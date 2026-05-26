@@ -156,26 +156,35 @@ def fetch_yahoo_smart(symbol, last_date):
                 return None, str(e)
         return None, "max retries exceeded"
 
-    # 1) Try via SOCKS proxy
-    r, exc = _get_with_retry(
-        dict(url=url, headers={'User-Agent': 'Mozilla/5.0'},
-             proxies={'https': PROXY_URL}, timeout=10, verify=False),
-        "proxy"
-    )
-    if r is not None:
-        parsed, err = _parse_response(r, "proxy")
-        if err is None:
-            if isinstance(parsed, str) and parsed == "UP_TO_DATE":
-                print("[OK] (Up to date via proxy)")
-                return None
-            if isinstance(parsed, str) and parsed == "NO_NEW":
-                print("[OK] (No new data via proxy)")
-                return None
-            print(f"[OK] (+{len(parsed)} new bars via proxy)")
-            return parsed
-        logging.warning(f"{y_sym} proxy route issue: {err}")
-    else:
-        logging.warning(f"{y_sym} proxy route exception: {exc}")
+    # 1) Try via SOCKS proxy — but ONLY if the local endpoint is actually
+    #    reachable. Probing once (cached) avoids wasting a 10s timeout per
+    #    asset when no SOCKS5 proxy is running (system VPN / no VPN).
+    try:
+        from net import is_proxy_alive as _proxy_alive
+        _use_proxy = _proxy_alive()
+    except Exception:
+        _use_proxy = True  # fall back to old always-try behavior
+
+    if _use_proxy:
+        r, exc = _get_with_retry(
+            dict(url=url, headers={'User-Agent': 'Mozilla/5.0'},
+                 proxies={'https': PROXY_URL}, timeout=10, verify=False),
+            "proxy"
+        )
+        if r is not None:
+            parsed, err = _parse_response(r, "proxy")
+            if err is None:
+                if isinstance(parsed, str) and parsed == "UP_TO_DATE":
+                    print("[OK] (Up to date via proxy)")
+                    return None
+                if isinstance(parsed, str) and parsed == "NO_NEW":
+                    print("[OK] (No new data via proxy)")
+                    return None
+                print(f"[OK] (+{len(parsed)} new bars via proxy)")
+                return parsed
+            logging.warning(f"{y_sym} proxy route issue: {err}")
+        else:
+            logging.warning(f"{y_sym} proxy route exception: {exc}")
 
     # 2) Fallback direct (no proxy)
     r, exc = _get_with_retry(
@@ -210,6 +219,7 @@ def fetch_moex_smart(symbol, last_date):
     start_str = (last_date + timedelta(days=1)).strftime('%Y-%m-%d') if last_date else "2015-01-01"
 
     all_data = []
+    net_failed = False  # distinguish "connection died" from "no new data"
     # Качаем порциями (если история большая)
     for offset in [0, 500, 1000]:
         url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{clean}/candles.json?interval=24&from={start_str}&start={offset}"
@@ -223,9 +233,19 @@ def fetch_moex_smart(symbol, last_date):
             all_data.extend(data)
             cols = r.json()['candles']['columns']
             if len(data) < 500: break # Конец данных
-        except Exception: break
+        except Exception as exc:
+            # A failure on the FIRST page means we never reached MOEX — this is
+            # an error, NOT "up to date". MOEX needs a Russian IP; a foreign VPN
+            # exit gets connection-reset. Report it instead of masking.
+            if offset == 0:
+                net_failed = True
+                logging.warning("MOEX fetch failed for %s: %s", clean, exc)
+            break
 
     if not all_data:
+        if net_failed:
+            print("[ERR] (MOEX unreachable — need RU IP / direct route)")
+            return None
         print("[OK] (Up to date)"); return None
 
     df = pd.DataFrame(all_data, columns=cols).rename(columns={'begin': 'Date', 'open': 'Open', 'close': 'Close', 'high': 'High', 'low': 'Low', 'volume': 'Volume'})
@@ -343,7 +363,15 @@ def fetch_yahoo_weekly(symbol, last_date):
             logging.warning("Weekly fetch error for %s: %s", y_sym, exc)
             return None
 
-    for proxies in [{'https': PROXY_URL}, {}]:
+    # Skip the SOCKS proxy attempt when the local endpoint is dead — otherwise
+    # every weekly fetch wastes a connection-refused round-trip to 127.0.0.1.
+    try:
+        from net import is_proxy_alive as _proxy_alive
+        _routes = [{'https': PROXY_URL}, {}] if _proxy_alive() else [{}]
+    except Exception:
+        _routes = [{'https': PROXY_URL}, {}]
+
+    for proxies in _routes:
         result = _try(proxies)
         if result is None:
             continue

@@ -91,6 +91,7 @@ if _HAS_GPU:
     try:
         tf.keras.mixed_precision.set_global_policy('mixed_float16')
     except Exception:
+        logger.warning("mixed_float16 not supported on this GPU, using float32")
         print("  [WARN] mixed_float16 not supported on this GPU, using float32")
 
 # ── Imports from core/ modules ────────────────────────────────────────────────

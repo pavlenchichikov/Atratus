@@ -20,9 +20,10 @@ hybrid_models/
 index_models/
 
 # ── Data & databases ──────────────────────────────────────
-market.db
-paper.db
+*.db
 *.db-journal
+*.db-wal
+*.db-shm
 market_data/
 
 # ── Logs ──────────────────────────────────────────────────
