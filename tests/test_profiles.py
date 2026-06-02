@@ -1,4 +1,4 @@
-"""Tests for core.profiles — asset profile mapping."""
+"""Tests for core.profiles - asset profile mapping."""
 
 from core.profiles import (
     FOREX,

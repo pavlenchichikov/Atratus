@@ -1,5 +1,5 @@
 """
-sector_rotation.py — Sector rotation analysis for G-Trade.
+sector_rotation.py - Sector rotation analysis for G-Trade.
 Analyzes which sectors are growing/declining over recent weeks.
 """
 
@@ -88,7 +88,7 @@ def _weekly_returns(series: pd.Series, weeks: int) -> list[float]:
     # Build list: most-recent first
     result = []
     for i in range(1, weeks + 1):
-        idx = -(i)  # -1 = last week, -2 = two weeks ago …
+        idx = -(i)  # -1 = last week, -2 = two weeks ago ...
         if abs(idx) <= len(pct):
             result.append(round(float(pct.iloc[idx]), 4))
         else:
@@ -144,10 +144,10 @@ def get_sector_momentum(weeks: int = 4) -> pd.DataFrame:
 
     Momentum_Score = average return over last `weeks` weeks (sector average).
     Trend:
-      "RISING"  — both W1 and W2 are positive
-      "FALLING" — both W1 and W2 are negative
-      "MIXED"   — otherwise
-    Best/Worst — asset with highest/lowest cumulative return over the period.
+      "RISING"  - both W1 and W2 are positive
+      "FALLING" - both W1 and W2 are negative
+      "MIXED"   - otherwise
+    Best/Worst - asset with highest/lowest cumulative return over the period.
     """
     engine = _engine()
     records = []

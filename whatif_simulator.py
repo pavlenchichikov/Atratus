@@ -1,9 +1,9 @@
 """
-whatif_simulator.py — G-Trade
+whatif_simulator.py - G-Trade
 ================================================
 "What if I invested $X in these assets N days ago using the model's signals?"
 
-Quick hypothetical backtest using CatBoost signals only (no LSTM — speed).
+Quick hypothetical backtest using CatBoost signals only (no LSTM - speed).
 
 Usage:
   python whatif_simulator.py BTC ETH NVDA --capital 10000 --days 90
@@ -54,13 +54,13 @@ def _load_quality_report() -> dict:
 
 
 def _asset_to_table(asset: str) -> str:
-    """Convert asset name to SQLite table name — must match data_engine.py convention."""
+    """Convert asset name to SQLite table name - must match data_engine.py convention."""
     try:
         from config import FULL_ASSET_MAP
         ticker = FULL_ASSET_MAP.get(asset, asset)
     except ImportError:
         ticker = asset
-    # data_engine uses: lower + strip ^ . -  (NOT "=")  — e.g. DX=F → "dx=f"
+    # data_engine uses: lower + strip ^ . -  (NOT "=")  - e.g. DX=F -> "dx=f"
     return ticker.lower().replace("^", "").replace(".", "").replace("-", "")
 
 
@@ -75,7 +75,7 @@ def _load_prices(asset: str, days_back: int, engine) -> pd.DataFrame | None:
             parse_dates=["Date"],
         )
     except Exception as e:
-        print(f"  [SKIP] {asset}: DB read error — {e}")
+        print(f"  [SKIP] {asset}: DB read error - {e}")
         return None
 
     if df.empty:
@@ -106,7 +106,7 @@ def _predict_cb(asset: str, df_full: pd.DataFrame, days_back: int, engine) -> pd
         df_feat = engineer_features(df_full.copy())
         df_feat = add_weekly_features(df_feat, table, engine)
     except Exception as e:
-        print(f"  [SKIP] {asset}: feature engineering failed — {e}")
+        print(f"  [SKIP] {asset}: feature engineering failed - {e}")
         return None
 
     # Restore DatetimeIndex
@@ -155,7 +155,7 @@ def _predict_cb(asset: str, df_full: pd.DataFrame, days_back: int, engine) -> pd
         cb.load_model(model_path)
         probs = cb.predict_proba(X_pred_scaled)[:, 1]
     except Exception as e:
-        print(f"  [SKIP] {asset}: CatBoost predict failed — {e}")
+        print(f"  [SKIP] {asset}: CatBoost predict failed - {e}")
         return None
 
     result = df_feat.iloc[split:][["close"]].copy()
@@ -168,9 +168,9 @@ def _predict_cb(asset: str, df_full: pd.DataFrame, days_back: int, engine) -> pd
 def _run_strategy(prices_probs: pd.DataFrame, capital: float) -> dict:
     """
     Simple long-only strategy:
-      prob > 0.55 → buy next day
-      prob < 0.45 → sell (flat)
-      else        → hold
+      prob > 0.55 -> buy next day
+      prob < 0.45 -> sell (flat)
+      else        -> hold
 
     Tracks equity, counts trades, computes Sharpe + max drawdown.
     Returns per-asset result dict.
@@ -266,8 +266,8 @@ def simulate(
     assets     : list of asset names, e.g. ["BTC", "ETH", "NVDA"]
     capital    : total starting capital (USD)
     days_back  : number of trading days to look back
-    strategy   : "equal" — split capital equally among assets
-                 "kelly"  — weight by Score from quality_report.json
+    strategy   : "equal" - split capital equally among assets
+                 "kelly"  - weight by Score from quality_report.json
 
     Returns
     -------
@@ -283,11 +283,11 @@ def simulate(
     alloc = _get_allocation(assets, capital, strategy)
 
     per_asset: dict[str, dict] = {}
-    portfolio_curves: dict[str, list[float]] = {}  # date → equity contributions
+    portfolio_curves: dict[str, list[float]] = {}  # date -> equity contributions
 
     for asset in assets:
         asset_capital = alloc.get(asset, capital / len(assets))
-        print(f"  Simulating {asset} (${asset_capital:,.0f})…")
+        print(f"  Simulating {asset} (${asset_capital:,.0f})...")
 
         df_full = _load_prices(asset, days_back, engine)
         if df_full is None:
@@ -392,7 +392,7 @@ def _print_summary(result: dict) -> None:
         return
 
     print("\n" + "=" * 58)
-    print("  G-TRADE — WHAT-IF SIMULATOR RESULTS")
+    print("  G-TRADE - WHAT-IF SIMULATOR RESULTS")
     print("=" * 58)
     print(f"  Initial capital : ${result['initial']:>12,.2f}")
     print(f"  Final equity    : ${result['final']:>12,.2f}")
@@ -412,7 +412,7 @@ def _print_summary(result: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="G-Trade — What-If Simulator",
+        description="G-Trade - What-If Simulator",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
@@ -457,7 +457,7 @@ def main():
         print(f"  Mode: Top-{args.top} by quality score")
         result = simulate_top_n(n=args.top, capital=args.capital, days_back=args.days)
     elif args.assets:
-        print(f"  Mode: Custom assets — {args.assets}")
+        print(f"  Mode: Custom assets - {args.assets}")
         result = simulate(
             assets=args.assets,
             capital=args.capital,

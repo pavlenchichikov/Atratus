@@ -1,5 +1,5 @@
 """
-Telegram Alert Bot V76 — G-Trade
+Telegram Alert Bot V76 - G-Trade
 ===================================================
 Synced with train_hybrid V50:
   * Features from champion_registry.json
@@ -123,7 +123,7 @@ def detect_proxy_needed():
     if _test_url(test_url):
         logger.info("Direct internet access OK")
         return False
-    logger.info("Direct access failed — using proxy")
+    logger.info("Direct access failed - using proxy")
     return True
 
 
@@ -131,7 +131,7 @@ def detect_telegram_proxy():
     if _test_url("https://api.telegram.org"):
         logger.info("Direct Telegram access OK")
         return False
-    logger.info("Telegram blocked — using proxy")
+    logger.info("Telegram blocked - using proxy")
     return True
 
 
@@ -307,7 +307,7 @@ def analyze_asset(df, name, registry, thresholds):
             size_line = (f"\n   Kelly: `{risk_result['position_size_pct']:.1%}` "
                          f"(${risk_result['position_size_usd']:,.0f})")
 
-        # Telegram message (emoji OK here — rendered in Telegram client)
+        # Telegram message (emoji OK here - rendered in Telegram client)
         emoji_char = "BUY" if action == "BUY" else "SELL"
         msg = (
             f"*{emoji_char}: {name}* (`{current_price:,.2f}`)\n"
@@ -330,8 +330,9 @@ def analyze_asset(df, name, registry, thresholds):
 # ==============================================================================
 
 def send_telegram(messages, use_proxy):
-    if not TELEGRAM_TOKEN:
-        logger.error("TELEGRAM_TOKEN is not set in .env")
+    if not TELEGRAM_TOKEN or not TELEGRAM_USER_ID:
+        logger.error("TELEGRAM_TOKEN / TELEGRAM_USER_ID not set in .env "
+                     "(copy .env.example to .env and fill them in)")
         return False
 
     if use_proxy:

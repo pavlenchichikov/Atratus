@@ -1,10 +1,10 @@
 """Neural network architectures for the ensemble pipeline.
 
 Provides four model builders:
-  • build_lstm_attention    — 2-layer LSTM + scaled attention
-  • build_transformer_encoder — 2-block Transformer encoder
-  • build_lstm_multitask    — LSTM+Attention with direction + magnitude heads
-  • build_tcn              — Temporal Convolutional Network (dilated causal)
+  - build_lstm_attention    - 2-layer LSTM + scaled attention
+  - build_transformer_encoder - 2-block Transformer encoder
+  - build_lstm_multitask    - LSTM+Attention with direction + magnitude heads
+  - build_tcn              - Temporal Convolutional Network (dilated causal)
 
 All builders return compiled Keras Models ready for .fit().
 """
@@ -16,7 +16,7 @@ from tensorflow.keras.layers import (
 from tensorflow.keras.models import Model
 
 # legacy.Adam avoids LossScaleOptimizer bug with CosineDecay + mixed_float16.
-# Keras 3 removed legacy entirely — fall back to standard Adam.
+# Keras 3 removed legacy entirely - fall back to standard Adam.
 try:
     _Adam = tf.keras.optimizers.legacy.Adam
     # Verify it's actually callable (Keras 3 stub raises ImportError on __init__)
@@ -25,7 +25,7 @@ except Exception:
     _Adam = tf.keras.optimizers.Adam
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# -- Helpers ------------------------------------------------------------------
 
 class ReduceSumLayer(tf.keras.layers.Layer):
     """Reduce-sum along the time axis (axis=1) for attention output."""
@@ -44,10 +44,10 @@ def attention_block(lstm_output, time_steps):
     return ReduceSumLayer()(res)
 
 
-# ── Architecture 1: LSTM + Attention ─────────────────────────────────────────
+# -- Architecture 1: LSTM + Attention -----------------------------------------
 
 def build_lstm_attention(input_shape):
-    """Two-layer LSTM (192→96 units) with attention pooling."""
+    """Two-layer LSTM (192->96 units) with attention pooling."""
     inputs = Input(shape=input_shape)
     x = LSTM(192, return_sequences=True)(inputs)
     x = LSTM(96, return_sequences=True)(x)
@@ -67,7 +67,7 @@ def build_lstm_attention(input_shape):
     return model
 
 
-# ── Architecture 2: Transformer Encoder ──────────────────────────────────────
+# -- Architecture 2: Transformer Encoder --------------------------------------
 
 def build_transformer_encoder(input_shape, num_heads=4, ff_dim=128, dropout=0.1,
                               n_train_samples=500):
@@ -105,7 +105,7 @@ def build_transformer_encoder(input_shape, num_heads=4, ff_dim=128, dropout=0.1,
     return model
 
 
-# ── Architecture 3: LSTM Multitask (Direction + Magnitude) ───────────────────
+# -- Architecture 3: LSTM Multitask (Direction + Magnitude) -------------------
 
 def build_lstm_multitask(input_shape, n_train_samples=500):
     """LSTM+Attention with direction (primary) and magnitude (auxiliary) heads.
@@ -142,7 +142,7 @@ def build_lstm_multitask(input_shape, n_train_samples=500):
     return model
 
 
-# ── Architecture 4: Temporal Convolutional Network ───────────────────────────
+# -- Architecture 4: Temporal Convolutional Network ---------------------------
 
 def build_tcn(input_shape, n_filters=64, kernel_size=3, n_blocks=3, dropout=0.15,
               n_train_samples=500):

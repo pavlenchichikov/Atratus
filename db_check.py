@@ -1,8 +1,8 @@
 """
-DB Check & Fix — проверка и ремонт market.db
-  python db_check.py          — только проверка (интерактивное предложение починить)
-  python db_check.py --fix    — проверка + автоматическое исправление
-  python db_check.py --stats  — только статистика таблиц
+DB Check & Fix - проверка и ремонт market.db
+  python db_check.py          - только проверка (интерактивное предложение починить)
+  python db_check.py --fix    - проверка + автоматическое исправление
+  python db_check.py --stats  - только статистика таблиц
 """
 
 import os
@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 
 
-# ── Утилиты ──────────────────────────────────────────────────────────────────
+# -- Утилиты ------------------------------------------------------------------
 
 def _connect():
     if not os.path.exists(DB_PATH):
@@ -31,7 +31,7 @@ def get_tables(cur):
     )
 
 
-# ── Проверки ─────────────────────────────────────────────────────────────────
+# -- Проверки -----------------------------------------------------------------
 
 def check_duplicates(cur, tables):
     """Таблицы с дубликатами по Date."""
@@ -108,10 +108,10 @@ def check_empty_tables(cur, tables):
     return empty
 
 
-# ── Исправления ──────────────────────────────────────────────────────────────
+# -- Исправления --------------------------------------------------------------
 
 def fix_date_formats(cur, tables):
-    """Нормализует даты > 10 символов → YYYY-MM-DD."""
+    """Нормализует даты > 10 символов -> YYYY-MM-DD."""
     total = 0
     for t in tables:
         before = cur.execute(
@@ -127,7 +127,7 @@ def fix_date_formats(cur, tables):
 
 
 def fix_duplicates(cur, tables):
-    """Удаляет дубликаты — оставляет MAX(rowid) для каждой даты."""
+    """Удаляет дубликаты - оставляет MAX(rowid) для каждой даты."""
     total = 0
     for t in tables:
         before = cur.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
@@ -167,19 +167,19 @@ def fix_nulls(cur, tables):
 
 
 def fix_vacuum(conn):
-    """VACUUM — сжатие файла БД после удалений."""
+    """VACUUM - сжатие файла БД после удалений."""
     before = os.path.getsize(DB_PATH)
     conn.execute("VACUUM")
     after = os.path.getsize(DB_PATH)
     saved = before - after
     if saved > 0:
-        print(f"    VACUUM: {before/1024/1024:.1f} MB → {after/1024/1024:.1f} MB (−{saved/1024:.0f} KB)")
+        print(f"    VACUUM: {before/1024/1024:.1f} MB -> {after/1024/1024:.1f} MB (-{saved/1024:.0f} KB)")
     else:
         print(f"    VACUUM: {after/1024/1024:.1f} MB (без изменений)")
     return saved
 
 
-# ── Вывод ────────────────────────────────────────────────────────────────────
+# -- Вывод --------------------------------------------------------------------
 
 def print_stats(cur, tables):
     """Статистика по таблицам."""
@@ -190,7 +190,7 @@ def print_stats(cur, tables):
             f"SELECT COUNT(*), MIN(Date), MAX(Date) FROM {t}"
         ).fetchone()
         cnt, d_min, d_max = row
-        print(f"  {t:<25} {cnt:>8}  {d_min or '—':<12} {d_max or '—':<12}")
+        print(f"  {t:<25} {cnt:>8}  {d_min or '-':<12} {d_max or '-':<12}")
 
 
 def run_diagnostics(cur, tables):
@@ -305,7 +305,7 @@ def run_fix(conn, cur, tables, results):
     return fixed_total
 
 
-# ── Точки входа ──────────────────────────────────────────────────────────────
+# -- Точки входа --------------------------------------------------------------
 
 def main_check(autofix=False):
     """Проверка с опциональным исправлением."""
@@ -351,7 +351,7 @@ def main_fix():
     results = run_diagnostics(cur, tables)
 
     if not results["has_problems"]:
-        print("\n  База чистая — исправлять нечего.")
+        print("\n  База чистая - исправлять нечего.")
         print_stats(cur, tables)
         conn.close()
         return
@@ -366,7 +366,7 @@ def main_stats():
     conn = _connect()
     cur = conn.cursor()
     tables = get_tables(cur)
-    print(f"\n  DB STATS — market.db ({len(tables)} таблиц)")
+    print(f"\n  DB STATS - market.db ({len(tables)} таблиц)")
     print_stats(cur, tables)
     conn.close()
 

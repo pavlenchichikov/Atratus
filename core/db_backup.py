@@ -76,4 +76,4 @@ if __name__ == "__main__":
         if result:
             print(f"Backup saved: {result}")
         else:
-            print("Backup failed — check logs")
+            print("Backup failed - check logs")

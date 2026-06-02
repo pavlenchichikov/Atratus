@@ -64,12 +64,12 @@ def get_last_date(table_name):
 
 
 def _drop_existing_dates(df, table_name):
-    """Убираем из df даты, которые уже есть в БД — защита от дубликатов."""
+    """Убираем из df даты, которые уже есть в БД - защита от дубликатов."""
     try:
         with engine.connect() as conn:
             check = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'"))
             if not check.fetchone():
-                return df  # таблицы нет — всё новое
+                return df  # таблицы нет - всё новое
             existing = pd.read_sql(f"SELECT DISTINCT Date FROM {table_name}", conn)
             if existing.empty:
                 return df
@@ -77,7 +77,7 @@ def _drop_existing_dates(df, table_name):
             mask = ~df.index.astype(str).str[:10].isin(existing_set)
             return df[mask]
     except Exception:
-        return df  # при ошибке — пишем как есть
+        return df  # при ошибке - пишем как есть
 
 def fetch_yahoo_smart(symbol, last_date):
     y_sym = FULL_ASSET_MAP.get(symbol, symbol)
@@ -156,7 +156,7 @@ def fetch_yahoo_smart(symbol, last_date):
                 return None, str(e)
         return None, "max retries exceeded"
 
-    # 1) Try via SOCKS proxy — but ONLY if the local endpoint is actually
+    # 1) Try via SOCKS proxy - but ONLY if the local endpoint is actually
     #    reachable. Probing once (cached) avoids wasting a 10s timeout per
     #    asset when no SOCKS5 proxy is running (system VPN / no VPN).
     try:
@@ -213,7 +213,7 @@ def fetch_yahoo_smart(symbol, last_date):
 
 def fetch_moex_smart(symbol, last_date):
     clean = symbol.split('.')[0]
-    print(f"   -> [🇷🇺 MOEX] {clean:<12}", end=" ", flush=True)
+    print(f"   -> [MOEX] {clean:<12}", end=" ", flush=True)
 
     # MOEX позволяет указать дату старта 'YYYY-MM-DD'
     start_str = (last_date + timedelta(days=1)).strftime('%Y-%m-%d') if last_date else "2015-01-01"
@@ -234,7 +234,7 @@ def fetch_moex_smart(symbol, last_date):
             cols = r.json()['candles']['columns']
             if len(data) < 500: break # Конец данных
         except Exception as exc:
-            # A failure on the FIRST page means we never reached MOEX — this is
+            # A failure on the FIRST page means we never reached MOEX - this is
             # an error, NOT "up to date". MOEX needs a Russian IP; a foreign VPN
             # exit gets connection-reset. Report it instead of masking.
             if offset == 0:
@@ -244,7 +244,7 @@ def fetch_moex_smart(symbol, last_date):
 
     if not all_data:
         if net_failed:
-            print("[ERR] (MOEX unreachable — need RU IP / direct route)")
+            print("[ERR] (MOEX unreachable - need RU IP / direct route)")
             return None
         print("[OK] (Up to date)"); return None
 
@@ -263,7 +263,7 @@ def fetch_moex_smart(symbol, last_date):
 def fetch_moex_weekly(symbol, last_date):
     """Fetch weekly (interval=7) OHLCV bars from MOEX ISS API."""
     clean = symbol.split('.')[0]
-    print(f"   -> [WEEKLY 🇷🇺] {clean:<12}", end=" ", flush=True)
+    print(f"   -> [WEEKLY RU] {clean:<12}", end=" ", flush=True)
 
     start_str = (last_date + timedelta(days=1)).strftime('%Y-%m-%d') if last_date else "2015-01-01"
 
@@ -322,7 +322,7 @@ def fetch_yahoo_weekly(symbol, last_date):
     _orig_last_date = last_date  # сохраняем для фильтрации
 
     if last_date is not None:
-        # Сдвигаем на 1 день (не неделю) — чтобы не пропустить текущую неделю
+        # Сдвигаем на 1 день (не неделю) - чтобы не пропустить текущую неделю
         start_ts = int(last_date.timestamp()) + 86400
         if start_ts >= now_ts:
             # Данные уже актуальны
@@ -363,7 +363,7 @@ def fetch_yahoo_weekly(symbol, last_date):
             logging.warning("Weekly fetch error for %s: %s", y_sym, exc)
             return None
 
-    # Skip the SOCKS proxy attempt when the local endpoint is dead — otherwise
+    # Skip the SOCKS proxy attempt when the local endpoint is dead - otherwise
     # every weekly fetch wastes a connection-refused round-trip to 127.0.0.1.
     try:
         from net import is_proxy_alive as _proxy_alive
@@ -512,7 +512,7 @@ def main():
     assets = list(FULL_ASSET_MAP.items())
     total = len(assets)
 
-    # ── DAILY ──────────────────────────────────────────────────────────────
+    # -- DAILY --------------------------------------------------------------
     print()
     print('  DAILY BARS')
     print('  ' + '-' * (W - 2))
@@ -588,7 +588,7 @@ def main():
             parts.append(f"{stats['err']} errors")
         print(f"  >> {' | '.join(parts)}")
 
-    # Print grouped summary (terminal only — GUI already shows per-asset lines)
+    # Print grouped summary (terminal only - GUI already shows per-asset lines)
     if _is_tty:
         result_map = {n: (st, b) for n, st, b in results}
         group_order = ['INDICES', 'COMMODITIES', 'US TECH', 'US OTHER', 'CRYPTO', 'MOEX', 'FOREX', 'OTHER']
@@ -618,7 +618,7 @@ def main():
                     mark = '   '
                 print(f"    {mark} {name:<14} {tag}")
 
-    # ── WEEKLY ─────────────────────────────────────────────────────────────
+    # -- WEEKLY -------------------------------------------------------------
     weekly_assets = list(assets)  # all assets including MOEX
     total_w = len(weekly_assets)
 
@@ -674,7 +674,7 @@ def main():
             parts.append(f"{w_err} errors")
         print(f"  >> {' | '.join(parts)}")
 
-    # ── SUMMARY ────────────────────────────────────────────────────────────
+    # -- SUMMARY ------------------------------------------------------------
     elapsed = time.time() - t_start
     print()
     print('=' * W)

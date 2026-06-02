@@ -55,7 +55,7 @@ if "%HAS_GPU%"=="1" (
         call conda install -n gtrade_gpu -c conda-forge cudatoolkit=11.2 cudnn=8.1 -y
     )
 ) else (
-    echo [SKIP] No GPU — skipping CUDA installation.
+    echo [SKIP] No GPU - skipping CUDA installation.
 )
 
 echo.

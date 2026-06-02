@@ -1,5 +1,5 @@
 """
-Optuna Hyperparameter Tuner — G-Trade
+Optuna Hyperparameter Tuner - G-Trade
 ========================================================
 Tunes per-asset hyperparameters using Bayesian optimization.
 Saves best params to models/optuna_params.json.
@@ -213,10 +213,10 @@ def run_tuner(assets=None, n_trials=20, fast_mode=True):
     params  = _load_params()
 
     print()
-    print("═" * W)
-    print(f"  OPTUNA TUNER  │  {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
+    print("=" * W)
+    print(f"  OPTUNA TUNER  |  {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
     print(f"  Assets: {total}   Trials/asset: {n_trials}   Mode: {'fast' if fast_mode else 'full'}")
-    print("═" * W)
+    print("=" * W)
 
     improved = 0
     for idx, asset in enumerate(targets, 1):
@@ -240,9 +240,9 @@ def run_tuner(assets=None, n_trials=20, fast_mode=True):
             print(f"ERR: {e}")
 
     print()
-    print("─" * W)
-    print(f"  Done.  Improved: {improved}/{total}  │  Params saved to models/optuna_params.json")
-    print("═" * W)
+    print("-" * W)
+    print(f"  Done.  Improved: {improved}/{total}  |  Params saved to models/optuna_params.json")
+    print("=" * W)
     print()
 
 

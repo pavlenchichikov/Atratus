@@ -1,5 +1,5 @@
 """
-guru_tracker.py — Track Guru Council recommendations vs actual outcomes.
+guru_tracker.py - Track Guru Council recommendations vs actual outcomes.
 Logs each guru's verdict + council vote, then compares with price movement
 after 1, 5, and 20 trading days.
 """
@@ -58,7 +58,7 @@ def log_guru_verdict(asset, lynch_score, buffett_score, graham_score, munger_sco
     with _conn() as con:
         cur = con.cursor()
         _ensure_table(cur)
-        # Don't duplicate — one entry per asset per day
+        # Don't duplicate - one entry per asset per day
         existing = cur.execute(
             "SELECT rowid FROM guru_log WHERE date = ? AND asset = ?",
             (today, asset)

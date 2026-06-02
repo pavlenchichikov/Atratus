@@ -1,5 +1,5 @@
 """
-Risk Manager V1 — G-Trade
+Risk Manager V1 - G-Trade
 ============================================
 Full risk management: Kelly Criterion, position sizing, drawdown protection,
 daily loss limits, Taleb risk gating, and persistent state tracking.
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RISK_STATE_PATH = os.path.join(BASE_DIR, "models", "risk_state.json")
 
-# ── Risk configuration ────────────────────────────────────────────────────────
+# -- Risk configuration --------------------------------------------------------
 RISK_CONFIG = {
     # Position limits
     "max_portfolio_exposure": 0.30,   # Max 30 % of capital deployed at once
@@ -61,7 +61,7 @@ class RiskManager:
         self.trade_history: list = []
         self._load_state()
 
-    # ── Persistence ───────────────────────────────────────────────────────────
+    # -- Persistence -----------------------------------------------------------
 
     def _load_state(self) -> None:
         if not os.path.exists(RISK_STATE_PATH):
@@ -99,11 +99,11 @@ class RiskManager:
         except Exception as exc:
             logger.error("Could not save risk state: %s", exc)
 
-    # ── Read-only properties ──────────────────────────────────────────────────
+    # -- Read-only properties --------------------------------------------------
 
     @property
     def current_drawdown(self) -> float:
-        """Fraction of capital lost from all-time peak (0–1)."""
+        """Fraction of capital lost from all-time peak (0-1)."""
         if self.peak_capital <= 0:
             return 0.0
         return max(0.0, (self.peak_capital - self.current_capital) / self.peak_capital)
@@ -126,7 +126,7 @@ class RiskManager:
         """How much more exposure is allowed before hitting the portfolio limit."""
         return max(0.0, RISK_CONFIG["max_portfolio_exposure"] - self.total_exposure)
 
-    # ── Circuit breakers ─────────────────────────────────────────────────────
+    # -- Circuit breakers -----------------------------------------------------
 
     def is_trading_halted(self) -> tuple:
         """
@@ -143,7 +143,7 @@ class RiskManager:
                           f"-{RISK_CONFIG['max_daily_loss']:.0%})")
         return False, ""
 
-    # ── Kelly Criterion ───────────────────────────────────────────────────────
+    # -- Kelly Criterion -------------------------------------------------------
 
     def kelly_fraction(
         self,
@@ -156,12 +156,12 @@ class RiskManager:
         """
         Compute the recommended position size as a fraction of current capital.
 
-        Formula: Kelly = (p·b − q) / b   where b = avg_win / avg_loss
+        Formula: Kelly = (p·b - q) / b   where b = avg_win / avg_loss
         Then applies:
-          • Fractional Kelly  (× kelly_fraction)
-          • Taleb risk penalty (exponential decay above soft cap)
-          • Correlation penalty (linear reduction per correlated position)
-          • Hard cap at max_single_position and remaining_capacity
+          - Fractional Kelly  (x kelly_fraction)
+          - Taleb risk penalty (exponential decay above soft cap)
+          - Correlation penalty (linear reduction per correlated position)
+          - Hard cap at max_single_position and remaining_capacity
 
         Returns 0.0 if the edge is negative or position is too small.
         """
@@ -182,13 +182,13 @@ class RiskManager:
         # 1. Fractional Kelly (quarter-Kelly by default)
         size = kelly_full * RISK_CONFIG["kelly_fraction"]
 
-        # 2. Taleb risk penalty — starts reducing size above soft_cap
+        # 2. Taleb risk penalty - starts reducing size above soft_cap
         soft_cap = RISK_CONFIG["taleb_soft_cap"]
         if taleb_risk > soft_cap:
             penalty = np.exp(-0.4 * (taleb_risk - soft_cap))
             size *= penalty
 
-        # 3. Correlation penalty — each correlated open position reduces size
+        # 3. Correlation penalty - each correlated open position reduces size
         if n_correlated > 0:
             size *= max(0.1, 1.0 - n_correlated * RISK_CONFIG["correlation_penalty"])
 
@@ -200,13 +200,13 @@ class RiskManager:
 
         return size
 
-    # ── Main signal check ─────────────────────────────────────────────────────
+    # -- Main signal check -----------------------------------------------------
 
     def check_signal(
         self,
         asset: str,
         signal: str,          # "BUY" | "SELL" | "WAIT"
-        confidence: float,    # model probability (0–1)
+        confidence: float,    # model probability (0-1)
         taleb_risk: float = 0.0,
         n_correlated: int = 0,
         win_rate: float | None = None,
@@ -241,18 +241,18 @@ class RiskManager:
         # Always allow WAIT
         if signal == "WAIT":
             result["approved"] = True
-            result["reason"] = "WAIT — no capital required"
+            result["reason"] = "WAIT - no capital required"
             return result
 
         # Circuit breaker
         halted, halt_reason = self.is_trading_halted()
         if halted:
-            result["reason"] = f"TRADING HALTED — {halt_reason}"
+            result["reason"] = f"TRADING HALTED - {halt_reason}"
             return result
 
         # Block BUY in high-risk regime
         if signal == "BUY" and taleb_risk > RISK_CONFIG["taleb_risk_cap"]:
-            result["reason"] = (f"HIGH TAIL RISK — Taleb={taleb_risk:.2f} "
+            result["reason"] = (f"HIGH TAIL RISK - Taleb={taleb_risk:.2f} "
                                 f"> cap={RISK_CONFIG['taleb_risk_cap']}")
             return result
 
@@ -278,7 +278,7 @@ class RiskManager:
         result["kelly_raw"] = max(0.0, (p * b - q) / b)
 
         if size_pct < RISK_CONFIG["min_kelly_threshold"]:
-            result["reason"] = (f"Edge too small — Kelly={size_pct:.2%} "
+            result["reason"] = (f"Edge too small - Kelly={size_pct:.2%} "
                                 f"< min={RISK_CONFIG['min_kelly_threshold']:.2%}")
             return result
 
@@ -286,13 +286,13 @@ class RiskManager:
         result["position_size_pct"] = size_pct
         result["position_size_usd"] = self.current_capital * size_pct
         result["reason"] = (
-            f"APPROVED — Kelly={size_pct:.1%}, "
+            f"APPROVED - Kelly={size_pct:.1%}, "
             f"Capital=${self.current_capital:,.0f}, "
             f"DD={self.current_drawdown:.1%}"
         )
         return result
 
-    # ── Trade lifecycle ───────────────────────────────────────────────────────
+    # -- Trade lifecycle -------------------------------------------------------
 
     def record_trade(
         self,
@@ -341,7 +341,7 @@ class RiskManager:
         self.save_state()
         return pnl
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # -- Summary ---------------------------------------------------------------
 
     def get_summary(self) -> dict:
         """Return a snapshot of the current risk state."""
@@ -387,5 +387,5 @@ if __name__ == "__main__":
     for asset, conf, taleb in [("BTC", 0.62, 1.5), ("ETH", 0.58, 6.0), ("GOLD", 0.54, 0.8)]:
         res = rm.check_signal(asset, "BUY", confidence=conf, taleb_risk=taleb)
         status = "[OK]" if res["approved"] else "[NO]"
-        print(f"{status} {asset:<6} conf={conf:.0%} taleb={taleb:.1f} → "
+        print(f"{status} {asset:<6} conf={conf:.0%} taleb={taleb:.1f} -> "
               f"size={res['position_size_pct']:.1%} (${res['position_size_usd']:,.0f}) | {res['reason']}")

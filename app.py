@@ -150,7 +150,7 @@ GLOBAL_BACKUP = {
     'FLOT': {'pe': 3.5, 'roe': 0.30, 'debt': 1.0, 'div': 12.0, 'desc': 'Совкомфлот'},
     'PIKK': {'pe': 6.0, 'roe': 0.20, 'debt': 2.5, 'div': 5.0, 'desc': 'ПИК'},
 
-    # США (US GIANTS) — updated 2026-03
+    # США (US GIANTS) - updated 2026-03
     'NVDA': {'pe': 38.0, 'growth': 0.96, 'roe': 1.01, 'debt': 0.07, 'marg': 0.56},
     'TSLA': {'pe': 95.0, 'growth': 0.17, 'roe': 0.27, 'debt': 0.13, 'marg': 0.13},
     'AAPL': {'pe': 33.0, 'growth': 0.18, 'roe': 1.52, 'debt': 1.03, 'marg': 0.27},
@@ -204,7 +204,7 @@ def get_smartlab_data():
                         f_map[t] = {'pe': pe, 'roe': 0.0, 'debt': debt, 'div': div}
                     except Exception: continue
 
-            # Table 1: banks (P/E, RoE, ДД ао) — merge/override
+            # Table 1: banks (P/E, RoE, ДД ао) - merge/override
             if len(dfs) > 1:
                 df1 = dfs[1]
                 roe_col = [c for c in df1.columns if c.lower() == 'roe']
@@ -487,7 +487,7 @@ def _fetch_yf_fundamentals(symbol):
 def _get_fundamentals(symbol, cl, smart_data):
     """
     Unified fundamental data loader with fallback chain:
-    Smart-Lab → yfinance live → GLOBAL_BACKUP → None
+    Smart-Lab -> yfinance live -> GLOBAL_BACKUP -> None
     """
     TICKER_MAP = {'YNDX': 'YDEX', 'TCSG': 'T'}
     search_ticker = TICKER_MAP.get(cl, cl)
@@ -632,7 +632,7 @@ with tab1:
             * **CRASH:** Risk > 5.0 (Не входи).
             """)
 
-        # ── Charts (4 rows: Price, MACD, RSI, Taleb Risk) ───────────────────
+        # -- Charts (4 rows: Price, MACD, RSI, Taleb Risk) -------------------
         df_w = get_weekly_data(selected_asset)
         fig = make_subplots(
             rows=4, cols=1, shared_xaxes=True,
@@ -640,7 +640,7 @@ with tab1:
             subplot_titles=("Price & MA (Daily + Weekly)", "MACD", "RSI (14)", "Tail Risk (Taleb)"),
         )
 
-        # Row 1 — Candlestick + moving averages + Bollinger + weekly overlay
+        # Row 1 - Candlestick + moving averages + Bollinger + weekly overlay
         fig.add_trace(go.Candlestick(
             x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'],
             name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
@@ -655,19 +655,19 @@ with tab1:
         if df_w is not None and 'SMA_20w' in df_w.columns:
             fig.add_trace(go.Scatter(x=df_w.index, y=df_w['SMA_20w'], line=dict(color='#ff6b6b', width=2, dash='longdash'), name='SMA 20W'), row=1, col=1)
 
-        # Row 2 — MACD histogram + lines
+        # Row 2 - MACD histogram + lines
         colors_macd = ['#26a69a' if v >= 0 else '#ef5350' for v in df['MACD_hist'].fillna(0)]
         fig.add_trace(go.Bar(x=df.index, y=df['MACD_hist'], marker_color=colors_macd, name='MACD Hist', showlegend=False), row=2, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MACD'],        line=dict(color='#00F0FF', width=1), name='MACD'),        row=2, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MACD_signal'], line=dict(color='#FF9800', width=1), name='Signal'),      row=2, col=1)
 
-        # Row 3 — RSI
+        # Row 3 - RSI
         fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#00F0FF', width=2), name='RSI'), row=3, col=1)
         fig.add_hline(y=70, line_dash="dot", line_color="red",   row=3, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="green", row=3, col=1)
         fig.add_hline(y=50, line_dash="dot", line_color="gray",  row=3, col=1)
 
-        # Row 4 — Taleb risk
+        # Row 4 - Taleb risk
         fig.add_trace(go.Scatter(x=df.index, y=df['taleb_index'], fill='tozeroy', line=dict(color='#FF2E00', width=1), name='Tail Risk'), row=4, col=1)
         fig.add_hline(y=5, line_dash="dash", line_color="red", row=4, col=1)
 
@@ -813,9 +813,9 @@ with tab2:
     else:
         st.error("Критическая ошибка анализа")
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — PORTFOLIO
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 3 - PORTFOLIO
+# ==============================================================================
 with tab3:
     st.header("Portfolio Analytics")
 
@@ -824,10 +824,10 @@ with tab3:
     else:
         col_l, col_r = st.columns([1, 1])
 
-        # ── Correlation heatmap ────────────────────────────────────────────
+        # -- Correlation heatmap --------------------------------------------
         with col_l:
             st.subheader("Asset Correlation Matrix")
-            with st.spinner("Computing correlations…"):
+            with st.spinner("Computing correlations..."):
                 corr = _pm.get_correlation_matrix()
 
             if not corr.empty:
@@ -852,9 +852,9 @@ with tab3:
                                        margin=dict(l=10, r=10, t=30, b=10))
                 st.plotly_chart(fig_corr, use_container_width=True)
             else:
-                st.info("No correlation data yet — run data_engine.py first.")
+                st.info("No correlation data yet - run data_engine.py first.")
 
-        # ── Sector heat bar chart ──────────────────────────────────────────
+        # -- Sector heat bar chart ------------------------------------------
         with col_r:
             st.subheader("Sector Heat (Example Allocation)")
             sample_positions = {
@@ -886,10 +886,10 @@ with tab3:
                       delta="Well diversified" if score > 60 else "Concentrated",
                       delta_color="normal" if score > 60 else "inverse")
 
-        # ── Asset statistics table ─────────────────────────────────────────
+        # -- Asset statistics table -----------------------------------------
         st.divider()
         st.subheader("Asset Risk Statistics (Last 120 days)")
-        with st.spinner("Computing per-asset statistics…"):
+        with st.spinner("Computing per-asset statistics..."):
             stats_df = _pm.get_all_stats()
 
         if not stats_df.empty:
@@ -905,9 +905,9 @@ with tab3:
             st.info("No statistics available yet.")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — RISK MANAGER
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 4 - RISK MANAGER
+# ==============================================================================
 with tab4:
     st.header("Risk Manager Dashboard")
 
@@ -917,15 +917,15 @@ with tab4:
         summary = _rm.get_summary()
         halted  = summary["trading_halted"]
 
-        # ── Status banner ──────────────────────────────────────────────────
+        # -- Status banner --------------------------------------------------
         if halted:
-            st.error(f"[OFF] TRADING HALTED — {summary['halt_reason']}")
+            st.error(f"[OFF] TRADING HALTED - {summary['halt_reason']}")
         else:
-            st.success("[ON] Trading Active — all circuit breakers OK")
+            st.success("[ON] Trading Active - all circuit breakers OK")
 
         st.divider()
 
-        # ── Key metrics row ────────────────────────────────────────────────
+        # -- Key metrics row ------------------------------------------------
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Capital",      f"${summary['current_capital']:,.0f}")
         m2.metric("Total Return", f"{summary['total_return_pct']:+.2f}%",
@@ -941,7 +941,7 @@ with tab4:
 
         st.divider()
 
-        # ── Kelly Criterion calculator ─────────────────────────────────────
+        # -- Kelly Criterion calculator -------------------------------------
         st.subheader("Kelly Position Sizer")
         kc1, kc2, kc3, kc4 = st.columns(4)
         k_win_rate  = kc1.slider("Win Rate",   0.40, 0.80, 0.56, 0.01, format="%.2f")
@@ -962,7 +962,7 @@ with tab4:
 
         st.divider()
 
-        # ── Risk config display ────────────────────────────────────────────
+        # -- Risk config display --------------------------------------------
         st.subheader("Active Risk Rules")
         rules = {
             "Max portfolio exposure":  f"{RISK_CONFIG['max_portfolio_exposure']:.0%}",
@@ -977,7 +977,7 @@ with tab4:
         rules_df = pd.DataFrame(list(rules.items()), columns=["Rule", "Value"])
         st.table(rules_df.set_index("Rule"))
 
-        # ── Signal check playground ────────────────────────────────────────
+        # -- Signal check playground ----------------------------------------
         st.subheader("Signal Risk Check Playground")
         p1, p2, p3, p4 = st.columns(4)
         pg_asset   = p1.selectbox("Asset",   list(FULL_ASSET_MAP.keys()), index=0)
@@ -993,12 +993,12 @@ with tab4:
             rb.metric("In Dollars",    f"${result['position_size_usd']:,.0f}")
             rc.metric("Raw Kelly",     f"{result['kelly_raw']:.3f}")
         else:
-            st.error(f"[!] REJECTED — {result['reason']}")
+            st.error(f"[!] REJECTED - {result['reason']}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — NEWS & SENTIMENT
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 5 - NEWS & SENTIMENT
+# ==============================================================================
 with tab5:
     st.header("News & Sentiment Analysis")
 
@@ -1108,9 +1108,9 @@ with tab5:
                     st.error(f"Digest error: {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — MARKET REGIME
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 6 - MARKET REGIME
+# ==============================================================================
 with tab6:
     st.header("Market Regime Detector")
 
@@ -1136,7 +1136,7 @@ with tab6:
             r3.metric("SP500 Trend", regime.get("sp500_trend", "?"))
             r4.metric("DXY Trend", regime.get("dxy_trend", "?"))
 
-            st.markdown(f"**Regime: :{rc}[{regime_name}]** — {regime.get('description', '')}")
+            st.markdown(f"**Regime: :{rc}[{regime_name}]** - {regime.get('description', '')}")
 
         except Exception as e:
             st.error(f"Global regime error: {e}")
@@ -1202,9 +1202,9 @@ with tab6:
                     st.error(f"All regimes error: {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 7 — PAPER TRADING
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 7 - PAPER TRADING
+# ==============================================================================
 with tab7:
     st.header("Paper Trading (Virtual Portfolio)")
 
@@ -1310,11 +1310,11 @@ with tab7:
             st.error(f"Paper trading error: {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 8 — SIGNAL RADAR
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 8 - SIGNAL RADAR
+# ==============================================================================
 with tab8:
-    st.header("Signal Radar — All Assets")
+    st.header("Signal Radar - All Assets")
     if not RADAR_AVAILABLE:
         st.warning("signal_dashboard.py not found.")
     else:
@@ -1373,9 +1373,9 @@ with tab8:
             st.error(f"Signal Radar error: {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 9 — PERFORMANCE TRACKER
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 9 - PERFORMANCE TRACKER
+# ==============================================================================
 with tab9:
     st.header("Prediction Performance Tracker")
     if not PERF_AVAILABLE:
@@ -1444,9 +1444,9 @@ with tab9:
             st.error(f"Performance Tracker error: {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 10 — SECTOR ROTATION
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 10 - SECTOR ROTATION
+# ==============================================================================
 with tab10:
     st.header("Sector Rotation Analysis")
     if not SECTOR_AVAILABLE:
@@ -1495,9 +1495,9 @@ with tab10:
             st.error(f"Sector Rotation error: {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 11 — WHAT-IF SIMULATOR
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 11 - WHAT-IF SIMULATOR
+# ==============================================================================
 with tab11:
     st.header("What-If Simulator")
     if not WHATIF_AVAILABLE:
@@ -1555,9 +1555,9 @@ with tab11:
             st.error(f"What-If error: {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 12 — MODEL HEALTH
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 12 - MODEL HEALTH
+# ==============================================================================
 with tab12:
     st.header("Model Health & Comparison")
     if not MC_AVAILABLE:
@@ -1624,9 +1624,9 @@ with tab12:
             st.error(f"Model Health error: {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 13 — ALERTS
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
+# TAB 13 - ALERTS
+# ==============================================================================
 with tab13:
     st.header("Custom Alert Rules")
     if not ALERTS_AVAILABLE:

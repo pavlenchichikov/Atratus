@@ -1,5 +1,5 @@
 """
-Model Health Monitor — G-Trade
+Model Health Monitor - G-Trade
 =================================================
 Checks age, quality, and drift of trained models.
 
@@ -182,52 +182,52 @@ def _print_report(max_age_days=7):
 
     now = datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
     print()
-    print("═" * _W)
-    print(f"  MODEL HEALTH  │  {now}")
-    print("═" * _W)
+    print("=" * _W)
+    print(f"  MODEL HEALTH  |  {now}")
+    print("=" * _W)
 
-    # ── SUMMARY ───────────────────────────────────────────────────
+    # -- SUMMARY ---------------------------------------------------
     oldest_lbl = summary['oldest_asset'] or "N/A"
     best  = summary["best_score"]
     worst = summary["worst_score"]
     print()
     print(f"  Models  : {summary['cb_count']} CatBoost + {summary['lstm_count']} LSTM"
-          f"   │   Registry: {summary['registry_entries']} entries")
+          f"   |   Registry: {summary['registry_entries']} entries")
     print(f"  Avg age : {summary['avg_age_days']}d"
-          f"   │   Oldest: {oldest_lbl} ({summary['oldest_age_days']}d)")
+          f"   |   Oldest: {oldest_lbl} ({summary['oldest_age_days']}d)")
     if best and worst:
         print(f"  Best    : {best[0]} ({best[1]:+.2f})"
-              f"   │   Worst: {worst[0]} ({worst[1]:+.2f})")
+              f"   |   Worst: {worst[0]} ({worst[1]:+.2f})")
     print()
 
-    # ── STALE MODELS ──────────────────────────────────────────────
-    tag_stale = f"── STALE  (>{max_age_days}d) "
-    print("  " + tag_stale + "─" * max(0, _W - 2 - len(tag_stale)))
+    # -- STALE MODELS ----------------------------------------------
+    tag_stale = f"-- STALE  (>{max_age_days}d) "
+    print("  " + tag_stale + "-" * max(0, _W - 2 - len(tag_stale)))
     if stale:
         print(f"  {'Asset':<10}  {'CB':<7}  {'LSTM':<7}  {'Score':>6}  Status")
-        print("  " + "─" * (_W - 4))
+        print("  " + "-" * (_W - 4))
         for s in stale:
-            cb_s   = f"{s['cb_age_days']}d"   if s["cb_age_days"]   is not None else "—"
-            lstm_s = f"{s['lstm_age_days']}d" if s["lstm_age_days"] is not None else "—"
+            cb_s   = f"{s['cb_age_days']}d"   if s["cb_age_days"]   is not None else "-"
+            lstm_s = f"{s['lstm_age_days']}d" if s["lstm_age_days"] is not None else "-"
             sc_s   = f"{s['score']:+.2f}"     if s["score"]         is not None else "N/A"
             print(f"  {s['asset']:<10}  {cb_s:<7}  {lstm_s:<7}  {sc_s:>6}  {s['status']}")
     else:
         print("  All models are fresh.")
     print()
 
-    # ── MISSING MODELS ────────────────────────────────────────────
-    print("  ── MISSING ─────────────────────────────────────────────")
+    # -- MISSING MODELS --------------------------------------------
+    print("  -- MISSING ---------------------------------------------")
     if missing:
         for m in missing:
-            print(f"  \033[91m{m}\033[0m  — no .cbm / .keras found")
+            print(f"  \033[91m{m}\033[0m  - no .cbm / .keras found")
     else:
         print("  All assets have models.")
     print()
 
-    # ── QUALITY RANKING ───────────────────────────────────────────
-    print("  ── QUALITY RANKING ─────────────────────────────────────")
+    # -- QUALITY RANKING -------------------------------------------
+    print("  -- QUALITY RANKING -------------------------------------")
     print(f"  {'Asset':<10}  {'Score':>7}  {'Policy':<12}  Updated")
-    print("  " + "─" * (_W - 4))
+    print("  " + "-" * (_W - 4))
     for r in ranking:
         updated_s = r["updated_at"][:10] if r["updated_at"] else "N/A"
         clr = _score_color(r["score"])

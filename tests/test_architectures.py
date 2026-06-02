@@ -1,4 +1,4 @@
-"""Tests for core.architectures — neural network model builders."""
+"""Tests for core.architectures - neural network model builders."""
 
 import numpy as np
 import tensorflow as tf

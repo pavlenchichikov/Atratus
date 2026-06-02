@@ -1,8 +1,8 @@
 """
-Equity Curve — график капитала по результатам Paper Trading / Backtest.
+Equity Curve - график капитала по результатам Paper Trading / Backtest.
 Открывает окно matplotlib с интерактивным графиком.
-  python equity_curve.py               — из paper trading
-  python equity_curve.py --backtest    — из backtest результатов
+  python equity_curve.py               - из paper trading
+  python equity_curve.py --backtest    - из backtest результатов
 """
 
 import os
@@ -76,7 +76,7 @@ def _get_backtest_equity():
         if "equity_curve" in data:
             return pd.DataFrame(data["equity_curve"])
 
-    # Альтернативно — сгенерировать из market.db используя простую стратегию
+    # Альтернативно - сгенерировать из market.db используя простую стратегию
     # на основе champion_registry scores
     registry_path = os.path.join(BASE_DIR, "models", "champion_registry.json")
     if not os.path.exists(registry_path):

@@ -185,7 +185,7 @@ REQUEST_TIMEOUT = 12
 # (name, rss_url, language, credibility_weight, category)
 # credibility: 1.5 = top-tier, 1.3 = solid, 1.0 = standard, 0.8 = blog
 AUTHORITY_FEEDS = [
-    # ═══ TIER 1: Premier global financial press ═══
+    # === TIER 1: Premier global financial press ===
     ("Bloomberg",       "https://feeds.bloomberg.com/markets/news.rss",             "en", 1.5, "markets"),
     ("Bloomberg Biz",   "https://feeds.bloomberg.com/bview/news.rss",               "en", 1.5, "opinion"),
     ("Reuters Biz",     "https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best", "en", 1.5, "markets"),
@@ -198,7 +198,7 @@ AUTHORITY_FEEDS = [
     ("Barron's",        "https://feeds.barrons.com/marketcurrents/newshighlights",  "en", 1.5, "analysis"),
     ("AP Business",     "https://rsshub.app/apnews/topics/business",                "en", 1.4, "macro"),
 
-    # ═══ TIER 2: Major financial media ═══
+    # === TIER 2: Major financial media ===
     ("MarketWatch",     "https://feeds.marketwatch.com/marketwatch/topstories/",    "en", 1.4, "markets"),
     ("MarketWatch Bull","https://feeds.marketwatch.com/marketwatch/bulletins/",     "en", 1.4, "breaking"),
     ("Yahoo Finance",   "https://finance.yahoo.com/news/rssindex",                  "en", 1.3, "markets"),
@@ -206,7 +206,7 @@ AUTHORITY_FEEDS = [
     ("Forbes",          "https://www.forbes.com/innovation/feed2",                   "en", 1.2, "tech"),
     ("Business Insider","https://markets.businessinsider.com/rss/news",             "en", 1.2, "markets"),
 
-    # ═══ TIER 2: Crypto & sector specialists ═══
+    # === TIER 2: Crypto & sector specialists ===
     ("CoinDesk",        "https://www.coindesk.com/arc/outboundfeeds/rss/",          "en", 1.3, "crypto"),
     ("CoinTelegraph",   "https://cointelegraph.com/rss",                            "en", 1.2, "crypto"),
     ("The Block",       "https://www.theblock.co/rss.xml",                          "en", 1.3, "crypto"),
@@ -216,7 +216,7 @@ AUTHORITY_FEEDS = [
     ("Motley Fool",     "https://www.fool.com/feeds/index.aspx",                    "en", 1.0, "analysis"),
     ("Zacks",           "https://www.zacks.com/feeds/",                              "en", 1.0, "analysis"),
 
-    # ═══ Russian authoritative sources ═══
+    # === Russian authoritative sources ===
     ("RBC",             "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",        "ru", 1.5, "markets"),
     ("RBC Investments", "https://rssexport.rbc.ru/rbcnews/news/97/full.rss",        "ru", 1.5, "markets"),
     ("Interfax",        "https://www.interfax.ru/rss.asp",                          "ru", 1.5, "macro"),

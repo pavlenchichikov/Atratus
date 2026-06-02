@@ -1,5 +1,5 @@
 """
-Portfolio Manager V1 — G-Trade
+Portfolio Manager V1 - G-Trade
 =================================================
 Cross-asset correlation, sector exposure tracking, diversification scoring,
 and signal ranking that accounts for portfolio concentration.
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ── Sector definitions ────────────────────────────────────────────────────────
+# -- Sector definitions --------------------------------------------------------
 SECTOR_MAP: Dict[str, List[str]] = {
     "CRYPTO":      ["BTC", "ETH", "SOL", "XRP", "TON", "DOGE", "BNB",
                     "ADA", "AVAX", "DOT", "LINK", "SHIB", "ATOM", "UNI", "NEAR"],
@@ -83,13 +83,13 @@ class PortfolioManager:
         self._returns_cache: Optional[pd.DataFrame] = None
         self._corr_cache:    Optional[pd.DataFrame] = None
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+    # -- Internal helpers ------------------------------------------------------
 
     def _table_name(self, asset: str) -> str:
         return asset.lower().replace("^", "").replace(".", "").replace("-", "")
 
     def _get_returns(self) -> pd.DataFrame:
-        """Load daily close prices → compute returns for all assets."""
+        """Load daily close prices -> compute returns for all assets."""
         if self._returns_cache is not None:
             return self._returns_cache
 
@@ -120,7 +120,7 @@ class PortfolioManager:
         self._returns_cache = None
         self._corr_cache    = None
 
-    # ── Correlation ───────────────────────────────────────────────────────────
+    # -- Correlation -----------------------------------------------------------
 
     def get_correlation_matrix(self) -> pd.DataFrame:
         """Pearson correlation matrix for all available assets."""
@@ -151,7 +151,7 @@ class PortfolioManager:
             candidates = [a for a in candidates if a in open_only]
         return candidates
 
-    # ── Sector helpers ────────────────────────────────────────────────────────
+    # -- Sector helpers --------------------------------------------------------
 
     def get_sector(self, asset: str) -> str:
         for sector, members in SECTOR_MAP.items():
@@ -159,7 +159,7 @@ class PortfolioManager:
                 return sector
         return "OTHER"
 
-    # ── Portfolio heat ────────────────────────────────────────────────────────
+    # -- Portfolio heat --------------------------------------------------------
 
     def get_portfolio_heat(self, positions: Dict[str, float]) -> Dict[str, float]:
         """
@@ -190,12 +190,12 @@ class PortfolioManager:
                       if self.get_sector(a) == sector)
         return (current + proposed_size <= limit), current, limit
 
-    # ── Diversification ───────────────────────────────────────────────────────
+    # -- Diversification -------------------------------------------------------
 
     def get_diversification_score(self, positions: Dict[str, float]) -> float:
         """
-        Score 0–100 measuring portfolio diversification.
-        Uses the Herfindahl–Hirschman Index (HHI) over sector exposures.
+        Score 0-100 measuring portfolio diversification.
+        Uses the Herfindahl-Hirschman Index (HHI) over sector exposures.
         100 = perfectly spread, 0 = all in one sector.
         """
         if not positions:
@@ -211,7 +211,7 @@ class PortfolioManager:
         hhi = sum(s ** 2 for s in shares)
         return round((1.0 - hhi) * 100, 1)
 
-    # ── Per-asset statistics ──────────────────────────────────────────────────
+    # -- Per-asset statistics --------------------------------------------------
 
     def get_asset_stats(self, asset: str) -> dict:
         """
@@ -255,7 +255,7 @@ class PortfolioManager:
             return pd.DataFrame()
         return pd.DataFrame(rows).set_index("asset")
 
-    # ── Signal ranking ────────────────────────────────────────────────────────
+    # -- Signal ranking --------------------------------------------------------
 
     def rank_signals(
         self,
@@ -265,7 +265,7 @@ class PortfolioManager:
     ) -> List[dict]:
         """
         Rank BUY/SELL signals by a composite score:
-            score = confidence − correlation_penalty − sector_crowding_penalty
+            score = confidence - correlation_penalty - sector_crowding_penalty
 
         signals: {asset: {"signal": "BUY"|"SELL"|"WAIT", "confidence": float}}
         Returns top_n ranked list of dicts.
@@ -308,7 +308,7 @@ class PortfolioManager:
         ranked.sort(key=lambda x: x["score"], reverse=True)
         return ranked[:top_n]
 
-    # ── Context summary for alert / dashboard ─────────────────────────────────
+    # -- Context summary for alert / dashboard ---------------------------------
 
     def get_signal_context(
         self,
@@ -330,7 +330,7 @@ class PortfolioManager:
         }
 
 
-# ── Standalone demo ───────────────────────────────────────────────────────────
+# -- Standalone demo -----------------------------------------------------------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     try:
@@ -342,7 +342,7 @@ if __name__ == "__main__":
 
     corr = pm.get_correlation_matrix()
     if not corr.empty:
-        print(f"\nCorrelation matrix: {corr.shape[0]} assets × {corr.shape[1]} assets")
+        print(f"\nCorrelation matrix: {corr.shape[0]} assets x {corr.shape[1]} assets")
 
     mock_positions = {"BTC": 0.10, "ETH": 0.08, "GOLD": 0.05}
     heat  = pm.get_portfolio_heat(mock_positions)

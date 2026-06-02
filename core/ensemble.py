@@ -16,7 +16,7 @@ def ensemble_with_gating(
     """Soft-gated ensemble of CatBoost and LSTM predictions.
 
     Uses trend_strength to dynamically weight LSTM vs CatBoost.
-    Higher trend → more LSTM weight. Disagreement between models
+    Higher trend -> more LSTM weight. Disagreement between models
     pulls the prediction toward 0.5 (reduces confidence).
 
     Args:

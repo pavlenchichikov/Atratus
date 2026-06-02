@@ -1,0 +1,13 @@
+# Normalize line endings: store as LF in the repo, check out native on Windows.
+# Stops the constant "LF will be replaced by CRLF" churn in diffs.
+* text=auto eol=lf
+
+# Binary artifacts: never touch.
+*.cbm  binary
+*.keras binary
+*.h5   binary
+*.pkl  binary
+*.db   binary
+*.png  binary
+*.jpg  binary
+*.ico  binary

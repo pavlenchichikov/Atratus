@@ -1,13 +1,13 @@
 """
-Backtest V72 — G-Trade
+Backtest V72 - G-Trade
 =========================================
 Fixes over V71:
-  • DB deduplication on load (remove duplicate Date rows)
-  • Weekly features now join correctly (Date column preserved)
-  • Walk-forward split uses Date column + registry updated_at
-  • Keras 3.x ZIP model loading (V71)
-  • Scaler fit on TRAIN only (V71)
-  • LSTM loader handles V49/V50/Keras3 (V71)
+  - DB deduplication on load (remove duplicate Date rows)
+  - Weekly features now join correctly (Date column preserved)
+  - Walk-forward split uses Date column + registry updated_at
+  - Keras 3.x ZIP model loading (V71)
+  - Scaler fit on TRAIN only (V71)
+  - LSTM loader handles V49/V50/Keras3 (V71)
 """
 
 import json
@@ -115,13 +115,13 @@ def _kelly_size(win_rate, avg_win, avg_loss):
 
 
 def _build_lstm_legacy(input_shape):
-    """V49 architecture: LSTM(128)+Dropout+LSTM(64), Bahdanau-style attention, Lambda→ReduceSum."""
+    """V49 architecture: LSTM(128)+Dropout+LSTM(64), Bahdanau-style attention, Lambda->ReduceSum."""
     timesteps = input_shape[0]
     inputs = Input(shape=input_shape)
     x = LSTM(128, return_sequences=True)(inputs)
     x = Dropout(0.2)(x)
     x = LSTM(64, return_sequences=True)(x)
-    # V49 attention: Dense(1,tanh)→Flatten→Dense(ts,softmax)→RepeatVector→Permute→Multiply
+    # V49 attention: Dense(1,tanh)->Flatten->Dense(ts,softmax)->RepeatVector->Permute->Multiply
     a = Dense(1, activation='tanh')(x)
     a = Flatten()(a)
     a = Dense(timesteps, activation='softmax')(a)
@@ -164,7 +164,7 @@ def _load_weights_keras3(model, h5_path):
 
 
 def _get_lookback(reg_entry, asset_name):
-    """Resolve actual lookback: registry.lookback → optuna_params → profile fallback."""
+    """Resolve actual lookback: registry.lookback -> optuna_params -> profile fallback."""
     if reg_entry and 'lookback' in reg_entry:
         return int(reg_entry['lookback'])
     optuna = _load_json(OPTUNA_PARAMS_PATH)
@@ -241,7 +241,7 @@ def _load_lstm_model(lstm_path, lookback, n_features):
         except Exception as e:
             logger.debug("V49 load failed: %s", e)
 
-        # Method 3: ZIP with Keras 3.x weights — extract h5, load manually
+        # Method 3: ZIP with Keras 3.x weights - extract h5, load manually
         if fmt == 'zip':
             tmpdir = tempfile.mkdtemp()
             try:

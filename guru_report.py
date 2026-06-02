@@ -1,5 +1,5 @@
 """
-guru_report.py — Console Guru Council report with full financial data.
+guru_report.py - Console Guru Council report with full financial data.
 Shows raw fundamentals + guru verdicts for any asset or all assets.
 
 Usage:
@@ -31,7 +31,7 @@ from sqlalchemy import create_engine
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 _engine = create_engine(f"sqlite:///{DB_PATH}")
 
-# ── MOEX list (no yfinance fundamentals) ──
+# -- MOEX list (no yfinance fundamentals) --
 MOEX_ASSETS = {
     "IMOEX", "SBER", "GAZP", "LKOH", "ROSN", "NVTK", "TATN", "SNGS",
     "PLZL", "SIBN", "MGNT", "TCSG", "VTBR", "BSPB", "MOEX_EX", "CBOM",
@@ -65,7 +65,7 @@ SECTORS = {
     "INDEX": {"SP500", "NASDAQ", "DOW", "IMOEX", "VIX", "DXY", "TNX"},
 }
 
-# ── BACKUP fundamentals (same as app.py) ──
+# -- BACKUP fundamentals (same as app.py) --
 GLOBAL_BACKUP = {
     'SBER': {'pe': 4.2, 'roe': 0.24, 'debt': 0.0, 'div': 11.5},
     'GAZP': {'pe': 3.5, 'roe': 0.04, 'debt': 1.8, 'div': 0.0},
@@ -80,9 +80,9 @@ GLOBAL_BACKUP = {
 }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # DATA FETCHING
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def fetch_yf_deep(symbol):
     """Full yfinance fetch: .info + financials + balance sheet + cashflow."""
@@ -289,14 +289,14 @@ def get_technical(name):
         return None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # FORMATTING HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def _fmt_num(val, fmt=",.0f"):
     """Format number with fallback."""
     if val is None or (isinstance(val, float) and (math.isnan(val) or math.isinf(val))):
-        return "—"
+        return "-"
     try:
         return f"{val:{fmt}}"
     except (ValueError, TypeError):
@@ -305,7 +305,7 @@ def _fmt_num(val, fmt=",.0f"):
 
 def _fmt_money(val):
     if val is None:
-        return "—"
+        return "-"
     if abs(val) >= 1e12:
         return f"${val/1e12:,.1f}T"
     if abs(val) >= 1e9:
@@ -317,7 +317,7 @@ def _fmt_money(val):
 
 def _fmt_pct(val, mult=1):
     if val is None:
-        return "—"
+        return "-"
     return f"{val * mult:.1f}%"
 
 
@@ -329,9 +329,9 @@ def _bar(val, max_val=100, width=20):
     return "[" + "#" * filled + "." * (width - filled) + "]"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # GURU ALGORITHMS (mirror of app.py)
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def _calc_peg(pe, growth):
     if pe <= 0 or growth <= 0:
@@ -500,9 +500,9 @@ def run_guru(name, fund, tech):
     return results
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # PRINTING
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def print_short(name, guru, source):
     """One-line summary."""
@@ -532,9 +532,9 @@ def print_full(name, symbol, fund, tech, guru):
         print(f"  Sector: {fund['sector']} / {fund.get('industry', '')}")
 
     # --- Price & Valuation ---
-    print(f"\n  {'─' * (w - 4)}")
+    print(f"\n  {'-' * (w - 4)}")
     print("  VALUATION")
-    print(f"  {'─' * (w - 4)}")
+    print(f"  {'-' * (w - 4)}")
     if fund:
         price = fund.get('price', 0)
         print(f"  Price:        {_fmt_num(price, ',.2f')}")
@@ -564,9 +564,9 @@ def print_full(name, symbol, fund, tech, guru):
 
     # --- Profitability ---
     if fund and fund.get('roe', 0) != 0:
-        print(f"\n  {'─' * (w - 4)}")
+        print(f"\n  {'-' * (w - 4)}")
         print("  PROFITABILITY")
-        print(f"  {'─' * (w - 4)}")
+        print(f"  {'-' * (w - 4)}")
         print(f"  ROE:            {_fmt_pct(fund.get('roe'), 100)}")
         print(f"  Gross Margin:   {_fmt_pct(fund.get('gross_margin'), 100)}")
         print(f"  Oper. Margin:   {_fmt_pct(fund.get('operating_margin'), 100)}")
@@ -574,9 +574,9 @@ def print_full(name, symbol, fund, tech, guru):
 
     # --- Balance Sheet ---
     if fund and fund.get('total_assets'):
-        print(f"\n  {'─' * (w - 4)}")
+        print(f"\n  {'-' * (w - 4)}")
         print("  BALANCE SHEET")
-        print(f"  {'─' * (w - 4)}")
+        print(f"  {'-' * (w - 4)}")
         print(f"  Total Assets:      {_fmt_money(fund.get('total_assets'))}")
         print(f"  Total Liabilities: {_fmt_money(fund.get('total_liabilities'))}")
         ta = fund.get('total_assets', 1)
@@ -604,9 +604,9 @@ def print_full(name, symbol, fund, tech, guru):
 
     # --- Cash Flow ---
     if fund and (fund.get('operating_cf') or fund.get('fcf')):
-        print(f"\n  {'─' * (w - 4)}")
+        print(f"\n  {'-' * (w - 4)}")
         print("  CASH FLOW")
-        print(f"  {'─' * (w - 4)}")
+        print(f"  {'-' * (w - 4)}")
         print(f"  Operating CF:  {_fmt_money(fund.get('operating_cf'))}")
         print(f"  CapEx:         {_fmt_money(fund.get('capex'))}")
         print(f"  Free CF:       {_fmt_money(fund.get('fcf'))}")
@@ -621,9 +621,9 @@ def print_full(name, symbol, fund, tech, guru):
     # --- Quarterly Trends ---
     has_quarters = fund and any(k in fund for k in ['revenue_quarters', 'net_income_quarters', 'fcf_quarters'])
     if has_quarters:
-        print(f"\n  {'─' * (w - 4)}")
+        print(f"\n  {'-' * (w - 4)}")
         print("  QUARTERLY TRENDS")
-        print(f"  {'─' * (w - 4)}")
+        print(f"  {'-' * (w - 4)}")
 
         for label, key in [("Revenue", "revenue_quarters"),
                            ("Net Income", "net_income_quarters"),
@@ -649,24 +649,24 @@ def print_full(name, symbol, fund, tech, guru):
 
     # --- Dividends ---
     if fund and (fund.get('dividend_yield', 0) > 0 or fund.get('payout_ratio', 0) > 0):
-        print(f"\n  {'─' * (w - 4)}")
+        print(f"\n  {'-' * (w - 4)}")
         print("  DIVIDENDS")
-        print(f"  {'─' * (w - 4)}")
+        print(f"  {'-' * (w - 4)}")
         print(f"  Div Yield:     {_fmt_num(fund.get('dividend_yield'), '.1f')}%")
         print(f"  Payout Ratio:  {_fmt_pct(fund.get('payout_ratio'), 100)}")
 
     # --- Risk ---
     if fund:
-        print(f"\n  {'─' * (w - 4)}")
+        print(f"\n  {'-' * (w - 4)}")
         print("  RISK")
-        print(f"  {'─' * (w - 4)}")
+        print(f"  {'-' * (w - 4)}")
         print(f"  Beta:          {_fmt_num(fund.get('beta'), '.2f')}")
 
     # --- Technical ---
     if tech:
-        print(f"\n  {'─' * (w - 4)}")
+        print(f"\n  {'-' * (w - 4)}")
         print("  TECHNICAL")
-        print(f"  {'─' * (w - 4)}")
+        print(f"  {'-' * (w - 4)}")
         print(f"  RSI(14):       {_fmt_num(tech['rsi'], '.1f')}  {_bar(tech['rsi'])}")
         print(f"  52W Range:     {_fmt_num(tech['pct_52w'], '.0f')}%  {_bar(tech['pct_52w'])}")
         print(f"  Vol (30d ann): {_fmt_pct(tech['vol_30d'], 100)}")
@@ -675,9 +675,9 @@ def print_full(name, symbol, fund, tech, guru):
         print(f"  MACD:          {'Bullish' if tech['macd_bull'] else 'Bearish'}")
 
     # --- Guru Verdicts ---
-    print(f"\n  {'─' * (w - 4)}")
+    print(f"\n  {'-' * (w - 4)}")
     print("  GURU COUNCIL")
-    print(f"  {'─' * (w - 4)}")
+    print(f"  {'-' * (w - 4)}")
     for g_name, g_key in [("Lynch (GARP)", "lynch"), ("Buffett (Quality)", "buffett"),
                            ("Graham (Value)", "graham"), ("Munger (Risk)", "munger")]:
         status, desc, score = guru[g_key]
@@ -691,9 +691,9 @@ def print_full(name, symbol, fund, tech, guru):
     print(f"  {'*' * w}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 # MAIN
-# ══════════════════════════════════════════════════════════════════════════════
+# ==============================================================================
 
 def main():
     args = sys.argv[1:]

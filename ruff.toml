@@ -5,12 +5,12 @@
 line-length = 120
 
 [lint]
-# Keep the high-value pyflakes (F) rules active — they catch unused imports
+# Keep the high-value pyflakes (F) rules active - they catch unused imports
 # and undefined names (real bugs). Silence pure-style E rules the codebase
 # deliberately uses, so `ruff check` stays green and CI-enforceable.
 ignore = [
-    "E402",  # module-level import not at top — intentional (TF GPU bootstrap)
-    "E701",  # multiple statements on one line (colon) — author's compact style
-    "E702",  # multiple statements on one line (semicolon) — author's compact style
-    "E741",  # ambiguous var name (l/I/O) — a couple of math vars, harmless
+    "E402",  # module-level import not at top - intentional (TF GPU bootstrap)
+    "E701",  # multiple statements on one line (colon) - author's compact style
+    "E702",  # multiple statements on one line (semicolon) - author's compact style
+    "E741",  # ambiguous var name (l/I/O) - a couple of math vars, harmless
 ]

@@ -1,5 +1,5 @@
 """
-Predict V51 — G-Trade
+Predict V51 - G-Trade
 ========================================
 Synced with train_hybrid V50:
   * Features from champion_registry.json
@@ -167,7 +167,7 @@ def _predict_asset(name, registry, thresholds):
                         lstm_prob = None
                         mode = "CB"
 
-        # ── Transformer (3rd ensemble member) ──────────────────────────────
+        # -- Transformer (3rd ensemble member) ------------------------------
         tf_path = os.path.join(MODEL_DIR, f"{table}_transformer.keras")
         tf_prob = None
         if os.path.exists(tf_path):
@@ -180,7 +180,7 @@ def _predict_asset(name, registry, thresholds):
                 logger.debug("Transformer predict failed: %s", e)
                 tf_prob = None
 
-        # ── TCN (4th ensemble member) ────────────────────────────────────
+        # -- TCN (4th ensemble member) ------------------------------------
         tcn_path = os.path.join(MODEL_DIR, f"{table}_tcn.keras")
         tcn_prob = None
         if os.path.exists(tcn_path):
@@ -192,7 +192,7 @@ def _predict_asset(name, registry, thresholds):
                 logger.debug("TCN predict failed: %s", e)
                 tcn_prob = None
 
-        # ── Stacking meta-classifier ─────────────────────────────────────
+        # -- Stacking meta-classifier -------------------------------------
         meta_path = os.path.join(MODEL_DIR, f"{table}_meta.pkl")
         trend_val = float(df['trend_strength'].iloc[-1]) if 'trend_strength' in df.columns else 0.01
 
@@ -250,7 +250,7 @@ def run_radar():
     registry = _load_json(REGISTRY_PATH)
     thresholds = _load_json(THRESHOLDS_PATH)
 
-    # ── Update actuals for previous predictions ──────────────────
+    # -- Update actuals for previous predictions ------------------
     try:
         from performance_tracker import update_actuals, log_prediction
         update_actuals()
@@ -261,11 +261,11 @@ def run_radar():
 
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
     print()
-    print("═" * W)
-    print(f"  REAL-TIME RADAR  │  {now}")
-    print("═" * W)
+    print("=" * W)
+    print(f"  REAL-TIME RADAR  |  {now}")
+    print("=" * W)
 
-    # ── Scan all assets with inline progress ──────────────────────
+    # -- Scan all assets with inline progress ----------------------
     all_names = list(FULL_ASSET_MAP.keys())
     total = len(all_names)
     results = {}
@@ -289,7 +289,7 @@ def run_radar():
     sys.stdout.write("\r" + " " * 45 + "\r")
     sys.stdout.flush()
 
-    # ── Print grouped results ──────────────────────────────────────
+    # -- Print grouped results --------------------------------------
     counts = {"BUY": 0, "SELL": 0, "WAIT": 0}
     col_hdr = f"  {'Asset':<10}  {'Sig':<6}  {'Conf':>7}  {'Price':>12}  Mode"
 
@@ -298,8 +298,8 @@ def run_radar():
         if not rows:
             continue
 
-        tag = f"  ── {group} "
-        print(tag + "─" * max(0, W - len(tag)))
+        tag = f"  -- {group} "
+        print(tag + "-" * max(0, W - len(tag)))
         print(col_hdr)
 
         for name, (sig, prob, price, mode) in rows:
@@ -312,16 +312,16 @@ def run_radar():
 
         print()
 
-    # ── Summary ───────────────────────────────────────────────────
+    # -- Summary ---------------------------------------------------
     elapsed = time.time() - t0
     scanned = sum(counts.values())
     buy_s  = f"\033[92mBUY  {counts['BUY']:>2}{_RST}"
     sell_s = f"\033[91mSELL {counts['SELL']:>2}{_RST}"
     wait_s = f"\033[90mWAIT {counts['WAIT']:>2}{_RST}"
-    print("─" * W)
+    print("-" * W)
     log_info = f"  Logged {logged}" if _do_log and logged else ""
     print(f"  {buy_s}   {sell_s}   {wait_s}   Total {scanned}   {elapsed:.1f}s{log_info}")
-    print("═" * W)
+    print("=" * W)
 
 
 if __name__ == "__main__":

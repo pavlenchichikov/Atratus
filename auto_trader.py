@@ -1,5 +1,5 @@
 """
-auto_trader.py — Auto-executes ML signals in the paper trading system.
+auto_trader.py - Auto-executes ML signals in the paper trading system.
 Connects predict.py signals (via signal_dashboard) with paper_trading.py execution.
 """
 
@@ -50,7 +50,7 @@ try:
 except ImportError:
     signal_dashboard = None
     _HAS_SIGNAL_DASHBOARD = False
-    logger.warning("signal_dashboard not found — signals unavailable")
+    logger.warning("signal_dashboard not found - signals unavailable")
 
 try:
     import paper_trading
@@ -58,7 +58,7 @@ try:
 except ImportError:
     paper_trading = None
     _HAS_PAPER_TRADING = False
-    logger.warning("paper_trading not found — execution unavailable")
+    logger.warning("paper_trading not found - execution unavailable")
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ def run_auto_trade() -> dict:
 
     # --- 1. Fetch signals ---
     if not _HAS_SIGNAL_DASHBOARD:
-        msg = "signal_dashboard unavailable — cannot fetch signals"
+        msg = "signal_dashboard unavailable - cannot fetch signals"
         logger.error(msg)
         results["errors"].append(msg)
         return results
@@ -279,7 +279,7 @@ def run_auto_trade() -> dict:
                 current_positions += 1
         else:
             if not _HAS_PAPER_TRADING:
-                msg = f"paper_trading unavailable — cannot execute {signal_raw} {asset}"
+                msg = f"paper_trading unavailable - cannot execute {signal_raw} {asset}"
                 logger.error(msg)
                 results["errors"].append({"asset": asset, "error": msg, "ts": _ts()})
                 continue
@@ -386,7 +386,7 @@ def _cast(value: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="auto_trader — auto-execute ML signals in paper trading"
+        description="auto_trader - auto-execute ML signals in paper trading"
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -437,7 +437,7 @@ def main():
 
     results = run_auto_trade()
     print(
-        f"\nDone — executed: {len(results['executed'])} | "
+        f"\nDone - executed: {len(results['executed'])} | "
         f"skipped: {len(results['skipped'])} | "
         f"errors: {len(results['errors'])}"
     )

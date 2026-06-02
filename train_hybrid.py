@@ -1,12 +1,12 @@
 import os
 import sys
 
-# ── GPU: добавляем Library\bin conda-окружения в PATH до импорта TF ──────────
+# -- GPU: добавляем Library\bin conda-окружения в PATH до импорта TF ----------
 # Нужно при запуске python.exe напрямую без `conda activate`
 _env_lib_bin = os.path.join(os.path.dirname(sys.executable), "Library", "bin")
 if os.path.isdir(_env_lib_bin) and _env_lib_bin not in os.environ.get("PATH", ""):
     os.environ["PATH"] = _env_lib_bin + os.pathsep + os.environ.get("PATH", "")
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 import json
 import signal
@@ -59,7 +59,7 @@ if gpus:
             )
             print(f"  [GPU] {gpus[0].name}  |  VRAM: {_vram_mb}MB  |  TF pool: {_tf_pool_mb}MB")
         else:
-            # VRAM unknown — use memory_growth (safe for any GPU)
+            # VRAM unknown - use memory_growth (safe for any GPU)
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
             print(f"  [GPU] {gpus[0].name}  |  memory_growth=True")
@@ -68,7 +68,7 @@ if gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
         print(f"  [GPU] {gpus[0].name}  |  memory_growth=True (fallback)")
 else:
-    print("  [CPU] No GPU detected — running on CPU")
+    print("  [CPU] No GPU detected - running on CPU")
 
 tf.get_logger().setLevel('ERROR')
 
@@ -78,14 +78,14 @@ _GPU_SLOTS   = 1
 _gpu_lock = threading.Semaphore(_GPU_SLOTS)
 _print_lock = threading.Lock()
 
-# --- SHARED EPOCH STATE (callback → ticker thread) ---
-_progress_state = {'label': '—', 'epoch': 0, 'total_ep': 0, 'loss': float('nan')}
+# --- SHARED EPOCH STATE (callback -> ticker thread) ---
+_progress_state = {'label': '-', 'epoch': 0, 'total_ep': 0, 'loss': float('nan')}
 _state_lock = threading.Lock()
 _N_WORKERS = 10
 _CB_THREADS = max(4, os.cpu_count() or 4)
 _HAS_GPU = bool(gpus)
 
-# ── Mixed precision: fp16 compute → faster on GPUs with Tensor Cores ──
+# -- Mixed precision: fp16 compute -> faster on GPUs with Tensor Cores --
 # (RTX 20xx+, A100, etc.) Falls back gracefully on older GPUs.
 if _HAS_GPU:
     try:
@@ -94,7 +94,7 @@ if _HAS_GPU:
         logger.warning("mixed_float16 not supported on this GPU, using float32")
         print("  [WARN] mixed_float16 not supported on this GPU, using float32")
 
-# ── Imports from core/ modules ────────────────────────────────────────────────
+# -- Imports from core/ modules ------------------------------------------------
 from core.architectures import (
     build_transformer_encoder,
     build_lstm_multitask, build_tcn,
@@ -188,12 +188,12 @@ def adversarial_fold_weight(X_train, X_test):
     return float(min(1.0, weight))
 
 
-# ── Functions moved to core/ modules (imported above) ────────────────────────
-# build_stacking_features → core.ensemble
-# get_profile → core.profiles
-# engineer_features, add_weekly_features, add_crossasset_features → core.features
-# adaptive_split_params, make_walk_forward_splits → core.backtesting
-# pnl_from_signals, max_drawdown_from_returns, score_strategy → core.backtesting
+# -- Functions moved to core/ modules (imported above) ------------------------
+# build_stacking_features -> core.ensemble
+# get_profile -> core.profiles
+# engineer_features, add_weekly_features, add_crossasset_features -> core.features
+# adaptive_split_params, make_walk_forward_splits -> core.backtesting
+# pnl_from_signals, max_drawdown_from_returns, score_strategy -> core.backtesting
 
 def build_sequences(X, y, lookback):
     Xs, ys = [], []
@@ -227,8 +227,8 @@ def derive_feature_set(df, train_idx, candidate_features, top_k):
     ranked = [f for _, f in sorted(zip(imps, candidate_features), reverse=True)]
     return ranked[:min(top_k, len(ranked))]
 
-# ensemble_with_gating, tune_ensemble_weights → core.ensemble (imported above)
-# make_signals, apply_regime_filter → core.backtesting (imported above)
+# ensemble_with_gating, tune_ensemble_weights -> core.ensemble (imported above)
+# make_signals, apply_regime_filter -> core.backtesting (imported above)
 
 def ensure_dirs():
     os.makedirs(MODEL_DIR, exist_ok=True)
@@ -249,7 +249,7 @@ _stop_requested = False
 def _signal_handler(sig, frame):
     global _stop_requested
     if _stop_requested:
-        print("\n\n  [FORCE] Second Ctrl+C — force quit.")
+        print("\n\n  [FORCE] Second Ctrl+C - force quit.")
         sys.exit(1)
     _stop_requested = True
     print("\n\n" + "=" * 60)
@@ -297,7 +297,7 @@ def _free_keras_from_fold(fold_info):
                 del m
             except Exception as _e:
                 logger.debug("Model cleanup failed: %s", _e)
-    # meta (LogisticRegression) тоже мелкий — оставляем
+    # meta (LogisticRegression) тоже мелкий - оставляем
     _gc.collect()
 
 
@@ -305,7 +305,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
     """Обучение одного актива. Запускается в ThreadPoolExecutor."""
     profile = get_profile(asset)
     table = asset.lower().replace("^", "").replace(".", "").replace("-", "")
-    # ── Load Optuna-tuned hyperparams if available ──────────────────────
+    # -- Load Optuna-tuned hyperparams if available ----------------------
     opt = _get_optuna_params(asset)
 
     pass  # progress shown by live ticker
@@ -437,10 +437,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             y_mag_train = np.clip(fold_data['y_mag_seq_train'] / 0.05, -1.0, 1.0).astype('float32')
             y_mag_val_d  = np.clip(fold_data['y_mag_seq_val']   / 0.05, -1.0, 1.0).astype('float32')
 
-            # GPU models use ALL training data — noise filter discards ~70% of samples,
-            # leaving 150 samples → batch shrinks to 64-75 → GPU busy 5ms/step, idle 50ms → 0% util.
+            # GPU models use ALL training data - noise filter discards ~70% of samples,
+            # leaving 150 samples -> batch shrinks to 64-75 -> GPU busy 5ms/step, idle 50ms -> 0% util.
             # LSTM/TF/TCN have Dropout(0.15-0.20) which handles noise natively.
-            # CatBoost uses X_train (flat, non-sequential) — unaffected by this change.
+            # CatBoost uses X_train (flat, non-sequential) - unaffected by this change.
             _batch = min(BATCH, max(64, len(X_seq_train) // 4))
 
             with _gpu_lock:
@@ -454,10 +454,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         except Exception:
                             _vram = ""
                         _safe_print(
-                            f"  [Device] {asset:<10} → {_placed}"
+                            f"  [Device] {asset:<10} -> {_placed}"
                             f"  train={len(X_seq_train)} seq  batch={_batch}{_vram}"
                         )
-                    # ── Multi-task LSTM ────────────────────────────────────────────
+                    # -- Multi-task LSTM --------------------------------------------
                     lstm_mt = build_lstm_multitask((lookback, len(selected)),
                                                    n_train_samples=len(X_seq_train))
                     train_ds = tf.data.Dataset.from_tensor_slices((
@@ -480,12 +480,12 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         X_seq_test.astype('float32'), batch_size=BATCH, verbose=0)[0].flatten()
                     lstm_val_prob  = lstm_mt.predict(
                         X_seq_val.astype('float32'),  batch_size=BATCH, verbose=0)[0].flatten()
-                    # Extract direction-only model — compatible with predict.py / backtest.py
+                    # Extract direction-only model - compatible with predict.py / backtest.py
                     lstm = Model(inputs=lstm_mt.input,
                                  outputs=lstm_mt.get_layer('direction').output)
-                    del lstm_mt  # Python obj freed; shared layers still in lstm — OK
+                    del lstm_mt  # Python obj freed; shared layers still in lstm - OK
 
-                    # ── Transformer encoder ──────────────────────────────────────
+                    # -- Transformer encoder --------------------------------------
                     tf_enc = build_transformer_encoder((lookback, len(selected)),
                                                        n_train_samples=len(X_seq_train))
                     train_ds_tf = tf.data.Dataset.from_tensor_slices(
@@ -505,7 +505,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     tf_val_prob  = tf_enc.predict(
                         X_seq_val.astype('float32'),  batch_size=BATCH, verbose=0).flatten()
 
-                    # ── TCN (4th ensemble member) ───────────────────────────────
+                    # -- TCN (4th ensemble member) -------------------------------
                     tcn_model = build_tcn((lookback, len(selected)),
                                           n_train_samples=len(X_seq_train))
                     train_ds_tcn = tf.data.Dataset.from_tensor_slices(
@@ -567,17 +567,17 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             test_taleb = test_taleb[:n_test]
             test_ret = test_ret[:n_test]
 
-            # ── Adversarial validation: detect distribution shift ──────
+            # -- Adversarial validation: detect distribution shift ------
             adv_weight = adversarial_fold_weight(X_train, X_test)
 
-            # ── Align all 4 model probs ─────────────────────────────────
+            # -- Align all 4 model probs ---------------------------------
             val_target_aligned = df.loc[va, 'target'].values[:n_val]
             tf_val_al   = tf_val_prob[:n_val]
             tf_test_al  = tf_test_prob[:n_test]
             tcn_val_al  = tcn_val_prob[:n_val]
             tcn_test_al = tcn_test_prob[:n_test]
 
-            # ── Stacking meta-classifier ────────────────────────────────
+            # -- Stacking meta-classifier --------------------------------
             X_meta_val = build_stacking_features(
                 cb_val_aligned, lstm_val_prob[:n_val], tf_val_al, tcn_val_al,
                 val_trend)
@@ -655,18 +655,18 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             }
             fold_metrics.append(fold_info)
 
-            # ── EAGER MEMORY MANAGEMENT ─────────────────────────────────────
+            # -- EAGER MEMORY MANAGEMENT -------------------------------------
             # Keep Keras models ONLY for the running-best fold (by weighted score).
             # All other folds: strip lstm/tf_enc/tcn immediately to prevent VRAM accumulation.
-            # Root cause of OOM crash: 60 folds × 4 workers × 3 models = hundreds of objects.
+            # Root cause of OOM crash: 60 folds x 4 workers x 3 models = hundreds of objects.
             if test_score_weighted > best_fold_score:
-                # This fold is new best — free previous best's Keras models
+                # This fold is new best - free previous best's Keras models
                 if best_fold is not None:
                     _free_keras_from_fold(best_fold)
                 best_fold_score = test_score_weighted
                 best_fold = fold_info          # keep this fold's models intact
             else:
-                # Not best — free Keras models immediately
+                # Not best - free Keras models immediately
                 _free_keras_from_fold(fold_info)
 
         # --- Post-processing ---
@@ -696,7 +696,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         # its Keras models may have been freed. Fall back to FROZEN_CHAMPION gracefully.
         _bm = best_fold.get('models', {})
         if not _bm.get('lstm') or not _bm.get('tf_enc') or not _bm.get('tcn'):
-            promote = False  # models unavailable — keep existing champion
+            promote = False  # models unavailable - keep existing champion
 
         if promote:
             best_fold['models']['cb'].save_model(cb_out)
@@ -810,7 +810,7 @@ def train_system():
     print("  Ctrl+C = safe stop (saves results)")
     print("=" * W)
 
-    # ── GPU DIAGNOSTICS ──────────────────────────────────────────────────────
+    # -- GPU DIAGNOSTICS ------------------------------------------------------
     if _HAS_GPU:
         print()
         print("  GPU DIAGNOSTICS")
@@ -829,7 +829,7 @@ def train_system():
         print(f"  Precision policy           : {policy.name}  "
               f"(compute={policy.compute_dtype}, var={policy.variable_dtype})")
 
-        # 4. Quick GPU benchmark — 1024×1024 fp16 matmul
+        # 4. Quick GPU benchmark - 1024x1024 fp16 matmul
         try:
             import time as _btime
             with tf.device('/GPU:0'):
@@ -839,8 +839,8 @@ def train_system():
                 for _ in range(10):
                     tf.matmul(_w, _w).numpy()
                 _dt_ms = (_btime.perf_counter() - _t0) / 10 * 1000
-            _verdict = "GPU ACTIVE ✓" if _dt_ms < 5.0 else "SLOW — may be CPU !"
-            print(f"  fp16 matmul 1024×1024 ×10 : {_dt_ms:.2f} ms/call  → {_verdict}")
+            _verdict = "GPU ACTIVE" if _dt_ms < 5.0 else "SLOW - may be CPU !"
+            print(f"  fp16 matmul 1024x1024 x10 : {_dt_ms:.2f} ms/call  -> {_verdict}")
         except Exception as _be:
             print(f"  Benchmark error            : {_be}")
 
@@ -895,7 +895,7 @@ def train_system():
 
     def _make_bar(done, total, elapsed, postfix=""):
         pct = int(done / total * 30) if total else 0
-        bar = '█' * pct + '░' * (30 - pct)
+        bar = '#' * pct + '-' * (30 - pct)
         if 0 < done < total:
             eta = elapsed / done * (total - done)
             time_str = f"{elapsed:.0f}s<{eta:.0f}s"
@@ -962,13 +962,13 @@ def train_system():
             with _state_lock:
                 s = dict(_progress_state)
 
-            # ── Training state ───────────────────────────────────────────────
+            # -- Training state -----------------------------------------------
             if s['total_ep'] > 0:
                 model_line = f"{s['label']}  ep {s['epoch']}  loss={s['loss']:.4f}"
             else:
                 model_line = "preparing..."
 
-            # ── GPU stats (nvidia-smi, refreshed every 3 sec) ────────────────
+            # -- GPU stats (nvidia-smi, refreshed every 3 sec) ----------------
             if _HAS_GPU:
                 if time.time() - _smi_cache["ts"] >= 3.0:
                     threading.Thread(target=_refresh_smi, daemon=True).start()

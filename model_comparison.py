@@ -1,5 +1,5 @@
 """
-model_comparison.py — Model quality tracking over time for G-Trade.
+model_comparison.py - Model quality tracking over time for G-Trade.
 Saves daily snapshots of quality_report.json and provides comparison utilities.
 """
 
@@ -53,7 +53,7 @@ def save_snapshot():
 
     # Check for duplicate date
     if history and history[-1].get("date") == today:
-        print(f"[model_comparison] Snapshot for {today} already exists — skipping.")
+        print(f"[model_comparison] Snapshot for {today} already exists - skipping.")
         return None
 
     # quality_report.json is expected to be a list of dicts with at least:
@@ -287,7 +287,7 @@ def get_best_worst(metric="score", n=5) -> dict:
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Model Quality Tracker — G-Trade")
+    print("Model Quality Tracker - G-Trade")
     print("=" * 60)
 
     print("\n[1] Saving snapshot...")

@@ -33,13 +33,13 @@ def _setup_root():
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
 
-    # Console handler — INFO level
+    # Console handler - INFO level
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter(_FMT, datefmt=_DATE_FMT))
     root.addHandler(console)
 
-    # File handler — DEBUG level, rotating
+    # File handler - DEBUG level, rotating
     try:
         fh = RotatingFileHandler(
             _LOG_FILE, maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8",

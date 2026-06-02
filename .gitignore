@@ -1,7 +1,7 @@
-# ── Credentials & secrets ─────────────────────────────────
+# Credentials & secrets
 .env
 
-# ── Python ────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,7 +10,7 @@ dist/
 build/
 .eggs/
 
-# ── ML models (binary, too large for git) ─────────────────
+# ML models (binary, too large for git)
 *.pkl
 *.h5
 *.keras
@@ -19,29 +19,29 @@ models/
 hybrid_models/
 index_models/
 
-# ── Data & databases ──────────────────────────────────────
+# Data & databases
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 market_data/
 
-# ── Logs ──────────────────────────────────────────────────
+# Logs
 *.log
 catboost_info/
 
-# ── Backups & exports ─────────────────────────────────────
+# Backups & exports
 backups/
 exports/
 backtest_results*.pkl
 
-# ── Scheduler state ───────────────────────────────────────
+# Scheduler state
 scheduler_state.json
 
-# ── Internal docs (outdated) ──────────────────────────────
+# Internal docs (outdated)
 PLAN.md
 
-# ── IDE & OS ──────────────────────────────────────────────
+# IDE & OS
 .idea/
 .vscode/
 *.swp

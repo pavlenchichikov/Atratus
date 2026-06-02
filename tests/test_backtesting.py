@@ -1,4 +1,4 @@
-"""Tests for core.backtesting — walk-forward splits, PnL, scoring."""
+"""Tests for core.backtesting - walk-forward splits, PnL, scoring."""
 
 import numpy as np
 

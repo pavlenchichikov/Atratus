@@ -291,7 +291,7 @@ def _cmd_list(rules: list) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="G-Trade — Custom Alert Rules")
+    parser = argparse.ArgumentParser(description="G-Trade - Custom Alert Rules")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--add", nargs=3, metavar=("ASSET", "CONDITION", "VALUE"),
                        help="Add a new rule. E.g.: --add BTC rsi_below 30")

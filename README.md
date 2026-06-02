@@ -1,6 +1,6 @@
 # G-Trade
 
-ML-powered trading signal system. Covers 300+ assets — crypto, US/Russian equities, forex, commodities. Runs an ensemble of four model architectures (CatBoost, LSTM+Attention, Transformer, TCN), does walk-forward backtesting with realistic costs, and manages risk with Kelly sizing and circuit breakers.
+ML-powered trading signal system. Covers 300+ assets - crypto, US/Russian equities, forex, commodities. Runs an ensemble of four model architectures (CatBoost, LSTM+Attention, Transformer, TCN), does walk-forward backtesting with realistic costs, and manages risk with Kelly sizing and circuit breakers.
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![TensorFlow](https://img.shields.io/badge/TensorFlow-2.10%2B-orange)
@@ -10,7 +10,7 @@ ML-powered trading signal system. Covers 300+ assets — crypto, US/Russian equi
 
 1. `data_engine.py` pulls daily/weekly OHLCV bars from Yahoo Finance and MOEX API into a local SQLite database
 2. `train_hybrid.py` engineers features (returns, vol, RSI, MACD, SMA crossovers, trend strength, etc.) and trains a 4-model ensemble with walk-forward splits
-3. `predict.py` runs inference on all assets — outputs BUY/SELL/WAIT with confidence and Kelly allocation
+3. `predict.py` runs inference on all assets - outputs BUY/SELL/WAIT with confidence and Kelly allocation
 4. `risk_manager.py` sizes positions via fractional Kelly, checks drawdown limits (-15% halt), daily loss limits (-5% halt), and a Taleb tail-risk gate
 5. `portfolio.py` tracks correlations, sector exposure, and diversification
 
@@ -38,13 +38,13 @@ Auto-detects NVIDIA GPUs. Works fine on CPU too (just slower training). Run `set
 
 ## Scheduler
 
-`python scheduler.py` runs as a daemon — fetches data every 6h, runs predictions every 4h, validates the DB daily. Configurable via `scheduler_config.json`.
+`python scheduler.py` runs as a daemon - fetches data every 6h, runs predictions every 4h, validates the DB daily. Configurable via `scheduler_config.json`.
 
 ## Config
 
-- `.env` — Telegram credentials, SOCKS5 proxy (optional, needed for Yahoo/Telegram behind firewalls)
-- `config.py` — asset map, per-asset buy/sell thresholds
-- `auto_trader_config.json` — paper trading parameters (confidence floor, max positions, Kelly toggle)
+- `.env` - Telegram credentials, SOCKS5 proxy (optional, needed for Yahoo/Telegram behind firewalls)
+- `config.py` - asset map, per-asset buy/sell thresholds
+- `auto_trader_config.json` - paper trading parameters (confidence floor, max positions, Kelly toggle)
 
 ## License
 

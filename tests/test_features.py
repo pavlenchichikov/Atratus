@@ -1,4 +1,4 @@
-"""Tests for core.features — feature engineering pipeline."""
+"""Tests for core.features - feature engineering pipeline."""
 
 import numpy as np
 import pandas as pd

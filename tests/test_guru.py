@@ -1,4 +1,4 @@
-"""Tests for core.guru — Guru Council fundamental analysis."""
+"""Tests for core.guru - Guru Council fundamental analysis."""
 
 import pytest
 

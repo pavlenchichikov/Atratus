@@ -1,12 +1,12 @@
 """
-Watchlist — управление списками избранных активов с текущими ценами.
-  python watchlist.py                  — показать default
-  python watchlist.py --list crypto    — конкретный список
-  python watchlist.py --add BTC GOLD   — добавить
-  python watchlist.py --remove VIX     — убрать
+Watchlist - управление списками избранных активов с текущими ценами.
+  python watchlist.py                  - показать default
+  python watchlist.py --list crypto    - конкретный список
+  python watchlist.py --add BTC GOLD   - добавить
+  python watchlist.py --remove VIX     - убрать
   python watchlist.py --create mylist BTC ETH
-  python watchlist.py --lists          — все списки
-  python watchlist.py --status         — компактный вывод (для GUI)
+  python watchlist.py --lists          - все списки
+  python watchlist.py --status         - компактный вывод (для GUI)
 """
 
 import os

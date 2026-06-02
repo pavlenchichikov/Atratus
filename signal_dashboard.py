@@ -77,7 +77,7 @@ def _kelly_size(win_rate, avg_win=0.020, avg_loss=0.012):
 
 
 def _load_transformer(path, lookback, n_features):
-    """Try loading a transformer model — returns (model, lookback) or (None, lookback)."""
+    """Try loading a transformer model - returns (model, lookback) or (None, lookback)."""
     try:
         from train_hybrid import build_transformer_encoder
         import shutil

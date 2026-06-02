@@ -30,7 +30,7 @@ THRESHOLDS = {
     "SBER": 0.54
 }
 
-# Настройки Telegram — loaded from .env (never hardcode credentials)
+# Настройки Telegram - loaded from .env (never hardcode credentials)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_USER_ID = os.getenv("TELEGRAM_USER_ID", "")
 
@@ -78,51 +78,51 @@ FULL_ASSET_MAP = {
     'ADA': 'ADA-USD', 'AVAX': 'AVAX-USD', 'DOT': 'DOT-USD', 'LINK': 'LINK-USD',
     'SHIB': 'SHIB-USD', 'ATOM': 'ATOM-USD', 'UNI': 'UNI-USD', 'NEAR': 'NEAR-USD',
 
-    # РЫНОК РФ — Голубые фишки
+    # РЫНОК РФ - Голубые фишки
     'IMOEX': 'IMOEX', 'SBER': 'SBER', 'GAZP': 'GAZP', 'LKOH': 'LKOH',
     'ROSN': 'ROSN', 'NVTK': 'NVTK', 'TATN': 'TATN', 'SNGS': 'SNGS',
     'PLZL': 'PLZL', 'SIBN': 'SIBN', 'MGNT': 'MGNT',
-    # РФ — Банки и финансы
+    # РФ - Банки и финансы
     'TCSG': 'T', 'VTBR': 'VTBR', 'BSPB': 'BSPB', 'MOEX_EX': 'MOEX',
-    # РФ — Технологии и рост
+    # РФ - Технологии и рост
     'YNDX': 'YDEX', 'OZON': 'OZON', 'VKCO': 'VKCO', 'POSI': 'POSI',
     'MTSS': 'MTSS', 'RTKM': 'RTKM',
-    # РФ — Металлы и промышленность
+    # РФ - Металлы и промышленность
     'CHMF': 'CHMF', 'NLMK': 'NLMK', 'MAGN': 'MAGN',
     'RUAL': 'RUAL', 'ALRS': 'ALRS',
-    # РФ — Энергетика и транспорт
+    # РФ - Энергетика и транспорт
     'IRAO': 'IRAO', 'HYDR': 'HYDR', 'FLOT': 'FLOT',
     'AFLT': 'AFLT', 'PIKK': 'PIKK',
-    # РФ — Химия и удобрения
+    # РФ - Химия и удобрения
     'PHOR': 'PHOR', 'SGZH': 'SGZH',
-    # РФ — Ритейл
+    # РФ - Ритейл
     'FIVE': 'FIVE', 'FIXP': 'FIXP', 'LENT': 'LENT', 'MVID': 'MVID',
-    # РФ — Строительство и девелопмент
+    # РФ - Строительство и девелопмент
     'SMLT': 'SMLT', 'LSRG': 'LSRG',
-    # РФ — Банки и финансы (доп)
+    # РФ - Банки и финансы (доп)
     'CBOM': 'CBOM',
-    # РФ — Энергетика (доп)
+    # РФ - Энергетика (доп)
     'FEES': 'FEES', 'UPRO': 'UPRO', 'MSNG': 'MSNG',
-    # РФ — Промышленность (доп)
+    # РФ - Промышленность (доп)
     'TRMK': 'TRMK', 'MTLR': 'MTLR', 'RASP': 'RASP', 'NMTP': 'NMTP',
-    # РФ — IT (доп)
+    # РФ - IT (доп)
     'HHRU': 'HHRU', 'SOFL': 'SOFL', 'ASTR': 'ASTR', 'WUSH': 'WUSH',
 
-    # FOREX — Мажоры
+    # FOREX - Мажоры
     'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X', 'USDJPY': 'JPY=X',
     'USDCHF': 'CHF=X', 'AUDUSD': 'AUDUSD=X', 'USDCAD': 'CAD=X',
     'NZDUSD': 'NZDUSD=X', 'USDRUB': 'RUB=X',
-    # FOREX — Кроссы EUR
+    # FOREX - Кроссы EUR
     'EURGBP': 'EURGBP=X', 'EURJPY': 'EURJPY=X', 'EURCHF': 'EURCHF=X',
     'EURAUD': 'EURAUD=X', 'EURCAD': 'EURCAD=X', 'EURNZD': 'EURNZD=X',
-    # FOREX — Кроссы GBP
+    # FOREX - Кроссы GBP
     'GBPJPY': 'GBPJPY=X', 'GBPAUD': 'GBPAUD=X', 'GBPCAD': 'GBPCAD=X',
     'GBPCHF': 'GBPCHF=X', 'GBPNZD': 'GBPNZD=X',
-    # FOREX — Кроссы AUD/NZD/CAD/CHF
+    # FOREX - Кроссы AUD/NZD/CAD/CHF
     'AUDCAD': 'AUDCAD=X', 'AUDCHF': 'AUDCHF=X', 'AUDJPY': 'AUDJPY=X',
     'AUDNZD': 'AUDNZD=X', 'CADJPY': 'CADJPY=X', 'CHFJPY': 'CHFJPY=X',
     'NZDJPY': 'NZDJPY=X',
-    # FOREX — Экзотика
+    # FOREX - Экзотика
     'USDTRY': 'TRY=X', 'USDMXN': 'MXN=X', 'USDZAR': 'ZAR=X',
     'USDSGD': 'SGD=X', 'USDNOK': 'NOK=X', 'USDSEK': 'SEK=X',
     'USDPLN': 'PLN=X', 'USDCNH': 'CNH=X',
@@ -156,3 +156,31 @@ ASSET_TYPES = {
                       "CADJPY", "CHFJPY", "NZDJPY"],
     "FOREX EXOTIC": ["USDTRY", "USDMXN", "USDZAR", "USDSGD", "USDNOK", "USDSEK", "USDPLN", "USDCNH"],
 }
+
+
+# --- 4. ВАЛИДАЦИЯ ОКРУЖЕНИЯ ---
+# Импорт config.py не должен падать, если секреты не заданы: большинство скриптов
+# (data_engine, train_hybrid, predict, backtest) работают без Telegram. Скрипты,
+# которым реально нужны креды, вызывают require_env(...) на старте и получают
+# понятную ошибку вместо падения где-то в сетевом коде.
+
+class ConfigError(RuntimeError):
+    """Обязательная переменная окружения не задана."""
+
+
+def require_env(*names: str) -> None:
+    """Падает с понятным сообщением, если какая-то из переменных пустая.
+
+    Пример: require_env("TELEGRAM_TOKEN", "TELEGRAM_USER_ID") в начале alert_bot.py.
+    """
+    missing = [n for n in names if not os.getenv(n)]
+    if missing:
+        raise ConfigError(
+            "Не заданы переменные окружения: " + ", ".join(missing) + ". "
+            "Скопируй .env.example в .env и заполни значения."
+        )
+
+
+def validate_telegram_config() -> None:
+    """Проверяет, что Telegram-креды заданы. Зови перед отправкой алертов."""
+    require_env("TELEGRAM_TOKEN", "TELEGRAM_USER_ID")

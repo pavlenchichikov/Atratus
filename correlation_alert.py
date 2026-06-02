@@ -1,8 +1,8 @@
 """
-Correlation Alert — детектор смены корреляций между активами.
-  python correlation_alert.py            — показать алерты
-  python correlation_alert.py --matrix   — матрица ключевых пар
-  python correlation_alert.py --json     — JSON вывод
+Correlation Alert - детектор смены корреляций между активами.
+  python correlation_alert.py            - показать алерты
+  python correlation_alert.py --matrix   - матрица ключевых пар
+  python correlation_alert.py --json     - JSON вывод
 """
 
 import os
@@ -122,7 +122,7 @@ def get_correlation_alerts(threshold=ALERT_THRESHOLD):
 
 
 def get_stress_indicator():
-    """Средняя попарная корреляция — индикатор рыночного стресса."""
+    """Средняя попарная корреляция - индикатор рыночного стресса."""
     ret_df = _load_returns(KEY_ASSETS)
     if ret_df.shape[1] < 3:
         return {"avg_corr": 0, "label": "N/A", "min_corr": 0, "max_corr": 0}

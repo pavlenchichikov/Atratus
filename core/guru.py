@@ -1,10 +1,10 @@
-"""Guru Council V2 — Fundamental analysis from 4 investment philosophies.
+"""Guru Council V2 - Fundamental analysis from 4 investment philosophies.
 
 Each guru returns (status, description, score 0-2):
-  • Lynch  — GARP: PEG ratio + revenue trend
-  • Buffett — Quality moats: ROE, FCF, low debt, margins
-  • Graham  — Deep value: NCAV, Graham Number, P/E, balance sheet
-  • Munger  — Inversion: what can go wrong? Risk detection
+  - Lynch  - GARP: PEG ratio + revenue trend
+  - Buffett - Quality moats: ROE, FCF, low debt, margins
+  - Graham  - Deep value: NCAV, Graham Number, P/E, balance sheet
+  - Munger  - Inversion: what can go wrong? Risk detection
 """
 
 from __future__ import annotations
@@ -60,10 +60,10 @@ def technical_context(df: pd.DataFrame) -> dict[str, Any] | None:
     }
 
 
-# ── Individual Guru Algorithms ───────────────────────────────────────────────
+# -- Individual Guru Algorithms -----------------------------------------------
 
 def lynch_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, int]:
-    """Peter Lynch — Growth At Reasonable Price (GARP)."""
+    """Peter Lynch - Growth At Reasonable Price (GARP)."""
     if fund:
         pe = fund.get('pe', 0)
         growth = fund.get('growth', 0)
@@ -115,7 +115,7 @@ def lynch_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, int]
 
 
 def buffett_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, int]:
-    """Warren Buffett — Quality moats, ROE, FCF, low debt, retained earnings."""
+    """Warren Buffett - Quality moats, ROE, FCF, low debt, retained earnings."""
     if fund:
         roe = fund.get('roe', 0)
         debt = fund.get('debt_equity', 0)
@@ -195,7 +195,7 @@ def buffett_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, in
 
 
 def graham_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, int]:
-    """Benjamin Graham — Deep value, margin of safety, Graham Number, NCAV."""
+    """Benjamin Graham - Deep value, margin of safety, Graham Number, NCAV."""
     if fund:
         pe = fund.get('pe', 0)
         eps = fund.get('eps', 0)
@@ -263,7 +263,7 @@ def graham_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, int
     if tech:
         pct = tech['pct_52w']
         if pct < 25:
-            return "[OK] CHEAP", f"52W: {pct:.0f}% (у минимумов — запас прочности)", 2
+            return "[OK] CHEAP", f"52W: {pct:.0f}% (у минимумов - запас прочности)", 2
         elif pct < 60:
             return "[--] FAIR", f"52W: {pct:.0f}% (середина)", 1
         else:
@@ -273,7 +273,7 @@ def graham_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, int
 
 
 def munger_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, int]:
-    """Charlie Munger — Inversion: what can go wrong? Deep risk detection."""
+    """Charlie Munger - Inversion: what can go wrong? Deep risk detection."""
     risks = []
     score = 0
 
@@ -386,13 +386,13 @@ def get_guru_analysis(
 
     if consensus_pct >= 75:
         council = {"verdict": "BUY", "pct": consensus_pct, "color": "green",
-                   "text": f"STRONG BUY ({consensus_pct:.0f}% — {total_score}/{max_score})"}
+                   "text": f"STRONG BUY ({consensus_pct:.0f}% - {total_score}/{max_score})"}
     elif consensus_pct >= 50:
         council = {"verdict": "HOLD", "pct": consensus_pct, "color": "orange",
-                   "text": f"HOLD ({consensus_pct:.0f}% — {total_score}/{max_score})"}
+                   "text": f"HOLD ({consensus_pct:.0f}% - {total_score}/{max_score})"}
     else:
         council = {"verdict": "AVOID", "pct": consensus_pct, "color": "red",
-                   "text": f"AVOID ({consensus_pct:.0f}% — {total_score}/{max_score})"}
+                   "text": f"AVOID ({consensus_pct:.0f}% - {total_score}/{max_score})"}
 
     data_source = fund.get('source', 'technical') if fund else 'technical'
 

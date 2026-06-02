@@ -1,4 +1,4 @@
-"""Tests for core.db_backup — SQLite backup utility."""
+"""Tests for core.db_backup - SQLite backup utility."""
 
 import os
 
