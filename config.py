@@ -40,7 +40,7 @@ SOCKS5_PROXY = os.getenv("SOCKS5_PROXY", "socks5h://127.0.0.1:12334")
 # --- 2. КАРТА АКТИВОВ ---
 FULL_ASSET_MAP = {
     # МИРОВЫЕ ИНДЕКСЫ
-    'VIX': '^VIX', 'DXY': 'DX=F', 'TNX': '^TNX',
+    'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 'TNX': '^TNX',
     'SP500': '^GSPC', 'NASDAQ': '^IXIC', 'DOW': '^DJI',
 
     # СЫРЬЕ

@@ -125,12 +125,15 @@ def add_weekly_features(df: pd.DataFrame, table: str, engine) -> pd.DataFrame:
     return df
 
 
+# Reference tables are named after the ASSET KEY (config.py), e.g. SP500 -> "sp500",
+# not after the Yahoo ticker. Using ticker-derived names here (btcusd/gspc/dxynyd)
+# meant every read missed its table and corr_* silently fell back to 0.0.
 _CROSS_REFS = [
-    ('btcusd', 'corr_btc'),
-    ('gspc', 'corr_sp500'),
-    ('dxynyd', 'corr_dxy'),
+    ('btc', 'corr_btc'),
+    ('sp500', 'corr_sp500'),
+    ('dxy', 'corr_dxy'),
 ]
-_CROSS_SKIP = {'btcusd', 'gspc', 'dxynyd', 'vix'}
+_CROSS_SKIP = {'btc', 'sp500', 'dxy', 'vix'}
 
 
 def add_crossasset_features(df: pd.DataFrame, table: str, engine) -> pd.DataFrame:

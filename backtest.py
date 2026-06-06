@@ -49,11 +49,12 @@ except ImportError:
     sys.exit(f"config.py not found in {BASE_DIR}")
 
 # Import shared components from core modules
-from core.features import engineer_features, add_weekly_features
+from core.features import engineer_features, add_weekly_features, add_crossasset_features
 from core.architectures import ReduceSumLayer, build_lstm_attention
 from core.ensemble import ensemble_with_gating, build_stacking_features
 from core.profiles import FOREX
 from core.backtesting import FOREX_COMMISSION, FOREX_SLIPPAGE
+from core.calibration import load_calibrator, apply_calibrator
 import joblib
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
@@ -304,6 +305,7 @@ def run_forensic_test():
             df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
             df = engineer_features(df_raw)
             df = add_weekly_features(df, table, engine)
+            df = add_crossasset_features(df, table, engine)
             if len(df) < 200:
                 continue
         except Exception as exc:
@@ -433,12 +435,26 @@ def run_forensic_test():
         comm = FOREX_COMMISSION if name in FOREX else COMMISSION
         slip = FOREX_SLIPPAGE if name in FOREX else SLIPPAGE
 
+        # --- Calibrator (identity when asset has no saved calibrator) ---
+        calibrator = load_calibrator(MODEL_DIR, table)
+
+        # --- Buy & hold benchmark over the same test window ---
+        bench_ret = 0.0
+        if len(df_test) > 1:
+            bench_ret = (df_test['close'].iloc[-1] / df_test['close'].iloc[0] - 1.0) * 100
+
         # --- Simulation with Kelly sizing ---
         balance = INITIAL_CAPITAL
         equity = [balance]
         trades = 0
         wins = 0
         trade_rets = []
+
+        # Raw directional accuracy + calibration, measured over ALL bars
+        # (not only the ones that became trades) - the honest model hit rate.
+        n_eval = 0
+        n_correct = 0
+        brier_sum = 0.0
 
         # Bootstrap Kelly init
         bootstrap_wr = 0.55
@@ -471,6 +487,18 @@ def run_forensic_test():
                 )[0])
             else:
                 prob = p_cb
+
+            # Calibrate raw ensemble prob (identity if no calibrator saved yet)
+            prob = float(apply_calibrator(calibrator, np.array([prob]))[0])
+
+            # --- Directional accuracy + Brier over every bar ---
+            _tgt_ret = df_test["next_ret"].iloc[i]
+            if not pd.isna(_tgt_ret):
+                _tgt = 1 if _tgt_ret > 0 else 0
+                n_eval += 1
+                if int(prob >= 0.5) == _tgt:
+                    n_correct += 1
+                brier_sum += (prob - _tgt) ** 2
 
             # Use tuned thresholds + no-trade band
             if (buy_thr - no_trade_band) <= prob <= (sell_thr + no_trade_band):
@@ -519,6 +547,9 @@ def run_forensic_test():
         max_dd = _max_drawdown(equity) * 100
         sharpe = _sharpe(trade_rets)
         calmar = _calmar(profit_pct / 100, max_dd / 100)
+        dir_acc = (n_correct / n_eval * 100) if n_eval else 0.0
+        brier = (brier_sum / n_eval) if n_eval else 0.0
+        alpha = profit_pct - bench_ret
 
         color = "\033[92m" if profit_pct > 0 else "\033[91m"
         reset = "\033[0m"
@@ -541,6 +572,10 @@ def run_forensic_test():
             "Calmar": calmar,
             "Trades": trades,
             "WinRate": winrate,
+            "DirAcc": dir_acc,
+            "Brier": brier,
+            "Benchmark": bench_ret,
+            "Alpha": alpha,
             "Mode": mode_label,
         })
         logger.info("Backtest %s: profit=%.2f%% trades=%d winrate=%.1f%% sharpe=%.2f mode=%s",
@@ -570,12 +605,17 @@ def run_forensic_test():
 
     print("\nPORTFOLIO AGGREGATES:")
     profitable = df_res[df_res["Profit"] > 0]
+    beat_bench = df_res[df_res["Alpha"] > 0]
     print(f"   Assets tested:     {len(df_res)}")
     print(f"   DUAL (AI) mode:    {dual_count}")
     print(f"   CB ONLY mode:      {cb_count}")
     print(f"   Profitable:        {len(profitable)} ({len(profitable)/len(df_res)*100:.0f}%)")
+    print(f"   Beat buy&hold:     {len(beat_bench)} ({len(beat_bench)/len(df_res)*100:.0f}%)")
     print(f"   Avg Net Return:    {df_res['Profit'].mean():+.2f}%")
     print(f"   Median Return:     {df_res['Profit'].median():+.2f}%")
+    print(f"   Avg Alpha:         {df_res['Alpha'].mean():+.2f}% (vs buy&hold)")
+    print(f"   Avg Dir. Accuracy: {df_res['DirAcc'].mean():.1f}%  (raw direction hit rate, all bars)")
+    print(f"   Avg Brier score:   {df_res['Brier'].mean():.4f}  (lower = better calibrated)")
     print(f"   Avg Sharpe:        {df_res['Sharpe'].mean():.2f}")
     print(f"   Avg Max DD:        {df_res['MaxDD'].mean():.1f}%")
     print(f"   Best Sharpe:       {df_res.loc[df_res['Sharpe'].idxmax(), 'Asset']} "

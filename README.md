@@ -1,50 +1,51 @@
 # G-Trade
 
-ML-powered trading signal system. Covers 300+ assets - crypto, US/Russian equities, forex, commodities. Runs an ensemble of four model architectures (CatBoost, LSTM+Attention, Transformer, TCN), does walk-forward backtesting with realistic costs, and manages risk with Kelly sizing and circuit breakers.
+ML trading-signal system for ~150 assets (crypto, US and Russian equities, forex, commodities). Each asset gets a 4-model ensemble (CatBoost, LSTM+Attention, Transformer, TCN) selected by walk-forward backtesting with realistic costs, plus Kelly position sizing and drawdown circuit breakers.
 
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
-![TensorFlow](https://img.shields.io/badge/TensorFlow-2.10%2B-orange)
-![CatBoost](https://img.shields.io/badge/CatBoost-1.2%2B-yellow)
+## Pipeline
 
-## How it works
+1. `data_engine.py` pulls daily and weekly OHLCV from Yahoo Finance and the MOEX API into a local SQLite DB (`market.db`).
+2. `train_hybrid.py` builds features (returns, volatility, RSI, MACD, SMA, ATR, weekly and cross-asset correlations), trains the ensemble on purged walk-forward splits, and saves the champion plus its scaler and probability calibrator.
+3. `predict.py` runs inference across all assets and prints BUY/SELL/WAIT with confidence.
+4. `backtest.py` evaluates champions on held-out data: PnL, win rate, Sharpe, directional accuracy, Brier score, and alpha vs buy & hold.
+5. `risk_manager.py` and `portfolio.py` handle Kelly sizing, drawdown and daily-loss halts, correlation and sector exposure.
 
-1. `data_engine.py` pulls daily/weekly OHLCV bars from Yahoo Finance and MOEX API into a local SQLite database
-2. `train_hybrid.py` engineers features (returns, vol, RSI, MACD, SMA crossovers, trend strength, etc.) and trains a 4-model ensemble with walk-forward splits
-3. `predict.py` runs inference on all assets - outputs BUY/SELL/WAIT with confidence and Kelly allocation
-4. `risk_manager.py` sizes positions via fractional Kelly, checks drawdown limits (-15% halt), daily loss limits (-5% halt), and a Taleb tail-risk gate
-5. `portfolio.py` tracks correlations, sector exposure, and diversification
-
-There's a Streamlit dashboard (`app.py`) with four tabs: signal radar, multi-model consensus, portfolio analytics, and risk monitor. Plus a Telegram bot for hourly alert scans.
+`app.py` is a Streamlit dashboard (signal radar, model consensus, portfolio, risk). A Telegram bot delivers hourly alert scans.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/pavlenchichikov/g-trade.git
-cd g-trade
 pip install -r requirements.txt
-cp .env.example .env   # add Telegram token, proxy if needed
+cp .env.example .env          # Telegram token, optional SOCKS5 proxy
+
+python data_engine.py         # fetch market data
+python train_hybrid.py        # train models
+python predict.py             # console signal radar
+streamlit run app.py          # dashboard
 ```
 
-```bash
-python data_engine.py       # fetch market data
-python train_hybrid.py      # train models
-python predict.py           # console radar scan
-streamlit run app.py        # dashboard
-```
+`python scheduler.py` runs as a daemon: data every 6h, predictions every 4h, daily DB validation.
+
+## Data routing
+
+Run from a Russian IP, the two sources need opposite routing: Yahoo Finance is geo-blocked and needs a foreign exit, MOEX works only from a Russian IP. Run AmneziaVPN in SOCKS5-proxy mode (`127.0.0.1:12334`); `net.py` then routes Yahoo through the proxy and MOEX direct. Override with `GTRADE_PROXY_MODE=auto|on|off`.
 
 ## GPU
 
-Auto-detects NVIDIA GPUs. Works fine on CPU too (just slower training). Run `setup_gpu.bat` to install matching CUDA/cuDNN automatically. Mixed precision (fp16) kicks in on RTX 20xx+ for ~2x speedup.
-
-## Scheduler
-
-`python scheduler.py` runs as a daemon - fetches data every 6h, runs predictions every 4h, validates the DB daily. Configurable via `scheduler_config.json`.
+Native TensorFlow on Windows is CPU-only since 2.11, so training runs on CPU here (fine for this workload). To use an NVIDIA GPU, run under WSL2 with `pip install tensorflow[and-cuda]`.
 
 ## Config
 
-- `.env` - Telegram credentials, SOCKS5 proxy (optional, needed for Yahoo/Telegram behind firewalls)
-- `config.py` - asset map, per-asset buy/sell thresholds
-- `auto_trader_config.json` - paper trading parameters (confidence floor, max positions, Kelly toggle)
+- `.env` - Telegram credentials, optional SOCKS5 proxy.
+- `config.py` - asset map and per-asset buy/sell thresholds.
+- `auto_trader_config.json` - paper-trading parameters.
+
+## Tests
+
+```bash
+pytest -q
+ruff check .
+```
 
 ## License
 

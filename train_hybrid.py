@@ -107,11 +107,14 @@ from core.features import engineer_features, add_weekly_features, add_crossasset
 from core.backtesting import (
     adaptive_split_params, make_walk_forward_splits,
     pnl_from_signals, max_drawdown_from_returns, score_strategy,
+    sharpe_from_returns,
     make_signals, apply_regime_filter,
     COMMISSION, SLIPPAGE, FOREX_COMMISSION, FOREX_SLIPPAGE,
     MAX_TRADE_RET,
 )
 from core.ensemble import build_stacking_features
+from core.scaling import save_scaler
+from core.calibration import fit_calibrator, save_calibrator
 
 
 class EpochStateCallback(Callback):
@@ -321,12 +324,16 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             _safe_print(f"  [SKIP] {asset:<12} insufficient rows ({len(df)})")
             return None
 
+        # Embargo = sequence lookback: purges overlap between train/val/test so
+        # sequence models cannot peek at neighbouring windows (purged walk-forward).
+        _embargo = int(opt.get('lookback', profile['lookback']))
         splits = make_walk_forward_splits(
             len(df),
             min_train=sp['min_train'],
             val_size=sp['val_size'],
             test_size=sp['test_size'],
-            step=sp['step']
+            step=sp['step'],
+            embargo=_embargo,
         )
         if not splits:
             _safe_print(f"  [SKIP] {asset:<12} no walk-forward windows ({len(df)} rows)")
@@ -470,8 +477,11 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         {'direction': y_seq_val.astype('float32'),
                          'magnitude': y_mag_val_d}
                     )).batch(BATCH).prefetch(tf.data.AUTOTUNE)
+                    # mode='min' is required on Keras 3 / TF 2.20+: it cannot infer
+                    # the direction for a multi-output loss name like
+                    # 'val_direction_loss' and raises without an explicit mode.
                     es_lstm = EarlyStopping(monitor='val_direction_loss', patience=10,
-                                            restore_best_weights=True)
+                                            mode='min', restore_best_weights=True)
                     _lstm_cb = EpochStateCallback(asset, k, 160,
                                                  label="LSTM", val_metric="val_direction_loss")
                     lstm_mt.fit(train_ds, validation_data=val_ds, epochs=160,
@@ -495,7 +505,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         (X_seq_val.astype('float32'), y_seq_val.astype('float32'))
                     ).batch(BATCH).prefetch(tf.data.AUTOTUNE)
                     es_tf = EarlyStopping(monitor='val_loss', patience=8,
-                                          restore_best_weights=True)
+                                          mode='min', restore_best_weights=True)
                     _tf_cb = EpochStateCallback(asset, k, 100,
                                                label="TF", val_metric="val_loss")
                     tf_enc.fit(train_ds_tf, validation_data=val_ds_tf, epochs=100,
@@ -515,7 +525,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         (X_seq_val.astype('float32'), y_seq_val.astype('float32'))
                     ).batch(BATCH).prefetch(tf.data.AUTOTUNE)
                     es_tcn = EarlyStopping(monitor='val_loss', patience=7,
-                                           restore_best_weights=True)
+                                           mode='min', restore_best_weights=True)
                     _tcn_cb = EpochStateCallback(asset, k, 80,
                                                  label="TCN", val_metric="val_loss")
                     tcn_model.fit(train_ds_tcn, validation_data=val_ds_tcn, epochs=80,
@@ -612,7 +622,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     ret_stream = [(float(np.clip((r if g > 0 else -r), -MAX_TRADE_RET, MAX_TRADE_RET)) - (comm + slip)) for g, r in zip(sig, val_ret) if g != 0 and not np.isnan(r)]
                     p, t, w = pnl_from_signals(sig, val_ret, commission=comm, slippage=slip)
                     mdd = max_drawdown_from_returns(ret_stream)
-                    score = score_strategy(p, mdd, w, t)
+                    score = score_strategy(p, mdd, w, t, sharpe=sharpe_from_returns(ret_stream))
                     all_configs.append((b, s, p, t, w, mdd, score))
 
             # Average top-3 thresholds for stability (reduces overfitting)
@@ -629,7 +639,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             test_returns = [(float(np.clip((r if g > 0 else -r), -MAX_TRADE_RET, MAX_TRADE_RET)) - (comm + slip)) for g, r in zip(sig_test, test_ret) if g != 0 and not np.isnan(r)]
             test_profit, test_trades, test_win = pnl_from_signals(sig_test, test_ret, commission=comm, slippage=slip)
             test_mdd = max_drawdown_from_returns(test_returns)
-            test_score = score_strategy(test_profit, test_mdd, test_win, test_trades)
+            test_score = score_strategy(test_profit, test_mdd, test_win, test_trades,
+                                        sharpe=sharpe_from_returns(test_returns))
 
             # Apply adversarial weight to score (penalize distribution-shifted folds)
             test_score_weighted = test_score * adv_weight
@@ -652,6 +663,9 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'models': {'cb': cb, 'lstm': lstm, 'tf_enc': tf_enc,
                            'tcn': tcn_model, 'meta': meta_clf, 'scaler': scaler},
                 'ensemble_mode': 'stacking' if meta_clf is not None else 'avg',
+                # Kept for probability calibration at champion-save time.
+                'val_prob': np.asarray(val_prob, dtype=float),
+                'val_target': np.asarray(val_target_aligned, dtype=int),
             }
             fold_metrics.append(fold_info)
 
@@ -711,6 +725,12 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             meta_out = os.path.join(MODEL_DIR, f"{table}_meta.pkl")
             if best_fold['models']['meta'] is not None:
                 joblib.dump(best_fold['models']['meta'], meta_out)
+            # Persist the train-fold scaler so inference reuses identical stats
+            # (prevents train/serve skew) and an isotonic calibrator fitted on the
+            # champion fold's validation probabilities.
+            save_scaler(best_fold['models']['scaler'], MODEL_DIR, table)
+            _calib = fit_calibrator(best_fold.get('val_prob'), best_fold.get('val_target'))
+            save_calibrator(_calib, MODEL_DIR, table)
             registry_update = {
                 'score': best_fold['score'],
                 'updated_at': datetime.now().isoformat(),

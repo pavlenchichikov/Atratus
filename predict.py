@@ -21,7 +21,6 @@ import tensorflow as tf
 import joblib
 from catboost import CatBoostClassifier
 from datetime import datetime
-from sklearn.preprocessing import StandardScaler
 from sqlalchemy import create_engine
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -43,8 +42,10 @@ except ImportError:
     sys.exit("config.py not found!")
 
 from core.logger import get_logger
-from core.features import engineer_features, add_weekly_features
+from core.features import engineer_features, add_weekly_features, add_crossasset_features
 from core.ensemble import build_stacking_features
+from core.scaling import load_or_fit_scaler
+from core.calibration import load_calibrator, apply_calibrator
 from backtest import _load_lstm_model, _get_lookback
 
 logger = get_logger("predict")
@@ -125,6 +126,7 @@ def _predict_asset(name, registry, thresholds):
         df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
         df = engineer_features(df_raw)
         df = add_weekly_features(df, table, engine)
+        df = add_crossasset_features(df, table, engine)
         if len(df) < 50:
             return None
     except Exception as e:
@@ -145,8 +147,14 @@ def _predict_asset(name, registry, thresholds):
     try:
         curr_price = float(df['close'].iloc[-1])
         n_bars = min(500, len(df))
-        scaler = StandardScaler()
-        X_all = scaler.fit_transform(df[features].iloc[-n_bars:].values)
+        x_fit = df[features].iloc[-n_bars:].values
+        # Reuse the scaler saved at training time (train/serve parity). Falls back
+        # to fitting on the recent window only for legacy models without a saved
+        # scaler, logging so the skew is visible until the asset is retrained.
+        scaler, _src = load_or_fit_scaler(MODEL_DIR, table, x_fit)
+        if _src == "fit":
+            logger.debug("No saved scaler for %s; fitting on recent window (retrain to fix)", table)
+        X_all = scaler.transform(x_fit)
 
         cb = CatBoostClassifier()
         cb.load_model(cb_path)
@@ -226,6 +234,10 @@ def _predict_asset(name, registry, thresholds):
             prob = float(np.mean(probs_avail))
         else:
             prob = cb_prob
+
+        # Calibrate the raw ensemble probability into an honest up-move frequency
+        # when a calibrator exists for this asset (identity otherwise).
+        prob = float(apply_calibrator(load_calibrator(MODEL_DIR, table), np.array([prob]))[0])
 
         thr = thresholds.get(name, {})
         buy_thr = thr.get('buy', 0.55)

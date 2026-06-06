@@ -10,6 +10,7 @@ from core.backtesting import (
     max_drawdown_from_returns,
     pnl_from_signals,
     score_strategy,
+    sharpe_from_returns,
 )
 
 
@@ -67,6 +68,25 @@ class TestWalkForwardSplits:
         splits = make_walk_forward_splits(800, min_train=500, val_size=120, test_size=120, step=120)
         for _, _, test_s in splits:
             assert test_s.stop <= 800
+
+    def test_embargo_inserts_gap(self):
+        """With embargo, a gap separates train/val and val/test (purged CV)."""
+        splits = make_walk_forward_splits(
+            1000, min_train=200, val_size=100, test_size=100, step=100, embargo=10
+        )
+        assert len(splits) > 0
+        for train_s, val_s, test_s in splits:
+            assert val_s.start - train_s.stop == 10
+            assert test_s.start - val_s.stop == 10
+
+    def test_embargo_zero_matches_contiguous(self):
+        """embargo=0 reproduces the original contiguous behavior."""
+        splits = make_walk_forward_splits(
+            1000, min_train=200, val_size=100, test_size=100, step=100, embargo=0
+        )
+        for train_s, val_s, test_s in splits:
+            assert val_s.start == train_s.stop
+            assert test_s.start == val_s.stop
 
 
 class TestPnLFromSignals:
@@ -145,6 +165,35 @@ class TestScoreStrategy:
         score1 = score_strategy(10.0, 5.0, 55.0, 50)
         score2 = score_strategy(10.0, 20.0, 55.0, 50)
         assert score1 > score2
+
+    def test_sharpe_rewards_consistency(self):
+        """Same profit/dd/winrate but higher Sharpe must score higher."""
+        low = score_strategy(10.0, 5.0, 55.0, 50, sharpe=0.5)
+        high = score_strategy(10.0, 5.0, 55.0, 50, sharpe=2.5)
+        assert high > low
+
+    def test_sharpe_none_is_legacy_formula(self):
+        assert score_strategy(20.0, 5.0, 65.0, 50, sharpe=None) == score_strategy(
+            20.0, 5.0, 65.0, 50
+        )
+
+
+class TestSharpeFromReturns:
+    def test_too_few_returns(self):
+        assert sharpe_from_returns([0.01]) == 0.0
+
+    def test_zero_variance(self):
+        assert sharpe_from_returns([0.01, 0.01, 0.01]) == 0.0
+
+    def test_positive_returns_positive_sharpe(self):
+        rng = np.random.default_rng(0)
+        r = rng.normal(0.002, 0.01, 200)
+        assert sharpe_from_returns(r) > 0
+
+    def test_nan_skipped(self):
+        a = sharpe_from_returns([0.01, 0.02, -0.01, 0.015])
+        b = sharpe_from_returns([0.01, 0.02, np.nan, -0.01, 0.015])
+        assert abs(a - b) < 1e-9
 
 
 class TestMakeSignals:

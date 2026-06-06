@@ -38,18 +38,25 @@ def make_walk_forward_splits(
     val_size: int = 120,
     test_size: int = 120,
     step: int = 120,
+    embargo: int = 0,
 ) -> list[tuple]:
     """Generate walk-forward cross-validation windows.
 
     Returns list of (train_slice, val_slice, test_slice) tuples.
+
+    embargo inserts a gap of `embargo` bars between train/val and val/test. This
+    prevents leakage from overlapping label and rolling-feature windows (e.g. a
+    sequence model whose val sequences would otherwise reuse the tail of train).
     """
     splits = []
     start = min_train
-    while start + val_size + test_size <= n:
+    while start + embargo + val_size + embargo + test_size <= n:
         tr_end = start
-        va_end = tr_end + val_size
-        te_end = va_end + test_size
-        splits.append((slice(0, tr_end), slice(tr_end, va_end), slice(va_end, te_end)))
+        va_start = tr_end + embargo
+        va_end = va_start + val_size
+        te_start = va_end + embargo
+        te_end = te_start + test_size
+        splits.append((slice(0, tr_end), slice(va_start, va_end), slice(te_start, te_end)))
         start += step
     return splits
 
@@ -100,14 +107,42 @@ def max_drawdown_from_returns(returns: np.ndarray) -> float:
     return abs(dd.min()) * 100.0
 
 
-def score_strategy(profit: float, max_dd: float, winrate: float, trades: int) -> float:
-    """Composite score: profit - 0.5 * maxDD + 0.1 * winrate.
+def sharpe_from_returns(returns, periods_per_year: int = 252) -> float:
+    """Annualized Sharpe ratio from a sequence of per-trade returns.
+
+    Returns 0.0 for degenerate inputs (too few trades or zero variance).
+    """
+    r = np.asarray(returns, dtype=float)
+    r = r[~np.isnan(r)]
+    if len(r) < 2 or r.std() == 0:
+        return 0.0
+    return float(r.mean() / r.std() * np.sqrt(periods_per_year))
+
+
+def score_strategy(
+    profit: float,
+    max_dd: float,
+    winrate: float,
+    trades: int,
+    sharpe: float | None = None,
+) -> float:
+    """Risk-adjusted strategy score.
+
+    Base term penalizes drawdown and rewards win rate:
+        profit - 0.5 * maxDD + 0.1 * winrate
+    When `sharpe` is provided the score additionally rewards return-per-unit-risk
+    (weight 2.0), so a strategy is preferred for *consistent* edge rather than a
+    few lucky large trades. Omitting `sharpe` reproduces the original composite,
+    keeping older callers unchanged.
 
     Returns -999 if fewer than 10 trades (unreliable signal).
     """
     if trades < 10:
         return -999.0
-    return profit - 0.5 * max_dd + 0.1 * winrate
+    base = profit - 0.5 * max_dd + 0.1 * winrate
+    if sharpe is not None:
+        base += 2.0 * sharpe
+    return base
 
 
 def make_signals(
