@@ -26,11 +26,12 @@ streamlit run app.py          # dashboard
 
 `python scheduler.py` runs as a daemon: data every 6h, predictions every 4h, daily DB validation.
 
-## Data routing
+## Network
 
-Run from a Russian IP, the two sources need opposite routing: Yahoo Finance is geo-blocked and needs a foreign exit, MOEX works only from a Russian IP. Run AmneziaVPN in SOCKS5-proxy mode (`127.0.0.1:12334`); `net.py` then routes Yahoo through the proxy and MOEX direct. Override with `GTRADE_PROXY_MODE=auto|on|off`.
+An optional SOCKS5 proxy (`SOCKS5_PROXY` in `.env`) can be used for outbound fetches; `net.py` probes it and falls back to a direct connection. Control with:
 
-TLS verification on outbound requests defaults off (the proxy/firewall can intercept TLS). On a trusted network set `GTRADE_SSL_VERIFY=1` to enforce it.
+- `GTRADE_PROXY_MODE=auto|on|off` - proxy usage (default `auto`).
+- `GTRADE_SSL_VERIFY=1` - enforce TLS verification (default off, since a proxy may intercept TLS).
 
 ## GPU
 
