@@ -65,6 +65,7 @@
     <button class="fbtn" data-f="SELL">SELL</button>
     <button class="fbtn" data-f="WAIT">WAIT</button>
   </div>
+  <span class="sync mono" id="sync"></span>
 </div>
 
 {% for g in groups %}
@@ -81,12 +82,12 @@
       {% for s in g.rows %}
       <tr data-asset="{{ s.asset }}" data-signal="{{ s.signal }}">
         <td><a class="asset-link" href="/asset/{{ s.asset }}">{{ s.asset }}</a></td>
-        <td><span class="chip chip-{{ s.signal }}">{{ s.signal }}</span></td>
-        <td class="num mono">{{ "%.2f"|format(s.probability) }}</td>
+        <td class="c-sig"><span class="chip chip-{{ s.signal }}">{{ s.signal }}</span></td>
+        <td class="num mono c-prob">{{ "%.2f"|format(s.probability) }}</td>
         <td class="cell-prob">
           <span class="probbar"><i class="probbar-fill {{ 'pb-buy' if s.signal == 'BUY' else ('pb-sell' if s.signal == 'SELL' else 'pb-wait') }}" style="width: {{ ((s.probability - 0.5) * 200) | abs | round(0) }}%"></i></span>
         </td>
-        <td>
+        <td class="c-acc">
           {% if s.acc.n %}
           <span class="acc {% if s.acc.acc >= 0.55 %}good{% elif s.acc.acc < 0.45 %}bad{% endif %} mono">{{ "%.0f"|format(s.acc.acc * 100) }}%</span>
           <span class="acc-n mono">{{ s.acc.correct }}/{{ s.acc.n }}</span>
@@ -100,7 +101,7 @@
           <span class="spark-chg mono {{ 't-buy' if s.spark.chg >= 0 else 't-sell' }}">{{ "%+.1f"|format(s.spark.chg * 100) }}%</span>
           {% else %}<span class="dim">—</span>{% endif %}
         </td>
-        <td class="num dim mono">{{ s.date }}</td>
+        <td class="num dim mono c-date">{{ s.date }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -131,6 +132,49 @@ btns.forEach(b => b.addEventListener('click', () => {
   sig = b.dataset.f;
   apply();
 }));
+
+let lastSync = Date.now();
+const syncEl = document.getElementById('sync');
+
+function fmtAcc(acc) {
+  if (!acc || !acc.n) return '<span class="dim">—</span>';
+  const cls = acc.acc >= 0.55 ? 'good' : (acc.acc < 0.45 ? 'bad' : '');
+  return `<span class="acc ${cls} mono">${Math.round(acc.acc * 100)}%</span> ` +
+         `<span class="acc-n mono">${acc.correct}/${acc.n}</span>`;
+}
+
+async function refresh() {
+  if (document.hidden) return;
+  let sigs;
+  try { sigs = await (await fetch('/api/signals')).json(); }
+  catch (e) { return; }
+  for (const s of sigs) {
+    const tr = document.querySelector(`tr[data-asset="${s.asset}"]`);
+    if (!tr) continue;
+    const changed = tr.dataset.signal !== s.signal;
+    tr.dataset.signal = s.signal;
+    const chip = tr.querySelector('.c-sig .chip');
+    chip.textContent = s.signal;
+    chip.className = 'chip chip-' + s.signal;
+    tr.querySelector('.c-prob').textContent = s.probability.toFixed(2);
+    const fill = tr.querySelector('.probbar-fill');
+    if (fill) {
+      fill.style.width = Math.round(Math.abs((s.probability - 0.5) * 200)) + '%';
+      fill.className = 'probbar-fill ' + (s.signal === 'BUY' ? 'pb-buy' : (s.signal === 'SELL' ? 'pb-sell' : 'pb-wait'));
+    }
+    tr.querySelector('.c-acc').innerHTML = fmtAcc(s.acc);
+    tr.querySelector('.c-date').textContent = s.date;
+    if (changed) { tr.classList.remove('flash'); void tr.offsetWidth; tr.classList.add('flash'); }
+  }
+  lastSync = Date.now();
+  apply();
+}
+
+setInterval(refresh, 60000);
+setInterval(() => {
+  const s = Math.round((Date.now() - lastSync) / 1000);
+  syncEl.textContent = s < 5 ? 'обновлено' : `обновлено ${s} с назад`;
+}, 5000);
 </script>
 
 {% else %}

@@ -568,10 +568,71 @@ code {
   font-size: 12px;
 }
 
+/* ---- интерактивный график ---- */
+
+.ranges { display: flex; gap: 4px; align-items: center; }
+.ranges .chart-chg { margin-left: 10px; font-size: 12px; }
+
+.chart-host { position: relative; padding: 10px 6px 4px 10px; min-height: 120px; }
+.chart-host svg { width: 100%; height: auto; display: block; cursor: crosshair; }
+
+.chart-loading { padding: 40px 16px; text-align: center; }
+
+.grid-line { stroke: var(--line-soft); stroke-width: 1; }
+.axis-label { fill: var(--dim); font-family: var(--mono); font-size: 11px; }
+
+.cursor-line { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
+.cursor-dot { fill: var(--amber); stroke: var(--bg); stroke-width: 1.5; }
+
+.chart-tip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(13, 17, 24, 0.95);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--amber);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  z-index: 5;
+  min-width: 90px;
+}
+
+/* ---- консенсус моделей ---- */
+
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+
+.consensus { padding: 14px 16px 6px; display: flex; flex-direction: column; gap: 9px; }
+
+.cons-row { display: grid; grid-template-columns: 90px 1fr 50px; gap: 10px; align-items: center; font-size: 13px; }
+.cons-name { color: var(--dim); }
+.cons-bar { min-width: 0; }
+.cons-total { padding-top: 6px; border-top: 1px dashed var(--line-soft); }
+.cons-total .cons-name { color: var(--text); }
+
+/* ---- живое обновление ---- */
+
+.sync { font-size: 11px; color: var(--dim); margin-left: auto; }
+
+@keyframes rowflash {
+  0% { background: rgba(227, 162, 58, 0.22); }
+  100% { background: transparent; }
+}
+
+tr.flash td { animation: rowflash 1.6s ease-out; }
+
+/* ---- сортировка таблиц ---- */
+
+#mtable th[data-k] { cursor: pointer; user-select: none; }
+#mtable th[data-k]:hover { color: var(--text); }
+th.sort-desc::after { content: " BE"; color: var(--amber); }
+th.sort-asc::after { content: " B4"; color: var(--amber); }
+
 /* ---- адаптив ---- */
 
 @media (max-width: 760px) {
-  .risk-layout { grid-template-columns: 1fr; }
+  .risk-layout, .duo { grid-template-columns: 1fr; }
+  .cons-row { grid-template-columns: 70px 1fr 44px; }
   .cell-spark, .cell-prob { display: none; }
   .grid th:nth-last-child(2), .grid td:nth-last-child(2) { display: table-cell; }
   main { padding: 14px 10px 30px; }

@@ -15,6 +15,7 @@
       <a class="brand" href="/">G-TRADE<span class="brand-dot"></span></a>
       <nav>
         <a href="/" {% if request.url.path == '/' %}class="active"{% endif %}>Радар</a>
+        <a href="/models" {% if request.url.path == '/models' %}class="active"{% endif %}>Модели</a>
         <a href="/risk" {% if request.url.path == '/risk' %}class="active"{% endif %}>Риск</a>
       </nav>
       <div class="topbar-right">

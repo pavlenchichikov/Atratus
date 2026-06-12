@@ -44,33 +44,86 @@
   </div>
 </div>
 
-{% if chart %}
 <section class="panel fade">
   <div class="panel-head">
-    <h2>Цена · {{ chart.first_date }} — {{ chart.last_date }}</h2>
-    <span class="mono chart-chg {{ 't-buy' if chart.chg >= 0 else 't-sell' }}">{{ "%+.1f"|format(chart.chg * 100) }}%</span>
-  </div>
-  <div class="chart-wrap">
-    <svg viewBox="0 0 {{ chart.w }} {{ chart.h }}" class="chart" preserveAspectRatio="none">
-      <polygon points="{{ chart.area }}" class="chart-area {{ 'ca-up' if chart.up else 'ca-down' }}"/>
-      <polyline points="{{ chart.points }}" class="chart-line {{ 'cl-up' if chart.up else 'cl-down' }}"/>
-      {% for m in chart.markers %}
-      <circle cx="{{ m.x }}" cy="{{ m.y }}" r="4" class="marker m-{{ m.signal }}">
-        <title>{{ m.signal }} · {{ m.date }}</title>
-      </circle>
-      {% endfor %}
-    </svg>
-    <div class="chart-scale mono">
-      <span>{{ "%.4g"|format(chart.hi) }}</span>
-      <span>{{ "%.4g"|format(chart.lo) }}</span>
+    <h2>Цена</h2>
+    <div class="ranges">
+      <button class="fbtn rbtn" data-days="30">30д</button>
+      <button class="fbtn rbtn active" data-days="90">90д</button>
+      <button class="fbtn rbtn" data-days="180">180д</button>
+      <button class="fbtn rbtn" data-days="365">1г</button>
+      <button class="fbtn rbtn" data-days="0">Всё</button>
+      <span class="mono chart-chg" id="chg"></span>
     </div>
+  </div>
+  <div class="chart-host" id="chart-host">
+    <div class="chart-loading dim" id="chart-msg">загрузка...</div>
+    <div class="chart-tip mono" id="tip" hidden></div>
   </div>
   <div class="legend">
     <span><i class="dot m-BUY"></i> BUY</span>
     <span><i class="dot m-SELL"></i> SELL</span>
-    <span class="dim">последняя цена: <b class="mono">{{ "%.4g"|format(chart.last) }}</b></span>
+    <span class="dim" id="last-price"></span>
   </div>
 </section>
+
+{% if reg or quality %}
+<div class="duo">
+  <section class="panel fade">
+    <div class="panel-head"><h2>Рекомендация моделей</h2></div>
+    {% if current %}
+    <div class="consensus">
+      {% if current.cb_prob is not none %}
+      <div class="cons-row">
+        <span class="cons-name">CatBoost</span>
+        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.cb_prob >= 0.5 else 'pb-sell' }}" style="width: {{ ((current.cb_prob - 0.5) * 200) | abs | round(0) }}%"></i></span>
+        <span class="mono">{{ "%.2f"|format(current.cb_prob) }}</span>
+      </div>
+      {% endif %}
+      {% if current.lstm_prob is not none %}
+      <div class="cons-row">
+        <span class="cons-name">LSTM</span>
+        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.lstm_prob >= 0.5 else 'pb-sell' }}" style="width: {{ ((current.lstm_prob - 0.5) * 200) | abs | round(0) }}%"></i></span>
+        <span class="mono">{{ "%.2f"|format(current.lstm_prob) }}</span>
+      </div>
+      {% endif %}
+      <div class="cons-row cons-total">
+        <span class="cons-name">Ансамбль</span>
+        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.probability >= 0.5 else 'pb-sell' }}" style="width: {{ ((current.probability - 0.5) * 200) | abs | round(0) }}%"></i></span>
+        <span class="mono"><b>{{ "%.2f"|format(current.probability) }}</b></span>
+      </div>
+    </div>
+    {% else %}
+    <p class="empty">Прогнозов в журнале нет.</p>
+    {% endif %}
+    {% if thr %}
+    <table class="kv">
+      <tr><td>Порог BUY</td><td class="mono t-buy">≥ {{ "%.3f"|format(thr.buy) }}</td></tr>
+      <tr><td>Порог SELL</td><td class="mono t-sell">≤ {{ "%.3f"|format(thr.sell) }}</td></tr>
+      {% if thr.no_trade_band %}<tr><td>Нейтральная зона</td><td class="mono">±{{ thr.no_trade_band }}</td></tr>{% endif %}
+    </table>
+    {% endif %}
+  </section>
+
+  <section class="panel fade">
+    <div class="panel-head"><h2>Чемпион</h2></div>
+    <table class="kv">
+      {% if reg %}
+      <tr><td>Режим ансамбля</td><td class="mono">{{ reg.ensemble_mode }}</td></tr>
+      <tr><td>Lookback</td><td class="mono">{{ reg.lookback }}</td></tr>
+      <tr><td>Фичей</td><td class="mono">{{ reg.features | length }}</td></tr>
+      <tr><td>Обучен</td><td class="mono">{{ reg.updated_at[:10] }}</td></tr>
+      <tr><td>Скор обучения</td><td class="mono">{{ "%.2f"|format(reg.score) }}</td></tr>
+      {% endif %}
+      {% if quality %}
+      <tr><td>Статус</td><td><span class="chip chip-{{ 'BUY' if quality.Status == 'STABLE' else 'SELL' }}">{{ quality.Status }}</span></td></tr>
+      <tr><td>CatBoost acc (train)</td><td class="mono">{{ "%.1f"|format(quality.CB_Acc * 100) }}%</td></tr>
+      <tr><td>LSTM acc (train)</td><td class="mono">{{ "%.1f"|format(quality.LSTM_Acc * 100) }}%</td></tr>
+      <tr><td>Сделок в оценке</td><td class="mono">{{ quality.Trades }}</td></tr>
+      {% endif %}
+    </table>
+  </section>
+</div>
 {% endif %}
 
 <section class="panel fade">
@@ -78,7 +131,7 @@
   {% if track %}
   <table class="grid">
     <thead>
-      <tr><th>Дата</th><th>Сигнал</th><th class="num">p</th><th class="num">Факт (след. бар)</th><th>Итог</th></tr>
+      <tr><th>Дата</th><th>Сигнал</th><th class="num">p</th><th class="num">CB</th><th class="num">LSTM</th><th class="num">Факт (след. бар)</th><th>Итог</th></tr>
     </thead>
     <tbody>
       {% for t in track %}
@@ -86,6 +139,8 @@
         <td class="dim mono">{{ t.date }}</td>
         <td><span class="chip chip-{{ t.signal }}">{{ t.signal }}</span></td>
         <td class="num mono">{{ "%.2f"|format(t.probability) }}</td>
+        <td class="num mono dim">{% if t.cb_prob is not none %}{{ "%.2f"|format(t.cb_prob) }}{% else %}—{% endif %}</td>
+        <td class="num mono dim">{% if t.lstm_prob is not none %}{{ "%.2f"|format(t.lstm_prob) }}{% else %}—{% endif %}</td>
         <td class="num mono {% if t.actual_next_ret is not none %}{{ 't-buy' if t.actual_next_ret > 0 else 't-sell' }}{% endif %}">
           {% if t.actual_next_ret is not none %}{{ "%+.2f"|format(t.actual_next_ret * 100) }}%{% else %}—{% endif %}
         </td>
@@ -102,5 +157,125 @@
   <p class="empty">Истории нет — запусти <code>python predict.py</code>.</p>
   {% endif %}
 </section>
+
+<script id="markers-data" type="application/json">{{ markers_json | safe }}</script>
+<script>
+const ASSET = {{ asset | tojson }};
+const MARKERS = JSON.parse(document.getElementById('markers-data').textContent);
+const host = document.getElementById('chart-host');
+const msg = document.getElementById('chart-msg');
+const tip = document.getElementById('tip');
+const chgEl = document.getElementById('chg');
+const lastEl = document.getElementById('last-price');
+const NS = 'http://www.w3.org/2000/svg';
+let series = [];
+
+function fmt(v) {
+  if (v >= 10000) return v.toLocaleString('ru-RU', {maximumFractionDigits: 0});
+  if (v >= 100) return v.toFixed(2);
+  if (v >= 1) return v.toFixed(3);
+  return v.toFixed(5);
+}
+
+function el(tag, attrs) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+function render() {
+  host.querySelectorAll('svg').forEach(s => s.remove());
+  if (series.length < 2) { msg.textContent = 'нет данных по ценам'; msg.hidden = false; return; }
+  msg.hidden = true;
+
+  const W = 960, H = 280, pad = {l: 14, r: 64, t: 14, b: 26};
+  const closes = series.map(p => p.close);
+  const lo = Math.min(...closes), hi = Math.max(...closes);
+  const span = (hi - lo) || 1;
+  const x = i => pad.l + i * (W - pad.l - pad.r) / (series.length - 1);
+  const y = c => H - pad.b - (c - lo) / span * (H - pad.t - pad.b);
+  const up = closes[closes.length - 1] >= closes[0];
+  const col = up ? 'var(--green)' : 'var(--red)';
+
+  const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, class: 'chart', preserveAspectRatio: 'none'});
+
+  for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+    const gy = y(lo + span * f);
+    svg.appendChild(el('line', {x1: pad.l, x2: W - pad.r, y1: gy, y2: gy, class: 'grid-line'}));
+    const t = el('text', {x: W - pad.r + 6, y: gy + 4, class: 'axis-label'});
+    t.textContent = fmt(lo + span * f);
+    svg.appendChild(t);
+  }
+
+  const pts = series.map((p, i) => `${x(i).toFixed(1)},${y(p.close).toFixed(1)}`).join(' ');
+  const area = `${pad.l},${H - pad.b} ${pts} ${x(series.length - 1).toFixed(1)},${H - pad.b}`;
+  svg.appendChild(el('polygon', {points: area, class: up ? 'chart-area ca-up' : 'chart-area ca-down'}));
+  svg.appendChild(el('polyline', {points: pts, class: 'chart-line', style: `stroke:${col}`}));
+
+  const byDate = {};
+  series.forEach((p, i) => byDate[p.date] = i);
+  for (const m of MARKERS) {
+    const i = byDate[m.date];
+    if (i === undefined) continue;
+    const c = el('circle', {cx: x(i).toFixed(1), cy: y(series[i].close).toFixed(1), r: 4, class: 'marker m-' + m.signal});
+    const t = el('title', {});
+    t.textContent = `${m.signal} · ${m.date}`;
+    c.appendChild(t);
+    svg.appendChild(c);
+  }
+
+  const cursor = el('line', {y1: pad.t, y2: H - pad.b, class: 'cursor-line', visibility: 'hidden'});
+  const dot = el('circle', {r: 4.5, class: 'cursor-dot', visibility: 'hidden'});
+  svg.appendChild(cursor);
+  svg.appendChild(dot);
+
+  svg.addEventListener('mousemove', ev => {
+    const r = svg.getBoundingClientRect();
+    const mx = (ev.clientX - r.left) / r.width * W;
+    let i = Math.round((mx - pad.l) / ((W - pad.l - pad.r) / (series.length - 1)));
+    i = Math.max(0, Math.min(series.length - 1, i));
+    const p = series[i];
+    cursor.setAttribute('x1', x(i)); cursor.setAttribute('x2', x(i));
+    cursor.setAttribute('visibility', 'visible');
+    dot.setAttribute('cx', x(i)); dot.setAttribute('cy', y(p.close));
+    dot.setAttribute('visibility', 'visible');
+    const d1 = i > 0 ? (p.close - series[i-1].close) / series[i-1].close * 100 : 0;
+    tip.innerHTML = `<b>${fmt(p.close)}</b> <span class="${d1 >= 0 ? 't-buy' : 't-sell'}">${d1 >= 0 ? '+' : ''}${d1.toFixed(2)}%</span><br><span class="dim">${p.date}</span>`;
+    tip.hidden = false;
+    const tx = ev.clientX - r.left;
+    tip.style.left = Math.min(tx + 14, r.width - 130) + 'px';
+    tip.style.top = '14px';
+  });
+  svg.addEventListener('mouseleave', () => {
+    tip.hidden = true;
+    cursor.setAttribute('visibility', 'hidden');
+    dot.setAttribute('visibility', 'hidden');
+  });
+
+  host.appendChild(svg);
+
+  const chg = (closes[closes.length - 1] - closes[0]) / closes[0] * 100;
+  chgEl.textContent = `${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%  ·  ${series[0].date} — ${series[series.length - 1].date}`;
+  chgEl.className = 'mono chart-chg ' + (chg >= 0 ? 't-buy' : 't-sell');
+  lastEl.innerHTML = `последняя цена: <b class="mono">${fmt(closes[closes.length - 1])}</b>`;
+}
+
+async function load(days) {
+  msg.textContent = 'загрузка...'; msg.hidden = false;
+  try {
+    const r = await fetch(`/api/prices/${ASSET}?days=${days}`);
+    series = (await r.json()).series;
+  } catch (e) { series = []; }
+  render();
+}
+
+document.querySelectorAll('.rbtn').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.rbtn').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  load(b.dataset.days);
+}));
+
+load(90);
+</script>
 
 {% endblock %}

@@ -1,4 +1,4 @@
-"""Веб-интерфейс: радар сигналов, track record, риск.
+"""Веб-интерфейс: радар сигналов, track record, модели, риск.
 
 Читает готовые предсказания из market.db (их пишет predict.py),
 модели не загружает — стартует мгновенно.
@@ -21,21 +21,29 @@ from core import track_record
 from risk_manager import RISK_CONFIG
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RISK_STATE_PATH = os.path.join(BASE_DIR, "models", "risk_state.json")
+MODEL_DIR = os.path.join(BASE_DIR, "models")
+RISK_STATE_PATH = os.path.join(MODEL_DIR, "risk_state.json")
+REGISTRY_PATH = os.path.join(MODEL_DIR, "champion_registry.json")
+QUALITY_PATH = os.path.join(MODEL_DIR, "quality_report.json")
+THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
 
 app = FastAPI(title="G-Trade")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 
-def _risk_state():
-    if os.path.exists(RISK_STATE_PATH):
+def _load_json(path, default):
+    if os.path.exists(path):
         try:
-            with open(RISK_STATE_PATH, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except (OSError, json.JSONDecodeError):
-            return None
-    return None
+            return default
+    return default
+
+
+def _risk_state():
+    return _load_json(RISK_STATE_PATH, None)
 
 
 def _spark(closes, w=110, h=26):
@@ -51,43 +59,6 @@ def _spark(closes, w=110, h=26):
     )
     chg = (closes[-1] - closes[0]) / closes[0] if closes[0] else 0.0
     return {"points": pts, "w": w, "h": h, "up": closes[-1] >= closes[0], "chg": chg}
-
-
-def _chart(asset, track, days=90, w=720, h=220):
-    """Линия цены + маркеры BUY/SELL для страницы актива."""
-    series = track_record.price_series(asset, days=days)
-    closes = [p["close"] for p in series]
-    if len(closes) < 2:
-        return None
-    lo, hi = min(closes), max(closes)
-    span = (hi - lo) or 1.0
-    pad = 12
-    step = (w - pad * 2) / (len(closes) - 1)
-
-    def x(i):
-        return pad + i * step
-
-    def y(c):
-        return h - pad - (c - lo) / span * (h - pad * 2)
-
-    pts = " ".join(f"{x(i):.1f},{y(c):.1f}" for i, c in enumerate(closes))
-    idx = {p["date"]: i for i, p in enumerate(series)}
-    markers = []
-    for t in track:
-        if t["signal"] in ("BUY", "SELL") and t["date"] in idx:
-            i = idx[t["date"]]
-            markers.append({
-                "x": round(x(i), 1), "y": round(y(closes[i]), 1),
-                "signal": t["signal"], "date": t["date"],
-            })
-    area = f"{pad},{h - pad} {pts} {x(len(closes) - 1):.1f},{h - pad}"
-    return {
-        "points": pts, "area": area, "markers": markers, "w": w, "h": h,
-        "lo": lo, "hi": hi, "last": closes[-1],
-        "first_date": series[0]["date"], "last_date": series[-1]["date"],
-        "up": closes[-1] >= closes[0],
-        "chg": (closes[-1] - closes[0]) / closes[0] if closes[0] else 0.0,
-    }
 
 
 def _summary(signals, stale):
@@ -159,7 +130,17 @@ def asset_page(request: Request, name: str):
         "losses": len(losses),
         "outcomes": [t["correct"] for t in track[:15]][::-1],
     }
+
+    reg = _load_json(REGISTRY_PATH, {}).get(name)
+    thr = _load_json(THRESHOLDS_PATH, {}).get(name)
+    if thr is None and reg:
+        thr = {"buy": reg.get("buy_thr"), "sell": reg.get("sell_thr")}
+    quality = next((q for q in _load_json(QUALITY_PATH, [])
+                    if q.get("Asset") == name), None)
     group = next((g for g, m in RADAR_GROUPS.items() if name in m), None)
+
+    markers = [{"date": t["date"], "signal": t["signal"]}
+               for t in track if t["signal"] in ("BUY", "SELL")]
     return templates.TemplateResponse(request, "asset.html", {
         "asset": name,
         "ticker": FULL_ASSET_MAP[name],
@@ -167,8 +148,54 @@ def asset_page(request: Request, name: str):
         "track": track,
         "acc": acc,
         "stats": stats,
-        "chart": _chart(name, track),
         "current": track[0] if track else None,
+        "reg": reg,
+        "thr": thr,
+        "quality": quality,
+        "markers_json": json.dumps(markers),
+    })
+
+
+@app.get("/models", response_class=HTMLResponse)
+def models_page(request: Request):
+    quality = _load_json(QUALITY_PATH, [])
+    registry = _load_json(REGISTRY_PATH, {})
+    sigs = {s["asset"]: s for s in track_record.latest_signals()}
+
+    rows = []
+    for q in quality:
+        asset = q.get("Asset")
+        reg = registry.get(asset, {})
+        sig = sigs.get(asset)
+        rows.append({
+            "asset": asset,
+            "score": q.get("Score"),
+            "cb_acc": q.get("CB_Acc"),
+            "lstm_acc": q.get("LSTM_Acc"),
+            "profit": q.get("Profit"),
+            "trades": q.get("Trades"),
+            "status": q.get("Status"),
+            "policy": q.get("Policy"),
+            "mode": reg.get("ensemble_mode", "—"),
+            "lookback": reg.get("lookback"),
+            "updated": str(reg.get("updated_at", ""))[:10],
+            "signal": sig["signal"] if sig else None,
+            "live_acc": sig["acc"] if sig else None,
+        })
+    rows.sort(key=lambda r: r["score"] or 0, reverse=True)
+
+    n = len(rows)
+    stable = sum(1 for r in rows if r["status"] == "STABLE")
+    last_train = max((r["updated"] for r in rows if r["updated"]), default=None)
+    summary = {
+        "total": n,
+        "stable": stable,
+        "unstable": n - stable,
+        "avg_score": (sum(r["score"] or 0 for r in rows) / n) if n else None,
+        "last_train": last_train,
+    }
+    return templates.TemplateResponse(request, "models.html", {
+        "rows": rows, "summary": summary,
     })
 
 
@@ -188,6 +215,15 @@ def risk_page(request: Request):
 @app.get("/api/signals")
 def api_signals():
     return track_record.latest_signals()
+
+
+@app.get("/api/prices/{name}")
+def api_prices(name: str, days: int = 90):
+    name = name.upper()
+    if name not in FULL_ASSET_MAP:
+        raise HTTPException(404, f"Unknown asset: {name}")
+    days = 100000 if days <= 0 else max(10, min(days, 100000))
+    return {"asset": name, "series": track_record.price_series(name, days=days)}
 
 
 @app.get("/api/track/{name}")

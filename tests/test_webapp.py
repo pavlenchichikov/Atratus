@@ -65,3 +65,18 @@ def test_api_track(client):
 def test_api_risk(client):
     data = client.get("/api/risk").json()
     assert "config" in data
+
+
+def test_api_prices(client):
+    data = client.get("/api/prices/BTC?days=30").json()
+    assert data["asset"] == "BTC"
+    assert isinstance(data["series"], list)
+
+
+def test_api_prices_unknown_404(client):
+    assert client.get("/api/prices/NOPE").status_code == 404
+
+
+def test_models_page(client):
+    r = client.get("/models")
+    assert r.status_code == 200

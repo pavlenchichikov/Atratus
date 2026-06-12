@@ -72,7 +72,8 @@ def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
     with _connect(db_path) as con:
         try:
             rows = con.execute(
-                "SELECT date, signal, probability, actual_next_ret, correct "
+                "SELECT date, signal, probability, actual_next_ret, correct, "
+                "cb_prob, lstm_prob "
                 "FROM prediction_log WHERE asset=? ORDER BY date DESC LIMIT ?",
                 (asset, limit),
             ).fetchall()
@@ -80,8 +81,9 @@ def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
             return []
         return [
             {"date": d, "signal": s, "probability": p,
-             "actual_next_ret": r, "correct": c}
-            for d, s, p, r, c in rows
+             "actual_next_ret": r, "correct": c,
+             "cb_prob": cb, "lstm_prob": lstm}
+            for d, s, p, r, c, cb, lstm in rows
         ]
 
 
