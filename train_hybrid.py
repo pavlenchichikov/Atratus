@@ -72,18 +72,45 @@ else:
 
 tf.get_logger().setLevel('ERROR')
 
+_HAS_GPU = bool(gpus)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read a positive int env override, falling back to `default`."""
+    try:
+        v = int((os.getenv(name) or "").strip())
+        return v if v >= 1 else default
+    except (TypeError, ValueError):
+        return default
+
+
 # --- PARALLEL LOCKS ---
-# Only 1 GPU slot to prevent cuDNN OOM (cuDNN workspace allocated outside TF pool).
-_GPU_SLOTS   = 1
+# Neural block (LSTM+TF+TCN) is gated by a semaphore. GPU: 1 slot (concurrent
+# cuDNN fits OOM outside the TF pool). CPU: small batches don't saturate 12 cores,
+# so run several models at once, each capped to a few intra-op threads -> total
+# threads ~= cores. Same models/epochs, scheduling only. Env-tunable below.
+_cores = os.cpu_count() or 8
+if _HAS_GPU:
+    _GPU_SLOTS = _env_int("GTRADE_NEURAL_SLOTS", 1)
+    _CB_THREADS = _env_int("GTRADE_CB_THREADS", max(4, _cores))
+    _N_WORKERS = _env_int("GTRADE_WORKERS", 10)
+else:
+    _TF_THREADS = _env_int("GTRADE_TF_THREADS", 3)
+    try:
+        tf.config.threading.set_intra_op_parallelism_threads(_TF_THREADS)
+        tf.config.threading.set_inter_op_parallelism_threads(2)
+    except (RuntimeError, ValueError):
+        pass
+    _GPU_SLOTS = _env_int("GTRADE_NEURAL_SLOTS", max(1, _cores // _TF_THREADS))
+    _CB_THREADS = _env_int("GTRADE_CB_THREADS", max(2, _TF_THREADS))  # CB runs alongside nets
+    _N_WORKERS = _env_int("GTRADE_WORKERS", _GPU_SLOTS + 2)
+
 _gpu_lock = threading.Semaphore(_GPU_SLOTS)
 _print_lock = threading.Lock()
 
 # --- SHARED EPOCH STATE (callback -> ticker thread) ---
 _progress_state = {'label': '-', 'epoch': 0, 'total_ep': 0, 'loss': float('nan')}
 _state_lock = threading.Lock()
-_N_WORKERS = 10
-_CB_THREADS = max(4, os.cpu_count() or 4)
-_HAS_GPU = bool(gpus)
 
 # -- Mixed precision: fp16 compute -> faster on GPUs with Tensor Cores --
 # (RTX 20xx+, A100, etc.) Falls back gracefully on older GPUs.
@@ -356,6 +383,15 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         if not splits:
             _safe_print(f"  [SKIP] {asset:<12} no walk-forward windows ({len(df)} rows)")
             return None
+
+        # Long histories yield 12-18 folds, each retraining all 3 nets. Champion is
+        # the median of folds (stable past ~8-10) and recent windows match live best,
+        # so keep only the newest GTRADE_MAX_FOLDS.
+        _max_folds = _env_int("GTRADE_MAX_FOLDS", 10)
+        if _max_folds and len(splits) > _max_folds:
+            _dropped = len(splits) - _max_folds
+            splits = splits[-_max_folds:]
+            _safe_print(f"  [FOLDS] {asset:<12} {_max_folds + _dropped} -> {_max_folds} (recent)")
 
         # Filter candidate_features to those present in df
         available_features = [f for f in candidate_features if f in df.columns]
