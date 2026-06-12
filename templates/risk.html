@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Риск — G-Trade{% endblock %}
+{% block content %}
+<h1>Риск</h1>
+
+{% if state %}
+<table>
+  <tr><td>Капитал</td><td>${{ "%.2f"|format(state.current_capital) }}</td></tr>
+  <tr><td>Пик</td><td>${{ "%.2f"|format(state.peak_capital) }}</td></tr>
+  <tr><td>Открытых позиций</td><td>{{ state.open_positions | length }}</td></tr>
+</table>
+{% else %}
+<p class="empty">Состояние не сохранено (models/risk_state.json нет) — показаны лимиты по умолчанию.</p>
+{% endif %}
+
+<h2>Лимиты</h2>
+<table>
+  <tr><td>Макс. экспозиция портфеля</td><td>{{ "%.0f"|format(config.max_portfolio_exposure * 100) }}%</td></tr>
+  <tr><td>Макс. размер позиции</td><td>{{ "%.0f"|format(config.max_single_position * 100) }}%</td></tr>
+  <tr><td>Лимит дневного убытка</td><td>{{ "%.0f"|format(config.max_daily_loss * 100) }}%</td></tr>
+  <tr><td>Стоп по просадке</td><td>{{ "%.0f"|format(config.max_drawdown_halt * 100) }}%</td></tr>
+  <tr><td>Доля Келли</td><td>{{ config.kelly_fraction }}</td></tr>
+</table>
+{% endblock %}

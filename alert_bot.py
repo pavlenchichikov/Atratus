@@ -15,6 +15,7 @@ Capabilities:
 import json
 import os
 import sys
+import threading
 import time
 import warnings
 from datetime import datetime, timedelta
@@ -61,6 +62,8 @@ from core.ensemble import ensemble_with_gating
 from core.scaling import load_or_fit_scaler
 from core.calibration import load_calibrator, apply_calibrator
 from core.model_io import get_lookback as _get_lookback, load_lstm_model as _load_lstm_model
+from core import reports, track_record
+from risk_manager import RISK_CONFIG
 
 from sqlalchemy import create_engine
 
@@ -366,6 +369,189 @@ def send_telegram(messages, use_proxy):
 
 
 # ==============================================================================
+# КОМАНДЫ, ДАЙДЖЕСТ, ДЕГРАДАЦИЯ
+# ==============================================================================
+
+DIGEST_HOUR = int(os.getenv("GTRADE_DIGEST_HOUR", "9"))
+STALE_MAX_DAYS = int(os.getenv("GTRADE_STALE_MAX_DAYS", "7"))
+ACC_ALERT_FLOOR = 0.40   # точность ниже — предупреждение
+ACC_ALERT_MIN_N = 10     # минимум проверенных сигналов для вывода
+ALERT_STATE_PATH = os.path.join(MODEL_DIR, "alert_state.json")
+RISK_STATE_PATH = os.path.join(MODEL_DIR, "risk_state.json")
+
+
+def _risk_state():
+    if os.path.exists(RISK_STATE_PATH):
+        try:
+            with open(RISK_STATE_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
+
+
+def _load_alert_state():
+    if os.path.exists(ALERT_STATE_PATH):
+        try:
+            with open(ALERT_STATE_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {}
+
+
+def _save_alert_state(state):
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    with open(ALERT_STATE_PATH, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def _send_plain(text, use_proxy):
+    """Отправка без Markdown (тексты отчётов содержат спецсимволы)."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_USER_ID:
+        return False
+    apihelper.proxy = {"https": SOCKS5_PROXY} if use_proxy else None
+    bot = TeleBot(TELEGRAM_TOKEN)
+    try:
+        for chunk in [text[i:i + 4000] for i in range(0, len(text), 4000)]:
+            bot.send_message(TELEGRAM_USER_ID, chunk)
+        return True
+    except Exception as exc:
+        logger.error("Telegram send failed: %s", exc)
+        return False
+
+
+def _compose_digest():
+    signals = track_record.latest_signals()
+    stale = track_record.stale_assets(max_age_days=STALE_MAX_DAYS)
+    return reports.build_digest(
+        signals=signals,
+        stale=stale,
+        risk=_risk_state(),
+        date_str=datetime.now().strftime("%Y-%m-%d"),
+    )
+
+
+def maybe_send_digest(use_proxy):
+    """Раз в день, начиная с DIGEST_HOUR."""
+    now = datetime.now()
+    if now.hour < DIGEST_HOUR:
+        return
+    state = _load_alert_state()
+    today = now.strftime("%Y-%m-%d")
+    if state.get("digest_sent") == today:
+        return
+    if _send_plain(_compose_digest(), use_proxy):
+        state["digest_sent"] = today
+        _save_alert_state(state)
+        logger.info("Digest sent")
+
+
+def check_degradation(use_proxy):
+    """Протухшие данные и упавшая точность; не чаще раза в сутки на актив."""
+    state = _load_alert_state()
+    sent = state.setdefault("degradation_sent", {})
+    today = datetime.now().strftime("%Y-%m-%d")
+    lines = []
+
+    for s in track_record.stale_assets(max_age_days=STALE_MAX_DAYS):
+        key = f"stale:{s['asset']}"
+        if sent.get(key) == today:
+            continue
+        if s["last_date"] is None:
+            lines.append(f"{s['asset']}: данных в market.db нет")
+        else:
+            lines.append(f"{s['asset']}: данные от {s['last_date']} ({s['age_days']} дн.)")
+        sent[key] = today
+
+    for sig in track_record.latest_signals():
+        acc = sig["acc"]
+        if acc["n"] >= ACC_ALERT_MIN_N and acc["acc"] is not None and acc["acc"] < ACC_ALERT_FLOOR:
+            key = f"acc:{sig['asset']}"
+            if sent.get(key) == today:
+                continue
+            lines.append(
+                f"{sig['asset']}: точность {acc['acc']:.0%} "
+                f"({acc['correct']}/{acc['n']}) — модель деградировала"
+            )
+            sent[key] = today
+
+    if lines:
+        text = "Деградация:\n" + "\n".join(lines)
+        if _send_plain(text, use_proxy):
+            logger.info("Degradation alert: %d items", len(lines))
+        _save_alert_state(state)
+
+
+def start_command_listener(use_proxy):
+    """Поток с polling: /top, /signal X, /risk, /digest. Только для владельца."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_USER_ID:
+        return None
+
+    apihelper.proxy = {"https": SOCKS5_PROXY} if use_proxy else None
+    bot = TeleBot(TELEGRAM_TOKEN)
+
+    def _own(message):
+        return str(message.chat.id) == str(TELEGRAM_USER_ID)
+
+    @bot.message_handler(commands=["top"])
+    def _top(message):
+        if not _own(message):
+            return
+        bot.reply_to(message, reports.build_top_message(track_record.latest_signals()))
+
+    @bot.message_handler(commands=["signal"])
+    def _signal(message):
+        if not _own(message):
+            return
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message, "Формат: /signal BTC")
+            return
+        asset = parts[1].upper()
+        if asset not in FULL_ASSET_MAP:
+            bot.reply_to(message, f"Не знаю актив {asset}")
+            return
+        bot.reply_to(message, reports.build_signal_message(
+            asset,
+            track_record.asset_track(asset, limit=10),
+            track_record.asset_accuracy(asset),
+        ))
+
+    @bot.message_handler(commands=["risk"])
+    def _risk(message):
+        if not _own(message):
+            return
+        bot.reply_to(message, reports.build_risk_message(_risk_state(), RISK_CONFIG))
+
+    @bot.message_handler(commands=["digest"])
+    def _digest(message):
+        if not _own(message):
+            return
+        bot.reply_to(message, _compose_digest())
+
+    @bot.message_handler(commands=["start", "help"])
+    def _help(message):
+        if not _own(message):
+            return
+        bot.reply_to(message, "Команды:\n/top — лучшие сигналы\n/signal BTC — история актива\n"
+                              "/risk — риск-статус\n/digest — дайджест сейчас")
+
+    def _poll():
+        while True:
+            try:
+                bot.infinity_polling(timeout=30, long_polling_timeout=25)
+            except Exception as exc:
+                logger.error("Polling error: %s", exc)
+                time.sleep(30)
+
+    thread = threading.Thread(target=_poll, daemon=True, name="tg-commands")
+    thread.start()
+    logger.info("Command listener started")
+    return thread
+
+
+# ==============================================================================
 # MAIN SCAN CYCLE
 # ==============================================================================
 
@@ -433,9 +619,13 @@ def run_cycle():
 # ==============================================================================
 
 if __name__ == "__main__":
+    _tg_proxy = detect_telegram_proxy()
+    start_command_listener(_tg_proxy)
     while True:
         try:
             run_cycle()
+            maybe_send_digest(_tg_proxy)
+            check_degradation(_tg_proxy)
         except KeyboardInterrupt:
             print("\nBot stopped by user.")
             logger.info("Bot stopped by user")

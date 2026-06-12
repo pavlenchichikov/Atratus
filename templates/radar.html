@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Радар — G-Trade{% endblock %}
+{% block content %}
+<h1>Радар сигналов <small>{{ total }} активов</small></h1>
+
+{% if not groups %}
+<p class="empty">Сигналов пока нет — запусти <code>python predict.py</code>, чтобы наполнить журнал.</p>
+{% endif %}
+
+{% for g in groups %}
+<section>
+  <h2>{{ g.name }}</h2>
+  <table>
+    <tr><th>Актив</th><th>Сигнал</th><th>p</th><th>Точность</th><th>Дата</th></tr>
+    {% for s in g.rows %}
+    <tr>
+      <td><a href="/asset/{{ s.asset }}">{{ s.asset }}</a></td>
+      <td class="sig-{{ s.signal }}">{{ s.signal }}</td>
+      <td>{{ "%.2f"|format(s.probability) }}</td>
+      <td>
+        {% if s.acc.n %}
+          <span class="acc {% if s.acc.acc >= 0.55 %}good{% elif s.acc.acc < 0.45 %}bad{% endif %}">
+            {{ "%.0f"|format(s.acc.acc * 100) }}% ({{ s.acc.correct }}/{{ s.acc.n }})
+          </span>
+        {% else %}—{% endif %}
+      </td>
+      <td class="dim">{{ s.date }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endfor %}
+{% endblock %}

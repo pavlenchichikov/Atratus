@@ -12,6 +12,24 @@ ML trading-signal system for ~150 assets (crypto, US and Russian equities, forex
 
 `app.py` is a Streamlit dashboard (signal radar, model consensus, portfolio, risk). A Telegram bot delivers hourly alert scans.
 
+## Web UI
+
+`uvicorn webapp:app --host 0.0.0.0 --port 8000` starts a lightweight web interface
+(no TensorFlow, reads predictions logged by `predict.py`): signal radar with
+per-asset accuracy badges at `/`, signal history at `/asset/BTC`, risk limits at
+`/risk`. JSON mirrors under `/api/...`. Reachable from a phone on the same network.
+
+## Telegram bot
+
+`python alert_bot.py` runs the hourly scan plus:
+
+- commands: `/top`, `/signal BTC`, `/risk`, `/digest` (owner-only, replies use
+  the prediction log, no model loading);
+- a daily digest at `GTRADE_DIGEST_HOUR` (default 9): top signals, risk status,
+  stale assets;
+- degradation alerts: data older than 7 days or champion accuracy below 40%
+  on the last 20 verified signals (at most one alert per asset per day).
+
 ## Quick start
 
 ```bash
