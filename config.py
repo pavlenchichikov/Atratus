@@ -96,7 +96,7 @@ FULL_ASSET_MAP = {
     # РФ - Химия и удобрения
     'PHOR': 'PHOR', 'SGZH': 'SGZH',
     # РФ - Ритейл
-    'FIVE': 'FIVE', 'FIXP': 'FIXP', 'LENT': 'LENT', 'MVID': 'MVID',
+    'FIVE': 'X5', 'FIXP': 'FIXR', 'LENT': 'LENT', 'MVID': 'MVID',  # FIVE и FIXP переименованы на MOEX в X5 и FIXR
     # РФ - Строительство и девелопмент
     'SMLT': 'SMLT', 'LSRG': 'LSRG',
     # РФ - Банки и финансы (доп)

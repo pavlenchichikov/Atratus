@@ -52,7 +52,7 @@ def ssl_verify() -> bool:
 _alive_cache: bool | None = None
 _cache_ts: float = 0.0
 
-# Per-host learned route: host -> (route_name, learned_ts). Threads share it.
+# Per-host learned route {host: (route_name, learned_ts)}. Threads share it.
 _route_cache: dict[str, tuple[str, float]] = {}
 _route_lock = threading.Lock()
 
