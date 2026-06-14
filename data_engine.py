@@ -14,15 +14,11 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- НАСТРОЙКИ ---
-try:
-    from config import SOCKS5_PROXY as PROXY_URL
-except ImportError:
-    PROXY_URL = "socks5h://127.0.0.1:12334"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path: sys.path.append(BASE_DIR)
 
 from core.logger import get_logger
-from net import ssl_verify
+import net
 logger = get_logger("data_engine")
 
 try:
@@ -80,40 +76,16 @@ def _drop_existing_dates(df, table_name):
     except Exception:
         return df  # при ошибке - пишем как есть
 
-HTTP_CONNECT_TIMEOUT = 10   # connect timeout, сек
-HTTP_READ_TIMEOUT = 30      # read timeout, сек
-HTTP_MAX_ATTEMPTS = 4
-HTTP_BACKOFF_BASE = 2       # пауза 2s, 4s, 8s
-
-
-def http_get_retry(url, *, label="", **kwargs):
-    """GET с повтором при таймауте, обрыве и 5xx (раздельный connect/read timeout)."""
-    kwargs.setdefault("timeout", (HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT))
-    last_exc = None
-    for attempt in range(HTTP_MAX_ATTEMPTS):
-        try:
-            r = requests.get(url, **kwargs)
-            if r.status_code >= 500 and attempt < HTTP_MAX_ATTEMPTS - 1:
-                wait = HTTP_BACKOFF_BASE ** (attempt + 1)
-                logging.warning("%s HTTP %s, retry %d/%d in %ds", label or url,
-                                r.status_code, attempt + 1,
-                                HTTP_MAX_ATTEMPTS - 1, wait)
-                time.sleep(wait)
-                continue
-            return r
-        except requests.exceptions.RequestException as exc:
-            last_exc = exc
-            if attempt < HTTP_MAX_ATTEMPTS - 1:
-                wait = HTTP_BACKOFF_BASE ** (attempt + 1)
-                logging.warning("%s network error (%s), retry %d/%d in %ds",
-                                label or url, type(exc).__name__, attempt + 1,
-                                HTTP_MAX_ATTEMPTS - 1, wait)
-                time.sleep(wait)
-                continue
-            raise
-    if last_exc:
-        raise last_exc
-    raise requests.exceptions.RequestException("max retries exceeded")
+def _yahoo_chart_ok(r) -> bool:
+    """True только для годного ответа Yahoo. 200 с error/без result = маршрут
+    попал не туда, net.http_get пробует другой. Пустой ответ держит 'result'."""
+    if r.status_code != 200:
+        return False
+    try:
+        chart = r.json().get('chart', {})
+    except Exception:
+        return False
+    return not chart.get('error') and bool(chart.get('result'))
 
 
 def fetch_yahoo_smart(symbol, last_date):
@@ -175,81 +147,29 @@ def fetch_yahoo_smart(symbol, last_date):
 
         return df.set_index('Date'), None
 
-    def _get_with_retry(req_kwargs, route_label, retries=3):
-        """GET с повтором при 5xx (экспоненциальная задержка 2s, 4s, 8s)."""
-        for attempt in range(retries):
-            try:
-                r = requests.get(**req_kwargs)
-                if r.status_code >= 500 and attempt < retries - 1:
-                    wait = 2 ** (attempt + 1)
-                    logging.warning(f"{y_sym} {route_label} HTTP {r.status_code}, retry {attempt+1}/{retries-1} in {wait}s")
-                    time.sleep(wait)
-                    continue
-                return r, None
-            except requests.exceptions.RequestException as e:
-                if attempt < retries - 1:
-                    time.sleep(2 ** (attempt + 1))
-                    continue
-                return None, str(e)
-        return None, "max retries exceeded"
-
-    # 1) Try via SOCKS proxy - but ONLY if the local endpoint is actually
-    #    reachable. Probing once (cached) avoids wasting a 10s timeout per
-    #    asset when no SOCKS5 proxy is running (system VPN / no VPN).
+    # net.http_get сам выбирает рабочий маршрут (direct/SOCKS5) и делает
+    # failover на сетевой ошибке либо когда validate отбраковал 200 с пустым
+    # или error-телом Yahoo.
     try:
-        from net import is_proxy_alive as _proxy_alive
-        _use_proxy = _proxy_alive()
-    except Exception:
-        _use_proxy = True  # fall back to old always-try behavior
+        r = net.http_get(url, route="auto", validate=_yahoo_chart_ok)
+    except requests.exceptions.RequestException as exc:
+        logging.error(f"{y_sym} yahoo fail: {exc}")
+        print(f"[ERR] (RequestException: {exc})")
+        return None
 
-    if _use_proxy:
-        r, exc = _get_with_retry(
-            dict(url=url, headers={'User-Agent': 'Mozilla/5.0'},
-                 proxies={'https': PROXY_URL},
-                 timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
-                 verify=ssl_verify()),
-            "proxy"
-        )
-        if r is not None:
-            parsed, err = _parse_response(r, "proxy")
-            if err is None:
-                if isinstance(parsed, str) and parsed == "UP_TO_DATE":
-                    print("[OK] (Up to date via proxy)")
-                    return None
-                if isinstance(parsed, str) and parsed == "NO_NEW":
-                    print("[OK] (No new data via proxy)")
-                    return None
-                print(f"[OK] (+{len(parsed)} new bars via proxy)")
-                return parsed
-            logging.warning(f"{y_sym} proxy route issue: {err}")
-        else:
-            logging.warning(f"{y_sym} proxy route exception: {exc}")
-
-    # 2) Fallback direct (no proxy)
-    r, exc = _get_with_retry(
-        dict(url=url, headers={'User-Agent': 'Mozilla/5.0'},
-             timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT), verify=ssl_verify()),
-        "direct"
-    )
-    if r is not None:
-        parsed, err = _parse_response(r, "direct")
-        if err is None:
-            if isinstance(parsed, str) and parsed == "UP_TO_DATE":
-                print("[OK] (Up to date via direct)")
-                return None
-            if isinstance(parsed, str) and parsed == "NO_NEW":
-                print("[OK] (No new data via direct)")
-                return None
-            print(f"[OK] (+{len(parsed)} new bars via direct)")
-            return parsed
+    parsed, err = _parse_response(r, "auto")
+    if err is not None:
         logging.error(f"{y_sym} yahoo fail: {err}")
         print(f"[ERR] ({err})")
         return None
-    else:
-        msg = f"RequestException direct: {exc}"
-        logging.error(f"{y_sym} yahoo fail: {msg}")
-        print(f"[ERR] ({msg})")
+    if isinstance(parsed, str) and parsed == "UP_TO_DATE":
+        print("[OK] (Up to date)")
         return None
+    if isinstance(parsed, str) and parsed == "NO_NEW":
+        print("[OK] (No new data)")
+        return None
+    print(f"[OK] (+{len(parsed)} new bars)")
+    return parsed
 
 def fetch_moex_smart(symbol, last_date):
     clean = symbol.split('.')[0]
@@ -267,7 +187,7 @@ def fetch_moex_smart(symbol, last_date):
              url = f"https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX/candles.json?interval=24&from={start_str}&start={offset}"
 
         try:
-            r = http_get_retry(url, label=f"MOEX {clean}")
+            r = net.http_get(url, route="auto", retries=4)
             data = r.json()['candles']['data']
             if not data: break
             all_data.extend(data)
@@ -319,7 +239,7 @@ def fetch_moex_weekly(symbol, last_date):
                    f"boards/TQBR/securities/{clean}/candles.json"
                    f"?interval=7&from={start_str}&start={offset}")
         try:
-            r = http_get_retry(url, label=f"WEEKLY RU {clean}")
+            r = net.http_get(url, route="auto", retries=4)
             payload = r.json()['candles']
             data = payload['data']
             if not data:
@@ -376,54 +296,33 @@ def fetch_yahoo_weekly(symbol, last_date):
 
     print(f"   -> [WEEKLY] {y_sym:<12}", end=" ", flush=True)
 
-    def _try(proxies):
-        try:
-            r = http_get_retry(url, label=f"WEEKLY {y_sym}",
-                               headers={'User-Agent': 'Mozilla/5.0'},
-                               proxies=proxies, verify=ssl_verify())
-            if r.status_code != 200:
-                return None
-            chart = r.json().get('chart', {})
-            if chart.get('error') or not chart.get('result'):
-                return None
-            res = chart['result'][0]
-            if 'timestamp' not in res:
-                return "UP_TO_DATE"
-            q = res['indicators']['quote'][0]
-            df = pd.DataFrame({
-                'Date':   [datetime.fromtimestamp(ts) for ts in res['timestamp']],
-                'Open':   q['open'], 'Close': q['close'],
-                'High':   q['high'], 'Low':   q['low'],
-                'Volume': q['volume'],
-            }).dropna()
-            df['Date'] = pd.to_datetime(df['Date'])
-            if _orig_last_date is not None:
-                df = df[df['Date'] > _orig_last_date]
-            return df.set_index('Date') if not df.empty else "NO_NEW"
-        except Exception as exc:
-            logging.warning("Weekly fetch error for %s: %s", y_sym, exc)
-            return None
-
-    # Skip the SOCKS proxy attempt when the local endpoint is dead - otherwise
-    # every weekly fetch wastes a connection-refused round-trip to 127.0.0.1.
     try:
-        from net import is_proxy_alive as _proxy_alive
-        _routes = [{'https': PROXY_URL}, {}] if _proxy_alive() else [{}]
-    except Exception:
-        _routes = [{'https': PROXY_URL}, {}]
+        r = net.http_get(url, route="auto", validate=_yahoo_chart_ok)
+    except requests.exceptions.RequestException as exc:
+        logging.warning("Weekly fetch error for %s: %s", y_sym, exc)
+        print("[ERR] (failed all routes)")
+        return None
 
-    for proxies in _routes:
-        result = _try(proxies)
-        if result is None:
-            continue
-        if isinstance(result, str):
-            print(f"[OK] ({result})")
-            return None
-        print(f"[OK] (+{len(result)} weekly bars)")
-        return result
-
-    print("[ERR] (failed all routes)")
-    return None
+    chart = r.json().get('chart', {})
+    res = chart['result'][0]
+    if 'timestamp' not in res:
+        print("[OK] (UP_TO_DATE)")
+        return None
+    q = res['indicators']['quote'][0]
+    df = pd.DataFrame({
+        'Date':   [datetime.fromtimestamp(ts) for ts in res['timestamp']],
+        'Open':   q['open'], 'Close': q['close'],
+        'High':   q['high'], 'Low':   q['low'],
+        'Volume': q['volume'],
+    }).dropna()
+    df['Date'] = pd.to_datetime(df['Date'])
+    if _orig_last_date is not None:
+        df = df[df['Date'] > _orig_last_date]
+    if df.empty:
+        print("[OK] (No new data)")
+        return None
+    print(f"[OK] (+{len(df)} weekly bars)")
+    return df.set_index('Date')
 
 
 def _save_df(df, table_name):

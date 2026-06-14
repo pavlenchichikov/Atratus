@@ -1,15 +1,23 @@
-"""Сетевые хелперы с учётом SOCKS5-прокси.
+"""Сетевые хелперы с адаптивной маршрутизацией (direct / SOCKS5-прокси).
 
-Прокси проверяется один раз на процесс (TCP-проба с кэшем), чтобы при
-мёртвом прокси не терять таймаут на каждом из ~150 запросов.
-Режим: GTRADE_PROXY_MODE = auto | on | off.
+Рабочий маршрут зависит от VPN: MOEX (iss.moex.com) ходит только по
+российскому IP, Yahoo лучше через зарубежный выход, а какой из двух
+маршрутов сейчас какой - заранее неизвестно и меняется при переключении VPN.
+Поэтому http_get не хардкодит маршрут под источник: пробует доступные
+маршруты с быстрым failover (короткий connect-таймаут), запоминает per-host
+рабочий маршрут (sticky-кэш с TTL) и сбрасывает его при полном отказе, чтобы
+смена VPN переучивалась сама. validate-callback позволяет считать "200 с
+ошибкой в теле" отказом маршрута.
 
-API: is_proxy_alive(), proxies_for(route), http_get(url, ...).
+Env: GTRADE_PROXY_MODE (auto|on|off), GTRADE_CONNECT_TIMEOUT (5),
+GTRADE_READ_TIMEOUT (25), GTRADE_ROUTE_TTL (300), GTRADE_HTTP_RETRIES (3).
+API: is_proxy_alive(), proxies_for(route), http_get(url, ...), reset_route_cache().
 """
 from __future__ import annotations
 
 import os
 import socket
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -24,6 +32,13 @@ _PROXY_MODE = (os.getenv("GTRADE_PROXY_MODE") or "auto").strip().lower()
 _PROBE_TIMEOUT = float(os.getenv("GTRADE_PROXY_PROBE_TIMEOUT", "1.0"))
 _PROBE_TTL = 60.0
 
+# Fast-fail connect + generous read. A blackholed route dies on the short
+# connect budget and we fail over instead of waiting out the read timeout.
+CONNECT_TIMEOUT = float(os.getenv("GTRADE_CONNECT_TIMEOUT", "5"))
+READ_TIMEOUT = float(os.getenv("GTRADE_READ_TIMEOUT", "25"))
+_ROUTE_TTL = float(os.getenv("GTRADE_ROUTE_TTL", "300"))
+_DEFAULT_RETRIES = int(os.getenv("GTRADE_HTTP_RETRIES", "3"))
+
 
 def ssl_verify() -> bool:
     """Whether outbound HTTPS requests should verify TLS certificates.
@@ -33,8 +48,13 @@ def ssl_verify() -> bool:
     """
     return (os.getenv("GTRADE_SSL_VERIFY") or "1").strip().lower() not in ("0", "false", "no", "off")
 
+
 _alive_cache: bool | None = None
 _cache_ts: float = 0.0
+
+# Per-host learned route: host -> (route_name, learned_ts). Threads share it.
+_route_cache: dict[str, tuple[str, float]] = {}
+_route_lock = threading.Lock()
 
 
 def _endpoint(proxy_url: str):
@@ -92,56 +112,127 @@ def proxies_for(route: str = "auto") -> dict | None:
     return None
 
 
-def http_get(url, *, route="auto", headers=None, timeout=10,
-             verify=None, retries=3, **kwargs):
-    """GET with proxy auto-selection + one failover.
+# --------------------------------------------------------------------------
+# Sticky per-host route cache
+# --------------------------------------------------------------------------
+def reset_route_cache() -> None:
+    """Forget all learned routes (used by tests and on explicit re-probe)."""
+    with _route_lock:
+        _route_cache.clear()
 
-    On 'auto': if the proxy is alive it's tried first, then direct on
-    transport failure. If the proxy is dead the attempt is skipped entirely.
-    5xx triggers exponential-backoff retry within each route.
 
-    verify defaults to ssl_verify() (env GTRADE_SSL_VERIFY) when not passed.
+def _host(url: str) -> str:
+    return urlparse(url).hostname or url
+
+
+def _learned_route(host: str) -> str | None:
+    with _route_lock:
+        v = _route_cache.get(host)
+        if not v:
+            return None
+        name, ts = v
+        if (time.time() - ts) < _ROUTE_TTL:
+            return name
+        _route_cache.pop(host, None)  # expired
+        return None
+
+
+def _remember_route(host: str, name: str) -> None:
+    with _route_lock:
+        _route_cache[host] = (name, time.time())
+
+
+def _forget_route(host: str) -> None:
+    with _route_lock:
+        _route_cache.pop(host, None)
+
+
+def _candidate_routes(route: str) -> list[tuple[str, dict | None]]:
+    """Ordered (name, proxies) candidates to try."""
+    proxy_dict = {"http": SOCKS5_PROXY, "https": SOCKS5_PROXY} if SOCKS5_PROXY else None
+    if route == "direct":
+        return [("direct", None)]
+    if route == "proxy":
+        return [("proxy", proxy_dict)] if proxy_dict else [("direct", None)]
+    # auto: direct is always available; proxy only when its endpoint answers.
+    routes: list[tuple[str, dict | None]] = [("direct", None)]
+    if proxy_dict and is_proxy_alive():
+        routes.append(("proxy", proxy_dict))
+    return routes
+
+
+def http_get(url, *, route="auto", headers=None, timeout=None,
+             verify=None, retries=None, validate=None, **kwargs):
+    """GET with adaptive route selection, failover and per-host learning.
+
+    route='auto' (default): try every available route, remember the one that
+    works for this host, and try it first next time. route='direct'/'proxy'
+    force a single route.
+
+    timeout: defaults to (CONNECT_TIMEOUT, READ_TIMEOUT) so a blackholed path
+    fails fast and we fail over. Pass a tuple/scalar to override.
+
+    validate: optional callable(response) -> bool. When it returns False the
+    response is treated as a route failure (e.g. HTTP 200 with an error body)
+    and the next route is tried. Transport errors, 5xx and 429 always fail
+    over / retry regardless of validate.
     """
     if verify is None:
         verify = ssl_verify()
-    headers = headers or {"User-Agent": "Mozilla/5.0"}
+    if headers is None:
+        headers = {"User-Agent": "Mozilla/5.0"}
+    if timeout is None:
+        timeout = (CONNECT_TIMEOUT, READ_TIMEOUT)
+    if retries is None:
+        retries = _DEFAULT_RETRIES
+
+    host = _host(url)
+    routes = _candidate_routes(route)
+
+    # Put the previously-winning route first.
+    if route == "auto" and len(routes) > 1:
+        learned = _learned_route(host)
+        if learned:
+            routes.sort(key=lambda r: 0 if r[0] == learned else 1)
 
     def _attempt(proxies):
+        last = (None, "no attempt")
         for i in range(retries):
             try:
                 r = requests.get(url, headers=headers, proxies=proxies,
-                                  timeout=timeout, verify=verify, **kwargs)
-                if r.status_code >= 500 and i < retries - 1:
-                    time.sleep(2 ** (i + 1))
+                                 timeout=timeout, verify=verify, **kwargs)
+                if (r.status_code >= 500 or r.status_code == 429) and i < retries - 1:
+                    time.sleep(2 ** i)
                     continue
+                if validate is not None:
+                    try:
+                        ok = bool(validate(r))
+                    except Exception:
+                        ok = False
+                    if not ok:
+                        # Content-level failure won't change on retry; fail over.
+                        return None, f"validate failed (status {r.status_code})"
                 return r, None
             except requests.exceptions.RequestException as e:
+                last = (None, str(e))
                 if i < retries - 1:
-                    time.sleep(2 ** (i + 1))
+                    time.sleep(2 ** i)
                     continue
-                return None, str(e)
-        return None, "max retries exceeded"
-
-    # Ordered routes: proxy first only when alive.
-    routes: list[dict | None] = []
-    if route == "direct":
-        routes = [None]
-    elif route == "proxy":
-        routes = [proxies_for("proxy")]
-    else:  # auto
-        if is_proxy_alive():
-            routes = [proxies_for("proxy"), None]
-        else:
-            routes = [None]
+        return last
 
     last_err = None
-    for proxies in routes:
+    for name, proxies in routes:
         r, err = _attempt(proxies)
         if r is not None:
+            if route == "auto":
+                _remember_route(host, name)
             return r
         last_err = err
+
+    if route == "auto":
+        _forget_route(host)  # re-probe fresh order next time (e.g. after VPN switch)
     raise requests.exceptions.RequestException(
-        f"GET {url} failed on all routes: {last_err}"
+        f"GET {url} failed on all routes ({[n for n, _ in routes]}): {last_err}"
     )
 
 
