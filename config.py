@@ -76,7 +76,7 @@ FULL_ASSET_MAP = {
     'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD',
     'XRP': 'XRP-USD', 'TON': 'TON11419-USD', 'DOGE': 'DOGE-USD', 'BNB': 'BNB-USD',
     'ADA': 'ADA-USD', 'AVAX': 'AVAX-USD', 'DOT': 'DOT-USD', 'LINK': 'LINK-USD',
-    'SHIB': 'SHIB-USD', 'ATOM': 'ATOM-USD', 'UNI': 'UNI-USD', 'NEAR': 'NEAR-USD',
+    'SHIB': 'SHIB-USD', 'ATOM': 'ATOM-USD', 'UNI': 'UNI7083-USD', 'NEAR': 'NEAR-USD',  # UNI-USD на Yahoo пустой, Uniswap идёт под UNI7083-USD
 
     # РЫНОК РФ - Голубые фишки
     'IMOEX': 'IMOEX', 'SBER': 'SBER', 'GAZP': 'GAZP', 'LKOH': 'LKOH',
@@ -106,7 +106,7 @@ FULL_ASSET_MAP = {
     # РФ - Промышленность (доп)
     'TRMK': 'TRMK', 'MTLR': 'MTLR', 'RASP': 'RASP', 'NMTP': 'NMTP',
     # РФ - IT (доп)
-    'HHRU': 'HHRU', 'SOFL': 'SOFL', 'ASTR': 'ASTR', 'WUSH': 'WUSH',
+    'HHRU': 'HEAD', 'SOFL': 'SOFL', 'ASTR': 'ASTR', 'WUSH': 'WUSH',  # HHRU переименован на MOEX в HEAD
 
     # FOREX - Мажоры
     'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X', 'USDJPY': 'JPY=X',

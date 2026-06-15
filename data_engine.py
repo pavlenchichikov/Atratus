@@ -28,6 +28,21 @@ except ImportError:
 
 engine = create_engine(f'sqlite:///{os.path.join(BASE_DIR, "market.db")}')
 _db_lock = threading.Lock()  # serialize SQLite writes
+
+
+def _env_int(name, default):
+    """int из переменной окружения, иначе default (пустое/мусор тоже даёт default)."""
+    try:
+        return int((os.getenv(name) or "").strip() or default)
+    except ValueError:
+        return default
+
+
+# Всё конфигурируемо через окружение, без зашитых констант.
+DAILY_WORKERS = _env_int("GTRADE_DAILY_WORKERS", 12)
+WEEKLY_WORKERS = _env_int("GTRADE_WEEKLY_WORKERS", 10)
+RETRY_SWEEPS = _env_int("GTRADE_RETRY_SWEEPS", 2)   # доп. проходы по активам с ERROR
+MOEX_RETRIES = _env_int("GTRADE_MOEX_RETRIES", 5)   # попыток на запрос внутри одного прохода
 MOEX_TARGETS = [
     "IMOEX", "SBER", "GAZP", "LKOH", "ROSN", "NVTK", "TATN", "SNGS",
     "PLZL", "SIBN", "MGNT",
@@ -187,7 +202,7 @@ def fetch_moex_smart(symbol, last_date):
              url = f"https://iss.moex.com/iss/engines/stock/markets/index/boards/SNDX/securities/IMOEX/candles.json?interval=24&from={start_str}&start={offset}"
 
         try:
-            r = net.http_get(url, route="auto", retries=4)
+            r = net.http_get(url, route="auto", retries=MOEX_RETRIES)
             data = r.json()['candles']['data']
             if not data: break
             all_data.extend(data)
@@ -239,7 +254,7 @@ def fetch_moex_weekly(symbol, last_date):
                    f"boards/TQBR/securities/{clean}/candles.json"
                    f"?interval=7&from={start_str}&start={offset}")
         try:
-            r = net.http_get(url, route="auto", retries=4)
+            r = net.http_get(url, route="auto", retries=MOEX_RETRIES)
             payload = r.json()['candles']
             data = payload['data']
             if not data:
@@ -435,6 +450,27 @@ def _fetch_and_save_weekly(n, s):
     return n, status, bars
 
 
+def _retry_failed(fetch_fn, sym_for, results, *, sweeps, workers, label):
+    """Доп. проходы по активам со статусом ERR. Блэкхолы к iss.moex.com
+    случайны на каждую попытку, поэтому свежий проход обычно их закрывает.
+    results (список (name, status, bars)) обновляется на месте."""
+    for sweep in range(sweeps):
+        failed = [n for n, st, _ in results if st == 'ERR']
+        if not failed:
+            break
+        net.reset_route_cache()  # заново подобрать маршрут на повторе
+        print(f"  retry {label}: sweep {sweep + 1}/{sweeps}, {len(failed)} assets")
+        fixed = {}
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(fetch_fn, n, sym_for[n]): n for n in failed}
+            for fut in as_completed(futs):
+                n, st, b = fut.result()
+                fixed[n] = (st, b)
+        results[:] = [(n, *fixed[n]) if n in fixed else (n, st, b)
+                      for n, st, b in results]
+    return results
+
+
 def main():
     global _real_stdout
     _real_stdout = sys.stdout
@@ -500,13 +536,16 @@ def main():
                     tag = 'up to date'
                 print(f"  [{_done[0]:>2}/{total}] {name:<14} {tag}")
 
-    with ThreadPoolExecutor(max_workers=12) as executor:
+    with ThreadPoolExecutor(max_workers=DAILY_WORKERS) as executor:
         futs = {executor.submit(_fetch_and_save_daily, n, s): (n, s)
                 for n, s in assets}
         for fut in as_completed(futs):
             _track_daily(fut)
     if _is_tty:
         print()
+
+    _retry_failed(_fetch_and_save_daily, dict(assets), results,
+                  sweeps=RETRY_SWEEPS, workers=DAILY_WORKERS, label='daily')
 
     stats = {
         'ok':       sum(1 for _, st, _ in results if st == 'NEW'),
@@ -588,13 +627,16 @@ def main():
                     tag = 'up to date'
                 print(f"  [{_done_w[0]:>2}/{total_w}] {name:<14} {tag}")
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=WEEKLY_WORKERS) as executor:
         futs_w = {executor.submit(_fetch_and_save_weekly, n, s): (n, s)
                   for n, s in weekly_assets}
         for fut in as_completed(futs_w):
             _track_weekly(fut)
     if _is_tty:
         print()
+
+    _retry_failed(_fetch_and_save_weekly, dict(weekly_assets), w_results,
+                  sweeps=RETRY_SWEEPS, workers=WEEKLY_WORKERS, label='weekly')
 
     w_ok   = sum(1 for _, st, _ in w_results if st == 'NEW')
     w_upd  = sum(1 for _, st, _ in w_results if st == 'UP_TO_DATE')

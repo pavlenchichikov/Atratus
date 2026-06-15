@@ -70,8 +70,8 @@ def _endpoint(proxy_url: str):
 def is_proxy_alive(force: bool = False) -> bool:
     """True if the local SOCKS5 endpoint accepts a TCP connection.
 
-    Mode override: GTRADE_PROXY_MODE=on -> always True, off -> always False,
-    auto (default) -> cached TCP probe.
+    Mode override: GTRADE_PROXY_MODE=on means always True, off means always
+    False, auto (default) uses a cached TCP probe.
     """
     global _alive_cache, _cache_ts
     if _PROXY_MODE == "off":
@@ -172,8 +172,9 @@ def http_get(url, *, route="auto", headers=None, timeout=None,
     timeout: defaults to (CONNECT_TIMEOUT, READ_TIMEOUT) so a blackholed path
     fails fast and we fail over. Pass a tuple/scalar to override.
 
-    validate: optional callable(response) -> bool. When it returns False the
-    response is treated as a route failure (e.g. HTTP 200 with an error body)
+    validate: optional callable taking the response and returning a bool. When
+    it returns False the response is treated as a route failure (e.g. HTTP 200
+    with an error body)
     and the next route is tried. Transport errors, 5xx and 429 always fail
     over / retry regardless of validate.
     """
