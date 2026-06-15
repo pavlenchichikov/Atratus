@@ -323,13 +323,23 @@ def _make_session(use_proxy: bool = True) -> requests.Session:
     return s
 
 
-def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT) -> str | None:
-    """Fetch URL text. Proxy first, then direct."""
+def _fetch_url(url: str, timeout: int = REQUEST_TIMEOUT, as_bytes: bool = False):
+    """Fetch URL via proxy then direct.
+
+    as_bytes=True returns raw bytes (used for XML feeds, so the parser honours
+    the document's own encoding declaration). Otherwise returns decoded text;
+    when the server omits a charset header requests defaults to ISO-8859-1 and
+    mangles UTF-8 (Cyrillic feeds), so the detected encoding is used instead.
+    """
     for use_proxy in (True, False):
         try:
             s = _make_session(use_proxy)
             resp = s.get(url, timeout=timeout)
             resp.raise_for_status()
+            if as_bytes:
+                return resp.content
+            if "charset" not in resp.headers.get("content-type", "").lower():
+                resp.encoding = resp.apparent_encoding or resp.encoding
             return resp.text
         except Exception:
             continue
@@ -374,7 +384,7 @@ _NS = {
 }
 
 
-def _parse_rss_items(xml_text: str, source_name: str = "",
+def _parse_rss_items(xml_text: "str | bytes", source_name: str = "",
                      fetch_summaries: bool = False) -> list[dict]:
     """Parse RSS/Atom XML. Extract title, link, date, description.
 
@@ -410,9 +420,11 @@ def _parse_rss_items(xml_text: str, source_name: str = "",
             link = ""
 
         # --- published ---
-        pub_el = (entry.find("pubDate")
-                  or entry.find("published")
-                  or entry.find(f"{{{_NS['dc']}}}date"))
+        pub_el = entry.find("pubDate")
+        if pub_el is None:
+            pub_el = entry.find("published")
+        if pub_el is None:
+            pub_el = entry.find(f"{{{_NS['dc']}}}date")
         published = pub_el.text.strip() if pub_el is not None and pub_el.text else ""
 
         # --- description / summary ---
@@ -472,11 +484,11 @@ def _fetch_authority_feed(name: str, url: str, lang: str,
     if cached is not None:
         return cached
 
-    xml_text = _fetch_url(url)
-    if not xml_text:
+    xml_bytes = _fetch_url(url, as_bytes=True)
+    if not xml_bytes:
         return []
 
-    items = _parse_rss_items(xml_text, source_name=name,
+    items = _parse_rss_items(xml_bytes, source_name=name,
                              fetch_summaries=fetch_summaries)
     _cache_set(cache_key, items)
     return items
@@ -588,7 +600,7 @@ def fetch_news(asset: str, max_articles: int = 10,
     all_items: list[dict] = []
 
     # Google News EN
-    xml_en = _fetch_url(url_en)
+    xml_en = _fetch_url(url_en, as_bytes=True)
     if xml_en:
         all_items.extend(_parse_rss_items(xml_en,
                                           fetch_summaries=fetch_summaries))
@@ -598,7 +610,7 @@ def fetch_news(asset: str, max_articles: int = 10,
         search_name_ru = SEARCH_NAMES_RU.get(asset, search_name_en)
         query_ru = quote_plus(search_name_ru)
         url_ru = RSS_RU.format(query=query_ru)
-        xml_ru = _fetch_url(url_ru)
+        xml_ru = _fetch_url(url_ru, as_bytes=True)
         if xml_ru:
             all_items.extend(_parse_rss_items(xml_ru,
                                               fetch_summaries=fetch_summaries))
