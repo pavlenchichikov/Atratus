@@ -74,14 +74,18 @@ def update_actuals():
                     _engine(),
                     index_col="Date",
                 )
+                # data_engine хранит колонки в нижнем регистре (close), поэтому
+                # нормализуем имена - иначе df["Close"] кидает KeyError, попадает
+                # в except и сверка с фактом молча не происходит.
+                df.columns = [c.lower() for c in df.columns]
                 df = df[~df.index.duplicated(keep="last")].sort_index()
                 if date_str not in df.index:
                     continue
                 idx = df.index.get_loc(date_str)
                 if idx + 1 >= len(df):
                     continue
-                today_close = df["Close"].iloc[idx]
-                next_close = df["Close"].iloc[idx + 1]
+                today_close = df["close"].iloc[idx]
+                next_close = df["close"].iloc[idx + 1]
                 if today_close == 0:
                     continue
                 ret = (next_close - today_close) / today_close
