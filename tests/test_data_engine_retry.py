@@ -110,7 +110,7 @@ def test_moex_skips_fetch_when_already_current(monkeypatch):
     import datetime as _dt
     called = []
     monkeypatch.setattr(net, "http_get", lambda *a, **k: called.append(1))
-    # last bar is today -> next bar starts in the future -> must not hit network
+    # last bar is today: next bar would start in the future, so no network call
     assert de.fetch_moex_smart("SBER", _dt.datetime.now()) is None
     assert called == []
     # weekly fetcher has the same guard
@@ -126,4 +126,4 @@ def test_moex_fetches_when_stale(monkeypatch):
         raise Exception("net hit")
     monkeypatch.setattr(net, "http_get", fake)
     de.fetch_moex_smart("SBER", _dt.datetime.now() - _dt.timedelta(days=7))
-    assert called  # stale data -> network attempted
+    assert called  # stale data: network attempted

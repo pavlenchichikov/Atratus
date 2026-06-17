@@ -179,6 +179,7 @@ class GTradeLauncher(tk.Tk):
             ("ОСНОВНОЕ", [
                 (">  Full Cycle",       "Данные > Обучение > Dashboard", self._run_full),
                 ("   Dashboard",        "Streamlit аналитика",          self._run_dashboard),
+                ("   Web UI",           "FastAPI: радар/модели/риск (быстрый, в браузере)", self._run_webapp),
                 ("   Predict (Radar)",  "Прогноз по текущим данным",    self._run_predict),
             ]),
             ("ДАННЫЕ & ОБУЧЕНИЕ", [
@@ -220,7 +221,7 @@ class GTradeLauncher(tk.Tk):
             ("СЕРВИСЫ", [
                 ("   Telegram Bot",     "Sentinel",                     self._run_bot),
                 ("   Scheduler",        "Автозапуск по расписанию",     self._run_scheduler),
-                ("   DB Check",         "Проверка базы данных",         self._run_db_check),
+                ("   DB Audit",         "Полный аудит market.db (read-only)", self._run_db_check),
                 ("   DB Fix",           "Авто-ремонт базы данных",     self._run_db_fix),
                 ("   DB Backup",        "Бэкап market.db",              self._run_backup),
                 ("   Install/Repair",   "Установить зависимости",      self._run_install),
@@ -651,6 +652,17 @@ class GTradeLauncher(tk.Tk):
         self._run_script(
             [PY, "-m", "streamlit", "run", os.path.join(BASE_DIR, "app.py")],
             "Dashboard"
+        )
+
+    def _run_webapp(self):
+        # FastAPI-дашборд: читает готовые предсказания из market.db (их пишет
+        # predict.py), стартует мгновенно. Открываем браузер с задержкой, пока
+        # uvicorn поднимается.
+        import webbrowser
+        threading.Timer(2.5, lambda: webbrowser.open("http://127.0.0.1:8000")).start()
+        self._run_script(
+            [PY, "-m", "uvicorn", "webapp:app", "--port", "8000"],
+            "Web UI (FastAPI :8000)"
         )
 
     def _run_predict(self):

@@ -1,16 +1,38 @@
 """
-DB Check & Fix - проверка и ремонт market.db
-  python db_check.py          - только проверка (интерактивное предложение починить)
-  python db_check.py --fix    - проверка + автоматическое исправление
+DB Audit & Fix - аудит и ремонт market.db
+
+  python db_check.py          - полный read-only аудит (ничего не меняет)
+  python db_check.py --fix    - аудит + авто-ремонт исправимых проблем
   python db_check.py --stats  - только статистика таблиц
+
+Аудит делится на два блока:
+  ИСПРАВИМОЕ (--fix чинит): дубли по дате, формат даты, скрытые дубли, NULL.
+  КАЧЕСТВО ДАННЫХ (read-only, требует внимания/догрузки): свежесть (отставшие
+  таблицы), целостность OHLC, разрывы в датах, покрытие по config, мало данных,
+  PRAGMA integrity.
 """
 
 import os
 import sqlite3
 import sys
+from datetime import datetime
+
+# Стабильный UTF-8 в консоль/в пайп лаунчера (иначе кириллица бьётся на cp1251).
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "market.db")
+
+# Пороги аудита (можно переопредилить через окружение при желании).
+STALE_DAILY_DAYS = 7      # дневная таблица без новых баров дольше - отстала
+STALE_WEEKLY_DAYS = 21    # недельная
+MAX_GAP_DAYS = 10         # разрыв между соседними дневными барами больше - дыра
+GAP_RECENT_DAYS = 730     # дыры старше не показываем (раннюю историю Yahoo даёт разреженно)
+MIN_ROWS_TRAIN = 100      # меньше строк - мало для обучения
 
 
 # -- Утилиты ------------------------------------------------------------------
@@ -106,6 +128,136 @@ def check_empty_tables(cur, tables):
         if cnt == 0:
             empty.append(t)
     return empty
+
+
+# -- Аудит качества данных (read-only) ----------------------------------------
+
+def _parse_date(s):
+    try:
+        return datetime.strptime(str(s)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _price_tables(cur, tables):
+    """Только OHLCV-таблицы активов (исключает лог-таблицы guru_log и т.п.)."""
+    out = []
+    for t in tables:
+        cols = {r[1].lower() for r in cur.execute(f"PRAGMA table_info({t})").fetchall()}
+        if {"open", "high", "low", "close"} <= cols:
+            out.append(t)
+    return out
+
+
+def check_freshness(cur, tables):
+    """Сколько дней назад последний бар; отмечает отставшие таблицы.
+
+    Отставшая таблица обычно = делистинг/переименование тикера или сломанный
+    фетч (см. историю с FIVE-X5, FIXP-FIXR), а не пустая база."""
+    today = datetime.now().date()
+    stale = {}
+    for t in tables:
+        d_max = cur.execute(f"SELECT MAX(Date) FROM {t}").fetchone()[0]
+        last = _parse_date(d_max)
+        if last is None:
+            continue
+        age = (today - last).days
+        limit = STALE_WEEKLY_DAYS if t.endswith("_weekly") else STALE_DAILY_DAYS
+        if age > limit:
+            stale[t] = age
+    return dict(sorted(stale.items(), key=lambda kv: -kv[1]))
+
+
+def check_ohlc(cur, tables):
+    """Целостность OHLCV, по тяжести.
+
+    critical: High<Low, неположительная цена, отрицательный объём (порча данных).
+    minor:    Open/Close вне диапазона [Low,High] - частый артефакт FX-фида Yahoo,
+              не порча, но к сведению."""
+    out = {}
+    for t in tables:
+        cols = {r[1].lower() for r in cur.execute(f"PRAGMA table_info({t})").fetchall()}
+        if not {"open", "high", "low", "close"} <= cols:
+            continue
+        crit = ["High < Low", "Open <= 0", "High <= 0", "Low <= 0", "Close <= 0"]
+        if "volume" in cols:
+            crit.append("Volume < 0")
+        minor = ["Close > High", "Close < Low", "Open > High", "Open < Low"]
+        c = cur.execute(f"SELECT COUNT(*) FROM {t} WHERE {' OR '.join(crit)}").fetchone()[0]
+        m = cur.execute(f"SELECT COUNT(*) FROM {t} WHERE {' OR '.join(minor)}").fetchone()[0]
+        if c or m:
+            out[t] = {"critical": c, "minor": m}
+    return out
+
+
+def check_gaps(cur, tables):
+    """Самый большой разрыв между соседними дневными барами за последние
+    GAP_RECENT_DAYS (старую разреженную историю Yahoo не считаем)."""
+    from datetime import timedelta
+    cutoff = datetime.now().date() - timedelta(days=GAP_RECENT_DAYS)
+    gaps = {}
+    for t in tables:
+        if t.endswith("_weekly"):
+            continue
+        dates = [r[0] for r in cur.execute(
+            f"SELECT DISTINCT substr(Date,1,10) d FROM {t} ORDER BY d"
+        ).fetchall()]
+        prev = None
+        biggest = 0
+        span = None
+        for ds in dates:
+            d = _parse_date(ds)
+            if d is None:
+                continue
+            # считаем дыру только если она заканчивается в недавнем окне
+            if prev is not None and d >= cutoff and (d - prev).days > biggest:
+                biggest = (d - prev).days
+                span = (prev.isoformat(), d.isoformat())
+            prev = d
+        if biggest > MAX_GAP_DAYS:
+            gaps[t] = (biggest, span)
+    return dict(sorted(gaps.items(), key=lambda kv: -kv[1][0]))
+
+
+def check_low_data(cur, tables):
+    """Дневные таблицы со слишком малым числом строк для обучения."""
+    low = {}
+    for t in tables:
+        if t.endswith("_weekly"):
+            continue
+        cnt = cur.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        if 0 < cnt < MIN_ROWS_TRAIN:
+            low[t] = cnt
+    return dict(sorted(low.items(), key=lambda kv: kv[1]))
+
+
+def _norm_key(key):
+    """Имя таблицы из ключа актива (как в data_engine)."""
+    return key.lower().replace("^", "").replace(".", "").replace("-", "")
+
+
+def check_coverage(tables):
+    """Сверка таблиц с реестром активов из config: чего не хватает, что лишнее,
+    у каких нет недельной пары. None, если config недоступен."""
+    try:
+        from config import FULL_ASSET_MAP
+    except Exception:
+        return None
+    expected = {_norm_key(k) for k in FULL_ASSET_MAP}
+    present = set(tables)
+    daily = {t for t in present if not t.endswith("_weekly")}
+    return {
+        "missing": sorted(expected - daily),
+        "orphan": sorted(daily - expected),
+        "no_weekly": sorted(a for a in expected
+                            if a in daily and f"{a}_weekly" not in present),
+    }
+
+
+def check_integrity(conn):
+    """PRAGMA quick_check + размер файла."""
+    res = conn.execute("PRAGMA quick_check").fetchone()[0]
+    return {"quick_check": res, "size_mb": os.path.getsize(DB_PATH) / 1024 / 1024}
 
 
 # -- Исправления --------------------------------------------------------------
@@ -261,6 +413,96 @@ def run_diagnostics(cur, tables):
     return results
 
 
+def run_quality_audit(conn, cur, tables):
+    """Read-only блок аудита качества данных. Возвращает число предупреждений."""
+    W = 60
+    print(f"\n{'='*W}")
+    print("  DATA QUALITY  |  read-only (--fix это не чинит)")
+    print("=" * W)
+    warn = 0
+    price = _price_tables(cur, tables)  # OHLCV-таблицы, без лог-таблиц
+
+    print("\n  [+] Integrity (PRAGMA quick_check)")
+    integ = check_integrity(conn)
+    if integ["quick_check"] == "ok":
+        print(f"  [OK] quick_check ok  |  {integ['size_mb']:.1f} MB  |  {len(price)} price tables")
+    else:
+        print(f"  [!] quick_check: {integ['quick_check']}"); warn += 1
+
+    print("\n  [+] Freshness (stale tables)")
+    stale = check_freshness(cur, price)
+    if stale:
+        warn += len(stale)
+        print(f"  [!] {len(stale)} tables stale "
+              f"(daily >{STALE_DAILY_DAYS}d / weekly >{STALE_WEEKLY_DAYS}d):")
+        for t, age in list(stale.items())[:20]:
+            print(f"       {t:<28} {age} days old")
+        if len(stale) > 20:
+            print(f"       ... +{len(stale) - 20} more")
+    else:
+        print("  [OK] all tables fresh")
+
+    print("\n  [+] OHLC integrity")
+    ohlc = check_ohlc(cur, price)
+    crit = {t: v["critical"] for t, v in ohlc.items() if v["critical"]}
+    minor = {t: v["minor"] for t, v in ohlc.items() if v["minor"] and not v["critical"]}
+    if crit:
+        warn += len(crit)
+        print(f"  [!] CRITICAL in {len(crit)} tables (High<Low / price<=0 / volume<0):")
+        for t, c in sorted(crit.items()):
+            print(f"       {t:<28} {c} rows")
+    else:
+        print("  [OK] no critical OHLC corruption")
+    if minor:
+        rows = sum(minor.values())
+        print(f"  [..] minor: {len(minor)} tables, {rows} rows with Open/Close just "
+              "outside [Low,High] (Yahoo FX feed quirk, not corruption)")
+
+    print("\n  [+] Date gaps (missing daily bars)")
+    gaps = check_gaps(cur, price)
+    if gaps:
+        warn += len(gaps)
+        print(f"  [!] {len(gaps)} tables with a gap > {MAX_GAP_DAYS} days:")
+        for t, (g, span) in list(gaps.items())[:15]:
+            where = f" ({span[0]}..{span[1]})" if span else ""
+            print(f"       {t:<28} {g} days{where}")
+        if len(gaps) > 15:
+            print(f"       ... +{len(gaps) - 15} more")
+    else:
+        print("  [OK] no large gaps")
+
+    print(f"\n  [+] Low data (< {MIN_ROWS_TRAIN} rows, weak for training)")
+    low = check_low_data(cur, price)
+    if low:
+        warn += len(low)
+        print(f"  [!] {len(low)} thin tables: " +
+              ", ".join(f"{t}({c})" for t, c in low.items()))
+    else:
+        print("  [OK] all daily tables have enough history")
+
+    print("\n  [+] Registry coverage (config.FULL_ASSET_MAP)")
+    cov = check_coverage(tables)
+    if cov is None:
+        print("  [..] config not importable - skipped")
+    else:
+        if cov["missing"]:
+            warn += len(cov["missing"])
+            print(f"  [!] {len(cov['missing'])} expected tables MISSING: "
+                  + ", ".join(cov["missing"]))
+        if cov["no_weekly"]:
+            print(f"  [..] {len(cov['no_weekly'])} assets without a _weekly table: "
+                  + ", ".join(cov["no_weekly"][:20])
+                  + (" ..." if len(cov["no_weekly"]) > 20 else ""))
+        if cov["orphan"]:
+            print(f"  [..] {len(cov['orphan'])} tables not in config (orphans): "
+                  + ", ".join(cov["orphan"]))
+        if not cov["missing"] and not cov["orphan"] and not cov["no_weekly"]:
+            print("  [OK] tables match the asset registry")
+
+    print(f"\n  Data-quality warnings: {warn}")
+    return warn
+
+
 def run_fix(conn, cur, tables, results):
     """Исправляет все найденные проблемы."""
     print()
@@ -307,56 +549,43 @@ def run_fix(conn, cur, tables, results):
 
 # -- Точки входа --------------------------------------------------------------
 
-def main_check(autofix=False):
-    """Проверка с опциональным исправлением."""
+def main_audit():
+    """Полный read-only аудит. Ничего не меняет (безопасно из лаунчера)."""
     conn = _connect()
     cur = conn.cursor()
     tables = get_tables(cur)
 
     results = run_diagnostics(cur, tables)
-
-    if not results["has_problems"]:
-        print(f"\n{'='*60}")
-        print("  РЕЗУЛЬТАТ: База данных чистая")
-        print(f"{'='*60}")
-        print_stats(cur, tables)
-        conn.close()
-        return
+    warn = run_quality_audit(conn, cur, tables)
 
     print(f"\n{'='*60}")
-    print("  РЕЗУЛЬТАТ: Обнаружены проблемы")
+    if not results["has_problems"] and not warn:
+        print("  РЕЗУЛЬТАТ: база чистая, замечаний нет")
+    else:
+        fixable = "есть" if results["has_problems"] else "нет"
+        print(f"  РЕЗУЛЬТАТ: исправимых проблем - {fixable}; "
+              f"предупреждений по качеству - {warn}")
+        if results["has_problems"]:
+            print("  Запусти  python db_check.py --fix  для авто-ремонта.")
     print(f"{'='*60}")
-
-    if autofix:
-        do_fix = True
-    else:
-        answer = input("\nИсправить автоматически? (y/n): ").strip().lower()
-        do_fix = answer in ("y", "yes", "д", "да")
-
-    if do_fix:
-        run_fix(conn, cur, tables, results)
-        print_stats(cur, tables)
-    else:
-        print("Отменено.")
-
+    print_stats(cur, tables)
     conn.close()
 
 
 def main_fix():
-    """Только исправление (без вопросов)."""
+    """Аудит + авто-ремонт исправимых проблем (без вопросов)."""
     conn = _connect()
     cur = conn.cursor()
     tables = get_tables(cur)
 
     results = run_diagnostics(cur, tables)
 
-    if not results["has_problems"]:
-        print("\n  База чистая - исправлять нечего.")
-        print_stats(cur, tables)
-        conn.close()
-        return
+    if results["has_problems"]:
+        run_fix(conn, cur, tables, results)
+    else:
+        print("\n  Исправимых проблем нет.")
 
-    run_fix(conn, cur, tables, results)
+    run_quality_audit(conn, cur, tables)
     print_stats(cur, tables)
     conn.close()
 
@@ -373,10 +602,11 @@ def main_stats():
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="DB Check & Fix для market.db")
-    parser.add_argument("--fix", action="store_true", help="Автоматическое исправление")
+    parser = argparse.ArgumentParser(description="DB Audit & Fix для market.db")
+    parser.add_argument("--fix", action="store_true", help="Авто-ремонт исправимых проблем")
     parser.add_argument("--stats", action="store_true", help="Только статистика")
     # Обратная совместимость
+    parser.add_argument("--audit", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--autofix", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -385,4 +615,4 @@ if __name__ == "__main__":
     elif args.fix or args.autofix:
         main_fix()
     else:
-        main_check()
+        main_audit()

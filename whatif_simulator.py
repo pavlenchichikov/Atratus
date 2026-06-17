@@ -196,7 +196,7 @@ def _run_strategy(prices_probs: pd.DataFrame, capital: float) -> dict:
         prev_equity = equity
 
         if p_today > 0.55 and position == 0.0:
-            # Enter long at next day open ≈ today close + slippage
+            # Enter long at next day open ~ today close + slippage
             entry_price = close_today * (1 + SLIPPAGE)
             units = (equity * (1 - COMMISSION)) / entry_price
             position = units

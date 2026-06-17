@@ -98,9 +98,9 @@
     {% endif %}
     {% if thr %}
     <table class="kv">
-      <tr><td>Порог BUY</td><td class="mono t-buy">≥ {{ "%.3f"|format(thr.buy) }}</td></tr>
-      <tr><td>Порог SELL</td><td class="mono t-sell">≤ {{ "%.3f"|format(thr.sell) }}</td></tr>
-      {% if thr.no_trade_band %}<tr><td>Нейтральная зона</td><td class="mono">±{{ thr.no_trade_band }}</td></tr>{% endif %}
+      <tr><td>Порог BUY</td><td class="mono t-buy">>= {{ "%.3f"|format(thr.buy) }}</td></tr>
+      <tr><td>Порог SELL</td><td class="mono t-sell"><= {{ "%.3f"|format(thr.sell) }}</td></tr>
+      {% if thr.no_trade_band %}<tr><td>Нейтральная зона</td><td class="mono">+/-{{ thr.no_trade_band }}</td></tr>{% endif %}
     </table>
     {% endif %}
   </section>

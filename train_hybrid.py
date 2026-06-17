@@ -950,7 +950,7 @@ def train_system():
             )
             if _smi.returncode == 0:
                 _fields = [v.strip() for v in _smi.stdout.strip().split(",")]
-                _labels = ["Name", "Driver", "Temp°C", "GPU%", "Mem%", "UsedMB", "FreeMB"]
+                _labels = ["Name", "Driver", "TempC", "GPU%", "Mem%", "UsedMB", "FreeMB"]
                 for _lbl, _val in zip(_labels, _fields):
                     print(f"  {_lbl:<28}: {_val}")
         except Exception:
@@ -1072,7 +1072,7 @@ def train_system():
                     f"GPU {c['gpu_pct']}% | "
                     f"MEM {c['mem_pct']}% {c['mem_used']}/{c['mem_total']}MB "
                     f"(TF={tf_vram}) | "
-                    f"TEMP {c['temp']}°C | "
+                    f"TEMP {c['temp']}C | "
                     f"PWR {c['pwr']}/{c['pwr_limit']}W | "
                     f"FAN {c['fan']}% | "
                     f"CLK {c['clk_gpu']}MHz/{c['clk_mem']}MHz"
