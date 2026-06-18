@@ -36,7 +36,7 @@ def build_lstm_legacy(input_shape):
     x = LSTM(128, return_sequences=True)(inputs)
     x = Dropout(0.2)(x)
     x = LSTM(64, return_sequences=True)(x)
-    # V49 attention: Dense(1,tanh)->Flatten-Dense(ts,softmax)->RepeatVector-Permute-Multiply
+    # V49 attention: Dense(1,tanh), Flatten, Dense(ts,softmax), RepeatVector, Permute, Multiply
     a = Dense(1, activation='tanh')(x)
     a = Flatten()(a)
     a = Dense(timesteps, activation='softmax')(a)

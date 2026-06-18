@@ -125,7 +125,7 @@ FULL_ASSET_MAP = {
     # FOREX - Экзотика
     'USDTRY': 'TRY=X', 'USDMXN': 'MXN=X', 'USDZAR': 'ZAR=X',
     'USDSGD': 'SGD=X', 'USDNOK': 'NOK=X', 'USDSEK': 'SEK=X',
-    'USDPLN': 'PLN=X', 'USDCNH': 'CNH=X',
+    'USDPLN': 'PLN=X', 'USDCNH': 'CNY=X',  # CNH=X у Yahoo пустой (1 бар), CNY=X отдаёт полную историю; офшор/оншор юань расходятся на пипсы
 }
 
 # --- 3. ГРУППИРОВКА ---

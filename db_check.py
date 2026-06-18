@@ -6,9 +6,12 @@ DB Audit & Fix - аудит и ремонт market.db
   python db_check.py --stats  - только статистика таблиц
 
 Аудит делится на два блока:
-  ИСПРАВИМОЕ (--fix чинит): дубли по дате, формат даты, скрытые дубли, NULL.
-  КАЧЕСТВО ДАННЫХ (read-only, требует внимания/догрузки): свежесть (отставшие
-  таблицы), целостность OHLC, разрывы в датах, покрытие по config, мало данных,
+  ИСПРАВИМОЕ (--fix чинит): дубли по дате, формат даты, скрытые дубли, NULL,
+  критическая порча OHLC (High<Low, цена<=0, отрицательный объём). Дубли ищутся
+  и правятся ТОЛЬКО в ценовых таблицах - лог-таблицы (prediction_log, guru_log)
+  держат много строк на дату по смыслу и дедупу не подлежат.
+  КАЧЕСТВО ДАННЫХ (требует ре-фетча через data_engine, не правки БД): свежесть
+  (отставшие таблицы), разрывы в датах, покрытие по config, мало данных,
   PRAGMA integrity.
 """
 
@@ -318,6 +321,69 @@ def fix_nulls(cur, tables):
     return total
 
 
+def fix_ohlc(cur, tables):
+    """Чинит критическую порчу OHLC в ценовых таблицах (по строке):
+
+      - ни одной положительной цены (O/H/L/C все <=0) - строка мертва, удаляем
+        (ранний SHIB: цена ниже точности хранения округлилась в нули);
+      - часть цен валидна - нули/отрицательные заполняем медианой положительных,
+        затем High=max, Low=min по набору. Убирает High<Low, нули O/H/L у tnx/vix
+        (где валиден только Close) и отрицательный Low (oil 2020-04 -40.32);
+      - Volume<0 - модуль (ошибка знака фида).
+
+    Минорные отклонения Open/Close за [Low,High] (артефакт FX-фида Yahoo) НЕ трогаем.
+    Возвращает (исправлено_строк, удалено_строк)."""
+    repaired = deleted = 0
+    for t in tables:
+        cols = {r[1].lower() for r in cur.execute(f"PRAGMA table_info({t})").fetchall()}
+        if not {"open", "high", "low", "close"} <= cols:
+            continue
+        has_vol = "volume" in cols
+        sel_vol = ", Volume" if has_vol else ""
+        crit = ["High < Low", "Open <= 0", "High <= 0", "Low <= 0", "Close <= 0"]
+        if has_vol:
+            crit.append("Volume < 0")
+        rows = cur.execute(
+            f"SELECT rowid, Open, High, Low, Close{sel_vol} FROM {t} "
+            f"WHERE {' OR '.join(crit)}"
+        ).fetchall()
+        t_rep = t_del = 0
+        for row in rows:
+            rid, o, h, l, c = row[0], row[1], row[2], row[3], row[4]
+            v = row[5] if has_vol else None
+            pos = sorted(x for x in (o, h, l, c) if x is not None and x > 0)
+            if not pos:
+                cur.execute(f"DELETE FROM {t} WHERE rowid = ?", (rid,))
+                t_del += 1
+                continue
+            ref = pos[len(pos) // 2]  # медиана положительных цен
+            o = o if (o is not None and o > 0) else ref
+            h = h if (h is not None and h > 0) else ref
+            l = l if (l is not None and l > 0) else ref
+            c = c if (c is not None and c > 0) else ref
+            hi, lo = max(o, h, l, c), min(o, h, l, c)
+            if has_vol:
+                nv = abs(v) if v is not None else v
+                cur.execute(
+                    f"UPDATE {t} SET Open=?, High=?, Low=?, Close=?, Volume=? "
+                    f"WHERE rowid=?", (o, hi, lo, c, nv, rid))
+            else:
+                cur.execute(
+                    f"UPDATE {t} SET Open=?, High=?, Low=?, Close=? WHERE rowid=?",
+                    (o, hi, lo, c, rid))
+            t_rep += 1
+        if t_rep or t_del:
+            parts = []
+            if t_rep:
+                parts.append(f"исправлено {t_rep}")
+            if t_del:
+                parts.append(f"удалено {t_del} мёртвых")
+            print(f"    {t}: " + ", ".join(parts))
+        repaired += t_rep
+        deleted += t_del
+    return repaired, deleted
+
+
 def fix_vacuum(conn):
     """VACUUM - сжатие файла БД после удалений."""
     before = os.path.getsize(DB_PATH)
@@ -354,10 +420,16 @@ def run_diagnostics(cur, tables):
     print("=" * W)
 
     results = {}
+    # Дубли/скрытые дубли ищем только в ценовых (OHLCV) таблицах. В лог-таблицах
+    # (prediction_log, guru_log) несколько строк на одну дату - это норма (строка
+    # на актив), и авто-дедуп по дате стёр бы историю прогнозов. _price_tables их
+    # отсекает (нет open/high/low/close).
+    price = _price_tables(cur, tables)
+    results["price"] = price
 
     # 1
     print("\n  [1/5] Duplicates by Date")
-    dups = check_duplicates(cur, tables)
+    dups = check_duplicates(cur, price)
     results["dups"] = dups
     if dups:
         total_extra = sum(v["extra_rows"] for v in dups.values())
@@ -380,7 +452,7 @@ def run_diagnostics(cur, tables):
 
     # 3
     print("\n  [3/5] Hidden duplicates (mixed date formats)")
-    hidden = check_hidden_duplicates(cur, tables)
+    hidden = check_hidden_duplicates(cur, price)
     results["hidden"] = hidden
     if hidden:
         print(f"  [!] Found in {len(hidden)} tables")
@@ -409,7 +481,14 @@ def run_diagnostics(cur, tables):
     else:
         print("  [OK] No empty tables")
 
-    results["has_problems"] = bool(dups or bad_fmt or hidden or nulls)
+    # Критическая порча OHLC теперь тоже чинится (--fix), поэтому входит в флаг
+    # исправимых проблем. Отчёт о ней по-прежнему печатает блок DATA QUALITY.
+    ohlc = check_ohlc(cur, price)
+    results["ohlc_crit"] = {t: v["critical"] for t, v in ohlc.items() if v["critical"]}
+
+    results["has_problems"] = bool(
+        dups or bad_fmt or hidden or nulls or results["ohlc_crit"]
+    )
     return results
 
 
@@ -417,7 +496,7 @@ def run_quality_audit(conn, cur, tables):
     """Read-only блок аудита качества данных. Возвращает число предупреждений."""
     W = 60
     print(f"\n{'='*W}")
-    print("  DATA QUALITY  |  read-only (--fix это не чинит)")
+    print("  DATA QUALITY  |  OHLC чинит --fix; разрывы/свежесть/мало данных - ре-фетч data_engine")
     print("=" * W)
     warn = 0
     price = _price_tables(cur, tables)  # OHLCV-таблицы, без лог-таблиц
@@ -448,7 +527,8 @@ def run_quality_audit(conn, cur, tables):
     minor = {t: v["minor"] for t, v in ohlc.items() if v["minor"] and not v["critical"]}
     if crit:
         warn += len(crit)
-        print(f"  [!] CRITICAL in {len(crit)} tables (High<Low / price<=0 / volume<0):")
+        print(f"  [!] CRITICAL in {len(crit)} tables (High<Low / price<=0 / volume<0) "
+              "- чинится --fix:")
         for t, c in sorted(crit.items()):
             print(f"       {t:<28} {c} rows")
     else:
@@ -511,6 +591,8 @@ def run_fix(conn, cur, tables, results):
     print("=" * 60)
 
     fixed_total = 0
+    # Дедуп только по ценовым таблицам - лог-таблицы трогать нельзя.
+    price = results.get("price") or _price_tables(cur, tables)
 
     if results.get("bad_fmt"):
         print("\n  [FIX] Нормализация дат:")
@@ -518,11 +600,16 @@ def run_fix(conn, cur, tables, results):
 
     if results.get("dups") or results.get("hidden"):
         print("\n  [FIX] Удаление дубликатов:")
-        fixed_total += fix_duplicates(cur, tables)
+        fixed_total += fix_duplicates(cur, price)
 
     if results.get("nulls"):
         print("\n  [FIX] Удаление NULL-строк:")
         fixed_total += fix_nulls(cur, tables)
+
+    if results.get("ohlc_crit"):
+        print("\n  [FIX] Ремонт OHLC (критическая порча):")
+        rep, dele = fix_ohlc(cur, price)
+        fixed_total += rep + dele
 
     conn.commit()
 
@@ -533,15 +620,16 @@ def run_fix(conn, cur, tables, results):
     print(f"\n{'='*60}")
     print("  ПЕРЕПРОВЕРКА")
     print(f"{'='*60}")
-    dups2 = check_duplicates(cur, tables)
+    dups2 = check_duplicates(cur, price)
     bad2 = check_date_formats(cur, tables)
-    hidden2 = check_hidden_duplicates(cur, tables)
+    hidden2 = check_hidden_duplicates(cur, price)
     nulls2 = check_nulls(cur, tables)
+    ohlc2 = {t: v["critical"] for t, v in check_ohlc(cur, price).items() if v["critical"]}
 
-    if not dups2 and not bad2 and not hidden2 and not nulls2:
+    if not dups2 and not bad2 and not hidden2 and not nulls2 and not ohlc2:
         print(f"\n  ГОТОВО: исправлено {fixed_total} строк. База чистая.")
     else:
-        remaining = len(dups2) + len(bad2) + len(hidden2) + len(nulls2)
+        remaining = len(dups2) + len(bad2) + len(hidden2) + len(nulls2) + len(ohlc2)
         print(f"\n  ВНИМАНИЕ: осталось {remaining} проблем. Запустите ещё раз.")
 
     return fixed_total
