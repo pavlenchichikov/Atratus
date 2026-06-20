@@ -43,6 +43,18 @@
     </span>
     <span class="stat-sub">old - new</span>
   </div>
+  <div class="stat fade {% if taleb_regime == 'extreme' %}stat-warn{% endif %}">
+    <span class="stat-label">Taleb tail risk</span>
+    <span class="stat-value">
+      {% if taleb is not none %}<span class="taleb-{{ taleb_regime }}">{{ "%.1f"|format(taleb) }}</span>{% else %}-{% endif %}
+    </span>
+    <span class="stat-sub">
+      {% if taleb is none %}not enough history
+      {% elif taleb_regime == 'extreme' %}above hard cap {{ "%.1f"|format(taleb_hard_cap) }} - BUY blocked
+      {% elif taleb_regime == 'elevated' %}above soft cap {{ "%.1f"|format(taleb_soft_cap) }} - size reduced
+      {% else %}normal (soft cap {{ "%.1f"|format(taleb_soft_cap) }}){% endif %}
+    </span>
+  </div>
 </div>
 
 <section class="panel fade">

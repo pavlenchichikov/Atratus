@@ -228,6 +228,32 @@ def test_api_risk(client):
     assert "config" in data
 
 
+def test_radar_page_has_taleb_column(client):
+    import core.dashboard as dash
+    dash.cache_clear()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Taleb" in r.text
+
+
+def test_risk_page_has_tail_risk_panel(client):
+    import core.dashboard as dash
+    dash.cache_clear()
+    r = client.get("/risk")
+    assert r.status_code == 200
+    assert "Tail risk (Taleb)" in r.text
+
+
+def test_asset_page_shows_taleb_value(client, monkeypatch):
+    import core.dashboard as dash
+    dash.cache_clear()
+    monkeypatch.setattr(dash, "taleb_for_asset", lambda asset: 3.4)
+    r = client.get("/asset/BTC")
+    assert r.status_code == 200
+    assert "Taleb tail risk" in r.text
+    assert "3.4" in r.text
+
+
 def test_api_risk_open_and_close_position(client, monkeypatch, tmp_path):
     import risk_manager
     monkeypatch.setattr(risk_manager, "RISK_STATE_PATH", str(tmp_path / "risk_state.json"))

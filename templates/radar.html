@@ -139,7 +139,7 @@
   </div>
   <table class="grid">
     <thead>
-      <tr><th>Asset</th><th>Signal</th><th class="num">p</th><th>Confidence</th><th>Accuracy</th><th>30 days</th><th class="num">Date</th></tr>
+      <tr><th>Asset</th><th>Signal</th><th class="num">p</th><th>Confidence</th><th>Accuracy</th><th class="num" title="Taleb tail-risk: rolling kurtosis of log-returns (soft cap {{ "%.1f"|format(config.taleb_soft_cap) }}, hard cap {{ "%.1f"|format(config.taleb_risk_cap) }})">Taleb</th><th>30 days</th><th class="num">Date</th></tr>
     </thead>
     <tbody>
       {% for s in g.rows %}
@@ -154,6 +154,11 @@
           {% if s.acc.n %}
           <span class="acc {% if s.acc.acc >= 0.55 %}good{% elif s.acc.acc < 0.45 %}bad{% endif %} mono">{{ "%.0f"|format(s.acc.acc * 100) }}%</span>
           <span class="acc-n mono">{{ s.acc.correct }}/{{ s.acc.n }}</span>
+          {% else %}<span class="dim">-</span>{% endif %}
+        </td>
+        <td class="num mono c-taleb">
+          {% if s.taleb is not none %}
+          <span class="taleb-{{ s.taleb_regime }}" title="{{ s.taleb_regime }}">{{ "%.1f"|format(s.taleb) }}</span>
           {% else %}<span class="dim">-</span>{% endif %}
         </td>
         <td class="cell-spark">

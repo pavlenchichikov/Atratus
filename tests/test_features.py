@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.features import engineer_features
+from core.features import compute_taleb_risk, engineer_features, latest_taleb_risk
 
 
 @pytest.fixture
@@ -27,6 +27,35 @@ def sample_ohlcv():
         "Close": close,
         "Volume": volume,
     }).set_index("Date")
+
+
+class TestTalebRisk:
+    def test_matches_engineer_features_column(self, sample_ohlcv):
+        """The extracted helper must reproduce the in-pipeline taleb_risk exactly."""
+        close = sample_ohlcv["Close"]
+        helper = compute_taleb_risk(close)
+        # Same formula engineer_features uses before the warm-up median fill.
+        log_ret = np.log(close / close.shift(1))
+        expected = log_ret.rolling(window=60, min_periods=30).kurt()
+        pd.testing.assert_series_equal(helper, expected, check_names=False)
+
+    def test_latest_returns_last_value(self, sample_ohlcv):
+        closes = list(sample_ohlcv["Close"])
+        val = latest_taleb_risk(closes)
+        assert val is not None
+        assert isinstance(val, float)
+        assert np.isfinite(val)
+
+    def test_latest_fills_warmup_with_median(self):
+        """A short series (only warm-up rows are NaN) still yields a number, not NaN."""
+        # 40 closes: rolling(60, min_periods=30) gives a value only from row 30 on.
+        closes = list(100 + np.cumsum(np.random.RandomState(0).randn(40) * 0.5))
+        val = latest_taleb_risk(closes)
+        assert val is not None and np.isfinite(val)
+
+    def test_latest_none_when_too_short(self):
+        assert latest_taleb_risk([100, 101, 102]) is None
+        assert latest_taleb_risk([]) is None
 
 
 class TestEngineerFeatures:

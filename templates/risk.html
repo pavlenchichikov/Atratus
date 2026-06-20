@@ -106,6 +106,34 @@
   </section>
 </div>
 
+<section class="panel fade">
+  <div class="panel-head">
+    <h2>Tail risk (Taleb)</h2>
+    <span class="dim mono">soft cap {{ "%.1f"|format(config.taleb_soft_cap) }} &middot; hard cap {{ "%.1f"|format(config.taleb_risk_cap) }}</span>
+  </div>
+  {% if taleb_top %}
+  <p class="dim" style="padding: 0 16px;">Highest tail-risk assets now (rolling kurtosis of log-returns). Above the soft cap position size is reduced; above the hard cap new BUYs are blocked.</p>
+  <table class="grid">
+    <thead><tr><th>Asset</th><th class="num">Taleb</th><th>Regime</th></tr></thead>
+    <tbody>
+      {% for t in taleb_top %}
+      <tr>
+        <td><a class="asset-link" href="/asset/{{ t.asset }}">{{ t.asset }}</a></td>
+        <td class="num mono"><span class="taleb-{{ t.regime }}">{{ "%.1f"|format(t.taleb) }}</span></td>
+        <td>
+          {% if t.regime == 'extreme' %}<span class="chip chip-SELL">BUY blocked</span>
+          {% elif t.regime == 'elevated' %}<span class="taleb-elevated">size reduced</span>
+          {% else %}<span class="dim">normal</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No tail-risk data yet - needs price history in market.db.</p>
+  {% endif %}
+</section>
+
 <script src="/static/js/live.js"></script>
 <script>
 const MAX_DD_HALT = {{ config.max_drawdown_halt }};

@@ -120,9 +120,13 @@ def _grouped_signals(signals):
 @app.get("/", response_class=HTMLResponse)
 def radar(request: Request):
     signals = track_record.latest_signals()
+    taleb = dashboard.taleb_index()
+    soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
     for s in signals:
         closes = [p["close"] for p in track_record.price_series(s["asset"], days=30)]
         s["spark"] = _spark(closes)
+        s["taleb"] = taleb.get(s["asset"])
+        s["taleb_regime"] = dashboard.taleb_regime(s["taleb"], soft_cap, hard_cap)
     stale = track_record.stale_assets()
     regime = dashboard.global_regime()
     score = dashboard.regime_score(regime)
@@ -140,6 +144,7 @@ def radar(request: Request):
         "sent_zone": dashboard.gauge_zone(sentiment["score"]),
         "breadth": dashboard.market_breadth(),
         "leaderboard": dashboard.top_leaderboard(limit=5),
+        "config": RISK_CONFIG,
     })
 
 
@@ -171,9 +176,15 @@ def asset_page(request: Request, name: str):
 
     markers = [{"date": t["date"], "signal": t["signal"]}
                for t in track if t["signal"] in ("BUY", "SELL")]
+    taleb = dashboard.taleb_for_asset(name)
+    soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
     return templates.TemplateResponse(request, "asset.html", {
         "asset": name,
         "ticker": FULL_ASSET_MAP[name],
+        "taleb": taleb,
+        "taleb_regime": dashboard.taleb_regime(taleb, soft_cap, hard_cap),
+        "taleb_soft_cap": soft_cap,
+        "taleb_hard_cap": hard_cap,
         "group": group,
         "cat": radar_category(name),
         "track": track,
@@ -233,11 +244,22 @@ def models_page(request: Request):
     })
 
 
+def _taleb_top(limit=10):
+    """Assets with the highest current Taleb tail-risk index, regime-tagged."""
+    soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
+    items = [(a, v) for a, v in dashboard.taleb_index().items() if v is not None]
+    items.sort(key=lambda kv: kv[1], reverse=True)
+    return [{"asset": a, "taleb": v,
+             "regime": dashboard.taleb_regime(v, soft_cap, hard_cap)}
+            for a, v in items[:limit]]
+
+
 @app.get("/risk", response_class=HTMLResponse)
 def risk_page(request: Request):
     return templates.TemplateResponse(request, "risk.html", {
         **_risk_snapshot(), "config": RISK_CONFIG,
         "full_asset_map": sorted(FULL_ASSET_MAP),
+        "taleb_top": _taleb_top(),
     })
 
 

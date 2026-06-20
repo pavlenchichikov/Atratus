@@ -15,6 +15,34 @@ def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
+def compute_taleb_risk(close: pd.Series, window: int = 60, min_periods: int = 30) -> pd.Series:
+    """Taleb tail-risk index: rolling kurtosis (4th moment) of log-returns.
+
+    A 60-bar window on log-returns - see engineer_features for the rationale
+    (kurtosis is unstable on short windows and symmetric, hence the companion
+    skew/var_5 features). Returns the raw rolling series; warm-up rows are NaN.
+    """
+    log_ret = np.log(close / close.shift(1))
+    return log_ret.rolling(window=window, min_periods=min_periods).kurt()
+
+
+def latest_taleb_risk(closes) -> float | None:
+    """Latest Taleb tail-risk value from a close-price sequence (for display).
+
+    Returns None when there aren't enough closes to form a single estimate
+    (need >= min_periods + 1). Warm-up NaNs are filled with the series median,
+    matching how engineer_features fills them, so a short history still yields a
+    number rather than NaN.
+    """
+    s = pd.Series(list(closes), dtype="float64")
+    if len(s) < 31:
+        return None
+    risk = compute_taleb_risk(s)
+    risk = risk.fillna(risk.median())
+    val = risk.iloc[-1]
+    return float(val) if pd.notna(val) else None
+
+
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute technical indicators from OHLCV data.
 
@@ -40,7 +68,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     # hurts, so we add skew (asymmetry) and var_5 (5% left-tail return, VaR).
     log_ret = np.log(df['close'] / df['close'].shift(1))
     tail = log_ret.rolling(window=60, min_periods=30)
-    df['taleb_risk'] = tail.kurt()
+    df['taleb_risk'] = compute_taleb_risk(df['close'])
     df['ret_skew'] = tail.skew()
     df['var_5'] = tail.quantile(0.05)
     # Warm-up rows: fill with the column median, NOT 0. A zero kurtosis/skew/VaR

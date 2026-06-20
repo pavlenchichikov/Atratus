@@ -863,6 +863,13 @@ tr.flash td { animation: rowflash 1.6s ease-out; }
 th.sort-desc::after { content: " BE"; color: var(--amber); }
 th.sort-asc::after { content: " B4"; color: var(--amber); }
 
+/* ---- Taleb tail-risk regime colors ---- */
+
+.taleb-normal { color: var(--green); }
+.taleb-elevated { color: var(--amber); font-weight: 600; }
+.taleb-extreme { color: var(--red); font-weight: 700; }
+.taleb-na { color: var(--dim); }
+
 /* ---- responsive ---- */
 
 @media (max-width: 760px) {

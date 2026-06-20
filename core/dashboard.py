@@ -381,3 +381,52 @@ def news_digest(lang="all", category="all", limit=40):
         return items[:limit]
     except Exception:
         return []
+
+
+def taleb_regime(value, soft_cap, hard_cap):
+    """Tail-risk band for a Taleb index value, mirroring risk_manager's gates.
+
+    normal   -> below the soft cap (full size)
+    elevated -> above the soft cap (risk_manager shrinks position size)
+    extreme  -> above the hard cap (risk_manager blocks new BUYs)
+    """
+    if value is None:
+        return "na"
+    if value > hard_cap:
+        return "extreme"
+    if value > soft_cap:
+        return "elevated"
+    return "normal"
+
+
+@ttl_cache(300)
+def taleb_for_asset(asset):
+    """Latest Taleb tail-risk index for one asset, or None if too little data."""
+    try:
+        from core import features, track_record
+        closes = [r["close"] for r in track_record.price_series(asset, days=120)]
+        return features.latest_taleb_risk(closes)
+    except Exception:
+        return None
+
+
+@ttl_cache(300)
+def taleb_index():
+    """Latest Taleb tail-risk index per asset: {asset: float|None}.
+
+    One DB read + kurtosis per asset, cached 5 min so the radar and risk pages
+    do not recompute ~150 kurtoses on every request.
+    """
+    try:
+        from config import FULL_ASSET_MAP
+        from core import features, track_record
+    except Exception:
+        return {}
+    out = {}
+    for asset in FULL_ASSET_MAP:
+        try:
+            closes = [r["close"] for r in track_record.price_series(asset, days=120)]
+            out[asset] = features.latest_taleb_risk(closes)
+        except Exception:
+            out[asset] = None
+    return out
