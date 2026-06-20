@@ -1,5 +1,5 @@
-"""predict.py должен брать сохранённый train-скейлер, а не фитить новый
-на окне инференса (train/serve skew)."""
+"""predict.py must use the saved train-fold scaler, not fit a new one
+on the inference window (train/serve skew)."""
 
 import os
 import re

@@ -38,6 +38,9 @@ backups/
 exports/
 backtest_results*.pkl
 
+# Generated HTML reports (performance_report.py)
+reports/
+
 # Scheduler state
 scheduler_state.json
 

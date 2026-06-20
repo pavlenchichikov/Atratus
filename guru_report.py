@@ -26,6 +26,8 @@ if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
 from config import FULL_ASSET_MAP
+from core.features import compute_rsi
+from core.guru import calc_graham_number, get_guru_analysis, technical_context
 from net import ssl_verify
 from sqlalchemy import create_engine
 
@@ -275,11 +277,7 @@ def get_technical(name):
         df['SMA_50'] = df['close'].rolling(50).mean()
         df['SMA_200'] = df['close'].rolling(200).mean()
 
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / (loss + 1e-9)
-        df['RSI'] = 100 - (100 / (1 + rs))
+        df['RSI'] = compute_rsi(df['close'])
 
         ema12 = df['close'].ewm(span=12, adjust=False).mean()
         ema26 = df['close'].ewm(span=26, adjust=False).mean()
@@ -331,173 +329,20 @@ def _bar(val, max_val=100, width=20):
 
 
 # ==============================================================================
-# GURU ALGORITHMS (mirror of app.py)
+# GURU ALGORITHMS - delegated to core.guru (single source of truth, shared
+# with app.py) so this report's verdicts never drift from the live terminal's.
 # ==============================================================================
 
-def _calc_peg(pe, growth):
-    if pe <= 0 or growth <= 0:
-        return None
-    return pe / (growth * 100)
-
-
-def _calc_graham_number(eps, bv):
-    if eps <= 0 or bv <= 0:
-        return None
-    return math.sqrt(22.5 * eps * bv)
-
-
-def _tech_context(df):
-    if df is None or len(df) < 50:
-        return None
-    last = df.iloc[-1]
-    close = last['close']
-    window = min(252, len(df))
-    series = df['close'].iloc[-window:]
-    p_min, p_max = series.min(), series.max()
-    pct_52w = (close - p_min) / (p_max - p_min) * 100 if p_max > p_min else 50
-    rets = df['close'].pct_change().dropna()
-    vol_30d = float(rets.iloc[-30:].std() * (252 ** 0.5)) if len(rets) >= 30 else 0
-    return {
-        'close': close,
-        'rsi': last.get('RSI', 50),
-        'above_50': close > last.get('SMA_50', close),
-        'above_200': close > last.get('SMA_200', close),
-        'pct_52w': pct_52w,
-        'vol_30d': vol_30d,
-        'macd_bull': last.get('MACD_hist', 0) > 0,
-    }
-
-
 def run_guru(name, fund, tech):
-    """Run all 4 gurus, return results dict."""
-    results = {}
-
-    # --- Lynch ---
-    if fund:
-        pe = fund.get('pe', 0)
-        growth = fund.get('growth', 0)
-        peg = fund.get('peg_ratio') or _calc_peg(pe, growth)
-        if peg and peg > 0:
-            if peg < 1.0:
-                results['lynch'] = ("[OK] BUY", f"PEG={peg:.2f} P/E={pe:.1f} Growth={growth:.0%}", 2)
-            elif peg < 2.0:
-                results['lynch'] = ("[--] FAIR", f"PEG={peg:.2f} P/E={pe:.1f} Growth={growth:.0%}", 1)
-            else:
-                results['lynch'] = ("[OFF] EXP", f"PEG={peg:.2f} P/E={pe:.1f} Growth={growth:.0%}", 0)
-        elif pe > 0:
-            if pe < 12:
-                results['lynch'] = ("[OK] CHEAP", f"P/E={pe:.1f} (no growth data)", 2)
-            elif pe < 25:
-                results['lynch'] = ("[--] FAIR", f"P/E={pe:.1f} (no growth data)", 1)
-            else:
-                results['lynch'] = ("[OFF] EXP", f"P/E={pe:.1f}", 0)
-    if 'lynch' not in results and tech:
-        s = int(tech['above_50']) + int(tech['above_200'])
-        results['lynch'] = (["[OFF]", "[--]", "[OK]"][s], f"SMA50/200 trend score={s}", s)
-    if 'lynch' not in results:
-        results['lynch'] = ("[--] N/A", "No data", 0)
-
-    # --- Buffett ---
-    if fund:
-        roe = fund.get('roe', 0)
-        debt = fund.get('debt_equity', 0)
-        gross_m = fund.get('gross_margin', 0)
-        margin = fund.get('profit_margin', 0)
-        div_y = fund.get('dividend_yield', 0)
-        fcf = fund.get('fcf', 0)
-        sc = 0
-        if roe > 0.20: sc += 2
-        elif roe > 0.15: sc += 1
-        if debt < 0.5: sc += 2
-        elif debt < 1.5: sc += 1
-        if gross_m > 0.40: sc += 1
-        elif margin > 0.20: sc += 1
-        if div_y > 3: sc += 1
-        if fcf and fcf > 0: sc += 1
-        retained = fund.get('retained_earnings', 0)
-        if retained and retained > 0: sc += 1
-        if sc >= 6:
-            results['buffett'] = ("[TOP] GEM", f"Score={sc} ROE={roe:.0%} D/E={debt:.1f}", 2)
-        elif sc >= 3:
-            results['buffett'] = ("[OK] QUALITY", f"Score={sc} ROE={roe:.0%} D/E={debt:.1f}", 1)
-        else:
-            results['buffett'] = ("[!] WEAK", f"Score={sc} ROE={roe:.0%} D/E={debt:.1f}", 0)
-    elif tech:
-        results['buffett'] = ("[--] TECH", f"RSI={tech['rsi']:.0f} SMA200={'+' if tech['above_200'] else '-'}", int(tech['above_200']))
-    else:
-        results['buffett'] = ("[--] N/A", "No data", 0)
-
-    # --- Graham ---
-    if fund:
-        pe = fund.get('pe', 0)
-        eps = fund.get('eps', 0)
-        bv = fund.get('book_value', 0)
-        price = fund.get('price', 0)
-        debt = fund.get('debt_equity', 0)
-        cr = fund.get('current_ratio', 0)
-        sc = 0
-        gn = _calc_graham_number(eps, bv)
-        ncav = fund.get('ncav_per_share') if 'ncav_per_share' in fund else None
-        if ncav and price > 0 and ncav > price: sc += 3
-        if gn and price > 0 and gn > price * 1.2: sc += 2
-        elif gn and price > 0 and gn > price: sc += 1
-        if 0 < pe < 10: sc += 2
-        elif 0 < pe < 15: sc += 1
-        if cr > 2: sc += 1
-        if debt < 0.5: sc += 1
-        gn_str = f"GN=${gn:.0f}" if gn else "GN=N/A"
-        results['graham'] = (
-            "[OK] BUY" if sc >= 5 else "[--] FAIR" if sc >= 2 else "[OFF] EXP",
-            f"Score={sc} {gn_str} P/E={pe:.1f} CR={cr:.1f}",
-            2 if sc >= 5 else 1 if sc >= 2 else 0
-        )
-    elif tech:
-        pct = tech['pct_52w']
-        results['graham'] = (
-            "[OK]" if pct < 25 else "[--]" if pct < 60 else "[OFF]",
-            f"52W={pct:.0f}%", 2 if pct < 25 else 1 if pct < 60 else 0
-        )
-    else:
-        results['graham'] = ("[--] N/A", "No data", 0)
-
-    # --- Munger ---
-    risk_score = 0
-    risk_notes = []
-    if fund:
-        if fund.get('debt_equity', 0) > 3: risk_score += 2; risk_notes.append("Debt>3x")
-        elif fund.get('debt_equity', 0) > 1.5: risk_score += 1; risk_notes.append(f"Debt={fund['debt_equity']:.1f}x")
-        if fund.get('roe', 0) < 0: risk_score += 2; risk_notes.append("ROE<0")
-        if fund.get('pe', 0) > 50: risk_score += 1; risk_notes.append(f"P/E={fund['pe']:.0f}")
-        if fund.get('profit_margin', 0) < 0: risk_score += 2; risk_notes.append("Margin<0")
-        rev_qoq = fund.get('revenue_qoq', 0)
-        if rev_qoq and rev_qoq < -0.10: risk_score += 2; risk_notes.append(f"RevQoQ={rev_qoq:.0%}")
-        fcf = fund.get('fcf', 0)
-        if fcf and fcf < 0: risk_score += 1; risk_notes.append("FCF<0")
-        payout = fund.get('payout_ratio', 0)
-        if payout > 1.0: risk_score += 1; risk_notes.append(f"Payout={payout:.0%}")
-    if tech:
-        if tech['rsi'] > 80: risk_score += 2; risk_notes.append(f"RSI={tech['rsi']:.0f}")
-        elif tech['rsi'] > 70: risk_score += 1; risk_notes.append(f"RSI={tech['rsi']:.0f}")
-        if tech['vol_30d'] > 0.60: risk_score += 1; risk_notes.append(f"Vol={tech['vol_30d']:.0%}")
-    if risk_score == 0:
-        results['munger'] = ("[OK] CLEAN", "No risks found", 2)
-    elif risk_score >= 5:
-        results['munger'] = ("[!!] DANGER", " | ".join(risk_notes[:4]), 0)
-    elif risk_score >= 2:
-        results['munger'] = ("[!] WARNING", " | ".join(risk_notes[:4]), 1)
-    else:
-        results['munger'] = ("[OK] MINOR", " | ".join(risk_notes[:3]), 2)
-
-    # --- Council Vote ---
-    total = results['lynch'][2] + results['buffett'][2] + results['graham'][2] + results['munger'][2]
-    pct = total / 8 * 100
-    if pct >= 75:
-        results['council'] = ("BUY", pct, total)
-    elif pct >= 50:
-        results['council'] = ("HOLD", pct, total)
-    else:
-        results['council'] = ("AVOID", pct, total)
-
+    """Run all 4 gurus via core.guru, reshaped into this script's (status, desc, score) tuples."""
+    analysis = get_guru_analysis(fund, tech)
+    results = {
+        key: (analysis[key]['status'], analysis[key]['desc'], analysis[key]['_score'])
+        for key in ('lynch', 'buffett', 'graham', 'munger')
+    }
+    total = sum(results[key][2] for key in ('lynch', 'buffett', 'graham', 'munger'))
+    council = analysis['council']
+    results['council'] = (council['verdict'], council['pct'], total)
     return results
 
 
@@ -550,7 +395,7 @@ def print_full(name, symbol, fund, tech, guru):
         print(f"  Book Value:   {_fmt_num(bv, '.2f')}")
         if bv and price and bv > 0:
             print(f"  P/B:          {_fmt_num(price / bv, '.2f')}")
-        gn = _calc_graham_number(fund.get('eps', 0), bv)
+        gn = calc_graham_number(fund.get('eps', 0), bv)
         if gn:
             margin = (gn - price) / price * 100 if price > 0 else 0
             print(f"  Graham #:     {_fmt_num(gn, '.2f')}  (margin: {margin:+.0f}%)")
@@ -800,7 +645,7 @@ def main():
                 }
 
         # Technical
-        tech = _tech_context(get_technical(name))
+        tech = technical_context(get_technical(name))
 
         # Guru
         guru = run_guru(name, fund, tech)

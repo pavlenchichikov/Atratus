@@ -16,6 +16,8 @@ import argparse
 import pandas as pd
 from sqlalchemy import create_engine
 
+from core.features import compute_rsi
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 WL_PATH = os.path.join(BASE_DIR, "watchlist.json")
@@ -69,11 +71,7 @@ def _get_asset_data(asset, rows=50):
         chg_1d = float(df["close"].pct_change().iloc[-1]) if len(df) > 1 else 0.0
 
         # RSI 14
-        delta = df["close"].diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / (loss + 1e-9)
-        rsi_series = 100 - (100 / (1 + rs))
+        rsi_series = compute_rsi(df["close"])
         rsi = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
 
         # Trend vs SMA20/SMA50

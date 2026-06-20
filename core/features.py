@@ -6,6 +6,15 @@ import numpy as np
 import pandas as pd
 
 
+def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """14-period RSI (simple rolling mean of gains/losses, Wilder-style)."""
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    rs = gain / (loss + 1e-9)
+    return 100 - (100 / (1 + rs))
+
+
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute technical indicators from OHLCV data.
 
@@ -57,11 +66,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df['trend_strength'] = (df['close'] / (df['sma_50'] + 1e-9) - 1.0).abs()
 
     # RSI
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / (loss + 1e-9)
-    df['rsi'] = 100 - (100 / (1 + rs))
+    df['rsi'] = compute_rsi(df['close'])
 
     # MACD histogram
     ema12 = df['close'].ewm(span=12).mean()
@@ -103,11 +108,7 @@ def add_weekly_features(df: pd.DataFrame, table: str, engine) -> pd.DataFrame:
             return df
         df_w.columns = [c.lower() for c in df_w.columns]
         df_w['w_ret'] = df_w['close'].pct_change()
-        w_delta = df_w['close'].diff()
-        w_gain = w_delta.where(w_delta > 0, 0).rolling(14).mean()
-        w_loss = (-w_delta.where(w_delta < 0, 0)).rolling(14).mean()
-        w_rs = w_gain / (w_loss + 1e-9)
-        df_w['w_rsi'] = 100 - (100 / (1 + w_rs))
+        df_w['w_rsi'] = compute_rsi(df_w['close'])
         w_sma4 = df_w['close'].rolling(4).mean()
         df_w['w_trend'] = df_w['close'] / (w_sma4 + 1e-9) - 1.0
         weekly_cols = ['w_ret', 'w_rsi', 'w_trend']

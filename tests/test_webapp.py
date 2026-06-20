@@ -1,4 +1,4 @@
-"""Тесты веб-интерфейса через TestClient (без TensorFlow и реальной БД)."""
+"""Web UI tests via TestClient (no TensorFlow, no real DB)."""
 
 import sqlite3
 

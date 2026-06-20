@@ -19,6 +19,7 @@ st.set_page_config(page_title="G-TRADE TERMINAL", layout="wide", page_icon="")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path: sys.path.append(BASE_DIR)
 
+from core.features import compute_rsi
 from net import ssl_verify
 
 try:
@@ -65,7 +66,7 @@ except Exception:
     _paper = None
 
 try:
-    import signal_dashboard as _radar
+    import signal_engine as _radar
     RADAR_AVAILABLE = True
 except Exception:
     RADAR_AVAILABLE = False
@@ -250,11 +251,7 @@ def get_technical_data(asset, weekly=False):
         df['BB_lower'] = df['SMA_20'] - 2 * std20
 
         # RSI
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / (loss + 1e-9)
-        df['RSI'] = 100 - (100 / (1 + rs))
+        df['RSI'] = compute_rsi(df['close'])
 
         # MACD
         ema12 = df['close'].ewm(span=12, adjust=False).mean()
@@ -1336,7 +1333,7 @@ with tab7:
 with tab8:
     st.header("Signal Radar - All Assets")
     if not RADAR_AVAILABLE:
-        st.warning("signal_dashboard.py not found.")
+        st.warning("signal_engine.py not found.")
     else:
         try:
             with st.spinner("Scanning all assets..."):

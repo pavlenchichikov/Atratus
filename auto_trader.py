@@ -1,6 +1,6 @@
 """
 auto_trader.py - Auto-executes ML signals in the paper trading system.
-Connects predict.py signals (via signal_dashboard) with paper_trading.py execution.
+Connects predict.py signals (via signal_engine) with paper_trading.py execution.
 """
 
 import os
@@ -45,12 +45,12 @@ DEFAULT_CONFIG = {
 # Optional dependency imports
 # ---------------------------------------------------------------------------
 try:
-    import signal_dashboard
-    _HAS_SIGNAL_DASHBOARD = True
+    import signal_engine
+    _HAS_SIGNAL_ENGINE = True
 except ImportError:
-    signal_dashboard = None
-    _HAS_SIGNAL_DASHBOARD = False
-    logger.warning("signal_dashboard not found - signals unavailable")
+    signal_engine = None
+    _HAS_SIGNAL_ENGINE = False
+    logger.warning("signal_engine not found - signals unavailable")
 
 try:
     import paper_trading
@@ -107,15 +107,15 @@ def run_auto_trade() -> dict:
     logger.info(f"{mode_label} run_auto_trade() started")
 
     # --- 1. Fetch signals ---
-    if not _HAS_SIGNAL_DASHBOARD:
-        msg = "signal_dashboard unavailable - cannot fetch signals"
+    if not _HAS_SIGNAL_ENGINE:
+        msg = "signal_engine unavailable - cannot fetch signals"
         logger.error(msg)
         results["errors"].append(msg)
         return results
 
     try:
         logger.info("Scanning all assets (this takes a few minutes)...")
-        signals_df = signal_dashboard.get_all_signals(progress=True)
+        signals_df = signal_engine.get_all_signals(progress=True)
     except Exception as e:
         msg = f"get_all_signals() failed: {e}"
         logger.error(msg)

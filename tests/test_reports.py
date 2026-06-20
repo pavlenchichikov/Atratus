@@ -1,4 +1,4 @@
-"""Тесты текстовых отчётов (дайджест и ответы бота)."""
+"""Tests for text reports (digest and bot replies)."""
 
 from core import reports
 
@@ -20,7 +20,7 @@ def test_top_message_excludes_wait():
 
 def test_top_message_empty():
     msg = reports.build_top_message([], n=5)
-    assert "нет" in msg.lower()
+    assert "no" in msg.lower()
 
 
 def test_signal_message_shows_track():
@@ -38,7 +38,7 @@ def test_signal_message_shows_track():
 
 def test_signal_message_no_history():
     msg = reports.build_signal_message("BTC", [], {"n": 0, "correct": 0, "acc": None})
-    assert "нет" in msg.lower()
+    assert "no" in msg.lower()
 
 
 def test_risk_message_without_state():
@@ -68,4 +68,4 @@ def test_digest_contains_sections():
 
 def test_digest_handles_empty():
     msg = reports.build_digest(signals=[], stale=[], risk=None, date_str="2026-06-12")
-    assert "нет" in msg.lower()
+    assert "no" in msg.lower()

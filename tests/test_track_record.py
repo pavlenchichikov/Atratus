@@ -1,4 +1,4 @@
-"""Тесты core.track_record на временной SQLite."""
+"""Tests for core.track_record against a temporary SQLite DB."""
 
 import sqlite3
 
@@ -18,15 +18,15 @@ def db(tmp_path):
         )
     """)
     rows = [
-        # BTC: три дня истории, последняя - BUY
+        # BTC: three days of history, latest is BUY
         ("2026-06-08", "BTC", "BUY", 0.61, 0.012, 1, 0.61, None),
         ("2026-06-09", "BTC", "SELL", 0.58, 0.004, 0, 0.58, None),
         ("2026-06-10", "BTC", "BUY", 0.62, None, None, 0.62, None),
-        # TSLA: один день
+        # TSLA: one day
         ("2026-06-10", "TSLA", "WAIT", 0.51, None, None, 0.51, None),
     ]
     con.executemany("INSERT INTO prediction_log VALUES (?,?,?,?,?,?,?,?)", rows)
-    # ценовая таблица для stale_assets
+    # price table for stale_assets
     con.execute('CREATE TABLE btc (Date TEXT, Close REAL)')
     con.execute("INSERT INTO btc VALUES ('2026-06-10', 100.0)")
     con.execute('CREATE TABLE tsla (Date TEXT, Close REAL)')
@@ -73,7 +73,7 @@ def test_accuracy_scoped_to_current_version_when_column_present(tmp_path):
 
 def test_asset_accuracy_counts_only_verified(db):
     acc = track_record.asset_accuracy("BTC", db_path=db)
-    assert acc["n"] == 2          # строка с correct=NULL не считается
+    assert acc["n"] == 2          # the row with correct=NULL isn't counted
     assert acc["correct"] == 1
     assert acc["acc"] == 0.5
 

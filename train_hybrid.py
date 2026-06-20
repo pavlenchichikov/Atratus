@@ -137,6 +137,7 @@ from core.backtesting import (
     MAX_TRADE_RET,
 )
 from core.ensemble import build_stacking_features
+from core.ensemble import ensemble_with_gating, tune_ensemble_weights  # noqa: F401 (re-exported for signal_engine.py)
 from core.scaling import save_scaler, scaler_path
 from core.calibration import fit_calibrator, save_calibrator
 

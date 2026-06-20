@@ -12,13 +12,11 @@ optuna>=3.5,<5
 pandas>=2.3,<3
 numpy>=2.4,<3
 sqlalchemy>=2.0,<3
-scipy>=1.17,<2
 
 # Market data APIs
 yfinance>=1.1,<2
-moexalgo>=2.5,<3
 requests>=2.32,<3
-lxml>=5.3,<6
+lxml>=5.3,<6  # parser backend for pd.read_html() (guru_report.py, app.py smart-lab scrape)
 
 # Visualization & UI
 streamlit>=1.51,<2
@@ -27,9 +25,6 @@ fastapi>=0.115,<1
 uvicorn>=0.30,<1
 jinja2>=3.1,<4
 httpx>=0.27,<1  # TestClient used in webapp tests
-
-# NLP
-textblob>=0.19,<1
 
 # Telegram bot
 pyTelegramBotAPI>=4.31,<5

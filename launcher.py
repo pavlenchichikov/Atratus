@@ -915,7 +915,7 @@ class GTradeLauncher(tk.Tk):
         self._run_script([PY, os.path.join(BASE_DIR, "optuna_tune.py")], "Optuna Tune")
 
     def _run_signal_radar(self):
-        self._run_script([PY, os.path.join(BASE_DIR, "signal_dashboard.py")], "Signal Radar")
+        self._run_script([PY, os.path.join(BASE_DIR, "signal_engine.py")], "Signal Radar")
 
     def _run_sector_rotation(self):
         self._run_script([PY, os.path.join(BASE_DIR, "sector_rotation.py")], "Sector Rotation")

@@ -14,6 +14,8 @@ from datetime import datetime
 import pandas as pd
 from sqlalchemy import create_engine
 
+from core.features import compute_rsi
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 MODEL_DIR = os.path.join(BASE_DIR, "models")
@@ -57,11 +59,7 @@ def _get_asset_stats(asset, rows=60):
         chg_5d = float((df["close"].iloc[-1] / df["close"].iloc[-6] - 1)) if len(df) > 5 else 0
         chg_20d = float((df["close"].iloc[-1] / df["close"].iloc[-21] - 1)) if len(df) > 20 else 0
 
-        delta = df["close"].diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / (loss + 1e-9)
-        rsi = float((100 - (100 / (1 + rs))).iloc[-1])
+        rsi = float(compute_rsi(df["close"]).iloc[-1])
 
         sma50 = float(df["close"].rolling(50).mean().iloc[-1]) if len(df) >= 50 else price
         trend = "UP" if price > sma50 else "DOWN"

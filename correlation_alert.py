@@ -122,13 +122,13 @@ def get_correlation_alerts(threshold=ALERT_THRESHOLD):
 
 
 def get_stress_indicator():
-    """Средняя попарная корреляция - индикатор рыночного стресса."""
+    """Average pairwise correlation - a market-stress indicator."""
     ret_df = _load_returns(KEY_ASSETS)
     if ret_df.shape[1] < 3:
         return {"avg_corr": 0, "label": "N/A", "min_corr": 0, "max_corr": 0}
 
     corr = ret_df.tail(SHORT_WINDOW).corr()
-    # Верхний треугольник без диагонали
+    # Upper triangle, excluding the diagonal
     mask = np.triu(np.ones(corr.shape, dtype=bool), k=1)
     vals = corr.where(mask).stack().values
 
@@ -149,7 +149,7 @@ def get_stress_indicator():
 
 
 def get_key_pairs_matrix():
-    """Корреляционная матрица для ключевых активов."""
+    """Correlation matrix for key assets."""
     ret_df = _load_returns(KEY_ASSETS)
     if ret_df.shape[1] < 2:
         return pd.DataFrame()
@@ -157,7 +157,7 @@ def get_key_pairs_matrix():
 
 
 def get_sector_correlations():
-    """Средняя внутренняя корреляция по секторам и между секторами."""
+    """Average intra-sector and cross-sector correlation."""
     result = {}
     sector_returns = {}
 
@@ -180,7 +180,7 @@ def get_sector_correlations():
             label = "LOW"
 
         result[sector] = {"internal": avg, "label": label}
-        # Среднюю доходность сектора для cross-sector
+        # Average sector return, used for cross-sector correlation below
         sector_returns[sector] = ret_df.mean(axis=1)
 
     # Cross-sector correlations

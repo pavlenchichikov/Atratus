@@ -1,7 +1,7 @@
 """Loading of saved champion models.
 
 Moved out of backtest.py: the loader is also needed by predict.py, alert_bot.py
-and signal_dashboard.py, so importing it from the backtest script was wrong.
+and signal_engine.py, so importing it from the backtest script was wrong.
 """
 
 import json

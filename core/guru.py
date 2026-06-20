@@ -503,10 +503,10 @@ def get_guru_analysis(
     data_source = fund.get('source', 'technical') if fund else 'technical'
 
     return {
-        'lynch':   {'status': lynch_status,   'desc': lynch_desc},
-        'buffett': {'status': buffett_status, 'desc': buffett_desc},
-        'graham':  {'status': graham_status,  'desc': graham_desc},
-        'munger':  {'status': munger_status,  'desc': munger_desc},
+        'lynch':   {'status': lynch_status,   'desc': lynch_desc,   '_score': lynch_score},
+        'buffett': {'status': buffett_status, 'desc': buffett_desc, '_score': buffett_score},
+        'graham':  {'status': graham_status,  'desc': graham_desc,  '_score': graham_score},
+        'munger':  {'status': munger_status,  'desc': munger_desc,  '_score': munger_score},
         'council': council,
         'data_source': data_source,
     }
