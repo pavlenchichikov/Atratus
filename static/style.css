@@ -411,6 +411,7 @@ th.num, td.num { text-align: right; }
 .chip-cat-ru { color: var(--cyan); border-color: rgba(0, 212, 255, 0.45); background: rgba(0, 212, 255, 0.08); }
 .chip-cat-commodity { color: var(--gold); border-color: rgba(255, 170, 0, 0.45); background: rgba(255, 170, 0, 0.08); }
 .chip-cat-us { color: var(--amber); border-color: rgba(227, 162, 58, 0.45); background: rgba(227, 162, 58, 0.08); }
+.chip-cat-eu { color: var(--green); border-color: rgba(0, 255, 163, 0.45); background: rgba(0, 255, 163, 0.08); }
 
 /* ---- confidence bar ---- */
 

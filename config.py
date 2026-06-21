@@ -72,6 +72,17 @@ FULL_ASSET_MAP = {
     # US SOFTWARE
     'CRM': 'CRM', 'ORCL': 'ORCL', 'ADBE': 'ADBE', 'UBER': 'UBER', 'PYPL': 'PYPL',
 
+    # EU INDICES (native exchange tickers on Yahoo)
+    'DAX': '^GDAXI', 'CAC40': '^FCHI', 'ESTOXX50': '^STOXX50E', 'FTSE100': '^FTSE',
+    'IBEX35': '^IBEX', 'FTSEMIB': 'FTSEMIB.MI', 'AEX': '^AEX', 'SMI': '^SSMI',
+
+    # EU STOCKS - top European large caps (key -> native EU listing on Yahoo)
+    'ASML': 'ASML.AS', 'LVMH': 'MC.PA', 'SAP': 'SAP.DE', 'NESTLE': 'NESN.SW',
+    'NOVO': 'NOVO-B.CO', 'AZN': 'AZN.L', 'SHELL': 'SHEL.L', 'TOTAL': 'TTE.PA',
+    'SIEMENS': 'SIE.DE', 'AIRBUS': 'AIR.PA', 'LOREAL': 'OR.PA', 'ALLIANZ': 'ALV.DE',
+    'HERMES': 'RMS.PA', 'SCHNEIDER': 'SU.PA', 'SANTANDER': 'SAN.MC', 'BNP': 'BNP.PA',
+    'ENEL': 'ENEL.MI', 'IBERDROLA': 'IBE.MC',
+
     # CRYPTO
     'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD',
     'XRP': 'XRP-USD', 'TON': 'TON11419-USD', 'DOGE': 'DOGE-USD', 'BNB': 'BNB-USD',
@@ -142,6 +153,10 @@ ASSET_TYPES = {
     "US INDUSTRIAL": ["BA", "CAT", "XOM", "CVX", "COP"],
     "US SEMI": ["INTC", "QCOM", "AVGO", "MU"],
     "US SOFTWARE": ["CRM", "ORCL", "ADBE", "UBER", "PYPL"],
+    "EU INDICES": ["DAX", "CAC40", "ESTOXX50", "FTSE100", "IBEX35", "FTSEMIB", "AEX", "SMI"],
+    "EU STOCKS": ["ASML", "LVMH", "SAP", "NESTLE", "NOVO", "AZN", "SHELL", "TOTAL",
+                  "SIEMENS", "AIRBUS", "LOREAL", "ALLIANZ", "HERMES", "SCHNEIDER",
+                  "SANTANDER", "BNP", "ENEL", "IBERDROLA"],
     "RUS BLUE CHIPS": ["SBER", "GAZP", "LKOH", "ROSN", "NVTK", "TATN", "SNGS", "PLZL", "SIBN", "MGNT"],
     "RUS FINANCE": ["TCSG", "VTBR", "BSPB", "MOEX_EX", "CBOM"],
     "RUS TECH": ["YNDX", "OZON", "VKCO", "POSI", "MTSS", "RTKM", "HHRU", "SOFL", "ASTR", "WUSH"],
@@ -179,6 +194,7 @@ RADAR_GROUPS = {
     "US INDUSTRIAL":   ASSET_TYPES["US INDUSTRIAL"],
     "US SEMI":         ASSET_TYPES["US SEMI"],
     "US SOFTWARE":     ASSET_TYPES["US SOFTWARE"],
+    "EUROPE":          _merge_types("EU INDICES", "EU STOCKS"),
     "CRYPTO":          ASSET_TYPES["CRYPTO"],
     # show IMOEX together with the Russian names
     "MOEX":            ["IMOEX"] + _merge_types(
@@ -189,7 +205,7 @@ RADAR_GROUPS = {
 
 # RADAR_GROUPS key -> webapp.py chip-cat-* CSS suffix (style.css). Anything not
 # listed here (US sectors, indices, forex) falls back to "us" in radar_category().
-_CATEGORY_CSS = {"CRYPTO": "crypto", "MOEX": "ru", "COMMODITIES": "commodity"}
+_CATEGORY_CSS = {"CRYPTO": "crypto", "MOEX": "ru", "COMMODITIES": "commodity", "EUROPE": "eu"}
 
 
 def radar_category(asset: str) -> str:

@@ -561,6 +561,7 @@ def main():
         'US TECH': 'US TECH', 'US HEALTHCARE': 'US OTHER', 'US FINANCE': 'US OTHER',
         'US CONSUMER': 'US OTHER', 'US INDUSTRIAL': 'US OTHER',
         'US SEMI': 'US OTHER', 'US SOFTWARE': 'US OTHER',
+        'EU INDICES': 'EUROPE', 'EU STOCKS': 'EUROPE',
         'CRYPTO': 'CRYPTO',
         'FOREX MAJORS': 'FOREX', 'FOREX CROSSES': 'FOREX', 'FOREX EXOTIC': 'FOREX',
         'RUS BLUE CHIPS': 'MOEX', 'RUS FINANCE': 'MOEX',
@@ -626,10 +627,10 @@ def main():
     # Print grouped summary (terminal only - GUI already shows per-asset lines)
     if _is_tty:
         result_map = {n: (st, b) for n, st, b in results}
-        group_order = ['INDICES', 'COMMODITIES', 'US TECH', 'US OTHER', 'CRYPTO', 'MOEX', 'FOREX', 'OTHER']
+        group_order = ['INDICES', 'COMMODITIES', 'US TECH', 'US OTHER', 'EUROPE', 'CRYPTO', 'MOEX', 'FOREX', 'OTHER']
         label_map = {
             'INDICES': 'Indices & Macro', 'COMMODITIES': 'Commodities',
-            'US TECH': 'US Tech', 'US OTHER': 'US Sectors',
+            'US TECH': 'US Tech', 'US OTHER': 'US Sectors', 'EUROPE': 'Europe',
             'CRYPTO': 'Crypto',
             'MOEX': 'MOEX (Russia)', 'FOREX': 'Forex', 'OTHER': 'Other',
         }
