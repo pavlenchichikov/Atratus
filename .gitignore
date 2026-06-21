@@ -59,3 +59,6 @@ Thumbs.db
 
 # Local validation / scratch scripts (not part of the pipeline)
 ab_validate.py
+
+# batfiles
+train_adaptive.bat
