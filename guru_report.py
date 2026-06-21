@@ -12,6 +12,7 @@ Usage:
 
 import os
 import sys
+import time
 import warnings
 import math
 
@@ -28,7 +29,7 @@ if BASE_DIR not in sys.path:
 from config import FULL_ASSET_MAP
 from core.features import compute_rsi
 from core.guru import calc_graham_number, get_guru_analysis, technical_context
-from net import ssl_verify
+from net import proxies_for, ssl_verify
 from sqlalchemy import create_engine
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
@@ -87,14 +88,48 @@ GLOBAL_BACKUP = {
 # DATA FETCHING
 # ==============================================================================
 
-def fetch_yf_deep(symbol):
-    """Full yfinance fetch: .info + financials + balance sheet + cashflow."""
-    try:
-        t = yf.Ticker(symbol)
-        info = t.info or {}
-        if info.get('currentPrice', 0) == 0 and info.get('regularMarketPrice', 0) == 0:
-            return None
+def _yf_session():
+    """A requests session through net.py's SOCKS5 proxy, ONLY when the proxy is
+    alive. Otherwise return None so yfinance uses its own session (and its
+    cookie/crumb handshake) - injecting a custom session on the direct path
+    breaks that handshake and yields an empty .info."""
+    proxies = proxies_for("auto")
+    if not proxies:
+        return None
+    s = requests.Session()
+    s.proxies.update(proxies)
+    s.verify = ssl_verify()
+    return s
 
+
+def _yf_fetch_info(symbol, attempts=3):
+    """Get (Ticker, .info) with retries. yfinance's .info over a foreign exit is
+    flaky (a single transient miss otherwise drops the asset to N/A). Routes
+    through the SOCKS5 proxy when one is alive. Returns (None, None) when no real
+    quote could be fetched."""
+    for _ in range(attempts):
+        try:
+            t = yf.Ticker(symbol, session=_yf_session())
+            info = t.info or {}
+            if info.get('currentPrice', 0) or info.get('regularMarketPrice', 0):
+                return t, info
+        except Exception:
+            pass
+        time.sleep(1.5)
+    return None, None
+
+
+def fetch_yf_deep(symbol):
+    """Full yfinance fetch: .info + financials + balance sheet + cashflow.
+
+    Routed through the project's proxy and retried (see _yf_fetch_info), so a
+    transient Yahoo hiccup no longer mislabels a real stock as having no
+    fundamentals.
+    """
+    t, info = _yf_fetch_info(symbol)
+    if not info:
+        return None
+    try:
         result = {'_info': info, '_source': 'yfinance_live'}
 
         # Core metrics

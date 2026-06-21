@@ -137,6 +137,22 @@ class TestGetGuruAnalysis:
         result = get_guru_analysis(None, None)
         assert result['council']['verdict'] == 'AVOID'
 
+    def test_data_source_uses_underscore_source_key(self):
+        """Regression: the fund dict key is '_source', not 'source'. A real stock
+        must report its true source, not be mislabeled 'technical'."""
+        fund = {'pe': 20, 'roe': 0.25, 'eps': 5, 'book_value': 40,
+                'sector': 'Technology', 'price': 100, '_source': 'yfinance_live'}
+        res = get_guru_analysis(fund, None)
+        assert res['data_source'] == 'yfinance_live'
+
+    def test_priced_but_no_fundamentals_is_technical(self):
+        """yfinance returns a priced .info for forex/crypto too - with no real
+        fundamentals it must count as technical (-> N/A in the UI)."""
+        fund = {'price': 1.14, 'pe': 0, 'roe': 0, 'eps': 0, 'book_value': 0,
+                'sector': '', '_source': 'yfinance_live'}
+        res = get_guru_analysis(fund, None)
+        assert res['data_source'] == 'technical'
+
 
 class TestMungerVeto:
     def test_danger_blocks_buy(self, monkeypatch):

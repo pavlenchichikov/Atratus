@@ -50,6 +50,17 @@ def calc_graham_number(eps: float, book_value: float) -> float | None:
     return math.sqrt(22.5 * eps * book_value)
 
 
+def _has_fundamentals(fund: dict | None) -> bool:
+    """True only if the dict carries real company fundamentals. yfinance returns
+    a priced .info even for forex/crypto/indices, so the presence of the dict is
+    not enough - require an actual valuation/quality field (P/E, ROE, EPS, book
+    value, or a sector)."""
+    if not fund:
+        return False
+    return bool(fund.get('pe') or fund.get('roe') or fund.get('eps')
+                or fund.get('book_value') or fund.get('sector'))
+
+
 def technical_context(df: pd.DataFrame) -> dict[str, Any] | None:
     """Extract technical indicators from price DataFrame."""
     if df is None or len(df) < 50:
@@ -476,9 +487,11 @@ def get_guru_analysis(
     max_score = 2.0 * sum(w.get(g, 1.0) for g in scores)
     consensus_pct = (weighted / max_score * 100) if max_score > 0 else 0.0
 
-    # Technical-only verdict (no fundamentals) is less reliable than one built on
-    # PEG/ROE/Graham#, so its confidence is shaved before the thresholds.
-    is_technical = not fund
+    # Technical-only verdict (no real fundamentals) is less reliable than one
+    # built on PEG/ROE/Graham#, so its confidence is shaved before the
+    # thresholds. A priced-but-fundamentals-less dict (forex/crypto/index) counts
+    # as technical.
+    is_technical = not _has_fundamentals(fund)
     if is_technical:
         consensus_pct *= TECH_CONFIDENCE_DISCOUNT
 
@@ -500,7 +513,7 @@ def get_guru_analysis(
                "vetoed": vetoed,
                "text": f"{label} ({consensus_pct:.0f}%){note}"}
 
-    data_source = fund.get('source', 'technical') if fund else 'technical'
+    data_source = fund.get('_source', 'technical') if not is_technical else 'technical'
 
     return {
         'lynch':   {'status': lynch_status,   'desc': lynch_desc,   '_score': lynch_score},
