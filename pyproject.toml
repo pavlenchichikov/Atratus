@@ -1,0 +1,26 @@
+# Single-source tool configuration for G-Trade.
+# G-Trade is an application (not a published package), so this file centralizes
+# tool config only - runtime dependencies stay pinned in requirements.txt, which
+# the Dockerfile and CI install. See README.md for setup.
+
+[tool.ruff]
+# E402 is intentionally ignored: several modules (train_hybrid.py, predict.py,
+# app.py) must run PATH / env-var setup BEFORE importing tensorflow/keras, so
+# their module-level imports legitimately sit below that bootstrap block.
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# Keep the high-value pyflakes (F) rules active - they catch unused imports and
+# undefined names (real bugs). Silence the pure-style E rules the codebase uses
+# on purpose, so `ruff check` stays green and CI-enforceable.
+ignore = [
+    "E402",  # module-level import not at top - intentional (TF GPU bootstrap)
+    "E701",  # multiple statements on one line (colon) - author's compact style
+    "E702",  # multiple statements on one line (semicolon) - author's compact style
+    "E741",  # ambiguous var name (l/I/O) - a couple of math vars, harmless
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

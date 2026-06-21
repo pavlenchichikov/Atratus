@@ -117,6 +117,30 @@ _print_lock = threading.Lock()
 _CB_TASK_TYPE = "GPU" if (os.getenv("GTRADE_CB_DEVICE") or "").strip().upper() == "GPU" else "CPU"
 _cb_gpu_lock = threading.Semaphore(_env_int("GTRADE_CB_GPU_SLOTS", 1))
 
+# Data-adaptive net right-sizing (see docs/.../adaptive-net-rightsizing-design.md).
+# OFF by default -> the builders use their original flat 192/128/64 sizes, exactly
+# reproducing the current models. ON -> nets are sized once per asset to its data
+# volume (less overfit on small assets, fewer params -> faster). Warm-start reuses
+# the previous fold's weights (shapes are constant per asset); it defaults to
+# following the adaptive flag but can be toggled on its own.
+_ADAPTIVE_NETS = (os.getenv("GTRADE_ADAPTIVE_NETS") or "").strip() in ("1", "true", "True")
+_warmstart_env = (os.getenv("GTRADE_NET_WARMSTART") or "").strip()
+_NET_WARMSTART = (_warmstart_env in ("1", "true", "True")) if _warmstart_env else _ADAPTIVE_NETS
+
+
+def _ws_load(model, key, store):
+    """Warm-start: load the previous fold's weights when shapes match (best effort)."""
+    if _NET_WARMSTART and store.get(key) is not None:
+        try:
+            model.set_weights(store[key])
+        except Exception:
+            pass  # shape changed - fall back to fresh init
+
+
+def _ws_save(model, key, store):
+    if _NET_WARMSTART:
+        store[key] = model.get_weights()
+
 # --- SHARED EPOCH STATE (callback - ticker thread) ---
 _progress_state = {'label': '-', 'epoch': 0, 'total_ep': 0, 'loss': float('nan')}
 _state_lock = threading.Lock()
@@ -132,7 +156,7 @@ if _HAS_GPU:
 # -- Imports from core/ modules ------------------------------------------------
 from core.architectures import (
     build_transformer_encoder,
-    build_lstm_multitask, build_tcn,
+    build_lstm_multitask, build_tcn, adaptive_units,
 )
 from core.profiles import (
     FOREX,
@@ -203,7 +227,10 @@ except ImportError:
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 engine = create_engine(f'sqlite:///{DB_PATH}')
-MODEL_DIR = os.path.join(BASE_DIR, "models")
+# GTRADE_MODEL_DIR redirects all training output (champions, registry, quality
+# report, thresholds) to an isolated dir - used by ab_validate.py so an A/B run
+# never touches the production models/. Default = the real models/ dir.
+MODEL_DIR = os.getenv("GTRADE_MODEL_DIR") or os.path.join(BASE_DIR, "models")
 EXPERIMENTS_DIR = os.path.join(MODEL_DIR, "experiments")
 THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
 REGISTRY_PATH = os.path.join(MODEL_DIR, "champion_registry.json")
@@ -463,7 +490,24 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         best_fold = None
         best_fold_score = -1e9
 
-        len(precomputed)
+        # Right-size the nets to this asset's data ONCE (from the largest fold),
+        # so the architecture is constant across folds and warm-start can reuse
+        # weights. Flag off -> empty kwargs -> builders keep their flat defaults.
+        _max_seq = max((len(p['X_seq_train']) for p in precomputed), default=0)
+        if _ADAPTIVE_NETS and _max_seq > 0:
+            _u1 = adaptive_units(_max_seq, lo=32, hi=128, divisor=16)
+            _lstm_kw = dict(units1=_u1, units2=max(16, _u1 // 2),
+                            head_dim=max(16, _u1 // 2),
+                            recurrent_dropout=0.10, l2_reg=1e-5)
+            _tf_kw = dict(num_heads=2,
+                          ff_dim=adaptive_units(_max_seq, lo=32, hi=96, divisor=24),
+                          dropout=0.15)
+            _tcn_kw = dict(n_filters=adaptive_units(_max_seq, lo=24, hi=64, divisor=24),
+                           dropout=0.20)
+        else:
+            _lstm_kw, _tf_kw, _tcn_kw = {}, {}, {}
+        _warm = {}  # per-asset weight carry across folds (warm-start)
+
         for k, fold_data in enumerate(precomputed, 1):
             if _stop_requested:
                 _safe_print(f"  [STOP] {asset:<12} interrupted on fold {k}/{len(splits)}")
@@ -538,7 +582,9 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         )
                     # -- Multi-task LSTM --------------------------------------------
                     lstm_mt = build_lstm_multitask((lookback, len(selected)),
-                                                   n_train_samples=len(X_seq_train))
+                                                   n_train_samples=len(X_seq_train),
+                                                   **_lstm_kw)
+                    _ws_load(lstm_mt, 'lstm', _warm)
                     train_ds = tf.data.Dataset.from_tensor_slices((
                         X_seq_train.astype('float32'),
                         {'direction': y_seq_train.astype('float32'),
@@ -558,6 +604,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                                                  label="LSTM", val_metric="val_direction_loss")
                     lstm_mt.fit(train_ds, validation_data=val_ds, epochs=160,
                                 callbacks=[es_lstm, _lstm_cb], verbose=0)
+                    _ws_save(lstm_mt, 'lstm', _warm)
                     lstm_test_prob = lstm_mt.predict(
                         X_seq_test.astype('float32'), batch_size=BATCH, verbose=0)[0].flatten()
                     lstm_val_prob  = lstm_mt.predict(
@@ -569,7 +616,9 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
 
                     # -- Transformer encoder --------------------------------------
                     tf_enc = build_transformer_encoder((lookback, len(selected)),
-                                                       n_train_samples=len(X_seq_train))
+                                                       n_train_samples=len(X_seq_train),
+                                                       **_tf_kw)
+                    _ws_load(tf_enc, 'tf', _warm)
                     train_ds_tf = tf.data.Dataset.from_tensor_slices(
                         (X_seq_train.astype('float32'), y_seq_train.astype('float32'))
                     ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
@@ -582,6 +631,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                                                label="TF", val_metric="val_loss")
                     tf_enc.fit(train_ds_tf, validation_data=val_ds_tf, epochs=100,
                                callbacks=[es_tf, _tf_cb], verbose=0)
+                    _ws_save(tf_enc, 'tf', _warm)
                     tf_test_prob = tf_enc.predict(
                         X_seq_test.astype('float32'), batch_size=BATCH, verbose=0).flatten()
                     tf_val_prob  = tf_enc.predict(
@@ -589,7 +639,9 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
 
                     # -- TCN (4th ensemble member) -------------------------------
                     tcn_model = build_tcn((lookback, len(selected)),
-                                          n_train_samples=len(X_seq_train))
+                                          n_train_samples=len(X_seq_train),
+                                          **_tcn_kw)
+                    _ws_load(tcn_model, 'tcn', _warm)
                     train_ds_tcn = tf.data.Dataset.from_tensor_slices(
                         (X_seq_train.astype('float32'), y_seq_train.astype('float32'))
                     ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
@@ -602,6 +654,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                                                  label="TCN", val_metric="val_loss")
                     tcn_model.fit(train_ds_tcn, validation_data=val_ds_tcn, epochs=80,
                                   callbacks=[es_tcn, _tcn_cb], verbose=0)
+                    _ws_save(tcn_model, 'tcn', _warm)
                     tcn_test_prob = tcn_model.predict(
                         X_seq_test.astype('float32'), batch_size=BATCH, verbose=0).flatten()
                     tcn_val_prob = tcn_model.predict(
@@ -901,6 +954,14 @@ def train_system():
         if not asset_list:
             print("\n  RETRAIN FROZEN: every asset already has a saved scaler - nothing to do.\n")
             return
+    # Subset filter for A/B validation: GTRADE_ASSETS=AAPL,SP500,BTC trains only
+    # those (comma-separated keys, case-insensitive). Empty -> all.
+    _subset = [a.strip().upper() for a in (os.getenv("GTRADE_ASSETS") or "").split(",") if a.strip()]
+    if _subset:
+        asset_list = [a for a in asset_list if a.upper() in _subset]
+        if not asset_list:
+            print(f"\n  GTRADE_ASSETS={_subset} matched no assets - nothing to do.\n")
+            return
 
     W = 72
     _dev_label = f"GPU: {gpus[0].name}" if _HAS_GPU else "CPU only"
@@ -909,7 +970,8 @@ def train_system():
     print("=" * W)
     print("  G-TRADE TRAINER  |  Ensemble (CB+LSTM+TF+TCN)")
     print(f"  {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
-    print(f"  Device : {_dev_label}  |  CatBoost: {_CB_TASK_TYPE}")
+    _nets_label = ("adaptive" + (" + warm-start" if _NET_WARMSTART else "")) if _ADAPTIVE_NETS else "flat (default)"
+    print(f"  Device : {_dev_label}  |  CatBoost: {_CB_TASK_TYPE}  |  Nets: {_nets_label}")
     print(f"  Workers: {_N_WORKERS} parallel  |  GPU slots: {_GPU_SLOTS}  |  CB threads: {_CB_THREADS}  |  Assets: {total_assets}")
     if _ONLY_FROZEN:
         print(f"  Mode   : RETRAIN FROZEN (only assets without a saved scaler, force-promote) | {total_assets} selected")

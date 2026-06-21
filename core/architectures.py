@@ -27,6 +27,16 @@ except Exception:
 
 # -- Helpers ------------------------------------------------------------------
 
+def adaptive_units(n_samples: int, lo: int, hi: int, divisor: int) -> int:
+    """Capacity sized to the data: n_samples // divisor, clamped to [lo, hi].
+
+    Used to right-size the neural nets per asset so a network's parameter count
+    tracks how much data it has, instead of a flat size that overfits small
+    assets and underfits large ones.
+    """
+    return int(max(lo, min(hi, n_samples // divisor)))
+
+
 class ReduceSumLayer(tf.keras.layers.Layer):
     """Reduce-sum along the time axis (axis=1) for attention output."""
     def call(self, x):
@@ -107,24 +117,33 @@ def build_transformer_encoder(input_shape, num_heads=4, ff_dim=128, dropout=0.1,
 
 # -- Architecture 3: LSTM Multitask (Direction + Magnitude) -------------------
 
-def build_lstm_multitask(input_shape, n_train_samples=500):
+def build_lstm_multitask(input_shape, n_train_samples=500,
+                         units1=192, units2=96, head_dim=64,
+                         recurrent_dropout=0.0, l2_reg=0.0):
     """LSTM+Attention with direction (primary) and magnitude (auxiliary) heads.
 
     Trains with richer signal. Save direction-only model for prediction.
     Uses cosine-decay LR scheduler for better convergence.
+
+    Capacity (units1/units2/head_dim) and regularization (recurrent_dropout,
+    l2_reg) are caller-tunable so the net can be right-sized to an asset's data.
+    The defaults reproduce the original flat 192->96 unit network exactly.
     """
+    reg = tf.keras.regularizers.l2(l2_reg) if l2_reg else None
     inputs = Input(shape=input_shape)
-    x = LSTM(192, return_sequences=True)(inputs)
-    x = LSTM(96, return_sequences=True)(x)
+    x = LSTM(units1, return_sequences=True,
+             recurrent_dropout=recurrent_dropout, kernel_regularizer=reg)(inputs)
+    x = LSTM(units2, return_sequences=True,
+             recurrent_dropout=recurrent_dropout, kernel_regularizer=reg)(x)
     x = attention_block(x, input_shape[0])
     x = Dropout(0.2)(x)
-    shared = Dense(64, activation='swish')(x)
+    shared = Dense(head_dim, activation='swish')(x)
     shared = Dropout(0.15)(shared)
     # Direction head (primary task: up/down)
-    d = Dense(32, activation='swish')(shared)
+    d = Dense(max(8, head_dim // 2), activation='swish')(shared)
     dir_out = Dense(1, activation='sigmoid', dtype='float32', name='direction')(d)
     # Magnitude head (auxiliary task: normalized next_ret)
-    m = Dense(16, activation='swish')(shared)
+    m = Dense(max(4, head_dim // 4), activation='swish')(shared)
     mag_out = Dense(1, dtype='float32', name='magnitude')(m)
     model = Model(inputs=inputs, outputs=[dir_out, mag_out])
     steps_per_epoch = max(1, n_train_samples // 128)

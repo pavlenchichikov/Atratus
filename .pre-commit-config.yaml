@@ -1,0 +1,14 @@
+# https://pre-commit.com - run `pre-commit install` once; ruff then lints staged
+# Python on every commit, matching the CI gate. Uses the project's own ruff
+# (and its pyproject.toml config) via a local hook, so there is no second ruff
+# version to keep pinned in sync with CI.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff check
+        entry: ruff check
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: ["."]

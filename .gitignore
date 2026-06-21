@@ -31,6 +31,7 @@ market_data/
 
 # Logs
 *.log
+*.log.*
 catboost_info/
 
 # Backups & exports
@@ -55,3 +56,6 @@ PLAN.md
 *.swo
 .DS_Store
 Thumbs.db
+
+# Local validation / scratch scripts (not part of the pipeline)
+ab_validate.py
