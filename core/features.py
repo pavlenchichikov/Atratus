@@ -210,6 +210,72 @@ def add_crossasset_features(df: pd.DataFrame, table: str, engine) -> pd.DataFram
     return df
 
 
+# Macro regime features sourced from the tnx/vix/dxy price tables (already
+# fetched via Yahoo): 10y Treasury yield (rates), VIX (volatility), the dollar
+# index (DXY). These are the dominant market-wide regime signals and they come
+# from the same reliable route as the rest of the data - no FRED dependency
+# (FRED's CSV host is unreachable from this project's VPN exits). Same value
+# across all assets on a date; aligned by as-of forward-fill, no look-ahead
+# beyond the same-day close the asset's own features already use.
+_MACRO_SOURCE_TABLES = ('tnx', 'vix', 'dxy')
+_MACRO_FEATURES = [
+    'macro_tnx', 'macro_tnx_chg20', 'macro_vix', 'macro_vix_chg5',
+    'macro_dxy_chg20',
+]
+
+
+def add_macro_features(df: pd.DataFrame, engine) -> pd.DataFrame:
+    """Merge macro regime features (10y yield, VIX, dollar) into a daily frame.
+
+    Reads the close series from the tnx/vix/dxy tables, derives level + momentum
+    features, and aligns them to the asset's dates with an as-of forward-fill
+    (last value known on or before each bar). A missing source table leaves its
+    features at 0.0 so the feature vector keeps a stable shape and
+    `feature_version()` stays consistent.
+    """
+    date_col = 'Date' if 'Date' in df.columns else ('date' if 'date' in df.columns else None)
+    if date_col is None:
+        for c in _MACRO_FEATURES:
+            df[c] = 0.0
+        return df
+    df = df.set_index(date_col)
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    def _close(table):
+        try:
+            ref = pd.read_sql(f"SELECT Date, Close FROM {table}", engine,
+                              index_col="Date", parse_dates=["Date"])
+            ref.index = pd.to_datetime(ref.index).normalize()
+            ref.columns = [c.lower() for c in ref.columns]
+            ref = ref[~ref.index.duplicated(keep='last')].sort_index()
+            return ref['close']
+        except Exception:
+            return None
+
+    cols = {}
+    tnx = _close('tnx')
+    if tnx is not None:
+        cols['macro_tnx'] = tnx
+        cols['macro_tnx_chg20'] = tnx.diff(20)
+    vix = _close('vix')
+    if vix is not None:
+        cols['macro_vix'] = vix
+        cols['macro_vix_chg5'] = vix.diff(5)
+    dxy = _close('dxy')
+    if dxy is not None:
+        cols['macro_dxy_chg20'] = dxy.pct_change(20)
+
+    feats = pd.concat(cols, axis=1).sort_index() if cols else pd.DataFrame()
+    for c in _MACRO_FEATURES:
+        if not feats.empty and c in feats.columns:
+            df[c] = feats[c].reindex(df.index, method='ffill').fillna(0.0).values
+        else:
+            df[c] = 0.0
+    df = df.reset_index()
+    return df
+
+
 # Feature columns used for training (order matters for model compatibility)
 CANDIDATE_FEATURES = [
     'ret_1', 'ret_5', 'ret_10', 'ret_20',
@@ -218,6 +284,8 @@ CANDIDATE_FEATURES = [
     'rsi', 'macd_hist', 'bb_pos', 'vol_ratio',
     'w_ret', 'w_rsi', 'w_trend',
     'corr_btc', 'corr_sp500', 'corr_dxy',
+    'macro_tnx', 'macro_tnx_chg20', 'macro_vix', 'macro_vix_chg5',
+    'macro_dxy_chg20',
 ]
 
 

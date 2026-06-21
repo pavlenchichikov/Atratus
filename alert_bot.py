@@ -49,7 +49,7 @@ except ImportError:
     sys.exit(1)
 
 # -- Shared ML components (core package) --
-from core.features import engineer_features, add_weekly_features, add_crossasset_features
+from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features
 from core.ensemble import ensemble_with_gating
 from core.scaling import load_or_fit_scaler
 from core.calibration import load_calibrator, apply_calibrator
@@ -195,6 +195,7 @@ def analyze_asset(df, name, registry, thresholds):
         table = name.lower().replace("^", "").replace(".", "").replace("-", "")
         df = add_weekly_features(df, table, db_engine)
         df = add_crossasset_features(df, table, db_engine)
+        df = add_macro_features(df, db_engine)
 
         if len(df) < 50:
             return None

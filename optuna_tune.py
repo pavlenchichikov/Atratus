@@ -52,7 +52,7 @@ except ImportError:
 
 from config import FULL_ASSET_MAP
 from train_hybrid import (
-    engineer_features, add_weekly_features, add_crossasset_features,
+    engineer_features, add_weekly_features, add_crossasset_features, add_macro_features,
     make_walk_forward_splits, adaptive_split_params,
     pnl_from_signals, max_drawdown_from_returns, score_strategy,
     make_signals, apply_regime_filter, get_profile,
@@ -91,6 +91,7 @@ def _load_asset_df(asset):
         df = engineer_features(df_raw)
         df = add_weekly_features(df, table, engine)
         df = add_crossasset_features(df, table, engine)
+        df = add_macro_features(df, engine)
         return df
     except Exception:
         return None

@@ -106,6 +106,17 @@ else:
 _gpu_lock = threading.Semaphore(_GPU_SLOTS)
 _print_lock = threading.Lock()
 
+# CatBoost device. CatBoost bundles its own CUDA and runs on native Windows
+# (unlike TF, whose Windows wheel is CPU-only), so this is independent of TF's
+# _HAS_GPU. Default CPU: on the small per-asset datasets here the host<->device
+# transfer overhead can make GPU SLOWER than CPU, so benchmark before keeping it
+# on. Set GTRADE_CB_DEVICE=GPU to enable. Only the heavy champion fit (700 iters)
+# moves to GPU; the tiny helper fits (adversarial validation, feature selection)
+# stay on CPU. _cb_gpu_lock serializes GPU fits so a 4GB card doesn't OOM when
+# several assets train at once (CPU CatBoost stays fully parallel, no lock).
+_CB_TASK_TYPE = "GPU" if (os.getenv("GTRADE_CB_DEVICE") or "").strip().upper() == "GPU" else "CPU"
+_cb_gpu_lock = threading.Semaphore(_env_int("GTRADE_CB_GPU_SLOTS", 1))
+
 # --- SHARED EPOCH STATE (callback - ticker thread) ---
 _progress_state = {'label': '-', 'epoch': 0, 'total_ep': 0, 'loss': float('nan')}
 _state_lock = threading.Lock()
@@ -127,7 +138,7 @@ from core.profiles import (
     FOREX,
     get_profile,
 )
-from core.features import engineer_features, add_weekly_features, add_crossasset_features
+from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features
 from core.backtesting import (
     adaptive_split_params, make_walk_forward_splits,
     pnl_from_signals, max_drawdown_from_returns, score_strategy,
@@ -362,6 +373,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         df = engineer_features(df_raw)
         df = add_weekly_features(df, table, engine)
         df = add_crossasset_features(df, table, engine)
+        df = add_macro_features(df, engine)
         sp = adaptive_split_params(len(df))
         if sp is None:
             _safe_print(f"  [SKIP] {asset:<12} insufficient rows ({len(df)})")
@@ -473,16 +485,24 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                                 _X_val=X_val, _y_val=y_val,
                                 _X_test=X_test, _y_test=y_test,
                                 _opt=opt):
-                cb = CatBoostClassifier(
+                _cb_kwargs = dict(
                     iterations=int(_opt.get('cb_iterations', 700)),
                     depth=int(_opt.get('cb_depth', 8)),
                     learning_rate=float(_opt.get('cb_lr', 0.03)),
                     verbose=0,
-                    task_type='CPU',
+                    task_type=_CB_TASK_TYPE,
                     thread_count=_CB_THREADS,
-                    early_stopping_rounds=50
+                    early_stopping_rounds=50,
                 )
-                cb.fit(_X_train, _y_train, eval_set=(_X_val, _y_val))
+                if _CB_TASK_TYPE == 'GPU':
+                    _cb_kwargs['devices'] = '0'
+                cb = CatBoostClassifier(**_cb_kwargs)
+                if _CB_TASK_TYPE == 'GPU':
+                    # 4GB VRAM: only one champion fit on the card at a time.
+                    with _cb_gpu_lock:
+                        cb.fit(_X_train, _y_train, eval_set=(_X_val, _y_val))
+                else:
+                    cb.fit(_X_train, _y_train, eval_set=(_X_val, _y_val))
                 cb_result['cb'] = cb
                 cb_result['cb_val'] = cb.predict_proba(_X_val)[:, 1]
                 cb_result['cb_test'] = cb.predict_proba(_X_test)[:, 1]
@@ -889,7 +909,7 @@ def train_system():
     print("=" * W)
     print("  G-TRADE TRAINER  |  Ensemble (CB+LSTM+TF+TCN)")
     print(f"  {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
-    print(f"  Device : {_dev_label}")
+    print(f"  Device : {_dev_label}  |  CatBoost: {_CB_TASK_TYPE}")
     print(f"  Workers: {_N_WORKERS} parallel  |  GPU slots: {_GPU_SLOTS}  |  CB threads: {_CB_THREADS}  |  Assets: {total_assets}")
     if _ONLY_FROZEN:
         print(f"  Mode   : RETRAIN FROZEN (only assets without a saved scaler, force-promote) | {total_assets} selected")

@@ -4,7 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.features import compute_taleb_risk, engineer_features, latest_taleb_risk
+from core.features import (
+    add_macro_features,
+    compute_taleb_risk,
+    engineer_features,
+    latest_taleb_risk,
+    _MACRO_FEATURES,
+)
 
 
 @pytest.fixture
@@ -56,6 +62,40 @@ class TestTalebRisk:
     def test_latest_none_when_too_short(self):
         assert latest_taleb_risk([100, 101, 102]) is None
         assert latest_taleb_risk([]) is None
+
+
+class TestMacroFeatures:
+    def _engine(self, tmp_path):
+        from sqlalchemy import create_engine
+        return create_engine(f"sqlite:///{tmp_path / 'macro_test.db'}")
+
+    def test_missing_tables_fill_zero(self, tmp_path):
+        """No tnx/vix/dxy tables -> all macro columns present and 0.0."""
+        eng = self._engine(tmp_path)
+        df = pd.DataFrame({"Date": pd.date_range("2024-01-01", periods=5),
+                           "close": [1, 2, 3, 4, 5]})
+        out = add_macro_features(df, eng)
+        for c in _MACRO_FEATURES:
+            assert c in out.columns
+            assert (out[c] == 0.0).all()
+
+    def test_as_of_forward_fill(self, tmp_path):
+        """A bar between two source dates gets the last value known on/before it."""
+        eng = self._engine(tmp_path)
+        pd.DataFrame({"Date": ["2024-01-01", "2024-01-10"],
+                      "close": [4.0, 4.5]}).to_sql("tnx", eng, index=False)
+        pd.DataFrame({"Date": ["2024-01-01", "2024-01-10"],
+                      "close": [13.0, 20.0]}).to_sql("vix", eng, index=False)
+        pd.DataFrame({"Date": ["2024-01-01", "2024-01-10"],
+                      "close": [100.0, 101.0]}).to_sql("dxy", eng, index=False)
+        # asset bar on 2024-01-05 is between the two dates -> takes the 01-01 value
+        df = pd.DataFrame({"Date": pd.to_datetime(["2024-01-05", "2024-01-11"]),
+                           "close": [10.0, 11.0]})
+        out = add_macro_features(df, eng).set_index("Date")
+        assert out.loc["2024-01-05", "macro_tnx"] == 4.0
+        assert out.loc["2024-01-05", "macro_vix"] == 13.0
+        assert out.loc["2024-01-11", "macro_tnx"] == 4.5  # after the 01-10 update
+        assert np.isfinite(out["macro_vix_chg5"]).all()
 
 
 class TestEngineerFeatures:

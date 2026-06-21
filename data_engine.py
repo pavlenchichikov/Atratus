@@ -43,6 +43,19 @@ DAILY_WORKERS = _env_int("GTRADE_DAILY_WORKERS", 12)
 WEEKLY_WORKERS = _env_int("GTRADE_WEEKLY_WORKERS", 10)
 RETRY_SWEEPS = _env_int("GTRADE_RETRY_SWEEPS", 2)   # extra passes over assets with ERROR
 MOEX_RETRIES = _env_int("GTRADE_MOEX_RETRIES", 5)   # attempts per request within a single pass
+
+# How far back to fetch on a first/backfill pull. Default 15y (verified that the
+# Yahoo chart endpoint returns clean daily over a 15y explicit window - the
+# quarterly-degradation issue only affects range=max, not period1/period2).
+HISTORY_DAYS = _env_int("GTRADE_HISTORY_DAYS", 15 * 365)
+# Backfill mode: re-fetch the full HISTORY_DAYS window for every asset (last_date
+# forced to None) so existing tables, which the incremental fetch only extends
+# forward, get their missing OLDER bars. _save_df dedupes by date, so this only
+# inserts bars not already stored. One-time: GTRADE_BACKFILL=1 python data_engine.py
+BACKFILL = (os.getenv("GTRADE_BACKFILL") or "").strip() in ("1", "true", "True")
+# MOEX history start used on a first/backfill pull (ISS returns only what exists,
+# so requesting earlier than a ticker's listing is harmless).
+MOEX_START_STR = (datetime.now() - timedelta(days=HISTORY_DAYS)).strftime('%Y-%m-%d')
 MOEX_TARGETS = [
     "IMOEX", "SBER", "GAZP", "LKOH", "ROSN", "NVTK", "TATN", "SNGS",
     "PLZL", "SIBN", "MGNT",
@@ -118,9 +131,10 @@ def fetch_yahoo_smart(symbol, last_date):
             print(f"   - [YAHOO] {y_sym:<12} [OK] (UP_TO_DATE)")
             return None
     else:
-        # Start from ~5 years ago (1825 days) instead of range=max
-        # range=max with interval=1d returns quarterly data for long histories
-        start_ts = now_ts - 1825 * 86400
+        # Start from HISTORY_DAYS ago using an explicit period1/period2 window.
+        # range=max with interval=1d returns quarterly data for long histories;
+        # an explicit window does not, so this stays clean daily even at 15y.
+        start_ts = now_ts - HISTORY_DAYS * 86400
 
     base_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{y_sym}?interval=1d"
     end_ts = max(now_ts - 300, start_ts + 1)
@@ -199,7 +213,7 @@ def fetch_moex_smart(symbol, last_date):
         return None
 
     # MOEX lets us specify a start date as 'YYYY-MM-DD'
-    start_str = (last_date + timedelta(days=1)).strftime('%Y-%m-%d') if last_date else "2015-01-01"
+    start_str = (last_date + timedelta(days=1)).strftime('%Y-%m-%d') if last_date else MOEX_START_STR
 
     all_data = []
     net_failed = False  # distinguish "connection died" from "no new data"
@@ -253,7 +267,7 @@ def fetch_moex_weekly(symbol, last_date):
         print("[OK] (Up to date)")
         return None
 
-    start_str = (last_date + timedelta(days=1)).strftime('%Y-%m-%d') if last_date else "2015-01-01"
+    start_str = (last_date + timedelta(days=1)).strftime('%Y-%m-%d') if last_date else MOEX_START_STR
 
     all_data = []
     cols = None
@@ -317,7 +331,7 @@ def fetch_yahoo_weekly(symbol, last_date):
             print(f"   - [WEEKLY] {y_sym:<12} [OK] (UP_TO_DATE)")
             return None
     else:
-        start_ts = now_ts - 1825 * 86400  # 5 years
+        start_ts = now_ts - HISTORY_DAYS * 86400
 
     base_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{y_sym}?interval=1wk"
     url = f"{base_url}&period1={start_ts}&period2={now_ts}"
@@ -438,7 +452,7 @@ class _StdoutProxy:
 def _fetch_and_save_daily(n, s):
     """Fetch one asset (daily) and save to DB. Thread-safe."""
     table_name = n.lower().replace("^","").replace(".","").replace("-","")
-    last_dt = get_last_date(table_name)
+    last_dt = None if BACKFILL else get_last_date(table_name)
     _tls.buf = io.StringIO()
     try:
         if n in MOEX_TARGETS:
@@ -466,7 +480,7 @@ def _fetch_and_save_daily(n, s):
 def _fetch_and_save_weekly(n, s):
     """Fetch one asset (weekly) and save to DB. Thread-safe."""
     table_name = n.lower().replace("^","").replace(".","").replace("-","") + "_weekly"
-    last_dt = get_last_date(table_name)
+    last_dt = None if BACKFILL else get_last_date(table_name)
     _tls.buf = io.StringIO()
     try:
         if n in MOEX_TARGETS:
