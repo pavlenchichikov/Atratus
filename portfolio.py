@@ -47,6 +47,10 @@ SECTOR_MAP: Dict[str, List[str]] = {
                     "GBPJPY", "GBPAUD", "GBPCAD", "GBPCHF", "GBPNZD",
                     "AUDCAD", "AUDCHF", "AUDJPY", "AUDNZD", "CADJPY", "CHFJPY", "NZDJPY",
                     "USDTRY", "USDMXN", "USDZAR", "USDSGD", "USDNOK", "USDSEK", "USDPLN", "USDCNH"],
+    # Regional bucket (like RUS): the EU stocks. EU indices go to INDICES above.
+    "EU":          ["ASML", "LVMH", "SAP", "NESTLE", "NOVO", "AZN", "SHELL", "TOTAL",
+                    "SIEMENS", "AIRBUS", "LOREAL", "ALLIANZ", "HERMES", "SCHNEIDER",
+                    "SANTANDER", "BNP", "ENEL", "IBERDROLA"],
 }
 
 # Maximum fraction of portfolio per sector
@@ -57,6 +61,7 @@ SECTOR_LIMITS: Dict[str, float] = {
     "INDICES":     0.30,
     "MACRO":       0.15,
     "RUS":         0.35,
+    "EU":          0.30,
     "FOREX":       0.30,
     "OTHER":       0.20,
 }
