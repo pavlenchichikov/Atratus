@@ -882,3 +882,177 @@ th.sort-asc::after { content: " B4"; color: var(--amber); }
   .topbar-inner { padding: 8px 12px; gap: 14px; }
   .stat-value { font-size: 21px; }
 }
+
+/* ============================================================
+   SIGNATURE FX  -  cosmetic instrument layer over the terminal.
+   Boot sequence, regime-reactive ambient, scanline + grain,
+   crosshair, odometer numbers, display typography. All optional
+   and CSS-driven; respects prefers-reduced-motion.
+   ============================================================ */
+
+:root {
+  --display: "Martian Mono", "IBM Plex Mono", monospace;
+  /* live regime wash colour, driven by fx.js from /api/regime */
+  --regime-tint: rgba(120, 140, 170, 0.0);
+}
+
+/* Stable, instrument-grade numerals so columns never jitter */
+.mono, .stat-value, table.grid td, table.grid th,
+.brand, h1, .panel-head h2 { font-variant-numeric: tabular-nums; }
+
+/* Distinctive wide display face for headers and the wordmark */
+.brand, h1, .panel-head h2 {
+  font-family: var(--display);
+  letter-spacing: 0.06em;
+}
+.brand { letter-spacing: 0.16em; }
+
+/* --- Regime-reactive ambient: the floor breathes market colour --- */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(130% 70% at 50% -15%, var(--regime-tint), transparent 60%),
+    radial-gradient(130% 60% at 50% 115%, var(--regime-tint), transparent 60%);
+  transition: background 1.6s ease;
+}
+
+/* --- Full-screen overlays: scanlines + film grain --- */
+.fx {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+.fx-scan {
+  z-index: 9000;
+  opacity: 0.45;
+  mix-blend-mode: overlay;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.022) 0px,
+    rgba(255, 255, 255, 0.022) 1px,
+    transparent 1px,
+    transparent 3px);
+}
+.fx-grain {
+  z-index: 9001;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 140px 140px;
+}
+
+/* --- Chart-crosshair cursor that tracks the mouse --- */
+.xhair {
+  position: fixed;
+  z-index: 8000;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.xhair.on { opacity: 1; }
+.xhair-x {
+  left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent,
+    rgba(0, 212, 255, 0.22) 18%, rgba(0, 212, 255, 0.22) 82%, transparent);
+}
+.xhair-y {
+  top: 0; bottom: 0; width: 1px;
+  background: linear-gradient(0deg, transparent,
+    rgba(0, 212, 255, 0.22) 18%, rgba(0, 212, 255, 0.22) 82%, transparent);
+}
+
+/* --- Panels: etched top light edge + deeper drop for layered depth --- */
+.panel {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 10px 34px rgba(0, 0, 0, 0.38);
+}
+
+/* --- Live dot: expanding double ring --- */
+.live-dot { position: relative; }
+.live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--green);
+  opacity: 0;
+  animation: ring 2.4s ease-out infinite;
+}
+@keyframes ring {
+  0%   { transform: scale(0.5); opacity: 0.55; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+/* --- Odometer flash: a number that just rolled gets a brief glow --- */
+.odo-live { transition: color 0.2s ease, text-shadow 0.2s ease; }
+.odo-live.rolled {
+  color: var(--cyan);
+  text-shadow: 0 0 12px rgba(0, 212, 255, 0.55);
+}
+
+/* --- Boot sequence --- */
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background:
+    radial-gradient(600px 300px at 50% 38%, rgba(0, 255, 163, 0.06), transparent 70%),
+    var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-family: var(--mono);
+  color: var(--green);
+  transition: opacity 0.55s ease;
+}
+#boot.done { opacity: 0; pointer-events: none; }
+#boot .boot-brand {
+  font-family: var(--display);
+  font-size: clamp(22px, 5vw, 34px);
+  letter-spacing: 0.34em;
+  color: var(--text);
+  margin-bottom: 22px;
+  text-shadow: 0 0 24px rgba(0, 255, 163, 0.25);
+}
+#boot .boot-line {
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+#boot .boot-line.show { opacity: 1; transform: none; }
+#boot .boot-line b { color: var(--green); font-weight: 600; }
+#boot .boot-bar {
+  width: min(260px, 60vw);
+  height: 2px;
+  margin-top: 18px;
+  background: var(--line);
+  overflow: hidden;
+}
+#boot .boot-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--green), var(--cyan));
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.6);
+  animation: bootbar 1.15s ease forwards;
+}
+@keyframes bootbar { to { width: 100%; } }
+
+/* Stronger staggered page reveal for content panels */
+.fade:nth-child(6) { animation-delay: 0.25s; }
+.fade:nth-child(7) { animation-delay: 0.3s; }
+.fade:nth-child(8) { animation-delay: 0.35s; }
+
+@media (prefers-reduced-motion: reduce) {
+  #boot, .live-dot::after, .fx-scan, .fx-grain, .xhair { display: none !important; }
+  body::before { transition: none; }
+}

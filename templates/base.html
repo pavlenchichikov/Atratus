@@ -6,10 +6,24 @@
   <title>{% block title %}G-Trade{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Martian+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <div id="boot" aria-hidden="true">
+    <div class="boot-brand">G-TRADE</div>
+    <div class="boot-line" data-d="0">booting trading floor<b>...</b></div>
+    <div class="boot-line" data-d="1">link MOEX feed <b>OK</b></div>
+    <div class="boot-line" data-d="2">link YAHOO feed <b>OK</b></div>
+    <div class="boot-line" data-d="3">ensemble CB+LSTM+TF+TCN <b>READY</b></div>
+    <div class="boot-line" data-d="4">181 assets <b>LIVE</b></div>
+    <div class="boot-bar"><i></i></div>
+  </div>
+  <div class="fx fx-scan" aria-hidden="true"></div>
+  <div class="fx fx-grain" aria-hidden="true"></div>
+  <div class="xhair xhair-x" aria-hidden="true"></div>
+  <div class="xhair xhair-y" aria-hidden="true"></div>
+
   <header class="topbar">
     <div class="topbar-inner">
       <a class="brand" href="/">G-TRADE<span class="brand-dot"></span></a>
@@ -36,5 +50,6 @@
   <footer>
     <span>G-Trade | signals are not investment advice</span>
   </footer>
+  <script src="/static/js/fx.js"></script>
 </body>
 </html>
