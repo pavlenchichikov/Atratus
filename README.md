@@ -22,13 +22,16 @@ uvicorn webapp:app --host 0.0.0.0 --port 8000
 
 Lightweight web interface, no TensorFlow needed, reads predictions from the database, starts instantly. Pages:
 
-- `/` signal radar: BUY/SELL/WAIT per asset with confidence, live accuracy, a Taleb tail-risk column, market regime and fear-greed gauges
+- `/` signal radar: BUY/SELL/WAIT per asset with confidence, live accuracy, a Taleb tail-risk column, a live market-breadth panel and regime / fear-greed gauges
 - `/asset/BTC` per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, and the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate
+- `/portfolio` portfolio analytics over your open positions: diversification score, sector exposure heat, held-asset correlation and per-position warnings
+- `/whatif` what-if simulator: backtest "what if I had invested $X, N days ago, following the signals", with an equity curve and per-asset breakdown
+- `/loop` self-maintaining loop: daily cycle status and drift proposals, with one-click approve of a champion-challenger retrain
 - `/guru` value overlay: the council verdict next to the ML signal for each stock, with a 60-day accuracy track record
 - `/risk` interactive risk manager: open and close positions, edit and persist risk limits, manually halt or resume trading, plus a Taleb tail-risk watchlist of the highest-risk assets
 - `/market`, `/sectors`, `/correlations`, `/performance`, `/news`, `/models` analytics pages
 
-Same data as JSON under `/api/...`. Pages auto-refresh; works from a phone on the same network.
+Same data as JSON under `/api/...`. Pages auto-refresh; the regime and fear-greed gauges update live with a pulsing needle; a Cmd-K command palette jumps to any asset or page; a ticker tape of top movers runs along the bottom. Works from a phone on the same network.
 
 ## Telegram bot
 
@@ -37,6 +40,18 @@ Same data as JSON under `/api/...`. Pages auto-refresh; works from a phone on th
 - commands /top, /signal BTC, /risk, /digest (owner only)
 - morning digest, hour is set by GTRADE_DIGEST_HOUR, default 9
 - degradation warnings: data older than 7 days or accuracy below 40% on the last 20 verified signals
+
+## Self-maintaining loop
+
+`loop_cycle.py` runs the safe daily pipeline (data, predict, reconcile) and scans every asset for drift: rolling accuracy below a floor, a drop from the trained baseline, model age, or stale data. Proposals show up on the `/loop` page. Approving one runs `loop_retrain.py`, a RAM-safe champion-challenger retrain (force-promote off) that replaces a champion only if the fresh model beats it. The loop never retrains on its own; retraining always waits for your approval.
+
+Register `run_loop.bat` with Windows Task Scheduler to run the cycle daily:
+
+```
+schtasks /Create /TN "G-Trade Loop" /TR "\"%CD%\run_loop.bat\"" /SC DAILY /ST 23:30
+```
+
+Drift thresholds live in `core/drift.py` (`DRIFT_CONFIG`). The cycle writes `loop_state.json`; a lockfile keeps the cycle and a retrain from running at the same time.
 
 ## Quick start
 
@@ -65,10 +80,15 @@ If SOCKS5_PROXY is set in `.env`, outbound requests go through it. `net.py` chec
 
 TensorFlow on Windows is CPU-only since 2.11, so neural training runs on CPU. Good enough for daily data. For a GPU use WSL2 and `pip install tensorflow[and-cuda]`.
 
+TensorFlow accumulates memory across many assets in one process, so a full 181-asset retrain on a memory-constrained box is best run in chunks (about 15 assets via `GTRADE_ASSETS`), restarting a fresh process per chunk; each restart releases the memory and keeps RAM flat. The champion registry accumulates per asset, so chunks add up to a full run.
+
 Optional env flags for `train_hybrid.py`:
 
 - `GTRADE_ADAPTIVE_NETS=1` - size each net to the asset's data (fewer params, faster, less overfit); off by default keeps the original flat nets
-- `GTRADE_FORCE_PROMOTE=1` - accept new champions regardless of score (use after a feature-set change)
+- `GTRADE_NET_CAP` - cap for the adaptive LSTM units (default 128); lower it, e.g. 80, to shrink the data-rich assets, the main speed and RAM lever
+- `GTRADE_EPOCHS_LSTM`, `GTRADE_EPOCHS_TF`, `GTRADE_EPOCHS_TCN` - per-net epoch caps (defaults 160, 100, 80); early stopping usually trims them further
+- `GTRADE_FORCE_PROMOTE=1` - accept new champions regardless of score (use after a feature-set change); leave it off for a champion-challenger retrain that keeps the old model unless beaten
+- `GTRADE_ASSETS=BTC,ETH,NVDA` - train only the listed assets (subset or chunk)
 - `GTRADE_HISTORY_DAYS` - how far back `data_engine.py` fetches (default 15 years); `GTRADE_BACKFILL=1` re-pulls older bars for tables that already exist
 - `GTRADE_WORKERS`, `GTRADE_MAX_FOLDS` - parallel workers and the walk-forward fold cap
 - `GTRADE_CB_DEVICE=GPU` - run CatBoost on GPU (Windows-native; benchmark first, often slower on the small per-asset datasets)
