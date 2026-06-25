@@ -249,7 +249,11 @@ def test_add_cross_lag_features_asof_and_missing(tmp_path):
 def test_ab_features_compare():
     import importlib.util
     import os
-    spec = importlib.util.spec_from_file_location("ab_features", os.path.join(os.path.dirname(os.path.dirname(__file__)), "ab_features.py"))
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ab_features.py")
+    if not os.path.exists(path):
+        import pytest
+        pytest.skip("ab_features.py is a local (gitignored) experiment tool, absent in CI")
+    spec = importlib.util.spec_from_file_location("ab_features", path)
     abf = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(abf)
     base = [{"Asset": "BTC", "Score": 2.0, "LSTM_Acc": 0.50}]
