@@ -37,7 +37,7 @@ except ImportError:
     sys.exit("config.py not found!")
 
 from core.logger import get_logger
-from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features, active_candidate_features
+from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features, add_cross_lag_features, active_candidate_features
 from core.ensemble import build_stacking_features
 from core.scaling import load_or_fit_scaler
 from core.calibration import load_calibrator, apply_calibrator
@@ -95,6 +95,7 @@ def _predict_asset(name, registry, thresholds):
         df = add_weekly_features(df, table, engine)
         df = add_crossasset_features(df, table, engine)
         df = add_macro_features(df, engine)
+        df = add_cross_lag_features(df, engine)
         if len(df) < 50:
             return None
     except Exception as e:

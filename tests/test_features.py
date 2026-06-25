@@ -205,17 +205,18 @@ def test_candidate_lists_base_and_ext():
 
 def test_active_candidate_features_flag(monkeypatch):
     import core.features as F
+    # ext is the adopted default; base only when explicitly requested
     monkeypatch.delenv("GTRADE_FEATURE_SET", raising=False)
-    assert F.active_candidate_features() == F.CANDIDATE_FEATURES
-    monkeypatch.setenv("GTRADE_FEATURE_SET", "ext")
     assert F.active_candidate_features() == F.CANDIDATE_FEATURES_EXT
+    monkeypatch.setenv("GTRADE_FEATURE_SET", "base")
+    assert F.active_candidate_features() == F.CANDIDATE_FEATURES
 
 
 def test_feature_version_differs_by_set(monkeypatch):
     import core.features as F
-    monkeypatch.delenv("GTRADE_FEATURE_SET", raising=False)
+    monkeypatch.setenv("GTRADE_FEATURE_SET", "base")
     base_v = F.feature_version()
-    monkeypatch.setenv("GTRADE_FEATURE_SET", "ext")
+    monkeypatch.delenv("GTRADE_FEATURE_SET", raising=False)  # default ext
     assert F.feature_version() != base_v
 
 

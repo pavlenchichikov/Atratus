@@ -370,10 +370,11 @@ CANDIDATE_FEATURES_EXT = [
 
 
 def active_candidate_features():
-    """Base list by default, the extended list when GTRADE_FEATURE_SET=ext."""
-    if (os.getenv("GTRADE_FEATURE_SET") or "base").strip().lower() == "ext":
-        return CANDIDATE_FEATURES_EXT
-    return CANDIDATE_FEATURES
+    """Extended list by default (the adopted set after the 2026-06-25 A/B); the
+    base list only when GTRADE_FEATURE_SET=base, kept for A/B against the old set."""
+    if (os.getenv("GTRADE_FEATURE_SET") or "ext").strip().lower() == "base":
+        return CANDIDATE_FEATURES
+    return CANDIDATE_FEATURES_EXT
 
 
 def feature_version() -> str:
