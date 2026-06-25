@@ -264,3 +264,12 @@ def test_ab_features_compare():
     assert r["asset"] == "BTC"
     assert round(r["score_delta"], 2) == 0.5
     assert round(r["lstm_delta"], 2) == 0.06
+
+
+def test_active_candidate_features_extra(monkeypatch):
+    import core.features as F
+    monkeypatch.delenv("GTRADE_FEATURE_SET", raising=False)
+    monkeypatch.setenv("GTRADE_EXTRA_FEATURES", "ret_1,brand_new_feat")
+    out = F.active_candidate_features()
+    assert "brand_new_feat" in out          # appended
+    assert out.count("ret_1") == 1          # not duplicated (already in base)

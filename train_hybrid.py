@@ -171,6 +171,7 @@ from core.profiles import (
     get_profile,
 )
 from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features, add_cross_lag_features, active_candidate_features
+from core.feature_dsl import add_dsl_features, load_dsl_specs
 from core.backtesting import (
     adaptive_split_params, make_walk_forward_splits,
     pnl_from_signals, max_drawdown_from_returns, score_strategy,
@@ -410,6 +411,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         df = add_crossasset_features(df, table, engine)
         df = add_macro_features(df, engine)
         df = add_cross_lag_features(df, engine)
+        df, _ = add_dsl_features(df, engine, load_dsl_specs())
         sp = adaptive_split_params(len(df))
         if sp is None:
             _safe_print(f"  [SKIP] {asset:<12} insufficient rows ({len(df)})")

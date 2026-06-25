@@ -5,7 +5,7 @@ ML trading signals for ~181 assets: crypto, US, European and Russian stocks, ind
 ## How it works
 
 1. `data_engine.py` downloads up to 15 years of daily and weekly quotes from Yahoo Finance and MOEX into `market.db` (SQLite).
-2. `train_hybrid.py` builds features: returns, volatility, tail risk (Taleb kurtosis, skew, VaR), RSI, MACD, SMA, ATR, weekly and cross-asset correlations, and macro regime (10y yield, VIX, dollar). Trains the ensemble and saves the champion together with its scaler and probability calibrator.
+2. `train_hybrid.py` builds features: returns and volatility-normalized returns, volatility, tail risk (Taleb kurtosis, skew, VaR), RSI, MACD, SMA, ATR, weekly and cross-asset correlations, cross-asset lead-lag, calendar position, and macro regime (10y yield, VIX, dollar). Trains the ensemble and saves the champion together with its scaler and probability calibrator.
 3. `predict.py` prints BUY/SELL/WAIT with confidence for all assets.
 4. `backtest.py` checks champions on held-out data: PnL, win rate, Sharpe, directional accuracy, Brier, alpha vs buy & hold.
 5. `risk_manager.py` and `portfolio.py` do position sizing, loss limits and correlations. Tail risk is gated by the Taleb index: position size shrinks above the soft cap and new buys are blocked above the hard cap.
@@ -53,6 +53,16 @@ schtasks /Create /TN "G-Trade Loop" /TR "\"%CD%\run_loop.bat\"" /SC DAILY /ST 23
 
 Drift thresholds live in `core/drift.py` (`DRIFT_CONFIG`). The cycle writes `loop_state.json`; a lockfile keeps the cycle and a retrain from running at the same time.
 
+## Auto-research agent
+
+The feature set can be extended at train time through a constrained transform DSL in `core/feature_dsl.py` (z-score, ratio, lag, diff, rolling, interaction, cross-asset lead-lag over the existing columns, no eval). Point `GTRADE_DSL_SPECS` at a JSON file of specs and list their names in `GTRADE_EXTRA_FEATURES`, and training materializes them as extra candidates; with both unset training is unchanged.
+
+`auto_research.py` (a local tool) automates the search: each round a proposer suggests a spec, the harness A/B-trains a 10-asset selection subset with and without it, and the result feeds the next round. The default proposer is an evolutionary search with no LLM and no API key; `GTRADE_AR_PROPOSER=llm` uses a model instead (Anthropic by default, or `GTRADE_AR_LLM=openai` for OpenAI and any OpenAI-compatible endpoint such as Mistral or a local Ollama via `GTRADE_AR_LLM_BASE_URL`). It never touches production: variants train into isolated directories and a winner is only flagged after also clearing a separate held-out asset set, with an iteration budget that guards against overfitting to noise. Adopting a flagged feature stays a manual full retrain.
+
+```
+GTRADE_AR_SEED=42 AR_BUDGET=5 python auto_research.py
+```
+
 ## Quick start
 
 ```bash
@@ -87,6 +97,7 @@ Optional env flags for `train_hybrid.py`:
 - `GTRADE_ADAPTIVE_NETS=1` - size each net to the asset's data (fewer params, faster, less overfit); off by default keeps the original flat nets
 - `GTRADE_NET_CAP` - cap for the adaptive LSTM units (default 128); lower it, e.g. 80, to shrink the data-rich assets, the main speed and RAM lever
 - `GTRADE_EPOCHS_LSTM`, `GTRADE_EPOCHS_TF`, `GTRADE_EPOCHS_TCN` - per-net epoch caps (defaults 160, 100, 80); early stopping usually trims them further
+- `GTRADE_FEATURE_SET=base|ext` - which candidate feature set to train on; `ext` (default, the adopted set) drops the raw non-stationary close/volume and adds macro, volatility-normalized returns, cross-asset lead-lag and calendar; `base` is the older list, kept for an A/B
 - `GTRADE_FORCE_PROMOTE=1` - accept new champions regardless of score (use after a feature-set change); leave it off for a champion-challenger retrain that keeps the old model unless beaten
 - `GTRADE_ASSETS=BTC,ETH,NVDA` - train only the listed assets (subset or chunk)
 - `GTRADE_HISTORY_DAYS` - how far back `data_engine.py` fetches (default 15 years); `GTRADE_BACKFILL=1` re-pulls older bars for tables that already exist
