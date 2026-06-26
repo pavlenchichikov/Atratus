@@ -1,5 +1,7 @@
 # G-Trade
 
+![G-Trade](assets/g-trade-banner.svg)
+
 ML trading signals for ~181 assets: crypto, US, European and Russian stocks, indices, forex, commodities. Each asset has an ensemble of 4 models (CatBoost, LSTM, Transformer, TCN). The best one is picked by walk-forward backtest with commissions. Position sizing is Kelly-based, with drawdown stops.
 
 ## How it works
