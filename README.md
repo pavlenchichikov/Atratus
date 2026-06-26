@@ -57,7 +57,11 @@ Drift thresholds live in `core/drift.py` (`DRIFT_CONFIG`). The cycle writes `loo
 
 The feature set can be extended at train time through a constrained transform DSL in `core/feature_dsl.py` (z-score, ratio, lag, diff, rolling, interaction, cross-asset lead-lag over the existing columns, no eval). Point `GTRADE_DSL_SPECS` at a JSON file of specs and list their names in `GTRADE_EXTRA_FEATURES`, and training materializes them as extra candidates; with both unset training is unchanged.
 
-`auto_research.py` (a local tool) automates the search: each round a proposer suggests a spec, the harness A/B-trains a 10-asset selection subset with and without it, and the result feeds the next round. The default proposer is an evolutionary search with no LLM and no API key; `GTRADE_AR_PROPOSER=llm` uses a model instead (Anthropic by default, or `GTRADE_AR_LLM=openai` for OpenAI and any OpenAI-compatible endpoint such as Mistral or a local Ollama via `GTRADE_AR_LLM_BASE_URL`). It never touches production: variants train into isolated directories and a winner is only flagged after also clearing a separate held-out asset set, with an iteration budget that guards against overfitting to noise. Adopting a flagged feature stays a manual full retrain.
+`auto_research.py` (a local tool, run via `auto_research.bat`) automates the search as a forward selection: each round a proposer suggests a spec, a cheap univariate pre-screen drops proposals with no signal, the baseline (trained once and cached) is compared against base plus the kept features plus the new one, and a feature is kept only if it improves the cumulative result. State is persisted, so a run resumes where it stopped. The default proposer is an evolutionary search with no LLM and no API key; `GTRADE_AR_PROPOSER=llm` uses a model instead (Anthropic by default, or `GTRADE_AR_LLM=openai` for OpenAI and any OpenAI-compatible endpoint such as Mistral or a local Ollama via `GTRADE_AR_LLM_BASE_URL`).
+
+It never touches production: variants train into isolated directories, and a winner is flagged only after also clearing a separate held-out set by a sign-test (with an effect-size floor and an iteration budget) that guards against overfitting to noise. Adopting a flagged feature stays a manual full retrain.
+
+Edit the knobs in `auto_research.bat` (proposer, `AR_BUDGET` rounds, `GTRADE_AR_SEED`, `AR_PRESCREEN_MIN`, the LLM settings) and run it, or:
 
 ```
 GTRADE_AR_SEED=42 AR_BUDGET=5 python auto_research.py

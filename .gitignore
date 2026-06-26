@@ -49,11 +49,11 @@ scheduler_state.json
 loop_state.json
 _loop.lock
 
-# Runtime config / state (written by the app; seeded from the matching
-# *.example.json on a fresh clone). The .example.json seeds stay tracked.
-watchlist.json
-auto_trader_config.json
-scheduler_config.json
+# All JSON is runtime/generated state (logs, champion registry, quality reports,
+# app config, agent state). Only the *.example.json seeds (hand-edited config
+# templates) stay tracked; live config is seeded from them on a fresh clone.
+*.json
+!*.example.json
 
 # Internal docs (outdated)
 PLAN.md
@@ -80,6 +80,7 @@ _auto_research_state.json
 
 # batfiles
 train_adaptive.bat
+auto_research.bat
 
 # subagent-driven scratch
 .superpowers/
