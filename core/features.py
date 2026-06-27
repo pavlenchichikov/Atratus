@@ -23,7 +23,9 @@ def compute_taleb_risk(close: pd.Series, window: int = 60, min_periods: int = 30
     (kurtosis is unstable on short windows and symmetric, hence the companion
     skew/var_5 features). Returns the raw rolling series; warm-up rows are NaN.
     """
-    log_ret = np.log(close / close.shift(1))
+    ratio = close / close.shift(1)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        log_ret = np.log(ratio.where(ratio > 0))
     return log_ret.rolling(window=window, min_periods=min_periods).kurt()
 
 
@@ -67,7 +69,9 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     # log-returns. Kurtosis is also symmetric, so on its own it cannot tell an
     # upside spike from a crash; for a long-biased model the left tail is what
     # hurts, so we add skew (asymmetry) and var_5 (5% left-tail return, VaR).
-    log_ret = np.log(df['close'] / df['close'].shift(1))
+    _ratio = df['close'] / df['close'].shift(1)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        log_ret = np.log(_ratio.where(_ratio > 0))
     tail = log_ret.rolling(window=60, min_periods=30)
     df['taleb_risk'] = compute_taleb_risk(df['close'])
     df['ret_skew'] = tail.skew()
@@ -133,6 +137,11 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
     df['next_ret'] = df['close'].pct_change().shift(-1)
 
+    # Non-positive or near-zero prices (e.g. SHIB) make ratio/log features blow
+    # up to +/-inf, which dropna does NOT remove - they would reach the model as
+    # "Input X contains infinity" and kill the whole asset. Coerce infinities to
+    # NaN first so the dropna below drops exactly those rows.
+    df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna()
 
     # Preserve Date as column for downstream joins

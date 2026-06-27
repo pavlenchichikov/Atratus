@@ -54,6 +54,12 @@ THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
 
 _GROUPS = RADAR_GROUPS  # single source: config.ASSET_TYPES
 
+# A champion whose walk-forward score is below this cannot be trusted for
+# direction (negative score = worse than the baseline, typically all-negative
+# recent folds / pos_ratio=0.00). Its BUY/SELL is suppressed to WAIT in the
+# radar and tagged "low-q" so the suppression is visible, not silent.
+MIN_TRUST_SCORE = 0.0
+
 W = 62  # output width
 
 _CLR = {"BUY": "\033[92m", "SELL": "\033[91m", "WAIT": "\033[90m"}
@@ -214,6 +220,14 @@ def _predict_asset(name, registry, thresholds):
             sig = "SELL"
         else:
             sig = "WAIT"
+
+        # Quality gate: do not emit a directional call from an untrustworthy
+        # champion (score below MIN_TRUST_SCORE). Surface it as WAIT and tag the
+        # mode, so a -5.8-score model can no longer print "BUY 100%".
+        score = (reg_entry or {}).get('score')
+        if sig != "WAIT" and score is not None and score < MIN_TRUST_SCORE:
+            sig = "WAIT"
+            mode = f"{mode} low-q"
 
         return sig, prob, curr_price, mode
 
