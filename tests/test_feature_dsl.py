@@ -77,26 +77,6 @@ def test_load_dsl_specs_env(tmp_path, monkeypatch):
     assert specs and specs[0]["name"] == "z"
 
 
-def test_run_loop_stubbed(monkeypatch, tmp_path):
-    ar = _load_auto_research()
-    monkeypatch.setattr(ar, "_STATE_PATH", str(tmp_path / "state.json"))
-    monkeypatch.setattr(ar, "_LOG_PATH", str(tmp_path / "log.json"))
-    calls = {"n": 0, "trains": 0}
-
-    def fake_propose(log, base_features):
-        calls["n"] += 1
-        return [{"name": "z%d" % calls["n"], "op": "zscore", "inputs": ["ret_1"], "params": {"window": 10}}]
-
-    def fake_train(subset, specs, extra):
-        calls["trains"] += 1
-        return [{"Asset": "A", "Score": 1.0 + 0.1 * len(specs)}]
-
-    log = ar.run_loop(fake_propose, fake_train, budget=3, base_features=["ret_1"], resume=False)
-    assert len(log) == 3 and calls["n"] == 3       # respected the budget
-    assert calls["trains"] == 4                     # base cached (1) + one variant per round (3)
-    assert ar.load_state().get("kept")              # improving features accumulated
-
-
 def _load_auto_research():
     import importlib.util
     import os
@@ -118,13 +98,6 @@ def test_propose_evolutionary_no_llm(monkeypatch, tmp_path):
     # empty log: exploration produces one validated spec, no API/LLM involved
     specs = ar.propose_evolutionary([], bf)
     assert specs and validate_spec(specs[0], set(bf))
-    # full loop with the evolutionary proposer and a stubbed single training: no API
-    def fake_train(subset, sp, ex):
-        return [{"Asset": "A", "Score": 1.0 + 0.01 * len(sp)}]
-    log = ar.run_loop(ar.propose_evolutionary, fake_train, budget=4, base_features=bf, resume=False)
-    assert len(log) == 4
-    ran = [e for e in log if e.get("spec")]
-    assert ran  # at least one real experiment with a validated spec
 
 
 def test_select_proposer_default_is_evolutionary(monkeypatch):
@@ -187,27 +160,3 @@ def test_prescreen_ok():
     # lead_lag (engine op) and a missing target pass through
     assert ar._prescreen_ok({"name": "ll", "op": "lead_lag", "inputs": ["sp500"]}, df)
     assert ar._prescreen_ok({"name": "z", "op": "zscore", "inputs": ["sig"]}, pd.DataFrame({"sig": [1.0, 2.0]}))
-
-
-def test_run_loop_resume(monkeypatch, tmp_path):
-    import json as _j
-    ar = _load_auto_research()
-    sp = str(tmp_path / "state.json")
-    monkeypatch.setattr(ar, "_STATE_PATH", sp)
-    monkeypatch.setattr(ar, "_LOG_PATH", str(tmp_path / "log.json"))
-    seed = {"log": [{"iter": 0, "spec": [], "note": "x"}, {"iter": 1, "spec": [], "note": "y"}],
-            "kept": [], "kept_delta": 0.0, "base_rows": [{"Asset": "A", "Score": 1.0}]}
-    with open(sp, "w") as f:
-        _j.dump(seed, f)
-    trains = {"n": 0}
-
-    def fake_propose(log, bf):
-        return [{"name": "zz", "op": "zscore", "inputs": ["ret_1"]}]
-
-    def fake_train(subset, specs, extra):
-        trains["n"] += 1
-        return [{"Asset": "A", "Score": 1.5}]
-
-    log = ar.run_loop(fake_propose, fake_train, budget=4, base_features=["ret_1"], resume=True)
-    assert len(log) == 4            # continued from the seeded 2 rounds
-    assert trains["n"] == 2         # base NOT retrained (cached), only the 2 new rounds

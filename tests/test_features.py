@@ -9,6 +9,7 @@ from core.features import (
     compute_taleb_risk,
     engineer_features,
     latest_taleb_risk,
+    make_target,
     _MACRO_FEATURES,
 )
 
@@ -273,3 +274,101 @@ def test_active_candidate_features_extra(monkeypatch):
     out = F.active_candidate_features()
     assert "brand_new_feat" in out          # appended
     assert out.count("ret_1") == 1          # not duplicated (already in base)
+
+
+def test_make_target_direction_matches_legacy():
+    close = pd.Series([10, 11, 10.5, 12, 11.5, 13.0])
+    expected = (close.shift(-1) > close).astype(int)
+    out = make_target(close, "direction")
+    pd.testing.assert_series_equal(out, expected)
+
+
+def test_make_target_rel_median_balances_a_trend():
+    # strong upward drift: the direction label is heavily skewed to 1,
+    # rel_median should sit near 0.5 because it is relative to recent moves
+    rng = np.random.default_rng(0)
+    close = pd.Series(100 + np.cumsum(rng.normal(0.5, 1.0, 400)))
+    direction = make_target(close, "direction")
+    relmed = make_target(close, "rel_median", window=30)
+    # compare on the region where the rolling baseline exists
+    rel_ratio = relmed.iloc[30:-1].mean()
+    dir_ratio = direction.iloc[30:-1].mean()
+    assert dir_ratio > 0.6           # legacy label is skewed on a trend
+    assert 0.4 <= rel_ratio <= 0.6   # rel_median is balanced
+
+
+def test_make_target_rel_median_has_no_lookahead():
+    rng = np.random.default_rng(1)
+    close = pd.Series(100 + np.cumsum(rng.normal(0.0, 1.0, 200)))
+    full = make_target(close, "rel_median", window=20)
+    truncated = make_target(close.iloc[:-5], "rel_median", window=20)
+    # overlapping interior rows must be identical (baseline uses only past returns).
+    # Exclude truncated's own final row: its next_ret is undefined by construction
+    # (post-C1 fix this is correctly NaN, not the prior bug's fabricated 0), so it
+    # is not a valid "no lookahead" comparison point regardless of the bug.
+    a = full.iloc[21:-6].reset_index(drop=True)
+    b = truncated.iloc[21:-1].reset_index(drop=True)
+    pd.testing.assert_series_equal(a, b)
+
+
+def test_make_target_unknown_mode_raises():
+    with pytest.raises(ValueError):
+        make_target(pd.Series([1.0, 2.0, 3.0]), "triple_barrier")
+
+
+def _ohlcv(n=320, seed=2):
+    rng = np.random.default_rng(seed)
+    close = 100 + np.cumsum(rng.normal(0.3, 1.0, n))
+    return pd.DataFrame({
+        "Date": pd.date_range("2022-01-01", periods=n),
+        "Open": close, "High": close * 1.01, "Low": close * 0.99,
+        "Close": close, "Volume": rng.integers(1, 100, n),
+    })
+
+
+def test_engineer_features_default_label_unchanged(monkeypatch):
+    monkeypatch.delenv("GTRADE_LABEL_MODE", raising=False)
+    from core.features import engineer_features
+    df = _ohlcv()
+    out = engineer_features(df)
+    # default target must equal the legacy direction formula on the same close
+    legacy = (out["close"].shift(-1) > out["close"]).astype(int)
+    # last row has no next bar; compare the interior the model actually uses
+    assert (out["target"].iloc[:-1].values == legacy.iloc[:-1].values).all()
+
+
+def test_engineer_features_rel_median_changes_label(monkeypatch):
+    from core.features import engineer_features
+    df = _ohlcv()
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "direction")
+    a = engineer_features(df)["target"].mean()
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "rel_median")
+    monkeypatch.setenv("GTRADE_LABEL_WINDOW", "30")
+    b = engineer_features(df)["target"].mean()
+    # Robust property, not a fixture-specific magnitude: the trending fixture
+    # skews "direction" toward 1 (next bar usually up), while rel_median is
+    # relative to the trailing median return and stays closer to balanced -
+    # so the label actually changes, and direction's mean is the higher one.
+    assert a != b
+    assert a > b
+
+
+def test_make_target_rel_median_warmup_and_final_row_are_nan():
+    """C1 regression: with a window large enough to extend past the feature
+    warm-up, make_target must emit NaN (not a fabricated 0) on rows where the
+    rolling baseline or next_ret is undefined, so dropna removes them
+    regardless of GTRADE_LABEL_WINDOW."""
+    rng = np.random.default_rng(3)
+    n, window = 120, 50
+    close = pd.Series(100 + np.cumsum(rng.normal(0.0, 1.0, n)))
+    out = make_target(close, "rel_median", window=window)
+    # ret = close.pct_change() is NaN at row 0, and rolling(window) needs
+    # `window` consecutive non-NaN values (default min_periods=window), so
+    # baseline's first valid row is index `window`, not `window - 1`.
+    assert out.iloc[:window].isna().all()
+    # the final row's next_ret is undefined regardless of window
+    assert pd.isna(out.iloc[-1])
+    # interior rows (baseline and next_ret both defined) must be concrete 0/1
+    interior = out.iloc[window:-1]
+    assert interior.isna().sum() == 0
+    assert set(interior.unique()) <= {0.0, 1.0}

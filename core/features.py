@@ -6,6 +6,10 @@ import os
 import numpy as np
 import pandas as pd
 
+from core.logger import get_logger
+
+_logger = get_logger(__name__)
+
 
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     """14-period RSI (simple rolling mean of gains/losses, Wilder-style)."""
@@ -14,6 +18,34 @@ def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
     rs = gain / (loss + 1e-9)
     return 100 - (100 / (1 + rs))
+
+
+def make_target(close: pd.Series, mode: str = "direction", window: int = 30) -> pd.Series:
+    """Binary next-bar label.
+
+    - "direction" (default): 1 if the next close is higher than the current one.
+      This is the historical label, preserved exactly.
+    - "rel_median": 1 if the next return beats the trailing-median return over
+      `window` bars. The baseline uses only past returns up to t (no look-ahead),
+      so the positive class stays near 50 percent in any trend - which fixes the
+      pos_ratio=0.00 degeneracy that flat next-bar-direction shows on downtrending
+      or low-volatility assets.
+
+    Warm-up rows (and the final row, whose next bar is unknown) are left as NaN
+    here and removed downstream by engineer_features' dropna, regardless of
+    `window` (a plain boolean compare against NaN would otherwise evaluate to
+    False, then astype(int) to 0, fabricating a label for rows with no real
+    meaning). Raises ValueError on an unknown mode."""
+    if mode == "direction":
+        return (close.shift(-1) > close).astype(int)
+    if mode == "rel_median":
+        ret = close.pct_change()
+        baseline = ret.rolling(window).median()
+        next_ret = ret.shift(-1)
+        target = (next_ret > baseline).astype(float)
+        target[baseline.isna() | next_ret.isna()] = np.nan
+        return target
+    raise ValueError("unknown GTRADE_LABEL_MODE: %r" % mode)
 
 
 def compute_taleb_risk(close: pd.Series, window: int = 60, min_periods: int = 30) -> pd.Series:
@@ -133,8 +165,19 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         df['cal_dow'] = 0.0
         df['cal_mpos'] = 0.0
 
-    # Target: next bar direction
-    df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+    # Target: configurable labeling mode (default reproduces next-bar direction
+    # exactly; see make_target). Read here, not at import, so an A/B run that
+    # flips GTRADE_LABEL_MODE per subprocess is honored on every call.
+    _label_mode = os.getenv("GTRADE_LABEL_MODE", "direction")
+    try:
+        _label_window = int(os.getenv("GTRADE_LABEL_WINDOW", "30"))
+    except ValueError:
+        _raw_window = os.getenv("GTRADE_LABEL_WINDOW")
+        _logger.warning(
+            "invalid GTRADE_LABEL_WINDOW=%r, falling back to 30", _raw_window,
+        )
+        _label_window = 30
+    df['target'] = make_target(df['close'], _label_mode, _label_window)
     df['next_ret'] = df['close'].pct_change().shift(-1)
 
     # Non-positive or near-zero prices (e.g. SHIB) make ratio/log features blow
@@ -143,6 +186,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     # NaN first so the dropna below drops exactly those rows.
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna()
+    df['target'] = df['target'].astype(int)
 
     # Preserve Date as column for downstream joins
     if isinstance(df.index, pd.DatetimeIndex):
