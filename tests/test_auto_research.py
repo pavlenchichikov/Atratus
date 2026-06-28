@@ -1,7 +1,10 @@
 import json
 import os
 
-import auto_research as ar
+import pytest
+
+# auto_research.py is a local, gitignored tool (absent in CI); skip there.
+ar = pytest.importorskip("auto_research")
 
 
 def test_train_merges_env_overrides(tmp_path, monkeypatch):

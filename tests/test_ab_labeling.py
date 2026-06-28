@@ -1,4 +1,9 @@
-from ab_labeling import evaluate
+import pytest
+
+# ab_labeling imports auto_research (a local, gitignored tool absent in CI);
+# importorskip skips this module there instead of erroring on collection.
+ab_labeling = pytest.importorskip("ab_labeling")
+evaluate = ab_labeling.evaluate
 
 
 def _rows(scores):
