@@ -24,3 +24,6 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "slow: real-training tests excluded from the fast suite (needs market.db)",
+]

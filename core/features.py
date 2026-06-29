@@ -425,13 +425,18 @@ CANDIDATE_FEATURES_EXT = [
 def active_candidate_features():
     """Extended list by default (the adopted set); the base list only when
     GTRADE_FEATURE_SET=base; plus any GTRADE_EXTRA_FEATURES (the auto-research
-    agent's variant runs append proposed feature names here)."""
+    agent's variant runs append proposed feature names here); minus any
+    GTRADE_DROP_FEATURES (the auto-research pruning axis removes names here).
+    GTRADE_DROP_FEATURES defaults to empty, so the list and feature_version are
+    unchanged for production."""
     if (os.getenv("GTRADE_FEATURE_SET") or "ext").strip().lower() == "base":
         base = CANDIDATE_FEATURES
     else:
         base = CANDIDATE_FEATURES_EXT
     extra = [f.strip() for f in (os.getenv("GTRADE_EXTRA_FEATURES") or "").split(",") if f.strip()]
-    return base + [f for f in extra if f not in base]
+    feats = base + [f for f in extra if f not in base]
+    drop = {f.strip() for f in (os.getenv("GTRADE_DROP_FEATURES") or "").split(",") if f.strip()}
+    return [f for f in feats if f not in drop]
 
 
 def feature_version() -> str:

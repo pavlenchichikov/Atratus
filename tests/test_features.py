@@ -372,3 +372,28 @@ def test_make_target_rel_median_warmup_and_final_row_are_nan():
     interior = out.iloc[window:-1]
     assert interior.isna().sum() == 0
     assert set(interior.unique()) <= {0.0, 1.0}
+
+
+def test_active_candidate_features_drop(monkeypatch):
+    from core.features import active_candidate_features, feature_version
+    monkeypatch.delenv("GTRADE_DROP_FEATURES", raising=False)
+    monkeypatch.delenv("GTRADE_EXTRA_FEATURES", raising=False)
+    full = active_candidate_features()
+    v_full = feature_version()
+    monkeypatch.setenv("GTRADE_DROP_FEATURES", "rsi, atr")
+    dropped = active_candidate_features()
+    assert "rsi" not in dropped and "atr" not in dropped
+    assert dropped == [f for f in full if f not in ("rsi", "atr")]
+    # unset again -> byte-identical list + same feature_version (production safety)
+    monkeypatch.delenv("GTRADE_DROP_FEATURES", raising=False)
+    assert active_candidate_features() == full
+    assert feature_version() == v_full
+
+
+def test_active_candidate_features_drop_unknown_is_harmless(monkeypatch):
+    from core.features import active_candidate_features
+    monkeypatch.delenv("GTRADE_EXTRA_FEATURES", raising=False)
+    monkeypatch.delenv("GTRADE_DROP_FEATURES", raising=False)
+    full = active_candidate_features()
+    monkeypatch.setenv("GTRADE_DROP_FEATURES", "does_not_exist")
+    assert active_candidate_features() == full

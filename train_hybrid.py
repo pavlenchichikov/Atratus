@@ -190,6 +190,12 @@ def _env_flag(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _screen_only() -> bool:
+    """CatBoost-only screening mode: skip the neural fits, substitute neutral 0.5
+    predictions, so a fold scores on a CatBoost-and-trend driven proxy. Default off."""
+    return (os.getenv("GTRADE_SCREEN_ONLY") or "").strip() in ("1", "true", "True")
+
+
 # Retraining policy (env flags):
 #   GTRADE_FORCE_PROMOTE=1   accept newly trained champions regardless of score.
 #   GTRADE_RETRAIN_FROZEN=1  train only assets that lack a saved scaler (the ones
@@ -579,101 +585,111 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             # CatBoost uses X_train (flat, non-sequential) - unaffected by this change.
             _batch = min(BATCH, max(64, len(X_seq_train) // 4))
 
-            with _gpu_lock:
-                _dev = '/GPU:0' if _HAS_GPU else '/CPU:0'
-                with tf.device(_dev):
-                    if k == 1:
-                        _placed = tf.constant(1.0).device
-                        try:
-                            _mem = tf.config.experimental.get_memory_info('GPU:0')
-                            _vram = f"  VRAM={_mem['current']//1024//1024}MB"
-                        except Exception:
-                            _vram = ""
-                        _safe_print(
-                            f"  [Device] {asset:<10} - {_placed}"
-                            f"  train={len(X_seq_train)} seq  batch={_batch}{_vram}"
-                        )
-                    # -- Multi-task LSTM --------------------------------------------
-                    lstm_mt = build_lstm_multitask((lookback, len(selected)),
-                                                   n_train_samples=len(X_seq_train),
-                                                   **_lstm_kw)
-                    _ws_load(lstm_mt, 'lstm', _warm)
-                    train_ds = tf.data.Dataset.from_tensor_slices((
-                        X_seq_train.astype('float32'),
-                        {'direction': y_seq_train.astype('float32'),
-                         'magnitude': y_mag_train}
-                    )).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
-                    val_ds = tf.data.Dataset.from_tensor_slices((
-                        X_seq_val.astype('float32'),
-                        {'direction': y_seq_val.astype('float32'),
-                         'magnitude': y_mag_val_d}
-                    )).batch(BATCH).prefetch(tf.data.AUTOTUNE)
-                    # mode='min' is required on Keras 3 / TF 2.20+: it cannot infer
-                    # the direction for a multi-output loss name like
-                    # 'val_direction_loss' and raises without an explicit mode.
-                    es_lstm = EarlyStopping(monitor='val_direction_loss', patience=10,
-                                            mode='min', restore_best_weights=True)
-                    _lstm_cb = EpochStateCallback(asset, k, _EP_LSTM,
-                                                 label="LSTM", val_metric="val_direction_loss")
-                    lstm_mt.fit(train_ds, validation_data=val_ds, epochs=_EP_LSTM,
-                                callbacks=[es_lstm, _lstm_cb], verbose=0)
-                    _ws_save(lstm_mt, 'lstm', _warm)
-                    lstm_test_prob = lstm_mt.predict(
-                        X_seq_test.astype('float32'), batch_size=BATCH, verbose=0)[0].flatten()
-                    lstm_val_prob  = lstm_mt.predict(
-                        X_seq_val.astype('float32'),  batch_size=BATCH, verbose=0)[0].flatten()
-                    # Extract direction-only model - compatible with predict.py / backtest.py
-                    lstm = Model(inputs=lstm_mt.input,
-                                 outputs=lstm_mt.get_layer('direction').output)
-                    del lstm_mt  # Python obj freed; shared layers still in lstm - OK
-
-                    # -- Transformer encoder --------------------------------------
-                    tf_enc = build_transformer_encoder((lookback, len(selected)),
+            if _screen_only():
+                lstm_val_prob = np.full(len(X_seq_val), 0.5)
+                lstm_test_prob = np.full(len(X_seq_test), 0.5)
+                tf_val_prob = np.full(len(X_seq_val), 0.5)
+                tf_test_prob = np.full(len(X_seq_test), 0.5)
+                tcn_val_prob = np.full(len(X_seq_val), 0.5)
+                tcn_test_prob = np.full(len(X_seq_test), 0.5)
+                lstm = tf_enc = tcn_model = None
+                lstm_acc = 0.5
+            else:
+                with _gpu_lock:
+                    _dev = '/GPU:0' if _HAS_GPU else '/CPU:0'
+                    with tf.device(_dev):
+                        if k == 1:
+                            _placed = tf.constant(1.0).device
+                            try:
+                                _mem = tf.config.experimental.get_memory_info('GPU:0')
+                                _vram = f"  VRAM={_mem['current']//1024//1024}MB"
+                            except Exception:
+                                _vram = ""
+                            _safe_print(
+                                f"  [Device] {asset:<10} - {_placed}"
+                                f"  train={len(X_seq_train)} seq  batch={_batch}{_vram}"
+                            )
+                        # -- Multi-task LSTM --------------------------------------------
+                        lstm_mt = build_lstm_multitask((lookback, len(selected)),
                                                        n_train_samples=len(X_seq_train),
-                                                       **_tf_kw)
-                    _ws_load(tf_enc, 'tf', _warm)
-                    train_ds_tf = tf.data.Dataset.from_tensor_slices(
-                        (X_seq_train.astype('float32'), y_seq_train.astype('float32'))
-                    ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
-                    val_ds_tf = tf.data.Dataset.from_tensor_slices(
-                        (X_seq_val.astype('float32'), y_seq_val.astype('float32'))
-                    ).batch(BATCH).prefetch(tf.data.AUTOTUNE)
-                    es_tf = EarlyStopping(monitor='val_loss', patience=8,
-                                          mode='min', restore_best_weights=True)
-                    _tf_cb = EpochStateCallback(asset, k, _EP_TF,
-                                               label="TF", val_metric="val_loss")
-                    tf_enc.fit(train_ds_tf, validation_data=val_ds_tf, epochs=_EP_TF,
-                               callbacks=[es_tf, _tf_cb], verbose=0)
-                    _ws_save(tf_enc, 'tf', _warm)
-                    tf_test_prob = tf_enc.predict(
-                        X_seq_test.astype('float32'), batch_size=BATCH, verbose=0).flatten()
-                    tf_val_prob  = tf_enc.predict(
-                        X_seq_val.astype('float32'),  batch_size=BATCH, verbose=0).flatten()
+                                                       **_lstm_kw)
+                        _ws_load(lstm_mt, 'lstm', _warm)
+                        train_ds = tf.data.Dataset.from_tensor_slices((
+                            X_seq_train.astype('float32'),
+                            {'direction': y_seq_train.astype('float32'),
+                             'magnitude': y_mag_train}
+                        )).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        val_ds = tf.data.Dataset.from_tensor_slices((
+                            X_seq_val.astype('float32'),
+                            {'direction': y_seq_val.astype('float32'),
+                             'magnitude': y_mag_val_d}
+                        )).batch(BATCH).prefetch(tf.data.AUTOTUNE)
+                        # mode='min' is required on Keras 3 / TF 2.20+: it cannot infer
+                        # the direction for a multi-output loss name like
+                        # 'val_direction_loss' and raises without an explicit mode.
+                        es_lstm = EarlyStopping(monitor='val_direction_loss', patience=10,
+                                                mode='min', restore_best_weights=True)
+                        _lstm_cb = EpochStateCallback(asset, k, _EP_LSTM,
+                                                     label="LSTM", val_metric="val_direction_loss")
+                        lstm_mt.fit(train_ds, validation_data=val_ds, epochs=_EP_LSTM,
+                                    callbacks=[es_lstm, _lstm_cb], verbose=0)
+                        _ws_save(lstm_mt, 'lstm', _warm)
+                        lstm_test_prob = lstm_mt.predict(
+                            X_seq_test.astype('float32'), batch_size=BATCH, verbose=0)[0].flatten()
+                        lstm_val_prob  = lstm_mt.predict(
+                            X_seq_val.astype('float32'),  batch_size=BATCH, verbose=0)[0].flatten()
+                        # Extract direction-only model - compatible with predict.py / backtest.py
+                        lstm = Model(inputs=lstm_mt.input,
+                                     outputs=lstm_mt.get_layer('direction').output)
+                        del lstm_mt  # Python obj freed; shared layers still in lstm - OK
 
-                    # -- TCN (4th ensemble member) -------------------------------
-                    tcn_model = build_tcn((lookback, len(selected)),
-                                          n_train_samples=len(X_seq_train),
-                                          **_tcn_kw)
-                    _ws_load(tcn_model, 'tcn', _warm)
-                    train_ds_tcn = tf.data.Dataset.from_tensor_slices(
-                        (X_seq_train.astype('float32'), y_seq_train.astype('float32'))
-                    ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
-                    val_ds_tcn = tf.data.Dataset.from_tensor_slices(
-                        (X_seq_val.astype('float32'), y_seq_val.astype('float32'))
-                    ).batch(BATCH).prefetch(tf.data.AUTOTUNE)
-                    es_tcn = EarlyStopping(monitor='val_loss', patience=7,
-                                           mode='min', restore_best_weights=True)
-                    _tcn_cb = EpochStateCallback(asset, k, _EP_TCN,
-                                                 label="TCN", val_metric="val_loss")
-                    tcn_model.fit(train_ds_tcn, validation_data=val_ds_tcn, epochs=_EP_TCN,
-                                  callbacks=[es_tcn, _tcn_cb], verbose=0)
-                    _ws_save(tcn_model, 'tcn', _warm)
-                    tcn_test_prob = tcn_model.predict(
-                        X_seq_test.astype('float32'), batch_size=BATCH, verbose=0).flatten()
-                    tcn_val_prob = tcn_model.predict(
-                        X_seq_val.astype('float32'), batch_size=BATCH, verbose=0).flatten()
+                        # -- Transformer encoder --------------------------------------
+                        tf_enc = build_transformer_encoder((lookback, len(selected)),
+                                                           n_train_samples=len(X_seq_train),
+                                                           **_tf_kw)
+                        _ws_load(tf_enc, 'tf', _warm)
+                        train_ds_tf = tf.data.Dataset.from_tensor_slices(
+                            (X_seq_train.astype('float32'), y_seq_train.astype('float32'))
+                        ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        val_ds_tf = tf.data.Dataset.from_tensor_slices(
+                            (X_seq_val.astype('float32'), y_seq_val.astype('float32'))
+                        ).batch(BATCH).prefetch(tf.data.AUTOTUNE)
+                        es_tf = EarlyStopping(monitor='val_loss', patience=8,
+                                              mode='min', restore_best_weights=True)
+                        _tf_cb = EpochStateCallback(asset, k, _EP_TF,
+                                                   label="TF", val_metric="val_loss")
+                        tf_enc.fit(train_ds_tf, validation_data=val_ds_tf, epochs=_EP_TF,
+                                   callbacks=[es_tf, _tf_cb], verbose=0)
+                        _ws_save(tf_enc, 'tf', _warm)
+                        tf_test_prob = tf_enc.predict(
+                            X_seq_test.astype('float32'), batch_size=BATCH, verbose=0).flatten()
+                        tf_val_prob  = tf_enc.predict(
+                            X_seq_val.astype('float32'),  batch_size=BATCH, verbose=0).flatten()
 
-            lstm_acc = float(((lstm_test_prob >= 0.5).astype(int) == y_seq_test).mean())
+                        # -- TCN (4th ensemble member) -------------------------------
+                        tcn_model = build_tcn((lookback, len(selected)),
+                                              n_train_samples=len(X_seq_train),
+                                              **_tcn_kw)
+                        _ws_load(tcn_model, 'tcn', _warm)
+                        train_ds_tcn = tf.data.Dataset.from_tensor_slices(
+                            (X_seq_train.astype('float32'), y_seq_train.astype('float32'))
+                        ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        val_ds_tcn = tf.data.Dataset.from_tensor_slices(
+                            (X_seq_val.astype('float32'), y_seq_val.astype('float32'))
+                        ).batch(BATCH).prefetch(tf.data.AUTOTUNE)
+                        es_tcn = EarlyStopping(monitor='val_loss', patience=7,
+                                               mode='min', restore_best_weights=True)
+                        _tcn_cb = EpochStateCallback(asset, k, _EP_TCN,
+                                                     label="TCN", val_metric="val_loss")
+                        tcn_model.fit(train_ds_tcn, validation_data=val_ds_tcn, epochs=_EP_TCN,
+                                      callbacks=[es_tcn, _tcn_cb], verbose=0)
+                        _ws_save(tcn_model, 'tcn', _warm)
+                        tcn_test_prob = tcn_model.predict(
+                            X_seq_test.astype('float32'), batch_size=BATCH, verbose=0).flatten()
+                        tcn_val_prob = tcn_model.predict(
+                            X_seq_val.astype('float32'), batch_size=BATCH, verbose=0).flatten()
+
+                lstm_acc = float(((lstm_test_prob >= 0.5).astype(int) == y_seq_test).mean())
 
             # Wait for CatBoost
             cb_thread.join()
@@ -852,52 +868,55 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         if not _bm.get('lstm') or not _bm.get('tf_enc') or not _bm.get('tcn'):
             promote = False  # models unavailable - keep existing champion
 
-        if promote:
-            best_fold['models']['cb'].save_model(cb_out)
-            with _gpu_lock, tf.device('/CPU:0'):
-                best_fold['models']['lstm'].save(lstm_out)
-            tf_out = os.path.join(MODEL_DIR, f"{table}_transformer.keras")
-            with _gpu_lock, tf.device('/CPU:0'):
-                best_fold['models']['tf_enc'].save(tf_out)
-            tcn_out = os.path.join(MODEL_DIR, f"{table}_tcn.keras")
-            with _gpu_lock, tf.device('/CPU:0'):
-                best_fold['models']['tcn'].save(tcn_out)
-            meta_out = os.path.join(MODEL_DIR, f"{table}_meta.pkl")
-            if best_fold['models']['meta'] is not None:
-                joblib.dump(best_fold['models']['meta'], meta_out)
-            # Persist the train-fold scaler so inference reuses identical stats
-            # (prevents train/serve skew) and an isotonic calibrator fitted on the
-            # champion fold's validation probabilities.
-            save_scaler(best_fold['models']['scaler'], MODEL_DIR, table)
-            _calib = fit_calibrator(best_fold.get('val_prob'), best_fold.get('val_target'))
-            save_calibrator(_calib, MODEL_DIR, table)
-            registry_update = {
-                'score': best_fold['score'],
-                'updated_at': datetime.now().isoformat(),
-                'buy_thr': best_fold['buy_thr'],
-                'sell_thr': best_fold['sell_thr'],
-                'features': best_fold['features'],
-                'profile': get_profile(asset),
-                'lookback': lookback,
-                'ensemble_mode': best_fold.get('ensemble_mode', 'stacking'),
-                'policy': 'champion'
-            }
-            policy_status = "PROMOTED"
-        else:
-            ch_dir = os.path.join(EXPERIMENTS_DIR, "challengers")
-            os.makedirs(ch_dir, exist_ok=True)
-            _ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-            best_fold['models']['cb'].save_model(os.path.join(ch_dir, f"{table}_cb_{_ts}.cbm"))
-            with _gpu_lock, tf.device('/CPU:0'):
-                best_fold['models']['lstm'].save(os.path.join(ch_dir, f"{table}_lstm_{_ts}.keras"))
-            with _gpu_lock, tf.device('/CPU:0'):
-                best_fold['models']['tf_enc'].save(os.path.join(ch_dir, f"{table}_transformer_{_ts}.keras"))
-            with _gpu_lock, tf.device('/CPU:0'):
-                best_fold['models']['tcn'].save(os.path.join(ch_dir, f"{table}_tcn_{_ts}.keras"))
-            if best_fold['models']['meta'] is not None:
-                joblib.dump(best_fold['models']['meta'], os.path.join(ch_dir, f"{table}_meta_{_ts}.pkl"))
-            registry_update = None
-            policy_status = "FROZEN_CHAMPION"
+        registry_update = None
+        policy_status = "SCREEN_SKIPPED"
+        if not _screen_only():
+            if promote:
+                best_fold['models']['cb'].save_model(cb_out)
+                with _gpu_lock, tf.device('/CPU:0'):
+                    best_fold['models']['lstm'].save(lstm_out)
+                tf_out = os.path.join(MODEL_DIR, f"{table}_transformer.keras")
+                with _gpu_lock, tf.device('/CPU:0'):
+                    best_fold['models']['tf_enc'].save(tf_out)
+                tcn_out = os.path.join(MODEL_DIR, f"{table}_tcn.keras")
+                with _gpu_lock, tf.device('/CPU:0'):
+                    best_fold['models']['tcn'].save(tcn_out)
+                meta_out = os.path.join(MODEL_DIR, f"{table}_meta.pkl")
+                if best_fold['models']['meta'] is not None:
+                    joblib.dump(best_fold['models']['meta'], meta_out)
+                # Persist the train-fold scaler so inference reuses identical stats
+                # (prevents train/serve skew) and an isotonic calibrator fitted on the
+                # champion fold's validation probabilities.
+                save_scaler(best_fold['models']['scaler'], MODEL_DIR, table)
+                _calib = fit_calibrator(best_fold.get('val_prob'), best_fold.get('val_target'))
+                save_calibrator(_calib, MODEL_DIR, table)
+                registry_update = {
+                    'score': best_fold['score'],
+                    'updated_at': datetime.now().isoformat(),
+                    'buy_thr': best_fold['buy_thr'],
+                    'sell_thr': best_fold['sell_thr'],
+                    'features': best_fold['features'],
+                    'profile': get_profile(asset),
+                    'lookback': lookback,
+                    'ensemble_mode': best_fold.get('ensemble_mode', 'stacking'),
+                    'policy': 'champion'
+                }
+                policy_status = "PROMOTED"
+            else:
+                ch_dir = os.path.join(EXPERIMENTS_DIR, "challengers")
+                os.makedirs(ch_dir, exist_ok=True)
+                _ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                best_fold['models']['cb'].save_model(os.path.join(ch_dir, f"{table}_cb_{_ts}.cbm"))
+                with _gpu_lock, tf.device('/CPU:0'):
+                    best_fold['models']['lstm'].save(os.path.join(ch_dir, f"{table}_lstm_{_ts}.keras"))
+                with _gpu_lock, tf.device('/CPU:0'):
+                    best_fold['models']['tf_enc'].save(os.path.join(ch_dir, f"{table}_transformer_{_ts}.keras"))
+                with _gpu_lock, tf.device('/CPU:0'):
+                    best_fold['models']['tcn'].save(os.path.join(ch_dir, f"{table}_tcn_{_ts}.keras"))
+                if best_fold['models']['meta'] is not None:
+                    joblib.dump(best_fold['models']['meta'], os.path.join(ch_dir, f"{table}_meta_{_ts}.pkl"))
+                registry_update = None
+                policy_status = "FROZEN_CHAMPION"
 
         status = "TRUSTED" if (best_fold['score'] > 1.5 and best_fold['test_trades'] >= 20) else "UNSTABLE"
         quality_row = {
