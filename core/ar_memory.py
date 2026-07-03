@@ -23,6 +23,7 @@ CACHE_PATH = os.path.join(BASE, "_ar_eval_cache.json")
 FINDINGS_PATH = os.path.join(BASE, "_ar_findings.json")
 DB_PATH = os.path.join(BASE, "market.db")
 CACHE_CAP = 50
+REPLICATION_PATH = os.path.join(BASE, "_ar_replication.json")
 
 
 def _load(path, default):
@@ -57,6 +58,22 @@ def tried_count():
     return sum(len(v) for v in _load(TRIED_PATH, {}).values())
 
 
+def replication_seen(sig):
+    """Whether this candidate signature cleared the held-out gate in any PRIOR run."""
+    return bool(_load(REPLICATION_PATH, {}).get(sig))
+
+
+def replication_add(sig, ts):
+    """Record a held-out-gate clear for sig at ISO time ts; return the number of
+    distinct runs (timestamps) that have now cleared it."""
+    reg = _load(REPLICATION_PATH, {})
+    stamps = reg.setdefault(sig, [])
+    if ts not in stamps:
+        stamps.append(ts)
+        _save(REPLICATION_PATH, reg)
+    return len(stamps)
+
+
 def findings_append(record):
     journal = _load(FINDINGS_PATH, [])
     journal.append(record)
@@ -68,7 +85,10 @@ def findings_summary():
     journal = _load(FINDINGS_PATH, [])
     adoptable = sum(1 for rec in journal
                     for w in rec.get("winners", []) if w.get("adoptable"))
-    return {"experiments": tried_count(), "adoptable": adoptable}
+    replicated = sum(1 for rec in journal
+                     for w in rec.get("winners", []) if w.get("replicated"))
+    return {"experiments": tried_count(), "adoptable": adoptable,
+            "replicated": replicated}
 
 
 def data_fingerprint(subset):

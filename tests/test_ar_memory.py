@@ -28,7 +28,7 @@ def test_findings_append_and_summary():
                                     {"axis": "labeling", "adoptable": False}]})
     am.findings_append({"ts": "t2", "mode": "qd", "winners": []})
     s = am.findings_summary()
-    assert s == {"experiments": 2, "adoptable": 1}
+    assert s == {"experiments": 2, "adoptable": 1, "replicated": 0}
 
 
 def test_base_key_sensitivity(monkeypatch):
@@ -80,3 +80,34 @@ def test_data_fingerprint_reads_max_dates(tmp_path, monkeypatch):
     assert am.data_fingerprint("SP500") != fp1     # new bar changes the fingerprint
     # a missing table is a deterministic marker, not an error
     assert am.data_fingerprint("NOPE") == am.data_fingerprint("NOPE")
+
+
+def test_replication_seen_and_add():
+    assert am.replication_seen("sigX") is False
+    n1 = am.replication_add("sigX", "2026-07-03T10:00:00")
+    assert n1 == 1
+    assert am.replication_seen("sigX") is True          # a prior clear now exists
+    n2 = am.replication_add("sigX", "2026-07-03T10:00:00")   # same ts, idempotent
+    assert n2 == 1
+    n3 = am.replication_add("sigX", "2026-07-04T10:00:00")   # a distinct run
+    assert n3 == 2
+    assert am.replication_seen("other") is False
+
+
+def test_replication_corrupt_file_is_empty():
+    with open(am.REPLICATION_PATH, "w", encoding="utf-8") as f:
+        f.write("{bad")
+    assert am.replication_seen("s") is False
+    assert am.replication_add("s", "t") == 1
+
+
+def test_findings_summary_counts_replicated():
+    am.tried_add("spec", "s1")
+    am.findings_append({"ts": "t1", "winners": [
+        {"adoptable": True, "replicated": True},
+        {"adoptable": True, "replicated": False},
+        {"adoptable": False, "replicated": False}]})
+    s = am.findings_summary()
+    assert s["adoptable"] == 2
+    assert s["replicated"] == 1
+    assert s["experiments"] == 1

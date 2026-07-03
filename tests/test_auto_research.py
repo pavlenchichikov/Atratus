@@ -965,3 +965,167 @@ def test_run_qd_no_elites_still_journals(monkeypatch):
     assert called["findings"] is not None
     assert called["findings"]["mode"] == "qd"
     assert called["findings"]["winners"] == []
+
+
+# --- Task 2: neural-lift primitives ---
+
+
+def _basis_train(subset, env):
+    # full Score 5.0 for a candidate (NAMES set) else 1.0; CB-only Score 0.5
+    if env.get("GTRADE_SCREEN_ONLY") == "1":
+        s = 0.5
+    else:
+        s = 5.0 if env.get("NAMES") else 1.0
+    return [{"Asset": a, "Score": s} for a in subset.split(",")]
+
+
+def test_neural_contribution_subtracts_cb():
+    full = [{"Asset": "A", "Score": 2.0}, {"Asset": "B", "Score": 1.0}]
+    cb = [{"Asset": "A", "Score": 0.5}, {"Asset": "C", "Score": 9.0}]
+    assert ar.neural_contribution(full, cb) == {"A": 1.5}   # B has no cb, C not in full
+
+
+def test_contribution_rows_full_minus_screen(monkeypatch):
+    monkeypatch.setattr(ar, "train_env", _basis_train)
+    rows = ar.contribution_rows("A,B", {"NAMES": "x"}, _basis_train)
+    # full 5.0 minus cb 0.5 = 4.5 for each asset
+    assert sorted(r["Asset"] for r in rows) == ["A", "B"]
+    assert all(abs(r["Score"] - 4.5) < 1e-9 for r in rows)
+
+
+def test_heldout_eval_returns_full_and_contribution(monkeypatch):
+    monkeypatch.setattr(ar, "train_env", _basis_train)
+    full, contrib = ar._heldout_eval("A", {"NAMES": "x"}, _basis_train)
+    assert full[0]["Score"] == 5.0
+    assert abs(contrib[0]["Score"] - 4.5) < 1e-9
+
+
+def test_score_basis_env(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_SCORE_BASIS", raising=False)
+    assert ar._score_basis() == "raw"
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "neural")
+    assert ar._score_basis() == "neural"
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "bogus")
+    assert ar._score_basis() == "raw"
+
+
+def test_score_rows_raw_vs_neural(monkeypatch):
+    monkeypatch.setattr(ar, "train_env", _basis_train)
+    monkeypatch.delenv("GTRADE_AR_SCORE_BASIS", raising=False)
+    raw = ar.score_rows("A", {"NAMES": "x"}, _basis_train)
+    assert raw[0]["Score"] == 5.0                       # raw = one full train
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "neural")
+    neu = ar.score_rows("A", {"NAMES": "x"}, _basis_train)
+    assert abs(neu[0]["Score"] - 4.5) < 1e-9            # neural = full minus cb
+
+
+def test_run_axis_neural_basis_scores_contribution(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "neural")
+    monkeypatch.setattr(ar, "train_env", _basis_train)
+    base = ar.score_rows(ar.SELECTION_ASSETS, {}, ar.train_env)   # contribution base ~0.5
+    axis = ar.Axis(name="s", propose=lambda log: [{"name": "x"}],
+                   to_env=lambda c: {"NAMES": c["name"]}, kind="select_best")
+    res = ar.run_axis(axis, 3, base, ar.train_env, persist=lambda log: None)
+    # candidate contribution (4.5) beats base contribution (0.5) -> accepted
+    assert res["best"] is not None and res["best"]["name"] == "x"
+    assert res["best_delta"] > 0
+    assert abs(res["best_delta"] - 4.0) < 1e-9   # 4.5 candidate - 0.5 base contribution
+
+
+# --- Task 4: neural_lift metric + replication gate in main() ---
+
+
+def _fake_axes_for_main(monkeypatch):
+    monkeypatch.setattr(ar, "_try_sample_frame", lambda: None)
+    monkeypatch.setattr(ar, "load_state", lambda: {})
+    monkeypatch.setattr(ar, "save_state", lambda s: None)
+    monkeypatch.setenv("GTRADE_AR_SCREEN", "0")
+    monkeypatch.setenv("GTRADE_AR_AXES", "features")
+    monkeypatch.setattr(ar, "BUDGET", 2, raising=False)
+    monkeypatch.setattr(ar, "build_axes", lambda names, bf: [
+        ar.Axis(name="ax1", propose=lambda log: [{"name": "a"}],
+                to_env=lambda c: {"NAMES": "a"}, kind="select_best")])
+
+
+def test_main_records_neural_lift_and_first_clear(monkeypatch):
+    _fake_axes_for_main(monkeypatch)
+    monkeypatch.setattr(ar, "train_env", _basis_train)
+    monkeypatch.setattr(ar, "train_base_cached", lambda subset, env: _basis_train(subset, env))
+    from core import ar_memory
+    ar.main()
+    journal = ar_memory._load(ar_memory.FINDINGS_PATH, [])
+    w = journal[-1]["winners"][0]
+    assert w["adoptable"] is True
+    assert w["neural_lift"] is not None and w["neural_lift"] > 0
+    assert w["replicated"] is False and w["clears"] == 1
+
+
+def test_main_replication_on_second_run(monkeypatch):
+    _fake_axes_for_main(monkeypatch)
+    monkeypatch.setattr(ar, "train_env", _basis_train)
+    monkeypatch.setattr(ar, "train_base_cached", lambda subset, env: _basis_train(subset, env))
+    from core import ar_memory
+    ar.main()
+    ar.main()   # second independent run, same isolated replication ledger
+    journal = ar_memory._load(ar_memory.FINDINGS_PATH, [])
+    w2 = journal[-1]["winners"][0]
+    assert w2["replicated"] is True and w2["clears"] == 2
+    assert ar_memory.findings_summary()["replicated"] >= 1
+
+
+def test_winner_sig_stable_across_temp_envs():
+    # a features winner is a list of spec dicts; the sig must ignore spec names / order
+    s1 = [{"name": "g1", "op": "lag", "inputs": ["ret_1"], "params": {"k": 1}}]
+    s2 = [{"name": "zz", "op": "lag", "inputs": ["ret_1"], "params": {"k": 1}}]
+    assert ar._winner_sig("features", s1) == ar._winner_sig("features", s2)
+    # a labeling winner is a dict
+    assert ar._winner_sig("labeling", {"mode": "rel_median", "window": 20}) == \
+        ar._winner_sig("labeling", {"window": 20, "mode": "rel_median"})
+
+
+# --- Task 5: neural_lift metric + replication gate in run_qd() ---
+
+
+def test_run_qd_records_neural_lift_and_replication(monkeypatch):
+    monkeypatch.setattr(ar, "_qd_load", lambda: {})
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setattr(ar, "BUDGET", 3, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "3")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "1")
+    monkeypatch.delenv("GTRADE_AR_OBJECTIVE", raising=False)
+    monkeypatch.delenv("GTRADE_AR_SCORE_BASIS", raising=False)
+    import random as _r
+    from core import ar_memory
+
+    def fake_train(subset, env):
+        # full: more drops -> higher Score; screen (CB-only): flat low
+        if env.get("GTRADE_SCREEN_ONLY") == "1":
+            s = 0.5
+        else:
+            n_drop = len([d for d in env.get("GTRADE_DROP_FEATURES", "").split(",") if d])
+            s = 1.0 + 1.5 * n_drop
+        return [{"Asset": a, "Score": s} for a in subset.split(",")]
+
+    _r.seed(0)
+    ar.run_qd(train_fn=fake_train)
+    journal = ar_memory._load(ar_memory.FINDINGS_PATH, [])
+    qd = [r for r in journal if r["mode"] == "qd"][-1]
+    assert qd["winners"], "an elite should have reached the gate"
+    w = qd["winners"][0]
+    # CB train is now intercepted by the injected fake, so neural_lift is a concrete
+    # number (not None from a real-subprocess empty result)
+    assert w["neural_lift"] is not None
+    assert "replicated" in w and "clears" in w
+
+
+def test_run_axis_additive_neural_basis(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "neural")
+    monkeypatch.setattr(ar, "train_env", _basis_train)
+    base = ar.score_rows(ar.SELECTION_ASSETS, {}, ar.train_env)   # contribution ~0.5
+    axis = ar.Axis(name="a",
+                   propose=lambda log: [{"name": "c%d" % len(log)}],
+                   to_env=lambda selected: {"NAMES": ",".join(c["name"] for c in selected)},
+                   kind="additive")
+    res = ar.run_axis(axis, 1, base, ar.train_env, persist=lambda log: None)
+    # candidate contribution (4.5) beats base contribution (0.5) -> kept
+    assert res["kept"] and res["kept_delta"] > 0

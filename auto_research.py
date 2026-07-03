@@ -162,6 +162,63 @@ def train_base_cached(subset, env):
     return rows
 
 
+def neural_contribution(full_rows, cbonly_rows):
+    """Per-asset neural-member contribution = full ensemble Score minus the CB-only
+    Score (nets replaced by neutral 0.5 under GTRADE_SCREEN_ONLY), over the shared
+    assets. Assets missing from either side are skipped."""
+    cb = {r["Asset"]: r.get("Score", 0.0) for r in cbonly_rows}
+    out = {}
+    for r in full_rows:
+        a = r["Asset"]
+        if a in cb:
+            out[a] = r.get("Score", 0.0) - cb[a]
+    return out
+
+
+def contribution_rows(subset, env, full_fn):
+    """Neural-contribution rows for a config: a full train (via full_fn, e.g.
+    train_base_cached for bases or train_env for candidates) minus a CB-only train
+    (also via full_fn with GTRADE_SCREEN_ONLY added). Empty if either train yields no
+    rows. Using full_fn for the CB train means a cached base (full_fn=train_base_cached)
+    gets a cached CB train too, and an injected fake trainer intercepts the CB train in
+    tests. For candidates and winners full_fn is train_env, so their CB train is
+    unchanged. This is a consistency change only; production result numbers are the same."""
+    full = full_fn(subset, env)
+    cb = full_fn(subset, screen_env(env))
+    return [{"Asset": a, "Score": c}
+            for a, c in neural_contribution(full, cb).items()]
+
+
+def _heldout_eval(subset, env, full_fn):
+    """(full_rows, contribution_rows) for one config, sharing the single full train
+    so the metric never pays for a redundant full train. The CB train uses full_fn
+    (with GTRADE_SCREEN_ONLY added): a cached base gets a cached CB train, and an
+    injected fake trainer intercepts the CB train in tests. For candidates and winners
+    full_fn is train_env, so their CB train is unchanged."""
+    full = full_fn(subset, env)
+    cb = full_fn(subset, screen_env(env))
+    contrib = [{"Asset": a, "Score": c}
+               for a, c in neural_contribution(full, cb).items()]
+    return full, contrib
+
+
+def _score_basis():
+    """What the search scores: 'raw' (default) or 'neural' (neural contribution)."""
+    b = (os.getenv("GTRADE_AR_SCORE_BASIS") or "raw").strip().lower()
+    if b not in ("raw", "neural"):
+        logger.warning("unknown GTRADE_AR_SCORE_BASIS %r, using raw", b)
+        return "raw"
+    return b
+
+
+def score_rows(subset, env, full_fn):
+    """Scoring rows for a config under the active basis. raw -> full_fn(subset, env)
+    (current behavior, caching preserved). neural -> neural-contribution rows."""
+    if _score_basis() == "neural":
+        return contribution_rows(subset, env, full_fn)
+    return full_fn(subset, env)
+
+
 def _feature_env(specs, extra_names):
     """Feature-axis env overrides: materialize DSL specs to a temp file and point
     train_hybrid at them. Empty specs means no overrides (the plain base set)."""
@@ -446,6 +503,10 @@ def run_qd(train_fn=None):
             archive_put(archive, g, _screen_eval(g), base_score, active)
         _qd_save(archive)
 
+    # NOTE: archive illumination always uses the cheap raw CB screen (fitness vs the
+    # CB base_score); GTRADE_AR_SCORE_BASIS=neural only re-scores the FINAL elite gate
+    # on neural contribution - it does NOT change which genomes become elites. Feeding
+    # contribution into illumination would require a full ensemble train per step.
     for _ in range(BUDGET):
         if not archive:
             break
@@ -462,29 +523,46 @@ def run_qd(train_fn=None):
         print("[qd] no elites in the archive.")
         finding_winners = []
     else:
-        ho_base = base_fn(HELDOUT_ASSETS, {})
         obj = _objective()
+        basis = _score_basis()
+        ho_base_full, ho_base_contrib = _heldout_eval(HELDOUT_ASSETS, {}, base_fn)
+        base_contrib = {r["Asset"]: r["Score"] for r in ho_base_contrib}
         results = []
         for e in elites:
             g = e["genome"]
-            ho_var = train_fn(HELDOUT_ASSETS, genome_to_env(g))
-            p, value, _d, tag = holdout_stats(ho_base, ho_var, obj)
-            results.append((g, p, value, tag))
-        sig = benjamini_hochberg([r[1] for r in results])
+            var_full, var_contrib = _heldout_eval(
+                HELDOUT_ASSETS, genome_to_env(g), train_fn)
+            nl, _d = _objective_delta(var_contrib, base_contrib, "mean")
+            nl = round(nl, 4) if _d else None
+            if basis == "neural":
+                p, value, _d, tag = holdout_stats(ho_base_contrib, var_contrib, obj)
+            else:
+                p, value, _d, tag = holdout_stats(ho_base_full, var_full, obj)
+            results.append((g, p, value, tag, nl))
+        flags = benjamini_hochberg([r[1] for r in results])
+        ts_qd = datetime.utcnow().isoformat()
         finding_winners = []
-        for (g, p, value, tag), s in zip(results, sig):
-            ok = s and value > ADOPT_MEAN_SCORE_DELTA
+        for (g, p, value, tag, nl), s in zip(results, flags):
+            ok = bool(s and value > ADOPT_MEAN_SCORE_DELTA)
+            replicated = clears = None
+            if ok:
+                gsig = genome_sig(g)
+                replicated = ar_memory.replication_seen(gsig)
+                clears = ar_memory.replication_add(gsig, ts_qd)
             finding_winners.append({"axis": "qd", "genome": asdict(g), "p": p,
-                                    "value": value, "tag": tag, "adoptable": bool(ok)})
-            print("[qd] elite drops=%s label=%s/%d extra=%d: %s | %s" % (
+                                    "value": value, "tag": tag, "adoptable": ok,
+                                    "neural_lift": nl, "replicated": bool(replicated),
+                                    "clears": clears or 0})
+            nl_str = "" if nl is None else " | neural_lift %+.2f" % nl
+            print("[qd] elite drops=%s label=%s/%d extra=%d: %s | %s%s" % (
                 g.drops, g.label_mode, g.label_window, len(g.extra),
-                "ADOPTABLE (BH)" if ok else "not adoptable", tag))
+                _gate_verdict(ok, bool(replicated), clears), tag, nl_str))
     ar_memory.findings_append({
         "ts": datetime.utcnow().isoformat(), "mode": "qd",
         "budget": BUDGET, "winners": finding_winners})
     mem = ar_memory.findings_summary()
-    print("[auto-research] memory: %d experiments tried, %d adoptable findings so far."
-          % (mem["experiments"], mem["adoptable"]))
+    print("[auto-research] memory: %d experiments tried, %d adoptable, %d replicated so far."
+          % (mem["experiments"], mem["adoptable"], mem["replicated"]))
     print("[qd] %d niches illuminated; review _qd_archive.json; nothing auto-adopted." % len(archive))
     return archive
 
@@ -719,7 +797,7 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
                     _mark_tried(new)
                     persist(log)
                     continue
-            rows = train_fn(SELECTION_ASSETS, axis.to_env(cand))
+            rows = score_rows(SELECTION_ASSETS, axis.to_env(cand), train_fn)
             delta, _ = _objective_delta(rows, base_score, objective)
             entry = {"axis": axis.name, "iter": i, "cand": new,
                      "cand_mean_delta": delta, "score": delta - kept_delta}
@@ -757,7 +835,7 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
                 persist(log)
                 i += 1
                 continue
-        rows = train_fn(SELECTION_ASSETS, axis.to_env(cand))
+        rows = score_rows(SELECTION_ASSETS, axis.to_env(cand), train_fn)
         delta, _ = _objective_delta(rows, base_score, objective)
         entry = {"axis": axis.name, "iter": i, "cand": cand, "cand_mean_delta": delta}
         if delta > best_delta + 1e-9:
@@ -897,6 +975,32 @@ def _persist(axis_name, log):
     save_state(state)
 
 
+def _gate_verdict(ok, replicated, clears):
+    """Console verdict string shared by the axis and QD gates."""
+    if not ok:
+        return "not adoptable"
+    if replicated:
+        return "REPLICATED-ADOPTABLE (%d clears)" % clears
+    return "ADOPTABLE (BH), 1st clear - awaiting replication"
+
+
+def _winner_sig(axis_name, winner):
+    """Stable cross-run signature of an axis winner, independent of temp-file env
+    paths. A features winner is a list of spec dicts (name-agnostic); a pruning
+    winner is a list of {'drop': f}; a labeling winner is a dict."""
+    def _item(it):
+        if isinstance(it, dict) and "drop" in it:
+            return "drop:" + it["drop"]
+        if isinstance(it, dict) and "op" in it:
+            return "spec:" + json.dumps(_spec_signature(it))
+        return json.dumps(it, sort_keys=True)
+    if isinstance(winner, list):
+        body = ",".join(sorted(_item(it) for it in winner))
+    else:
+        body = json.dumps(winner, sort_keys=True)
+    return axis_name + ":" + body
+
+
 def main():
     base_features = ["ret_1", "ret_5", "ret_10", "ret_20", "vol_z", "rsi",
                      "macd_hist", "bb_pos", "trend_strength", "atr"]
@@ -911,11 +1015,12 @@ def main():
     print("[auto-research] axes: %s | budget: %d | prescreen: %s" % (
         ",".join(a.name for a in axes), BUDGET, "on" if screen_df is not None else "off"))
 
-    base_rows = train_base_cached(SELECTION_ASSETS, {})  # shared base, trained once
+    base_rows = score_rows(SELECTION_ASSETS, {}, train_base_cached)  # shared base
     screen_base = train_base_cached(SELECTION_ASSETS, {"GTRADE_SCREEN_ONLY": "1"}) if _screen_on() else None
     obj = _objective()
-    winners = []   # (axis_name, p, value, tag)
-    ho_base = None
+    basis = _score_basis()
+    winners = []   # (axis_name, winner, p, value, tag, neural_lift)
+    ho_base_full = ho_base_contrib = None
     for axis in axes:
         try:
             prior = load_state().get("by_axis", {}).get(axis.name)
@@ -926,31 +1031,47 @@ def main():
             if not winner:
                 print("[auto-research] axis %s: nothing beat the base." % axis.name)
                 continue
-            if ho_base is None:
-                ho_base = train_base_cached(HELDOUT_ASSETS, {})
-            ho_var = train_env(HELDOUT_ASSETS, axis.to_env(winner))
-            p, value, _deltas, tag = holdout_stats(ho_base, ho_var, obj)
-            winners.append((axis.name, p, value, tag))
+            winner_env = axis.to_env(winner)
+            if ho_base_full is None:
+                ho_base_full, ho_base_contrib = _heldout_eval(
+                    HELDOUT_ASSETS, {}, train_base_cached)
+            var_full, var_contrib = _heldout_eval(HELDOUT_ASSETS, winner_env, train_env)
+            base_contrib = {r["Asset"]: r["Score"] for r in ho_base_contrib}
+            nl, _d = _objective_delta(var_contrib, base_contrib, "mean")
+            nl = round(nl, 4) if _d else None
+            if basis == "neural":
+                p, value, _d, tag = holdout_stats(ho_base_contrib, var_contrib, obj)
+            else:
+                p, value, _d, tag = holdout_stats(ho_base_full, var_full, obj)
+            winners.append((axis.name, winner, p, value, tag, nl))
         except RuntimeError as exc:
             print("[auto-research] axis %s: LLM proposer unavailable, skipping (%s)"
                   % (axis.name, exc))
             continue
 
-    sig = benjamini_hochberg([w[1] for w in winners])
+    flags = benjamini_hochberg([w[2] for w in winners])
+    ts = datetime.utcnow().isoformat()
     finding_winners = []
-    for (name, p, value, tag), s in zip(winners, sig):
-        ok = s and value > ADOPT_MEAN_SCORE_DELTA
-        finding_winners.append({"axis": name, "p": p, "value": value,
-                                "tag": tag, "adoptable": bool(ok)})
-        print("[auto-research] axis %s: %s | %s" % (
-            name, "ADOPTABLE (BH)" if ok else "not adoptable", tag))
+    for (name, winner, p, value, tag, nl), s in zip(winners, flags):
+        ok = bool(s and value > ADOPT_MEAN_SCORE_DELTA)
+        replicated = clears = None
+        if ok:
+            wsig = _winner_sig(name, winner)
+            replicated = ar_memory.replication_seen(wsig)
+            clears = ar_memory.replication_add(wsig, ts)
+        finding_winners.append({"axis": name, "p": p, "value": value, "tag": tag,
+                                "adoptable": ok, "neural_lift": nl,
+                                "replicated": bool(replicated), "clears": clears or 0})
+        verdict = _gate_verdict(ok, bool(replicated), clears)
+        nl_str = "" if nl is None else " | neural_lift %+.2f" % nl
+        print("[auto-research] axis %s: %s | %s%s" % (name, verdict, tag, nl_str))
     ar_memory.findings_append({
-        "ts": datetime.utcnow().isoformat(), "mode": "axes",
+        "ts": ts, "mode": "axes",
         "axes": [a.name for a in axes], "budget": BUDGET,
         "winners": finding_winners})
     mem = ar_memory.findings_summary()
-    print("[auto-research] memory: %d experiments tried, %d adoptable findings so far."
-          % (mem["experiments"], mem["adoptable"]))
+    print("[auto-research] memory: %d experiments tried, %d adoptable, %d replicated so far."
+          % (mem["experiments"], mem["adoptable"], mem["replicated"]))
     print("[auto-research] nothing adopted automatically; review _auto_research_log.json.")
 
 

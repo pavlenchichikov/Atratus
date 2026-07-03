@@ -11,3 +11,4 @@ def _isolate_ar_memory(tmp_path, monkeypatch):
     monkeypatch.setattr(ar_memory, "CACHE_PATH", str(tmp_path / "_ar_eval_cache.json"))
     monkeypatch.setattr(ar_memory, "FINDINGS_PATH", str(tmp_path / "_ar_findings.json"))
     monkeypatch.setattr(ar_memory, "DB_PATH", str(tmp_path / "market.db"))
+    monkeypatch.setattr(ar_memory, "REPLICATION_PATH", str(tmp_path / "_ar_replication.json"))
