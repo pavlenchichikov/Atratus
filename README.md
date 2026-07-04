@@ -98,10 +98,15 @@ python precompute_chronos.py --model base --assets all # bigger model, all 181 a
 `--model` picks the Chronos base model by short name (`tiny`, `mini`, `small`, `base`,
 `large`) or a full Hugging Face id; a bigger model forecasts better but is much slower
 per bar. `--assets` takes comma-separated names or `all` for the full 181-asset universe
-(default is a 10-asset selection). Then A/B via auto_research with
-`GTRADE_CHRONOS=1 GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread`
-(optionally `GTRADE_AR_SCORE_BASIS=neural`). They enter only via GTRADE_EXTRA_FEATURES,
-so feature_version and the production model are unchanged until adopted.
+(default is a 10-asset selection).
+
+The cache is keyed by (asset, date, MODEL), so different base models cache and read
+independently - precompute each model once, and select which one training reads with
+`GTRADE_CHRONOS_MODEL` (short name or full id, default `tiny`). Then A/B via auto_research
+with `GTRADE_CHRONOS=1 GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread`
+(and e.g. `GTRADE_CHRONOS_MODEL=base`, optionally `GTRADE_AR_SCORE_BASIS=neural`). They
+enter only via GTRADE_EXTRA_FEATURES, so feature_version and the production model are
+unchanged until adopted.
 
 ## Quick start
 

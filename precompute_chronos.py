@@ -17,27 +17,14 @@ import sys
 import pandas as pd
 from sqlalchemy import create_engine
 
-from core.chronos_features import forecast_features
+from core.chronos_features import (CHRONOS_MODELS, DEFAULT_CHRONOS_MODEL,
+                                   forecast_features, resolve_model)
 from core.features import CHRONOS_CACHE_TABLE
 from core.track_record import _table_name
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE, "market.db")
 SELECTION = "SP500,NVDA,BTC,ETH,EURUSD,GBPJPY,GAS,AAPL,SBER,DAX"
-
-# Short names for the Chronos-T5 base models (accuracy/speed trade-off, tiny -> large).
-CHRONOS_MODELS = {
-    "tiny": "amazon/chronos-t5-tiny",
-    "mini": "amazon/chronos-t5-mini",
-    "small": "amazon/chronos-t5-small",
-    "base": "amazon/chronos-t5-base",
-    "large": "amazon/chronos-t5-large",
-}
-
-
-def resolve_model(name):
-    """Expand a short base-model name to its Hugging Face id; pass a full id through."""
-    return CHRONOS_MODELS.get((name or "").strip().lower(), name)
 
 
 def resolve_assets(spec):
@@ -49,21 +36,47 @@ def resolve_assets(spec):
     return [x.strip() for x in spec.split(",") if x.strip()]
 
 
-def _cached_dates(engine, table):
+def migrate(db_path=DB_PATH):
+    """Make the Chronos cache MODEL-AWARE: add a nullable 'model' column (idempotent) and
+    backfill pre-existing rows as the tiny default (the historical single-model era), so
+    different base models cache + read independently instead of the second model's bars
+    being silently discarded as (asset, date) duplicates. No-op when the table/column is
+    absent/present."""
+    import sqlite3
+    con = sqlite3.connect(db_path)
+    try:
+        cols = [r[1] for r in con.execute(
+            "PRAGMA table_info(%s)" % CHRONOS_CACHE_TABLE).fetchall()]
+        if cols and "model" not in cols:
+            con.execute("ALTER TABLE %s ADD COLUMN model TEXT" % CHRONOS_CACHE_TABLE)
+            con.execute("UPDATE %s SET model = ? WHERE model IS NULL" % CHRONOS_CACHE_TABLE,
+                        (DEFAULT_CHRONOS_MODEL,))
+            con.commit()
+    except Exception:
+        pass
+    finally:
+        con.close()
+
+
+def _cached_dates(engine, table, model):
+    """Dates already cached for (asset, model). A missing table/column -> empty set (so
+    the bars are (re)computed)."""
     try:
         df = pd.read_sql(
-            "SELECT date FROM %s WHERE asset = ?" % CHRONOS_CACHE_TABLE,
-            engine, params=(table,))
+            "SELECT date FROM %s WHERE asset = ? AND model = ?" % CHRONOS_CACHE_TABLE,
+            engine, params=(table, model))
         return set(df["date"].astype(str))
     except Exception as exc:
-        if "no such table" in str(exc).lower():
+        low = str(exc).lower()
+        if "no such table" in low or "no such column" in low:
             return set()
         raise
 
 
 def precompute_asset(asset, engine, forecaster=None, context=64, horizon=5,
-                     model="amazon/chronos-t5-tiny"):
-    """Forecast + cache the uncached bars of one asset. Returns rows newly written."""
+                     model=DEFAULT_CHRONOS_MODEL):
+    """Forecast + cache the uncached bars of one asset FOR THIS MODEL. Returns rows newly
+    written (0 when this model already cached them all)."""
     table = _table_name(asset)
     # OHLCV column case varies (real market.db is lower-case; some tables use "Close"),
     # so read all columns and normalize to lower-case before selecting close.
@@ -75,13 +88,14 @@ def precompute_asset(asset, engine, forecaster=None, context=64, horizon=5,
                               model=model, forecaster=forecaster).dropna()
     if feats.empty:
         return 0
-    already = _cached_dates(engine, table)
+    already = _cached_dates(engine, table, model)
     rows = []
     for dt, r in feats.iterrows():
         d = str(pd.Timestamp(dt).date())
         if d in already:
             continue
-        rows.append({"asset": table, "date": d, "chronos_ret": r["chronos_ret"],
+        rows.append({"asset": table, "date": d, "model": model,
+                     "chronos_ret": r["chronos_ret"],
                      "chronos_spread": r["chronos_spread"], "chronos_dir": r["chronos_dir"]})
     if not rows:
         return 0
@@ -101,6 +115,7 @@ def main(argv=None):
     model = resolve_model(args.model)
     assets = resolve_assets(args.assets)
     print("[chronos] model=%s  assets=%d" % (model, len(assets)))
+    migrate(DB_PATH)                                   # make the cache model-aware first
     engine = create_engine("sqlite:///" + DB_PATH)
     total = 0
     for a in assets:

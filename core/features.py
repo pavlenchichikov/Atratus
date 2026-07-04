@@ -357,19 +357,33 @@ def _chronos_on():
     return (os.getenv("GTRADE_CHRONOS") or "").strip() in ("1", "true", "True")
 
 
+def _chronos_model():
+    """The Chronos base model whose cached forecasts to read (GTRADE_CHRONOS_MODEL, short
+    name or full id; default tiny) - matches the model precompute_chronos.py cached under."""
+    from core.chronos_features import resolve_model
+    return resolve_model(os.getenv("GTRADE_CHRONOS_MODEL"))
+
+
 def add_chronos_features(df, table, engine):
     """LEFT-JOIN cached Chronos forecast columns onto df by date, when GTRADE_CHRONOS
-    is set and a cache exists for `table`. Off / no cache -> df unchanged (so the
-    production feature space and feature_version are untouched). The column names
-    enter training only via GTRADE_EXTRA_FEATURES."""
+    is set and a cache exists for `table` under the selected model. Off / no cache -> df
+    unchanged (so the production feature space and feature_version are untouched). The
+    column names enter training only via GTRADE_EXTRA_FEATURES."""
     if not _chronos_on():
         return df
     try:
-        q = "SELECT date, %s FROM %s WHERE asset = ?" % (
+        q = "SELECT date, %s FROM %s WHERE asset = ? AND model = ?" % (
             ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
-        cache = pd.read_sql(q, engine, params=(table,))
+        cache = pd.read_sql(q, engine, params=(table, _chronos_model()))
     except Exception:
-        return df                                   # no cache table -> no-op
+        # Legacy cache without a model column (pre-migration, single-model era): read
+        # un-filtered so an old cache still works until precompute_chronos.migrate runs.
+        try:
+            q = "SELECT date, %s FROM %s WHERE asset = ?" % (
+                ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
+            cache = pd.read_sql(q, engine, params=(table,))
+        except Exception:
+            return df                               # no cache table -> no-op
     if cache.empty:
         return df
     cache["date"] = pd.to_datetime(cache["date"])
