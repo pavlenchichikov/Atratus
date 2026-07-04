@@ -435,8 +435,10 @@ def _llm_child(elites, active, base_features):
     top = sorted(elites, key=lambda e: e["fitness"], reverse=True)[:5]
     parent = random.choice(top)["genome"]
     summary = [{"genome": asdict(e["genome"]), "fitness": e["fitness"]} for e in top]
+    avoid = ar_memory.tried_recent("genome", 30)
     try:
-        obj = llm_proposer.propose_genome(asdict(parent), summary, active, base_features)
+        obj = llm_proposer.propose_genome(
+            asdict(parent), summary, active, base_features, avoid=avoid)
     except Exception:
         return None
     if not isinstance(obj, dict):
@@ -543,13 +545,22 @@ def run_qd(train_fn=None):
     # CB base_score); GTRADE_AR_SCORE_BASIS=neural only re-scores the FINAL elite gate
     # on neural contribution - it does NOT change which genomes become elites. Feeding
     # contribution into illumination would require a full ensemble train per step.
+    max_misses = int(os.getenv("GTRADE_AR_QD_MAX_MISSES", "5"))
+    misses = 0
     for _ in range(BUDGET):
         if not archive:
             break
         child = next_child(archive, active, base_features)
         if child is None:
+            misses += 1
             print("[qd] dedup: no unseen child this step, skipping.")
+            if misses >= max_misses:
+                print("[qd] search space exhausted vs the tried-registry after %d "
+                      "misses; stopping early (raise GTRADE_AR_QD_MAX_MISSES to "
+                      "keep trying)." % misses)
+                break
             continue
+        misses = 0
         ar_memory.tried_add("genome", genome_sig(child))
         archive_put(archive, child, _screen_eval(child), base_score, active)
         _qd_save(archive)
@@ -655,10 +666,12 @@ def _mutate(spec, name):
     return out
 
 
-def propose_evolutionary(log, base_features):
+def propose_evolutionary(log, base_features, avoid=None):
     """Autonomous (no LLM) proposer. Explores the DSL early; once a past spec shows
     a positive mean selection delta it biases input choice toward the good inputs and
-    mutates the best spec. Reads the log, dedups against it, returns one valid spec."""
+    mutates the best spec. Reads the log, dedups against it, returns one valid spec.
+    avoid is accepted for a uniform proposer signature but unused (this path already
+    dedups against the log and the tried registry)."""
     seed = os.getenv("GTRADE_AR_SEED")
     if seed:
         random.seed(int(seed) + len(log))
@@ -896,7 +909,8 @@ def make_features_axis(base_features):
 
     return Axis(
         name="features",
-        propose=lambda log: proposer(log, base_features),
+        propose=lambda log: proposer(log, base_features,
+                                     avoid=ar_memory.tried_recent("spec", 30)),
         to_env=lambda selected: _feature_env(selected, [s["name"] for s in selected]),
         kind="additive",
         validate=_validate,

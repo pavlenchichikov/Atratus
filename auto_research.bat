@@ -10,8 +10,16 @@ REM  _ar_eval_cache.json (base runs reused while the data is unchanged),
 REM  _ar_findings.json (cumulative findings journal). Budget = NEW iterations
 REM  per run, so periodic launches keep exploring fresh candidates.
 REM
-REM  Advanced knobs (screen, prune floor, QD sizes, seed, LLM model/URL) live
-REM  below as set lines; the menu only asks the everyday questions.
+REM  Chronos forecast features (menu item 5): zero-shot price-forecast columns
+REM  (chronos_dir / chronos_ret / chronos_spread) from Amazon's Chronos model,
+REM  added to every asset as extra inputs. They are OFF by default and require
+REM  a one-time setup:
+REM    1) pip install -r requirements-chronos.txt   (torch + chronos-forecasting)
+REM    2) python precompute_chronos.py              (fills the forecast cache)
+REM  Without that cache the columns are empty and the toggle is a no-op.
+REM
+REM  Advanced knobs (screen, prune floor, QD sizes, seed, base URL, exhaustion
+REM  cutoff) live below as set lines; the menu only asks the everyday questions.
 REM ===========================================================================
 
 cd /d "%~dp0"
@@ -25,9 +33,12 @@ set "GTRADE_AR_QD_FINAL=3"
 set "GTRADE_AR_SEED=42"
 set "AR_PRESCREEN_MIN=0.02"
 set "GTRADE_AR_QD_LLM_P=0.3"
-REM    Model / base URL overrides (blank = provider default / auto-detect):
-set "GTRADE_AR_LLM_MODEL="
+set "GTRADE_AR_QD_MAX_MISSES=5"
+REM    Base URL override (blank = provider default / Ollama localhost):
 set "GTRADE_AR_LLM_BASE_URL="
+REM    Model override (blank = auto-detect for Ollama / provider default);
+REM    the menu sets this for you when you pick a local or OpenAI model.
+set "GTRADE_AR_LLM_MODEL="
 
 echo ============================================================
 echo   AUTO-RESEARCH  (Enter = default)
@@ -48,14 +59,35 @@ if "%MODE%"=="4" set /p "GTRADE_AR_AXES=    axes (comma-separated): "
 echo.
 echo [2] Proposer:
 echo     1 = evolutionary (no LLM, fully autonomous)
-echo     2 = local LLM via Ollama (gemma auto-detected; Ollama must be running)
+echo     2 = local LLM (Ollama; any installed model - you pick below)
 echo     3 = Anthropic API (needs ANTHROPIC_API_KEY)
+echo     4 = OpenAI API (needs OPENAI_API_KEY)
 set "PROP=1"
 set /p "PROP=    choice [1]: "
 set "GTRADE_AR_PROPOSER=evolutionary"
 set "GTRADE_AR_LLM="
-if "%PROP%"=="2" (set "GTRADE_AR_PROPOSER=llm" & set "GTRADE_AR_LLM=ollama")
-if "%PROP%"=="3" (set "GTRADE_AR_PROPOSER=llm" & set "GTRADE_AR_LLM=anthropic")
+
+if "%PROP%"=="2" (
+  set "GTRADE_AR_PROPOSER=llm"
+  set "GTRADE_AR_LLM=ollama"
+  echo.
+  echo     Installed local models:
+  python -m core.llm_proposer --list-ollama
+  echo     Enter = auto-detect ^(first gemma, else first installed^).
+  set /p "GTRADE_AR_LLM_MODEL=    model name [auto]: "
+)
+
+if "%PROP%"=="3" (
+  set "GTRADE_AR_PROPOSER=llm"
+  set "GTRADE_AR_LLM=anthropic"
+  set /p "GTRADE_AR_LLM_MODEL=    Anthropic model [claude-opus-4-8]: "
+)
+
+if "%PROP%"=="4" (
+  set "GTRADE_AR_PROPOSER=llm"
+  set "GTRADE_AR_LLM=openai"
+  set /p "GTRADE_AR_LLM_MODEL=    OpenAI model [gpt-4o]: "
+)
 
 echo.
 set "AR_BUDGET=15"
@@ -69,8 +101,21 @@ set "GTRADE_AR_OBJECTIVE=mean"
 if "%OBJ%"=="2" set "GTRADE_AR_OBJECTIVE=min"
 
 echo.
+echo [5] Chronos forecast features?  (needs setup - see top of this file)
+echo     1 = off (default)   2 = on
+set "CHR=1"
+set /p "CHR=    choice [1]: "
+set "GTRADE_CHRONOS="
+if "%CHR%"=="2" (
+  set "GTRADE_CHRONOS=1"
+  set "GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread"
+  echo     Chronos ON - make sure you ran: python precompute_chronos.py
+)
+
+echo.
 echo ------------------------------------------------------------
 echo   axes=%GTRADE_AR_AXES%  proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
+echo   model=%GTRADE_AR_LLM_MODEL%  chronos=%GTRADE_CHRONOS%
 echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%
 echo ------------------------------------------------------------
 set "GO=Y"

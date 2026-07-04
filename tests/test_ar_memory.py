@@ -120,3 +120,11 @@ def test_findings_recent_newest_first_and_cap():
     rec = am.findings_recent(2)
     assert [r["ts"] for r in rec] == ["t2", "t1"]      # newest first, capped at 2
     assert len(am.findings_recent()) == 3
+
+
+def test_tried_recent_returns_last_n():
+    for i in range(5):
+        am.tried_add("genome", "sig-%d" % i)
+    assert am.tried_recent("genome", 2) == ["sig-3", "sig-4"]   # last n, in-order
+    assert am.tried_recent("genome", 10) == ["sig-0", "sig-1", "sig-2", "sig-3", "sig-4"]
+    assert am.tried_recent("spec", 5) == []                     # empty / unknown kind

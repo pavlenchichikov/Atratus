@@ -1181,3 +1181,42 @@ def test_next_child_surrogate_error_falls_back(monkeypatch):
     _r.seed(0)
     child = ar.next_child(archive, _ACTIVE, ["ret_1"])
     assert child is not None                       # fell back to mutate/crossover
+
+
+def test_llm_child_passes_avoid_to_proposer(monkeypatch):
+    captured = {}
+
+    def fake_propose(parent, elites, active, base_features, avoid=None):
+        captured["avoid"] = avoid
+        return None
+    monkeypatch.setattr(ar.llm_proposer, "propose_genome", fake_propose)
+    monkeypatch.setattr(ar.ar_memory, "tried_recent",
+                        lambda kind, n: ["SIG"] if kind == "genome" else [])
+    g = ar.Genome(drops=[], extra=[], label_mode="direction", label_window=30)
+    ar._llm_child([{"genome": g, "fitness": 1.0}], _ACTIVE, ["ret_1"])
+    assert captured["avoid"] == ["SIG"]
+
+
+def test_run_qd_early_stops_on_exhaustion(monkeypatch):
+    monkeypatch.setattr(ar, "_qd_load", lambda: {})
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setattr(ar, "BUDGET", 20, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "4")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "2")
+    monkeypatch.setenv("GTRADE_AR_QD_MAX_MISSES", "3")
+    import random as _r
+    _r.seed(0)
+    n_next = {"n": 0}
+
+    def none_child(*a, **k):
+        n_next["n"] += 1
+        return None
+    monkeypatch.setattr(ar, "next_child", none_child)
+    monkeypatch.setattr(ar, "benjamini_hochberg", lambda p, alpha=0.05: [1.0] * len(p))
+
+    def fake_train(subset, env):
+        n_drop = len([d for d in env.get("GTRADE_DROP_FEATURES", "").split(",") if d])
+        return [{"Asset": a, "Score": 1.0 + 0.5 * n_drop} for a in subset.split(",")]
+
+    ar.run_qd(train_fn=fake_train)
+    assert n_next["n"] == 3      # stopped after GTRADE_AR_QD_MAX_MISSES, not all 20 budget steps

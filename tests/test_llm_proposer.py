@@ -242,3 +242,43 @@ def test_propose_genome_includes_reflection(monkeypatch):
     monkeypatch.setattr(lp, "_call_openai", capture)
     lp.propose_genome({"drops": []}, [], ["rsi", "atr"], ["ret_1"])
     assert "Reflection: labels too noisy" in seen["prompt"]
+
+
+def test_list_ollama_models_returns_all(monkeypatch):
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=5: _FakeResp(
+        {"models": [{"name": "gemma3:27b"}, {"name": "gemma2:2b"}, {"name": ""}]}))
+    assert lp.list_ollama_models() == ["gemma3:27b", "gemma2:2b"]   # blanks dropped
+
+
+def test_avoid_clause_off_by_default():
+    assert lp._avoid_clause(None) == ""
+    assert lp._avoid_clause([]) == ""
+
+
+def test_propose_specs_avoid_appended_only_when_given(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("GTRADE_AR_LLM", "openai")
+    monkeypatch.delenv("GTRADE_AR_REFLECT", raising=False)
+
+    def capture(prompt):
+        seen["prompt"] = prompt
+        return "[]"
+
+    monkeypatch.setattr(lp, "_call_openai", capture)
+    lp.propose_specs([], ["ret_1"])
+    without = seen["prompt"]
+    assert "Already tried" not in without                 # None -> unchanged prompt
+
+    lp.propose_specs([], ["ret_1"], avoid=["sig-A", "sig-B"])
+    assert "Already tried" in seen["prompt"] and "sig-A" in seen["prompt"]
+    assert seen["prompt"].startswith(without.split("\nAlready tried")[0][:20])
+
+
+def test_propose_genome_avoid_appended(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("GTRADE_AR_LLM", "openai")
+    monkeypatch.delenv("GTRADE_AR_REFLECT", raising=False)
+    monkeypatch.setattr(lp, "_call_openai", lambda p: seen.setdefault("prompt", p) or "{}")
+    lp.propose_genome({"drops": []}, [], ["rsi"], ["ret_1"], avoid=["gsig-1"])
+    assert "Already tried" in seen["prompt"] and "gsig-1" in seen["prompt"]

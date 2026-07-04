@@ -36,6 +36,15 @@ def _proposer_prompt(log, base_features):
     )
 
 
+def _avoid_clause(avoid):
+    """A prompt line listing already-tried candidates so the model proposes something
+    novel. Empty string when there is nothing to avoid, so the prompt is unchanged."""
+    if not avoid:
+        return ""
+    return ("\nAlready tried (do NOT repeat these - propose something genuinely "
+            "different): " + json.dumps(list(avoid)[-40:], ensure_ascii=True))
+
+
 def _parse_specs(text):
     """Extract the JSON list of specs from a model reply, tolerant of stray prose."""
     if not text:
@@ -90,25 +99,46 @@ def _ollama_base_url():
     return os.getenv("GTRADE_AR_LLM_BASE_URL") or "http://localhost:11434/v1"
 
 
-def _detect_ollama_model():
-    """The installed model to use when GTRADE_AR_LLM_MODEL is not set: the
-    first gemma* model, else the first installed model. Uses Ollama's native
-    tags endpoint (the OpenAI-compatible /v1 API has no model listing)."""
+def list_ollama_models():
+    """Every model installed in the local Ollama, newest-first as Ollama returns
+    them, via its native tags endpoint (the OpenAI-compatible /v1 API has no model
+    listing). Raises RuntimeError if Ollama is unreachable."""
     import urllib.request
     base = _ollama_base_url()
     host = base[:-3] if base.endswith("/v1") else base
     url = host.rstrip("/") + "/api/tags"
     try:
         with urllib.request.urlopen(url, timeout=5) as r:
-            names = [m.get("name", "")
-                     for m in json.loads(r.read().decode()).get("models", [])]
+            data = json.loads(r.read().decode())
     except Exception as exc:
         raise RuntimeError(
             "cannot reach Ollama at %s (is Ollama running?): %s" % (url, exc))
+    return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+
+
+def _detect_ollama_model():
+    """The installed model to use when GTRADE_AR_LLM_MODEL is not set: the first
+    gemma* model, else the first installed model (any local model works)."""
+    names = list_ollama_models()
     if not names:
         raise RuntimeError("no Ollama models installed; run: ollama pull gemma3")
     gemma = [n for n in names if n.lower().startswith("gemma")]
     return gemma[0] if gemma else names[0]
+
+
+def _print_ollama_models():
+    """Print installed Ollama models as a numbered list for the launcher menu.
+    Never raises: an unreachable Ollama prints a friendly note instead."""
+    try:
+        names = list_ollama_models()
+    except RuntimeError as exc:
+        print("  (could not list local models: %s)" % exc)
+        return
+    if not names:
+        print("  (no Ollama models installed; run: ollama pull gemma3)")
+        return
+    for i, name in enumerate(names, 1):
+        print("  [%d] %s" % (i, name))
 
 
 def _call_ollama(prompt):
@@ -192,11 +222,13 @@ def _parse_obj(text):
     return obj if isinstance(obj, dict) else None
 
 
-def propose_genome(parent, elites, active, base_features):
+def propose_genome(parent, elites, active, base_features, avoid=None):
     """Ask the LLM for ONE modified experiment genome (the QD agent's
     LLM-guided mutation). Returns a plain dict or None on any parse/shape
     problem; the caller validates and falls back to evolutionary operators.
-    Retries once (the QD loop has a cheap fallback, unlike the features axis)."""
+    Retries once (the QD loop has a cheap fallback, unlike the features axis).
+    avoid: already-tried genome signatures the model must not repeat (default None,
+    so the prompt is unchanged)."""
     prompt = (
         "You are evolving experiment genomes for a trading-model search "
         "(MAP-Elites). Propose ONE child genome likely to beat the elites.\n"
@@ -205,6 +237,7 @@ def propose_genome(parent, elites, active, base_features):
         "\nBase columns for specs: " + ",".join(base_features) +
         "\nParent genome: " + json.dumps(parent, ensure_ascii=True) +
         "\nCurrent elites (genome + fitness): " + json.dumps(elites, ensure_ascii=True) +
+        _avoid_clause(avoid) +
         "\nReturn STRICT JSON: one genome object, no prose."
     )
     hyp = _reflect_hypothesis()
@@ -218,12 +251,19 @@ def propose_genome(parent, elites, active, base_features):
     return None
 
 
-def propose_specs(log, base_features):
+def propose_specs(log, base_features, avoid=None):
     """Ask the selected LLM for the next 1-2 feature specs. The backend retries
     a few times then raises cleanly; a non-JSON reply yields no specs (that
-    iteration is skipped)."""
-    prompt = _proposer_prompt(log, base_features)
+    iteration is skipped). avoid: already-tried spec signatures the model must not
+    repeat (default None, so the prompt is unchanged)."""
+    prompt = _proposer_prompt(log, base_features) + _avoid_clause(avoid)
     hyp = _reflect_hypothesis()
     if hyp:
         prompt = "Reflection: " + hyp + "\n" + prompt
     return _parse_specs(_backend()(prompt))
+
+
+if __name__ == "__main__":
+    import sys
+    if "--list-ollama" in sys.argv:
+        _print_ollama_models()

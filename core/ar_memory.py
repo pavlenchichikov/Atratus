@@ -58,6 +58,12 @@ def tried_count():
     return sum(len(v) for v in _load(TRIED_PATH, {}).values())
 
 
+def tried_recent(kind, n=20):
+    """The last n evaluated signatures for a kind (as stored, oldest-first). Fed to
+    the LLM proposer as an 'avoid these' list so it stops re-proposing tried candidates."""
+    return _load(TRIED_PATH, {}).get(kind, [])[-n:]
+
+
 def replication_seen(sig):
     """Whether this candidate signature cleared the held-out gate in any PRIOR run."""
     return bool(_load(REPLICATION_PATH, {}).get(sig))
