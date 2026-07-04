@@ -71,6 +71,20 @@ Advanced knobs (`GTRADE_AR_SEED`, `AR_PRESCREEN_MIN`, the screen, the QD sizes, 
 GTRADE_AR_SEED=42 AR_BUDGET=5 python auto_research.py
 ```
 
+### Research wiki (compounding findings, optional)
+
+`GTRADE_AR_WIKI=1` (menu item 6, or the env var) turns the append-only findings journal
+into a compounding, self-maintained knowledge base (Karpathy's "LLM Wiki" pattern). After
+each run an LLM distills the new findings into a few interlinked markdown topic pages under
+`_ar_wiki/` (labeling, features, regime, neural, calibration, general, changes) - tagging
+claims by confidence, reconciling contradictions, pruning stale ones - and the LLM proposer
+reads that distilled wiki instead of only the last few findings, so learning accumulates
+across runs. It uses the LLM backend (pick an LLM proposer, or it defaults to Anthropic).
+The launcher offers a `lint` pass (reconcile + prune) after a run; the pages also render
+read-only on the `/research` Web UI page. Off by default (byte-identical). The wiki is
+strategy guidance only - the factual "was this candidate tried" stays in `_ar_tried.json`,
+so a wiki gap is never mistaken for untried.
+
 ### Chronos forecast features (optional, experimental)
 
 Zero-shot forecasts from a pretrained time-series model as CatBoost features, off by

@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 from core import ar_memory
+from core import ar_wiki
 from core import llm_proposer
 from core import qd_surrogate
 from core.feature_dsl import validate_spec
@@ -596,6 +597,8 @@ def run_qd(train_fn=None):
                 gsig = genome_sig(g)
                 replicated = ar_memory.replication_seen(gsig)
                 clears = ar_memory.replication_add(gsig, ts_qd)
+                if ar_wiki.wiki_on() and clears >= 2:
+                    ar_wiki.note_replicated(gsig, "replicated (%d clears)" % clears)
             finding_winners.append({"axis": "qd", "genome": asdict(g), "p": p,
                                     "value": value, "tag": tag, "adoptable": ok,
                                     "neural_lift": nl, "replicated": bool(replicated),
@@ -607,6 +610,8 @@ def run_qd(train_fn=None):
     ar_memory.findings_append({
         "ts": datetime.utcnow().isoformat(), "mode": "qd",
         "budget": BUDGET, "winners": finding_winners})
+    if ar_wiki.wiki_on():
+        ar_wiki.compile_wiki()
     mem = ar_memory.findings_summary()
     print("[auto-research] memory: %d experiments tried, %d adoptable, %d replicated so far."
           % (mem["experiments"], mem["adoptable"], mem["replicated"]))
@@ -1110,6 +1115,8 @@ def main():
             wsig = _winner_sig(name, winner)
             replicated = ar_memory.replication_seen(wsig)
             clears = ar_memory.replication_add(wsig, ts)
+            if ar_wiki.wiki_on() and clears >= 2:
+                ar_wiki.note_replicated(wsig, "replicated (%d clears)" % clears)
         finding_winners.append({"axis": name, "p": p, "value": value, "tag": tag,
                                 "adoptable": ok, "neural_lift": nl,
                                 "replicated": bool(replicated), "clears": clears or 0})
@@ -1120,6 +1127,8 @@ def main():
         "ts": ts, "mode": "axes",
         "axes": [a.name for a in axes], "budget": BUDGET,
         "winners": finding_winners})
+    if ar_wiki.wiki_on():
+        ar_wiki.compile_wiki()
     mem = ar_memory.findings_summary()
     print("[auto-research] memory: %d experiments tried, %d adoptable, %d replicated so far."
           % (mem["experiments"], mem["adoptable"], mem["replicated"]))

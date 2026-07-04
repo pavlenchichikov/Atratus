@@ -41,4 +41,11 @@
   </table>
 </section>
 
+{% if wiki %}
+<section class="panel fade">
+  <div class="panel-head"><h2>Research Wiki (read-only)</h2></div>
+  <pre class="dim" style="white-space:pre-wrap;word-break:break-word;padding:1rem">{{ wiki }}</pre>
+</section>
+{% endif %}
+
 {% endblock %}

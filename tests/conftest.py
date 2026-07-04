@@ -12,3 +12,5 @@ def _isolate_ar_memory(tmp_path, monkeypatch):
     monkeypatch.setattr(ar_memory, "FINDINGS_PATH", str(tmp_path / "_ar_findings.json"))
     monkeypatch.setattr(ar_memory, "DB_PATH", str(tmp_path / "market.db"))
     monkeypatch.setattr(ar_memory, "REPLICATION_PATH", str(tmp_path / "_ar_replication.json"))
+    import core.ar_wiki as _ar_wiki
+    monkeypatch.setattr(_ar_wiki, "WIKI_DIR", str(tmp_path / "_ar_wiki"))

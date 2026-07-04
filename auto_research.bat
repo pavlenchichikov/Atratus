@@ -18,6 +18,14 @@ REM    1) pip install -r requirements-chronos.txt   (torch + chronos-forecasting
 REM    2) python precompute_chronos.py              (fills the forecast cache)
 REM  Without that cache the columns are empty and the toggle is a no-op.
 REM
+REM  Research wiki (menu item 6): a compounding, self-maintained knowledge base
+REM  (GTRADE_AR_WIKI). After each run an LLM distills the findings journal into
+REM  _ar_wiki/*.md topic pages the proposer then reads, so learning accumulates
+REM  across runs instead of a sliding window. It uses the LLM backend, so pick an
+REM  LLM proposer (or it defaults to Anthropic and needs ANTHROPIC_API_KEY). Off
+REM  by default -> byte-identical. When on, this script also offers a wiki lint
+REM  (reconcile contradictions + prune stale claims) after the run.
+REM
 REM  Advanced knobs (screen, prune floor, QD sizes, seed, base URL, exhaustion
 REM  cutoff) live below as set lines; the menu only asks the everyday questions.
 REM ===========================================================================
@@ -113,9 +121,17 @@ if "%CHR%"=="2" (
 )
 
 echo.
+echo [6] Research wiki?  (compounding findings; uses the LLM backend)
+echo     1 = off (default)   2 = on
+set "WIKI=1"
+set /p "WIKI=    choice [1]: "
+set "GTRADE_AR_WIKI="
+if "%WIKI%"=="2" set "GTRADE_AR_WIKI=1"
+
+echo.
 echo ------------------------------------------------------------
 echo   axes=%GTRADE_AR_AXES%  proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
-echo   model=%GTRADE_AR_LLM_MODEL%  chronos=%GTRADE_CHRONOS%
+echo   model=%GTRADE_AR_LLM_MODEL%  chronos=%GTRADE_CHRONOS%  wiki=%GTRADE_AR_WIKI%
 echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%
 echo ------------------------------------------------------------
 set "GO=Y"
@@ -124,6 +140,15 @@ if /i "%GO%"=="n" exit /b 0
 
 python auto_research.py
 
+REM  Optional wiki lint (flat, no parenthesized block, so set /p + if see the fresh value).
+if not "%GTRADE_AR_WIKI%"=="1" goto :nolint
+echo.
+set "LINT=n"
+set /p "LINT=Lint the research wiki now (reconcile + prune)? [y/N]: "
+if /i "%LINT%"=="y" python -c "from core import ar_wiki; ar_wiki.lint_wiki()"
+:nolint
+
 echo.
 echo Done. Review _auto_research_log.json / _qd_archive.json / _ar_findings.json.
+if "%GTRADE_AR_WIKI%"=="1" echo Research wiki: _ar_wiki\*.md  (also on the /research Web UI page).
 pause

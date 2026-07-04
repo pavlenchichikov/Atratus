@@ -181,6 +181,21 @@ def reflect_on():
     return (os.getenv("GTRADE_AR_REFLECT") or "").strip() in ("1", "true", "True")
 
 
+def _wiki_preamble():
+    """The compounding research wiki as a prompt preamble when GTRADE_AR_WIKI is on;
+    '' otherwise (so the prompt is unchanged). Any error yields ''."""
+    try:
+        from core import ar_wiki
+        if not ar_wiki.wiki_on():
+            return ""
+        text = ar_wiki.wiki_summary()
+        if not text:
+            return ""
+        return "Accumulated research wiki (distilled prior findings):\n" + text + "\n"
+    except Exception:
+        return ""
+
+
 def _reflect_hypothesis():
     """One-line hypothesis of why recent experiments did not clear the gate, from the
     findings journal. Empty string when reflection is off, the journal is empty, or any
@@ -240,6 +255,7 @@ def propose_genome(parent, elites, active, base_features, avoid=None):
         _avoid_clause(avoid) +
         "\nReturn STRICT JSON: one genome object, no prose."
     )
+    prompt = _wiki_preamble() + prompt
     hyp = _reflect_hypothesis()
     if hyp:
         prompt = "Reflection: " + hyp + "\n" + prompt
@@ -257,6 +273,7 @@ def propose_specs(log, base_features, avoid=None):
     iteration is skipped). avoid: already-tried spec signatures the model must not
     repeat (default None, so the prompt is unchanged)."""
     prompt = _proposer_prompt(log, base_features) + _avoid_clause(avoid)
+    prompt = _wiki_preamble() + prompt
     hyp = _reflect_hypothesis()
     if hyp:
         prompt = "Reflection: " + hyp + "\n" + prompt

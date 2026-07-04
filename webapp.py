@@ -427,7 +427,10 @@ async def api_loop_dismiss(request: Request):
 
 @app.get("/research", response_class=HTMLResponse)
 def research_page(request: Request):
-    return templates.TemplateResponse(request, "research.html", _research_snapshot())
+    from core import ar_wiki
+    snap = _research_snapshot()
+    snap["wiki"] = ar_wiki.wiki_summary() if ar_wiki.wiki_on() else ""
+    return templates.TemplateResponse(request, "research.html", snap)
 
 
 @app.get("/api/research")

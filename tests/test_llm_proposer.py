@@ -282,3 +282,25 @@ def test_propose_genome_avoid_appended(monkeypatch):
     monkeypatch.setattr(lp, "_call_openai", lambda p: seen.setdefault("prompt", p) or "{}")
     lp.propose_genome({"drops": []}, [], ["rsi"], ["ret_1"], avoid=["gsig-1"])
     assert "Already tried" in seen["prompt"] and "gsig-1" in seen["prompt"]
+
+
+def test_wiki_prepended_when_on(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("GTRADE_AR_LLM", "openai")
+    monkeypatch.setenv("GTRADE_AR_WIKI", "1")
+    monkeypatch.delenv("GTRADE_AR_REFLECT", raising=False)
+    import core.ar_wiki as w
+    monkeypatch.setattr(w, "wiki_summary", lambda max_chars=6000: "## features\nmacro drops hurt")
+    monkeypatch.setattr(lp, "_call_openai", lambda p: seen.setdefault("prompt", p) or "[]")
+    lp.propose_specs([], ["ret_1"])
+    assert "research wiki" in seen["prompt"].lower() and "macro drops hurt" in seen["prompt"]
+
+
+def test_wiki_off_prompt_unchanged(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("GTRADE_AR_LLM", "openai")
+    monkeypatch.delenv("GTRADE_AR_WIKI", raising=False)
+    monkeypatch.delenv("GTRADE_AR_REFLECT", raising=False)
+    monkeypatch.setattr(lp, "_call_openai", lambda p: seen.setdefault("prompt", p) or "[]")
+    lp.propose_specs([], ["ret_1"])
+    assert "research wiki" not in seen["prompt"].lower()          # off -> unchanged
