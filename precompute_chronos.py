@@ -3,11 +3,14 @@
 Opt-in and heavy (a rolling forecast per bar), so run this once when you want to A/B
 Chronos features; training then reads the cache cheaply. Needs requirements-chronos.txt.
 
-    python precompute_chronos.py [--assets SP500,NVDA|all] [--model tiny|mini|small|base|large]
+    python precompute_chronos.py [--assets SP500,NVDA|all] [--model tiny..large] [--fresh]
 
 The base model picks the accuracy/speed trade-off: a bigger Chronos model forecasts
 better but is much slower per bar. A short name (tiny/mini/small/base/large) resolves to
 the matching amazon/chronos-t5-* checkpoint; a full Hugging Face id is also accepted.
+--fresh wipes the cache first (start from scratch). The cache is keyed by model and the
+reader (core.features.add_chronos_features) AUTO-DETECTS the cached model, so precomputing
+one model is enough - training just uses whatever is cached, no GTRADE_CHRONOS_MODEL to set.
 """
 
 import argparse
@@ -54,6 +57,17 @@ def migrate(db_path=DB_PATH):
             con.commit()
     except Exception:
         pass
+    finally:
+        con.close()
+
+
+def clear_cache(db_path=DB_PATH):
+    """Wipe the Chronos cache so a run starts from scratch. No-op if the table is absent."""
+    import sqlite3
+    con = sqlite3.connect(db_path)
+    try:
+        con.execute("DROP TABLE IF EXISTS %s" % CHRONOS_CACHE_TABLE)
+        con.commit()
     finally:
         con.close()
 
@@ -111,10 +125,15 @@ def main(argv=None):
     ap.add_argument("--model", default="tiny",
                     help="Chronos base model: %s, or a full Hugging Face id "
                          "(default: tiny)" % "/".join(CHRONOS_MODELS))
+    ap.add_argument("--fresh", action="store_true",
+                    help="wipe the cache first and recompute from scratch")
     args = ap.parse_args(argv)
     model = resolve_model(args.model)
     assets = resolve_assets(args.assets)
-    print("[chronos] model=%s  assets=%d" % (model, len(assets)))
+    print("[chronos] model=%s  assets=%d  fresh=%s" % (model, len(assets), args.fresh))
+    if args.fresh:
+        clear_cache(DB_PATH)
+        print("[chronos] cache wiped - starting from scratch")
     migrate(DB_PATH)                                   # make the cache model-aware first
     engine = create_engine("sqlite:///" + DB_PATH)
     total = 0

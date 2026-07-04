@@ -91,22 +91,24 @@ Zero-shot forecasts from a pretrained time-series model as CatBoost features, of
 default. Install `requirements-chronos.txt`, then precompute the cache once:
 
 ```bash
-python precompute_chronos.py                          # 10-asset selection, tiny model
-python precompute_chronos.py --model base --assets all # bigger model, all 181 assets
+python precompute_chronos.py --fresh --assets all       # start clean, all 181 assets, tiny
+python precompute_chronos.py --model small --assets all # a bigger model for more quality
 ```
 
 `--model` picks the Chronos base model by short name (`tiny`, `mini`, `small`, `base`,
-`large`) or a full Hugging Face id; a bigger model forecasts better but is much slower
-per bar. `--assets` takes comma-separated names or `all` for the full 181-asset universe
-(default is a 10-asset selection).
+`large`) or a full Hugging Face id; a bigger model forecasts better but is much slower per
+bar (on CPU, `base` is ~40-60 min per asset, `large` far more - `small`/`tiny` are the
+practical picks, and for near-noise financial series the marginal quality gain of a large
+model is small). `--assets` takes comma-separated names or `all` for the full 181-asset
+universe. `--fresh` wipes the cache first.
 
-The cache is keyed by (asset, date, MODEL), so different base models cache and read
-independently - precompute each model once, and select which one training reads with
-`GTRADE_CHRONOS_MODEL` (short name or full id, default `tiny`). Then A/B via auto_research
-with `GTRADE_CHRONOS=1 GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread`
-(and e.g. `GTRADE_CHRONOS_MODEL=base`, optionally `GTRADE_AR_SCORE_BASIS=neural`). They
-enter only via GTRADE_EXTRA_FEATURES, so feature_version and the production model are
-unchanged until adopted.
+The cache is keyed by (asset, date, model) and training AUTO-DETECTS the cached model, so
+you precompute ONE model and everything downstream just uses it - no `GTRADE_CHRONOS_MODEL`
+to keep in sync (it stays available only as an override if several models are cached). Then
+A/B via auto_research with `GTRADE_CHRONOS=1
+GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread` (optionally
+`GTRADE_AR_SCORE_BASIS=neural`). They enter only via GTRADE_EXTRA_FEATURES, so
+feature_version and the production model are unchanged until adopted.
 
 ## Quick start
 

@@ -501,3 +501,24 @@ def test_add_chronos_features_dedup_no_row_multiplication(monkeypatch, tmp_path)
     # keep="last" means the second row (chronos_ret=0.99) wins for 2020-01-01
     val = float(out.loc[out["Date"] == pd.Timestamp("2020-01-01"), "chronos_ret"].iloc[0])
     assert abs(val - 0.99) < 1e-9
+
+
+def test_add_chronos_features_auto_detects_cached_model(monkeypatch, tmp_path):
+    """With a model-tagged cache and no GTRADE_CHRONOS_MODEL, the system reads the model
+    that is actually cached (no tiny/base to configure)."""
+    import pandas as pd
+    from sqlalchemy import create_engine
+    from core import features as F
+    eng = create_engine("sqlite:///" + str(tmp_path / "am.db"))
+    pd.DataFrame({
+        "asset": ["sp500", "sp500"], "date": ["2020-01-01", "2020-01-02"],
+        "model": ["amazon/chronos-t5-base", "amazon/chronos-t5-base"],
+        "chronos_ret": [0.01, 0.02], "chronos_spread": [0.05, 0.06],
+        "chronos_dir": [1.0, 0.0]}).to_sql("chronos_cache", eng, index=False)
+    monkeypatch.setenv("GTRADE_CHRONOS", "1")
+    monkeypatch.delenv("GTRADE_CHRONOS_MODEL", raising=False)
+    df = pd.DataFrame({"close": [1.0, 2.0]},
+                      index=pd.to_datetime(["2020-01-01", "2020-01-02"]))
+    out = F.add_chronos_features(df.copy(), "sp500", eng)
+    assert "chronos_ret" in out.columns                       # base cache auto-detected + joined
+    assert abs(out.iloc[0]["chronos_ret"] - 0.01) < 1e-9

@@ -59,3 +59,17 @@ def test_migrate_adds_model_column_and_backfills(tmp_path):
     model = con.execute("SELECT model FROM chronos_cache").fetchone()[0]
     con.close()
     assert "model" in cols and model == "amazon/chronos-t5-tiny"   # backfilled to tiny
+
+
+def test_clear_cache_wipes(tmp_path):
+    import sqlite3
+    db = str(tmp_path / "c.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE chronos_cache (asset TEXT, date TEXT, model TEXT)")
+    con.execute("INSERT INTO chronos_cache VALUES ('sp500','2020-01-01','tiny')")
+    con.commit(); con.close()
+    pc.clear_cache(db)
+    con = sqlite3.connect(db)
+    gone = con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chronos_cache'").fetchone()
+    con.close()
+    assert gone is None                                       # table dropped

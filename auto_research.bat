@@ -52,17 +52,20 @@ echo ============================================================
 echo   AUTO-RESEARCH  (Enter = default)
 echo ============================================================
 echo.
-echo [1] Mode:
+echo [1] Mode (type the number, or an axes name/list directly):
 echo     1 = qd (MAP-Elites quality-diversity, the flagship)
 echo     2 = features (DSL forward-selection)
 echo     3 = labeling,pruning
 echo     4 = custom (type your own axes list)
 set "MODE=1"
 set /p "MODE=    choice [1]: "
+set "GTRADE_AR_AXES="
 if "%MODE%"=="1" set "GTRADE_AR_AXES=qd"
 if "%MODE%"=="2" set "GTRADE_AR_AXES=features"
 if "%MODE%"=="3" set "GTRADE_AR_AXES=labeling,pruning"
 if "%MODE%"=="4" set /p "GTRADE_AR_AXES=    axes (comma-separated): "
+REM  Not one of 1-4 -> use whatever was typed verbatim as the axes (e.g. "qd" or "qd,features").
+if not defined GTRADE_AR_AXES set "GTRADE_AR_AXES=%MODE%"
 
 echo.
 echo [2] Proposer:

@@ -357,33 +357,46 @@ def _chronos_on():
     return (os.getenv("GTRADE_CHRONOS") or "").strip() in ("1", "true", "True")
 
 
-def _chronos_model():
-    """The Chronos base model whose cached forecasts to read (GTRADE_CHRONOS_MODEL, short
-    name or full id; default tiny) - matches the model precompute_chronos.py cached under."""
-    from core.chronos_features import resolve_model
-    return resolve_model(os.getenv("GTRADE_CHRONOS_MODEL"))
+def _chronos_model(engine, table):
+    """Which cached Chronos model to read, determined by the SYSTEM so there is no
+    tiny/base to configure: GTRADE_CHRONOS_MODEL if the user set one, else the model
+    actually present in the cache for this asset (the single cached model, or the one
+    with the most rows if several). None when nothing is cached."""
+    override = os.getenv("GTRADE_CHRONOS_MODEL")
+    if override:
+        from core.chronos_features import resolve_model
+        return resolve_model(override)
+    try:
+        cnt = pd.read_sql(
+            "SELECT model, COUNT(*) c FROM %s WHERE asset = ? GROUP BY model "
+            "ORDER BY c DESC" % CHRONOS_CACHE_TABLE, engine, params=(table,))
+        models = [m for m in cnt["model"].tolist() if m]
+        return models[0] if models else None
+    except Exception:
+        return None
 
 
 def add_chronos_features(df, table, engine):
     """LEFT-JOIN cached Chronos forecast columns onto df by date, when GTRADE_CHRONOS
-    is set and a cache exists for `table` under the selected model. Off / no cache -> df
-    unchanged (so the production feature space and feature_version are untouched). The
-    column names enter training only via GTRADE_EXTRA_FEATURES."""
+    is set and a cache exists for `table`. The model is auto-detected from the cache (see
+    _chronos_model), so precomputing one model is enough - no GTRADE_CHRONOS_MODEL needed.
+    Off / no cache -> df unchanged (so the production feature space and feature_version are
+    untouched). The column names enter training only via GTRADE_EXTRA_FEATURES."""
     if not _chronos_on():
         return df
+    model = _chronos_model(engine, table)
     try:
-        q = "SELECT date, %s FROM %s WHERE asset = ? AND model = ?" % (
-            ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
-        cache = pd.read_sql(q, engine, params=(table, _chronos_model()))
-    except Exception:
-        # Legacy cache without a model column (pre-migration, single-model era): read
-        # un-filtered so an old cache still works until precompute_chronos.migrate runs.
-        try:
+        if model is not None:
+            q = "SELECT date, %s FROM %s WHERE asset = ? AND model = ?" % (
+                ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
+            cache = pd.read_sql(q, engine, params=(table, model))
+        else:
+            # legacy cache without a model column (pre-migration) -> un-filtered read
             q = "SELECT date, %s FROM %s WHERE asset = ?" % (
                 ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
             cache = pd.read_sql(q, engine, params=(table,))
-        except Exception:
-            return df                               # no cache table -> no-op
+    except Exception:
+        return df                                   # no cache table -> no-op
     if cache.empty:
         return df
     cache["date"] = pd.to_datetime(cache["date"])
