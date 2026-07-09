@@ -90,7 +90,7 @@
         <td class="dim">{{ h.sector }}</td>
         <td class="num mono">{% if h.entry is not none %}{{ h.entry }}{% else %}-{% endif %}</td>
         <td class="num mono">{% if h.price is not none %}{{ "%.4f"|format(h.price) }}{% else %}-{% endif %}</td>
-        <td class="num mono {% if h.pnl is not none %}{{ 't-buy' if h.pnl >= 0 else 't-sell' }}{% endif %}">{% if h.pnl is not none %}{{ "%+,.0f"|format(h.pnl) }}{% else %}-{% endif %}</td>
+        <td class="num mono {% if h.pnl is not none %}{{ 't-buy' if h.pnl >= 0 else 't-sell' }}{% endif %}">{% if h.pnl is not none %}{{ "{:+,.0f}".format(h.pnl) }}{% else %}-{% endif %}</td>
         <td>{% if h.correlated_open %}<span class="taleb-elevated" title="highly correlated with held: {{ h.correlated_open | join(', ') }}">corr: {{ h.correlated_open | join(', ') }}</span>{% else %}<span class="dim">-</span>{% endif %}</td>
         <td><button class="fbtn pf-close-btn" data-asset="{{ h.asset }}">Close</button></td>
       </tr>
