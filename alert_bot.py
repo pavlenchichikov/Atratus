@@ -12,12 +12,10 @@ import time
 import warnings
 from datetime import datetime, timedelta
 
-import numpy as np
 import pandas as pd
 import requests
 import tensorflow as tf
 import yfinance as yf
-from catboost import CatBoostClassifier
 from telebot import TeleBot, apihelper
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -39,7 +37,7 @@ if BASE_DIR not in sys.path:
 
 # -- Config --
 try:
-    from config import FULL_ASSET_MAP, TELEGRAM_TOKEN, TELEGRAM_USER_ID
+    from config import FULL_ASSET_MAP, RADAR_GROUPS, TELEGRAM_TOKEN, TELEGRAM_USER_ID
     try:
         from config import SOCKS5_PROXY
     except ImportError:
@@ -49,11 +47,10 @@ except ImportError:
     sys.exit(1)
 
 # -- Shared ML components (core package) --
+# Model scoring is shared with predict.py through core.scoring so the two serve
+# paths cannot drift apart (see core/scoring.py).
 from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features, add_cross_lag_features
-from core.ensemble import ensemble_with_gating
-from core.scaling import load_or_fit_scaler
-from core.calibration import load_calibrator, apply_calibrator
-from core.model_io import get_lookback as _get_lookback, load_lstm_model as _load_lstm_model
+from core.scoring import score_asset
 from core import reports, track_record
 from risk_manager import RISK_CONFIG
 
@@ -67,14 +64,11 @@ db_engine = create_engine(f"sqlite:///{DB_PATH}")
 REGISTRY_PATH = os.path.join(MODEL_DIR, "champion_registry.json")
 THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
 
-MOEX_TARGETS = [
-    "IMOEX", "SBER", "GAZP", "LKOH", "ROSN", "NVTK", "TATN", "SNGS",
-    "PLZL", "SIBN", "MGNT",
-    "TCSG", "VTBR", "BSPB", "MOEX_EX",
-    "YNDX", "OZON", "VKCO", "POSI", "MTSS", "RTKM",
-    "CHMF", "NLMK", "MAGN", "RUAL", "ALRS",
-    "IRAO", "HYDR", "FLOT", "AFLT", "PIKK",
-]
+# Assets fetched from MOEX (no proxy) rather than Yahoo. Derived from config so
+# adding a Russian asset to config.ASSET_TYPES flows here automatically - no
+# second hand-maintained list to fall out of sync (which silently dropped ~20
+# MOEX names before this was wired to RADAR_GROUPS).
+MOEX_TARGETS = set(RADAR_GROUPS["MOEX"])
 
 # -- Risk & Portfolio --
 try:
@@ -188,9 +182,10 @@ def fetch_world(symbol, use_proxy):
 # ==============================================================================
 
 def analyze_asset(df, name, registry, thresholds):
-    """Run models on df and return a signal dict or None."""
+    """Engineer features on df, score via the shared pipeline, apply the risk
+    gate, and return a Telegram signal dict or None."""
     try:
-        # Engineer features (same as training)
+        # Feature engineering (same helpers as training / predict.py)
         df = engineer_features(df)
         table = name.lower().replace("^", "").replace(".", "").replace("-", "")
         df = add_weekly_features(df, table, db_engine)
@@ -201,86 +196,32 @@ def analyze_asset(df, name, registry, thresholds):
         if len(df) < 50:
             return None
 
-        current_price = float(df['close'].iloc[-1])
+        # Shared model scoring: CB + LSTM + Transformer + TCN + stacking meta,
+        # calibrated and thresholded exactly as predict.py does it.
+        reg_entry = registry.get(name)
+        res = score_asset(df, name, table, reg_entry, thresholds, MODEL_DIR)
+        if res is None:
+            return None
+
+        action = res["sig"]
+        if action == "WAIT":
+            return None
+
+        prob = res["prob"]
+        cb_prob = res["cb_prob"]
+        mode = res["mode"]
+        current_price = res["price"]
+        confidence = prob
         taleb_val = float(df['taleb_risk'].iloc[-1]) if 'taleb_risk' in df.columns else 0.0
 
-        cb_path = os.path.join(MODEL_DIR, f"{table}_cb.cbm")
-        lstm_path = os.path.join(MODEL_DIR, f"{table}_lstm.keras")
-        if not os.path.exists(cb_path):
-            return None
-
-        # Get features from registry (same as training used)
-        reg_entry = registry.get(name)
-        if reg_entry and 'features' in reg_entry:
-            features = [f for f in reg_entry['features'] if f in df.columns]
-        else:
-            features = ["close", "volume", "vol_z", "taleb_risk", "ret_1",
-                        "ret_5", "trend_strength", "rsi", "sma_20", "sma_50"]
-            features = [f for f in features if f in df.columns]
-
-        if len(features) < 3:
-            return None
-
-        # Scale using the saved train-fold scaler (train/serve parity); fall back
-        # to fitting on the recent window only for legacy models without one.
-        n_bars = min(500, len(df))
-        x_fit = df[features].iloc[-n_bars:].values
-        scaler, _ = load_or_fit_scaler(MODEL_DIR, table, x_fit)
-        X_all = scaler.transform(x_fit)
-
-        # CatBoost prediction (last bar)
-        cb = CatBoostClassifier()
-        cb.load_model(cb_path)
-        cb_prob = float(cb.predict_proba(X_all[-1:])[:, 1][0])
-
-        # LSTM prediction
-        lstm_prob = None
-        mode = "CB"
-        if os.path.exists(lstm_path):
-            lookback = _get_lookback(reg_entry, name)
-            if len(X_all) >= lookback:
-                lstm_model, mode, lookback = _load_lstm_model(lstm_path, lookback, len(features))
-                if lstm_model is not None:
-                    try:
-                        X_seq = X_all[-lookback:].reshape(1, lookback, len(features))
-                        lstm_prob = float(lstm_model.predict(X_seq, verbose=0)[0][0])
-                    except Exception:
-                        lstm_prob = None
-                        mode = "CB"
-
-        # Ensemble
-        if lstm_prob is not None:
-            trend_val = float(df['trend_strength'].iloc[-1]) if 'trend_strength' in df.columns else 0.01
-            trend_gate = reg_entry.get('profile', {}).get('trend_gate', 0.01) if reg_entry else 0.01
-            prob = float(ensemble_with_gating(
-                np.array([cb_prob]), np.array([lstm_prob]),
-                np.array([trend_val]), trend_gate
-            )[0])
-        else:
-            prob = cb_prob
-
-        # Calibrate to an honest up-move frequency when a calibrator exists.
-        prob = float(apply_calibrator(load_calibrator(MODEL_DIR, table), np.array([prob]))[0])
-
-        # Tuned thresholds
-        thr = thresholds.get(name, {})
-        buy_thr = thr.get('buy', 0.55)
-        sell_thr = thr.get('sell', 0.45)
-
-        # Signal decision
-        action, signal_type = "WAIT", ""
-        if prob > buy_thr:
-            action = "BUY"
+        if action == "BUY":
             signal_type = "SNIPER BUY" if mode != "CB" else "CB BUY"
-        elif prob < sell_thr:
-            action = "SELL"
+        else:
             signal_type = "SNIPER SHORT" if mode != "CB" else "CB SHORT"
-
-        confidence = prob
 
         # Risk gate
         risk_result = None
-        if _rm is not None and action != "WAIT":
+        if _rm is not None:
             n_corr = 0
             if _pm is not None:
                 n_corr = len(_pm.get_correlated_assets(name))
@@ -290,10 +231,7 @@ def analyze_asset(df, name, registry, thresholds):
             if not risk_result["approved"]:
                 logger.info("Signal %s %s REJECTED by risk: %s",
                             action, name, risk_result["reason"])
-                action = "WAIT"
-
-        if action == "WAIT":
-            return None
+                return None
 
         # Portfolio context
         portfolio_line = ""
