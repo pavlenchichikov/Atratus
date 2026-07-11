@@ -107,16 +107,32 @@ if "%PROP%"=="4" (
   set /p "GTRADE_AR_LLM_MODEL=    OpenAI model [gpt-4o]: "
 )
 
+REM  Token budget for the LLM (proposer + wiki). Reasoning models like gemma spend
+REM  tokens on an internal trace before the answer; too small a cap returns EMPTY
+REM  content. 0 = no cap (the local model is free; the only cost is wall-clock time).
+if not "%GTRADE_AR_PROPOSER%"=="llm" goto :skiptoks
+echo.
+echo     LLM max tokens  (0 = no cap; gemma reasoning needs room)
+set "GTRADE_AR_LLM_MAX_TOKENS=8000"
+set /p "GTRADE_AR_LLM_MAX_TOKENS=    max tokens [8000]: "
+:skiptoks
+
 echo.
 set "AR_BUDGET=15"
 set /p "AR_BUDGET=[3] Budget (NEW search iterations this run) [15]: "
 
 echo.
-echo [4] Objective:  1 = mean (average lift)   2 = min (lift the floor)
+echo [4] Objective (how per-asset held-out lifts are reduced to one number):
+echo     1 = mean (average)   2 = min (lift the floor)   3 = median (robust average)
+echo     4 = cvar (mean of the worst 25%%)   5 = sharpe (consistency)   6 = trimmed (no extremes)
 set "OBJ=1"
 set /p "OBJ=    choice [1]: "
 set "GTRADE_AR_OBJECTIVE=mean"
 if "%OBJ%"=="2" set "GTRADE_AR_OBJECTIVE=min"
+if "%OBJ%"=="3" set "GTRADE_AR_OBJECTIVE=median"
+if "%OBJ%"=="4" set "GTRADE_AR_OBJECTIVE=cvar"
+if "%OBJ%"=="5" set "GTRADE_AR_OBJECTIVE=sharpe"
+if "%OBJ%"=="6" set "GTRADE_AR_OBJECTIVE=trimmed_mean"
 
 echo.
 echo [5] Chronos forecast features?  (needs setup - see top of this file)
@@ -141,7 +157,7 @@ if "%WIKI%"=="2" set "GTRADE_AR_WIKI=1"
 echo.
 echo ------------------------------------------------------------
 echo   axes=%GTRADE_AR_AXES%  proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
-echo   model=%GTRADE_AR_LLM_MODEL%  chronos=%GTRADE_CHRONOS%  wiki=%GTRADE_AR_WIKI%
+echo   model=%GTRADE_AR_LLM_MODEL%  maxtok=%GTRADE_AR_LLM_MAX_TOKENS%  chronos=%GTRADE_CHRONOS%  wiki=%GTRADE_AR_WIKI%
 echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%
 echo ------------------------------------------------------------
 set "GO=Y"

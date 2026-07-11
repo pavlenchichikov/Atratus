@@ -151,11 +151,17 @@ def _call_ollama(prompt):
     # Reasoning models (e.g. gemma) spend tokens on an internal reasoning trace before
     # the answer; a small cap gets fully consumed by reasoning and returns EMPTY content
     # (the silent cause of a wiki/proposer that "runs" but produces nothing). Budget
-    # generously; override with GTRADE_AR_LLM_MAX_TOKENS.
-    try:
-        max_toks = int(os.getenv("GTRADE_AR_LLM_MAX_TOKENS") or "8000")
-    except ValueError:
-        max_toks = 8000
+    # generously. GTRADE_AR_LLM_MAX_TOKENS overrides; set it to 0 for NO cap (local model
+    # is free, but the only cost is wall-clock time - an uncapped reasoning trace can run
+    # long, fine for the one-shot wiki, risky for the many-call proposer path).
+    raw = (os.getenv("GTRADE_AR_LLM_MAX_TOKENS") or "8000").strip().lower()
+    if raw in ("0", "none", "unlimited"):
+        max_toks = None
+    else:
+        try:
+            max_toks = int(raw)
+        except ValueError:
+            max_toks = 8000
     client = openai.OpenAI(base_url=base, api_key="ollama")
     last_err = None
     for _attempt in range(3):

@@ -1312,3 +1312,54 @@ def test_regate_end_to_end_with_injected_trainer(tmp_path, monkeypatch):
     recs = json.load(open(str(tmp_path / "f.json"), encoding="utf-8"))
     assert recs and recs[-1]["mode"] == "regate"
     assert recs[-1]["winners"] and recs[-1]["winners"][0]["axis"] == "regate"
+
+
+# --- objective diversification (mean/min + median/cvar/sharpe/trimmed_mean) ---
+
+
+def test_reduce_deltas_objectives():
+    import auto_research as ar
+    d = [1.0, 2.0, 3.0, 4.0, 10.0]
+    assert ar._reduce_deltas(d, "mean") == 4.0
+    assert ar._reduce_deltas(d, "min") == 1.0
+    assert ar._reduce_deltas(d, "median") == 3.0
+    assert ar._reduce_deltas(d, "cvar") == 1.5          # worst ceil(5*0.25)=2 -> mean(1,2)
+    assert ar._reduce_deltas(d, "trimmed_mean") == 3.0  # drop min+max -> mean(2,3,4)
+    assert abs(ar._reduce_deltas(d, "sharpe") - (4.0 / (10 ** 0.5))) < 1e-9
+    assert ar._reduce_deltas([], "mean") == 0.0
+
+
+def test_reduce_deltas_sharpe_zero_variance_is_finite():
+    import auto_research as ar
+    v = ar._reduce_deltas([2.0, 2.0, 2.0], "sharpe")
+    assert v == v and v > 0            # finite (no ZeroDivisionError), positive
+
+
+def test_adopt_floor_sharpe_uses_own_threshold(monkeypatch):
+    import auto_research as ar
+    assert ar._adopt_floor("mean") == ar.ADOPT_MEAN_SCORE_DELTA
+    assert ar._adopt_floor("cvar") == ar.ADOPT_MEAN_SCORE_DELTA
+    monkeypatch.delenv("GTRADE_AR_ADOPT_SHARPE", raising=False)
+    assert ar._adopt_floor("sharpe") == 0.5
+    monkeypatch.setenv("GTRADE_AR_ADOPT_SHARPE", "0.8")
+    assert ar._adopt_floor("sharpe") == 0.8
+
+
+def test_objective_accepts_six_modes(monkeypatch):
+    import auto_research as ar
+    for o in ("mean", "min", "median", "cvar", "sharpe", "trimmed_mean"):
+        monkeypatch.setenv("GTRADE_AR_OBJECTIVE", o)
+        assert ar._objective() == o
+    monkeypatch.setenv("GTRADE_AR_OBJECTIVE", "bogus")
+    assert ar._objective() == "mean"
+
+
+def test_objective_delta_uses_the_reduction():
+    import auto_research as ar
+    base = {"A": 0.0, "B": 0.0, "C": 0.0, "D": 0.0}
+    var = [{"Asset": "A", "Score": 1.0}, {"Asset": "B", "Score": 2.0},
+           {"Asset": "C", "Score": 3.0}, {"Asset": "D", "Score": 8.0}]
+    v_mean, deltas = ar._objective_delta(var, base, "mean")
+    v_med, _ = ar._objective_delta(var, base, "median")
+    assert deltas == [1.0, 2.0, 3.0, 8.0]
+    assert v_mean == 3.5 and v_med == 2.5

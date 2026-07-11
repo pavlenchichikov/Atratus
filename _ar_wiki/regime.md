@@ -1,0 +1,2 @@
+- Success observed consistently even when `macro_tnx_chg20` is dropped from the genome [high].
+- Success observed frequently when `trend_strength` is removed, suggesting it may be redundant in "qd" mode [high].

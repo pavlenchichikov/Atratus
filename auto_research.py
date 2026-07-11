@@ -18,6 +18,7 @@ import json
 import math
 import os
 import random
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -47,17 +48,43 @@ LIGHT_ENV = {
 }
 
 
+def _reduce_deltas(deltas, objective):
+    """Reduce per-asset Score deltas to one objective value. 'mean' (average lift) and
+    'min' (lift-the-floor) are the originals; the diversifiers are 'median' (robust
+    average), 'cvar' (mean of the worst quartile - a softer, less-noisy floor than min),
+    'trimmed_mean' (average without the single best/worst), and 'sharpe' (mean/std =
+    consistency; a DIFFERENT, dimensionless scale gated by GTRADE_AR_ADOPT_SHARPE, not
+    the Score-delta floor). Unknown -> mean."""
+    n = len(deltas)
+    if n == 0:
+        return 0.0
+    if objective == "min":
+        return min(deltas)
+    if objective == "median":
+        return statistics.median(deltas)
+    if objective == "cvar":
+        k = max(1, math.ceil(n * 0.25))
+        return sum(sorted(deltas)[:k]) / k
+    if objective == "trimmed_mean":
+        if n < 4:
+            return sum(deltas) / n
+        core = sorted(deltas)[1:-1]
+        return sum(core) / len(core)
+    if objective == "sharpe":
+        sd = statistics.pstdev(deltas) if n > 1 else 0.0
+        return statistics.mean(deltas) / (sd if sd > 1e-9 else 1e-9)
+    return sum(deltas) / n
+
+
 def _objective_delta(var_rows, base_score, objective="mean"):
     """Paired (variant minus base) Score deltas over shared assets, reduced by the
-    objective: 'mean' = average delta, 'min' = the worst asset's delta (lift-the-floor).
-    Returns (value, deltas)."""
+    objective (see _reduce_deltas). Returns (value, deltas)."""
     e = {r["Asset"]: r.get("Score", 0.0) for r in var_rows}
     common = sorted(set(e) & set(base_score))
     if not common:
         return 0.0, []
     deltas = [e[a] - base_score[a] for a in common]
-    value = min(deltas) if objective == "min" else sum(deltas) / len(deltas)
-    return value, deltas
+    return _reduce_deltas(deltas, objective), deltas
 
 
 def _mean_delta(var_rows, base_score):
@@ -108,13 +135,29 @@ def _wilcoxon_p(deltas):
         return 1.0
 
 
+_OBJECTIVES = ("mean", "min", "median", "cvar", "sharpe", "trimmed_mean")
+
+
 def _objective():
-    """The search/gate objective: 'mean' (default) or 'min' (lift-the-floor)."""
+    """The search/gate objective (see _reduce_deltas): mean (default) / min / median /
+    cvar / sharpe / trimmed_mean."""
     o = (os.getenv("GTRADE_AR_OBJECTIVE") or "mean").strip().lower()
-    if o not in ("mean", "min"):
+    if o not in _OBJECTIVES:
         logger.warning("unknown GTRADE_AR_OBJECTIVE %r, using mean", o)
         return "mean"
     return o
+
+
+def _adopt_floor(objective="mean"):
+    """The practical-effect floor the objective value must beat to adopt. Score-scale
+    objectives (mean/min/median/cvar/trimmed_mean) use ADOPT_MEAN_SCORE_DELTA; the
+    dimensionless 'sharpe' uses GTRADE_AR_ADOPT_SHARPE (default 0.5)."""
+    if objective == "sharpe":
+        try:
+            return float(os.getenv("GTRADE_AR_ADOPT_SHARPE") or "0.5")
+        except ValueError:
+            return 0.5
+    return ADOPT_MEAN_SCORE_DELTA
 
 
 def holdout_stats(base_rows, ext_rows, objective="mean"):
@@ -139,7 +182,7 @@ def is_adoptable(base_rows, ext_rows, n_experiments, budget, alpha=0.05, objecti
     p, value, deltas, tag = holdout_stats(base_rows, ext_rows, objective)
     if not deltas:
         return False, "no common held-out assets"
-    if p < alpha and value > ADOPT_MEAN_SCORE_DELTA:
+    if p < alpha and value > _adopt_floor(objective):
         return True, tag
     return False, tag + " (below bar)"
 
@@ -607,7 +650,7 @@ def run_qd(train_fn=None):
         ts_qd = datetime.utcnow().isoformat()
         finding_winners = []
         for (g, p, value, tag, nl), s in zip(results, flags):
-            ok = bool(s and value > ADOPT_MEAN_SCORE_DELTA)
+            ok = bool(s and value > _adopt_floor(obj))
             replicated = clears = None
             if ok:
                 gsig = genome_sig(g)
@@ -713,7 +756,7 @@ def regate(k=8, screen=False):
     ts = datetime.utcnow().isoformat()
     finding_winners = []
     for (g, old_score, p, value, tag, nl), s in zip(results, flags):
-        ok = bool(s and value > ADOPT_MEAN_SCORE_DELTA)
+        ok = bool(s and value > _adopt_floor(obj))
         replicated = clears = None
         if ok:
             gsig = genome_sig(g)
@@ -1246,7 +1289,7 @@ def main():
     ts = datetime.utcnow().isoformat()
     finding_winners = []
     for (name, winner, p, value, tag, nl), s in zip(winners, flags):
-        ok = bool(s and value > ADOPT_MEAN_SCORE_DELTA)
+        ok = bool(s and value > _adopt_floor(obj))
         replicated = clears = None
         if ok:
             wsig = _winner_sig(name, winner)
