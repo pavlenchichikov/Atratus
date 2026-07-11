@@ -2,7 +2,7 @@
 
 ![Atratus](assets/atratus-banner.svg)
 
-[![CI](https://github.com/pavlenchichikov/G-Trade/actions/workflows/ci.yml/badge.svg)](https://github.com/pavlenchichikov/G-Trade/actions/workflows/ci.yml)
+[![CI](https://github.com/pavlenchichikov/Atratus/actions/workflows/ci.yml/badge.svg)](https://github.com/pavlenchichikov/Atratus/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
