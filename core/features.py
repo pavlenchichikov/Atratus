@@ -11,6 +11,22 @@ from core.logger import get_logger
 _logger = get_logger(__name__)
 
 
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        _logger.warning("invalid %s=%r, using %d", name, os.getenv(name), default)
+        return default
+
+
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        _logger.warning("invalid %s=%r, using %s", name, os.getenv(name), default)
+        return default
+
+
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     """14-period RSI (simple rolling mean of gains/losses, Wilder-style)."""
     delta = close.diff()
@@ -20,22 +36,18 @@ def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def make_target(close: pd.Series, mode: str = "direction", window: int = 30) -> pd.Series:
-    """Binary next-bar label.
+def make_target(close: pd.Series, mode: str = "direction", window: int = 30,
+                high: pd.Series = None, low: pd.Series = None,
+                horizon: int = 1, barrier_k: float = 1.0,
+                vol_window: int = 20) -> pd.Series:
+    """Binary label. `direction` and `rel_median` are unchanged (see history).
 
-    - "direction" (default): 1 if the next close is higher than the current one.
-      This is the historical label, preserved exactly.
-    - "rel_median": 1 if the next return beats the trailing-median return over
-      `window` bars. The baseline uses only past returns up to t (no look-ahead),
-      so the positive class stays near 50 percent in any trend - which fixes the
-      pos_ratio=0.00 degeneracy that flat next-bar-direction shows on downtrending
-      or low-volatility assets.
-
-    Warm-up rows (and the final row, whose next bar is unknown) are left as NaN
-    here and removed downstream by engineer_features' dropna, regardless of
-    `window` (a plain boolean compare against NaN would otherwise evaluate to
-    False, then astype(int) to 0, fabricating a label for rows with no real
-    meaning). Raises ValueError on an unknown mode."""
+    `triple_barrier`: 1 if the price hits the upper barrier close_t*(1+k*sigma_t)
+    before the lower barrier close_t*(1-k*sigma_t) within `horizon` bars, else 0.
+    Touch is checked intrabar via high/low; sigma_t is the EWM std of close-to-close
+    returns up to t (no look-ahead). No touch within the (fully available) horizon ->
+    sign of the horizon return. Warm-up rows and the final horizon-incomplete rows
+    are NaN and dropped downstream. high/low None falls back to close for touch."""
     if mode == "direction":
         return (close.shift(-1) > close).astype(int)
     if mode == "rel_median":
@@ -45,7 +57,45 @@ def make_target(close: pd.Series, mode: str = "direction", window: int = 30) -> 
         target = (next_ret > baseline).astype(float)
         target[baseline.isna() | next_ret.isna()] = np.nan
         return target
+    if mode == "triple_barrier":
+        return _triple_barrier(close, high, low, horizon, barrier_k, vol_window)
     raise ValueError("unknown GTRADE_LABEL_MODE: %r" % mode)
+
+
+def _triple_barrier(close, high, low, horizon, barrier_k, vol_window):
+    """See make_target. Returns a {0.0, 1.0, NaN} Series aligned to close.index."""
+    c = close.to_numpy(dtype="float64")
+    n = len(c)
+    hi = c if high is None else high.to_numpy(dtype="float64")
+    lo = c if low is None else low.to_numpy(dtype="float64")
+    sigma = close.pct_change().ewm(span=vol_window,
+                                   min_periods=vol_window).std().to_numpy()
+    out = np.full(n, np.nan)
+    for t in range(n - 1):
+        s = sigma[t]
+        if not np.isfinite(s) or s <= 0.0:
+            continue
+        upper = c[t] * (1.0 + barrier_k * s)
+        lower = c[t] * (1.0 - barrier_k * s)
+        end = min(t + horizon, n - 1)
+        label = None
+        for j in range(t + 1, end + 1):
+            up = hi[j] >= upper
+            dn = lo[j] <= lower
+            if up and dn:
+                label = 1 if c[j] >= c[t] else 0   # same-bar path unknown: sign
+                break
+            if up:
+                label = 1
+                break
+            if dn:
+                label = 0
+                break
+        if label is None and t + horizon <= n - 1:
+            label = 1 if c[t + horizon] > c[t] else 0   # vertical barrier
+        if label is not None:
+            out[t] = float(label)
+    return pd.Series(out, index=close.index)
 
 
 def compute_taleb_risk(close: pd.Series, window: int = 60, min_periods: int = 30) -> pd.Series:
@@ -177,7 +227,22 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
             "invalid GTRADE_LABEL_WINDOW=%r, falling back to 30", _raw_window,
         )
         _label_window = 30
-    df['target'] = make_target(df['close'], _label_mode, _label_window)
+    if _label_mode == "triple_barrier":
+        # Default 1 (a degenerate 1-bar barrier), NOT a private default of the mode:
+        # GTRADE_LABEL_HORIZON is the single source of truth shared with the LdP
+        # uniqueness weights (train_hybrid reads it with default 1). A private default
+        # here would silently desync the label footprint from the uniqueness weights.
+        # The triple-barrier recipe (ab_labeling.variant_env) sets it explicitly.
+        _horizon = _env_int("GTRADE_LABEL_HORIZON", 1)
+        _barrier_k = _env_float("GTRADE_LABEL_BARRIER_K", 1.0)
+        _vol_window = _env_int("GTRADE_LABEL_VOL_WINDOW", 20)
+        _hi = df['high'] if 'high' in df.columns else None
+        _lo = df['low'] if 'low' in df.columns else None
+        df['target'] = make_target(df['close'], _label_mode, _label_window,
+                                   high=_hi, low=_lo, horizon=_horizon,
+                                   barrier_k=_barrier_k, vol_window=_vol_window)
+    else:
+        df['target'] = make_target(df['close'], _label_mode, _label_window)
     df['next_ret'] = df['close'].pct_change().shift(-1)
 
     # Non-positive or near-zero prices (e.g. SHIB) make ratio/log features blow

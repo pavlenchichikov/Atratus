@@ -609,6 +609,25 @@ def test_performance_page_has_reconcile_button(client, monkeypatch):
     assert "reconcile-btn" in r.text
 
 
+def test_performance_page_has_meta_shadow_panel(client):
+    r = client.get("/performance")
+    assert r.status_code == 200
+    assert "Meta-sizing shadow" in r.text
+
+
+def test_performance_page_renders_meta_shadow_sweep(client, monkeypatch):
+    import performance_tracker
+    monkeypatch.setattr(performance_tracker, "meta_shadow_report", lambda **k: {
+        "rows": 40, "baseline_accuracy": 0.52,
+        "sweep": [{"thr": 0.55, "kept": 10, "coverage": 0.25, "accuracy": 0.70, "lift": 0.18}],
+        "discrimination": {"high_meta_acc": 0.64, "high_meta_n": 22,
+                           "low_meta_acc": 0.38, "low_meta_n": 18},
+    })
+    r = client.get("/performance")
+    assert r.status_code == 200
+    assert "70.0%" in r.text and "+18.0%" in r.text
+
+
 def test_research_page_empty(client):
     r = client.get("/research")
     assert r.status_code == 200

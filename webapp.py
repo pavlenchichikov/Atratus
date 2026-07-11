@@ -518,10 +518,16 @@ def correlations_page(request: Request):
 
 @app.get("/performance", response_class=HTMLResponse)
 def performance_page(request: Request):
+    import performance_tracker
+    try:
+        meta_shadow = performance_tracker.meta_shadow_report(days=30)
+    except Exception:
+        meta_shadow = {"rows": 0}
     return templates.TemplateResponse(request, "performance.html", {
         "series": dashboard.accuracy_timeseries(),
         "leaderboard": dashboard.top_leaderboard(limit=20),
         "version": dashboard.current_model_version(),
+        "meta_shadow": meta_shadow,
     })
 
 

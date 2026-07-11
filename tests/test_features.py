@@ -313,7 +313,7 @@ def test_make_target_rel_median_has_no_lookahead():
 
 def test_make_target_unknown_mode_raises():
     with pytest.raises(ValueError):
-        make_target(pd.Series([1.0, 2.0, 3.0]), "triple_barrier")
+        make_target(pd.Series([1.0, 2.0, 3.0]), "bogus")
 
 
 def _ohlcv(n=320, seed=2):
@@ -351,6 +351,18 @@ def test_engineer_features_rel_median_changes_label(monkeypatch):
     # so the label actually changes, and direction's mean is the higher one.
     assert a != b
     assert a > b
+
+
+def test_engineer_features_triple_barrier_sets_target(monkeypatch):
+    from core.features import engineer_features
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "triple_barrier")
+    monkeypatch.setenv("GTRADE_LABEL_HORIZON", "5")
+    monkeypatch.setenv("GTRADE_LABEL_BARRIER_K", "1.0")
+    monkeypatch.setenv("GTRADE_LABEL_VOL_WINDOW", "10")
+    out = engineer_features(_ohlcv())
+    assert "target" in out.columns
+    assert set(out["target"].dropna().unique()).issubset({0.0, 1.0})
+    assert out["target"].notna().any()
 
 
 def test_make_target_rel_median_warmup_and_final_row_are_nan():

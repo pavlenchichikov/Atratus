@@ -67,11 +67,11 @@ def _prepare():
 
 def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                    model_version=None, meta_prob=None, date=None):
-    # Stamp the prediction with the market bar it was computed from, not the wall
-    # clock. A radar run on a Saturday for a stock sees only Friday's close, so the
-    # caller passes date="Friday" and the per-asset dedup collapses it into the real
-    # Friday prediction instead of minting a phantom "Saturday" row for a closed
-    # market. date=None keeps the old wall-clock default for callers that lack a bar.
+    # Date the prediction by the wall clock (one row per asset per day). Non-trading
+    # days for an asset (a stock predicted on a weekend/holiday) are not stamped onto
+    # a neighbouring bar here; update_actuals() reconciles only exact trading-bar dates
+    # and purges the rest, so a closed-market row never double-counts a real move.
+    # `date` may be passed to override for backfills/tests; default is today (UTC).
     today = date or datetime.utcnow().strftime("%Y-%m-%d")
     if model_version is None:
         model_version = feature_version()
@@ -328,6 +328,60 @@ def get_daily_stats(days=30, model_version=None):
     return daily.sort_values("Date").reset_index(drop=True)
 
 
+META_SHADOW_THRESHOLDS = (0.40, 0.45, 0.50, 0.55, 0.60)
+
+
+def meta_shadow_report(days=30, model_version=None):
+    """Shadow evaluation of the SP-6 meta-sizing gate. Over reconciled directional
+    predictions that carry a meta_prob (logged while GTRADE_META_SIZING=shadow), it
+    asks: if we gated - kept only signals with meta_prob >= thr and sent the rest to
+    WAIT - would the acted-on accuracy beat acting on all of them? That is the
+    shadow->active decision signal. Returns {"rows": 0} until shadow data exists."""
+    _prepare()
+    cutoff = _date_filter(days)
+    params = [cutoff]
+    where = ("WHERE date >= ? AND signal != 'WAIT' AND correct IS NOT NULL "
+             "AND meta_prob IS NOT NULL")
+    if model_version:
+        where += " AND model_version = ?"
+        params.append(model_version)
+    df = pd.read_sql(
+        f"SELECT correct, meta_prob FROM prediction_log {where}",
+        _engine(),
+        params=tuple(params),
+    )
+    if df.empty:
+        return {"rows": 0}
+
+    total = len(df)
+    base_acc = float(df["correct"].mean())
+    sweep = []
+    for thr in META_SHADOW_THRESHOLDS:
+        kept = df[df["meta_prob"] >= thr]
+        n = len(kept)
+        acc = float(kept["correct"].mean()) if n else None
+        sweep.append({
+            "thr": thr,
+            "kept": n,
+            "coverage": n / total,
+            "accuracy": acc,
+            "lift": (acc - base_acc) if acc is not None else None,
+        })
+    hi = df[df["meta_prob"] >= 0.5]["correct"]
+    lo = df[df["meta_prob"] < 0.5]["correct"]
+    return {
+        "rows": total,
+        "baseline_accuracy": base_acc,
+        "sweep": sweep,
+        "discrimination": {
+            "high_meta_acc": float(hi.mean()) if len(hi) else None,
+            "high_meta_n": int(len(hi)),
+            "low_meta_acc": float(lo.mean()) if len(lo) else None,
+            "low_meta_n": int(len(lo)),
+        },
+    }
+
+
 if __name__ == "__main__":
     print("Updating actuals...")
     res = update_actuals()
@@ -357,3 +411,19 @@ if __name__ == "__main__":
             for sig, stats in overall["by_signal"].items():
                 acc_str = f"{stats['acc']:.1%}" if stats["acc"] is not None else "N/A"
                 print(f"  {sig}: {acc_str} ({stats['count']} predictions)")
+
+    ms = meta_shadow_report(days=30)
+    print("\n=== META-SIZING SHADOW (last 30 days) ===")
+    if ms["rows"] == 0:
+        print("No shadow data yet (run predict with GTRADE_META_SIZING=shadow, then reconcile).")
+    else:
+        print(f"Signals with meta_prob : {ms['rows']}   baseline acc {ms['baseline_accuracy']:.1%}")
+        d = ms["discrimination"]
+        hi = f"{d['high_meta_acc']:.1%}" if d["high_meta_acc"] is not None else "N/A"
+        lo = f"{d['low_meta_acc']:.1%}" if d["low_meta_acc"] is not None else "N/A"
+        print(f"  meta>=0.5: {hi} ({d['high_meta_n']})   meta<0.5: {lo} ({d['low_meta_n']})")
+        print(f"  {'thr':>5} {'kept':>6} {'coverage':>9} {'acc':>7} {'lift':>7}")
+        for s in ms["sweep"]:
+            acc = f"{s['accuracy']:.1%}" if s["accuracy"] is not None else "N/A"
+            lift = f"{s['lift']:+.1%}" if s["lift"] is not None else "N/A"
+            print(f"  {s['thr']:>5.2f} {s['kept']:>6} {s['coverage']:>8.0%} {acc:>7} {lift:>7}")

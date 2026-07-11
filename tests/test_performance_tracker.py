@@ -215,6 +215,45 @@ def test_log_prediction_stamps_bar_date(tmp_path, monkeypatch):
     assert rows == [("2026-06-12", "BUY")]
 
 
+def test_meta_shadow_report_scores_the_gate(tmp_path, monkeypatch):
+    """meta_shadow_report: over reconciled directional predictions that carry a
+    meta_prob, keeping only meta_prob>=thr should surface the accuracy lift."""
+    import performance_tracker as pt
+    db = str(tmp_path / "shadow.db")
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+    pt._prepare()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    con = sqlite3.connect(db)
+    con.executemany(
+        "INSERT INTO prediction_log (date,asset,signal,probability,actual_next_ret,"
+        "correct,cb_prob,lstm_prob,model_version,meta_prob) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [(today, "AAA", "BUY", 0.6, 0.01, 1, None, None, "v1", 0.70),
+         (today, "BBB", "BUY", 0.6, 0.01, 1, None, None, "v1", 0.60),
+         (today, "CCC", "SELL", 0.4, 0.01, 0, None, None, "v1", 0.30),
+         (today, "DDD", "SELL", 0.4, 0.01, 0, None, None, "v1", 0.40),
+         # a WAIT and a not-yet-reconciled row must be ignored
+         (today, "EEE", "WAIT", 0.5, 0.0, None, None, None, "v1", 0.9),
+         (today, "FFF", "BUY", 0.6, None, None, None, None, "v1", 0.9)],
+    )
+    con.commit(); con.close()
+    rep = pt.meta_shadow_report(days=30)
+    assert rep["rows"] == 4
+    assert rep["baseline_accuracy"] == 0.5
+    at_50 = next(s for s in rep["sweep"] if s["thr"] == 0.50)
+    assert at_50["kept"] == 2 and at_50["accuracy"] == 1.0 and at_50["coverage"] == 0.5
+    assert rep["discrimination"]["high_meta_acc"] == 1.0
+    assert rep["discrimination"]["low_meta_acc"] == 0.0
+
+
+def test_meta_shadow_report_empty_when_no_shadow_data(tmp_path, monkeypatch):
+    import performance_tracker as pt
+    db = str(tmp_path / "empty.db")
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+    assert pt.meta_shadow_report(days=30) == {"rows": 0}
+
+
 def test_log_prediction_records_meta_prob(tmp_path, monkeypatch):
     import sqlite3
     import performance_tracker as pt

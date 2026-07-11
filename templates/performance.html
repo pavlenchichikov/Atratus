@@ -39,6 +39,44 @@
   {% endif %}
 </section>
 
+<section class="panel fade">
+  <div class="panel-head">
+    <h2>Meta-sizing shadow</h2>
+    <span class="dim mono">SP-6 gate, observation phase</span>
+  </div>
+  <p class="dim" style="padding: 0 16px;">P(CB correct) logged per prediction while
+    <span class="mono">GTRADE_META_SIZING=shadow</span> (signals unchanged). If keeping only
+    <span class="mono">meta_prob &gt;= thr</span> lifts the acted-on accuracy over baseline with
+    enough coverage, flipping to <span class="mono">active</span> is worth it.</p>
+  {% if meta_shadow.rows and meta_shadow.rows > 0 %}
+  {% set disc = meta_shadow.discrimination %}
+  <p class="mono" style="padding: 0 16px;">
+    {{ meta_shadow.rows }} signals &middot; baseline
+    <b class="{{ 't-buy' if meta_shadow.baseline_accuracy >= 0.5 else 't-sell' }}">{{ "%.1f%%"|format(meta_shadow.baseline_accuracy * 100) }}</b>
+    &middot; meta&ge;0.5: <b>{% if disc.high_meta_acc is not none %}{{ "%.1f%%"|format(disc.high_meta_acc * 100) }}{% else %}-{% endif %}</b> <span class="dim">({{ disc.high_meta_n }})</span>
+    &middot; meta&lt;0.5: <b>{% if disc.low_meta_acc is not none %}{{ "%.1f%%"|format(disc.low_meta_acc * 100) }}{% else %}-{% endif %}</b> <span class="dim">({{ disc.low_meta_n }})</span>
+  </p>
+  <table class="grid">
+    <thead>
+      <tr><th class="num">Threshold</th><th class="num">Kept</th><th class="num">Coverage</th><th class="num">Accuracy</th><th class="num">Lift vs baseline</th></tr>
+    </thead>
+    <tbody>
+      {% for s in meta_shadow.sweep %}
+      <tr>
+        <td class="num mono">{{ "%.2f"|format(s.thr) }}</td>
+        <td class="num mono dim">{{ s.kept }}</td>
+        <td class="num mono dim">{{ "%.0f%%"|format(s.coverage * 100) }}</td>
+        <td class="num mono">{% if s.accuracy is not none %}{{ "%.1f%%"|format(s.accuracy * 100) }}{% else %}-{% endif %}</td>
+        <td class="num mono {% if s.lift is not none %}{{ 't-buy' if s.lift > 0 else ('t-sell' if s.lift < 0 else '') }}{% endif %}">{% if s.lift is not none %}{{ "{:+.1f}%".format(s.lift * 100) }}{% else %}-{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No shadow data yet - runs accrue once predict.py logs meta_prob (shadow on) and those predictions reconcile.</p>
+  {% endif %}
+</section>
+
 <script id="perf-data" type="application/json">{{ series | tojson }}</script>
 <script src="/static/echarts.min.js"></script>
 <script>
