@@ -84,6 +84,20 @@ Same data as JSON under `/api/...`. Pages auto-refresh; a Cmd-K palette jumps to
 
 ![Signals on the price](assets/screenshot-signals.png)
 
+**Console output** - `predict.py` prints BUY / SELL / WAIT for every asset with the calibrated probability, the ensemble mode and the Taleb tail-risk read.
+
+```text
+$ python predict.py
+  REAL-TIME RADAR  |  2026-07-12 02:31
+
+  BTC      BUY    p=0.62  STACK  taleb=0.3
+  ETH      WAIT   p=0.51  STACK
+  NVDA     BUY    p=0.66  STACK  taleb=0.4
+  SBER     SELL   p=0.38  STACK  taleb=1.2
+  EURUSD   WAIT   p=0.49  STACK
+  GOLD     BUY    p=0.58  STACK  taleb=0.2
+```
+
 ## Auto-research agent
 
 The feature set can be extended at train time through a constrained transform DSL in `core/feature_dsl.py` (z-score, ratio, lag, diff, rolling, interaction, cross-asset lead-lag over existing columns - no `eval`). Point `GTRADE_DSL_SPECS` at a JSON file of specs and list their names in `GTRADE_EXTRA_FEATURES`; with both unset, training is unchanged.
