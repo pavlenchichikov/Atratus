@@ -1314,3 +1314,21 @@ body { padding-bottom: 30px; }
 .wf-svg { width: 100%; height: 240px; display: block; }
 .wf-line { vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 4px currentColor); }
 .wf-base { stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+
+/* Position card + state ribbon + entry/exit markers (asset page) */
+.pos-card { display: flex; flex-direction: column; gap: 8px; }
+.pos-main { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.pos-state { font-weight: 700; font-size: 20px; letter-spacing: 0.04em; }
+.pos-long .pos-state { color: var(--green); }
+.pos-short .pos-state { color: var(--red); }
+.pos-flat .pos-state { color: #7f8aa0; }
+.pos-detail { color: #aeb8cc; font-size: 14px; }
+.pos-guide { font-size: 13px; }
+.ribbon { display: flex; width: 100%; height: 12px; border-radius: 6px; overflow: hidden; gap: 1px; margin-top: 4px; }
+.ribbon-seg { min-width: 2px; }
+.ribbon-long { background: var(--green); }
+.ribbon-short { background: var(--red); }
+.ribbon-flat { background: #2a3142; }
+.pm { stroke: var(--panel); stroke-width: 1; }
+.pm-long { fill: var(--green); }
+.pm-short { fill: var(--red); }

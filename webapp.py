@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from config import FULL_ASSET_MAP, RADAR_GROUPS, radar_category
 from core import track_record
 from core import dashboard
+from core import positions as positions_mod
 from risk_manager import RISK_CONFIG, RiskManager, save_risk_config_override
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -268,8 +269,12 @@ def asset_page(request: Request, name: str):
                     if q.get("Asset") == name), None)
     group = next((g for g, m in RADAR_GROUPS.items() if name in m), None)
 
-    markers = [{"date": t["date"], "signal": t["signal"]}
-               for t in track if t["signal"] in ("BUY", "SELL")]
+    # Collapse the per-bar signals into positions: enter/exit markers for the
+    # chart, a state ribbon, a trade log and the current-position card.
+    pos = positions_mod.build_positions(
+        [{"date": t["date"], "signal": t["signal"], "ret": t["actual_next_ret"]}
+         for t in reversed(track)])
+    markers = pos["markers"]
     taleb = dashboard.taleb_for_asset(name)
     soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
     return templates.TemplateResponse(request, "asset.html", {
@@ -285,6 +290,9 @@ def asset_page(request: Request, name: str):
         "acc": acc,
         "stats": stats,
         "current": track[0] if track else None,
+        "position": pos["current"],
+        "trades": pos["trades"],
+        "segments": pos["segments"],
         "reg": reg,
         "thr": thr,
         "quality": quality,
