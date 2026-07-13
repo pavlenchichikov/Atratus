@@ -31,7 +31,7 @@ SELECTION = "SP500,NVDA,BTC,ETH,EURUSD,GBPJPY,GAS,AAPL,SBER,DAX"
 
 
 def resolve_assets(spec):
-    """The asset list for --assets: 'all' - the full 181-asset universe, else the
+    """The asset list for --assets: 'all' - the full 208-asset universe, else the
     comma-separated names given."""
     if (spec or "").strip().lower() == "all":
         from config import FULL_ASSET_MAP
@@ -120,7 +120,7 @@ def precompute_asset(asset, engine, forecaster=None, context=64, horizon=5,
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--assets", default=SELECTION,
-                    help="comma-separated asset names, or 'all' for the full 181-asset "
+                    help="comma-separated asset names, or 'all' for the full 208-asset "
                          "universe (default: a 10-asset selection)")
     ap.add_argument("--model", default="tiny",
                     help="Chronos base model: %s, or a full Hugging Face id "
