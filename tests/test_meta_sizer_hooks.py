@@ -16,13 +16,13 @@ def test_train_hybrid_hook_gated(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(ms, "train_and_save", lambda asset, df: calls.append(asset) or True)
 
-    # off -> not called
+    # off - not called
     monkeypatch.delenv("GTRADE_META_SIZING", raising=False)
     if ms.meta_enabled() != "off":
         ms.train_and_save("A", None)
     assert calls == []
 
-    # shadow -> called
+    # shadow - called
     monkeypatch.setenv("GTRADE_META_SIZING", "shadow")
     if ms.meta_enabled() != "off":
         ms.train_and_save("A", None)

@@ -10,7 +10,7 @@ cache, never this model.
 import numpy as np
 import pandas as pd
 
-# Short names for the Chronos-T5 base models (accuracy/speed trade-off, tiny -> large).
+# Short names for the Chronos-T5 base models (accuracy/speed trade-off, tiny - large).
 CHRONOS_MODELS = {
     "tiny": "amazon/chronos-t5-tiny",
     "mini": "amazon/chronos-t5-mini",
@@ -23,7 +23,7 @@ DEFAULT_CHRONOS_MODEL = CHRONOS_MODELS["tiny"]
 
 def resolve_model(name):
     """Expand a short base-model name (tiny/mini/small/base/large) to its Hugging Face
-    id; a full id passes through; blank -> the tiny default."""
+    id; a full id passes through; blank - the tiny default."""
     name = (name or "").strip()
     if not name:
         return DEFAULT_CHRONOS_MODEL

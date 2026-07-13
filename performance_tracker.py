@@ -127,16 +127,16 @@ def update_actuals():
     for that asset. Trading days are per-asset: a Saturday is a live bar for crypto
     but a closed market for a stock. So for each row:
 
-      - date is an exact bar with a following bar  -> score it (BUY correct if the
+      - date is an exact bar with a following bar  - score it (BUY correct if the
         next close rose, SELL if it fell, WAIT never scored).
-      - date is an exact bar but the latest one    -> stays pending (outcome not
+      - date is an exact bar but the latest one    - stays pending (outcome not
         formed yet: today/yesterday before the next close lands).
-      - date has no bar but a later bar exists      -> the market was closed that day
+      - date has no bar but a later bar exists      - the market was closed that day
         (weekend/holiday); the prediction just reused the prior close and cannot be
         verified, so it is dropped (excluded) rather than mapped onto a neighbouring
         day and double-counted. This is why non-trading days never reach the stats.
-      - date has no bar and none follow yet         -> a real trading day whose bar is
-        not fetched yet -> stays pending (never deleted).
+      - date has no bar and none follow yet         - a real trading day whose bar is
+        not fetched yet - stays pending (never deleted).
     """
     reconciled = 0
     excluded = 0
@@ -166,16 +166,16 @@ def update_actuals():
             if not exact:
                 if has_future:
                     # Non-trading day for this asset (market was closed), yet it has
-                    # since traded: unverifiable stale duplicate -> remove it.
+                    # since traded: unverifiable stale duplicate - remove it.
                     cur.execute("DELETE FROM prediction_log WHERE rowid=?", (rowid,))
                     excluded += 1
-                # else: bar simply not fetched yet -> leave pending, never delete.
+                # else: bar simply not fetched yet - leave pending, never delete.
                 continue
 
             if anr is not None:
                 continue  # already scored on a real bar
             if not has_future:
-                continue  # exact bar but latest -> outcome not formed yet
+                continue  # exact bar but latest - outcome not formed yet
 
             today_close = df["close"].iloc[pos]
             next_close = df["close"].iloc[pos + 1]
@@ -336,7 +336,7 @@ def meta_shadow_report(days=30, model_version=None):
     predictions that carry a meta_prob (logged while GTRADE_META_SIZING=shadow), it
     asks: if we gated - kept only signals with meta_prob >= thr and sent the rest to
     WAIT - would the acted-on accuracy beat acting on all of them? That is the
-    shadow->active decision signal. Returns {"rows": 0} until shadow data exists."""
+    shadow-active decision signal. Returns {"rows": 0} until shadow data exists."""
     _prepare()
     cutoff = _date_filter(days)
     params = [cutoff]

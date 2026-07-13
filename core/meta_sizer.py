@@ -1,7 +1,7 @@
 """Meta-probability sizing gate for the production predictor (SP-6 Phase 2b).
 
 P(CB is correct on this bar), learned from a leakage-free walk-forward CB, used as an
-env-gated confidence gate: a weak-meta BUY/SELL is suppressed to WAIT. Default OFF ->
+env-gated confidence gate: a weak-meta BUY/SELL is suppressed to WAIT. Default OFF -
 the predictor is byte-identical. Heavy deps (catboost, joblib) are imported lazily."""
 
 import os
@@ -12,7 +12,7 @@ META_DIR = os.path.join(MODEL_DIR, "meta")
 
 
 def meta_enabled():
-    """GTRADE_META_SIZING: off (default) / shadow / active. Unknown -> off."""
+    """GTRADE_META_SIZING: off (default) / shadow / active. Unknown - off."""
     v = (os.getenv("GTRADE_META_SIZING") or "off").strip().lower()
     return v if v in ("off", "shadow", "active") else "off"
 
@@ -42,7 +42,7 @@ def gate(signal, meta_prob, mode=None, thr=None):
 def build_meta_label(feat, cb_cols, meta_cols, target_col="target", n_blocks=5,
                      cb_params=None):
     """Leakage-free walk-forward CB (expanding window, first block excluded) over cb_cols
-    -> OOS direction preds; y = (pred == target); X = feat[meta_cols] on those OOS rows.
+    - OOS direction preds; y = (pred == target); X = feat[meta_cols] on those OOS rows.
     Returns (None, None) when unfittable. Lazy-imports catboost."""
     import numpy as np
     from catboost import CatBoostClassifier
@@ -132,7 +132,7 @@ def train_and_save(asset, feat):
         # A single-class y_meta means CB was right (or wrong) on every OOS bar - a
         # degenerate / leak-contaminated asset where an "is-CB-right" sizer is
         # meaningless; train_meta_model returns None and we correctly skip (no meta
-        # model saved -> predict never gates that asset). Do NOT fabricate a label.
+        # model saved - predict never gates that asset). Do NOT fabricate a label.
         if model is None:
             return False
         save_meta(asset, model)

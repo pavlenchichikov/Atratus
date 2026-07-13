@@ -28,12 +28,12 @@ def test_select_features_falls_back_to_active_set():
 
 
 def test_score_asset_returns_none_when_champion_missing(tmp_path):
-    # Empty model dir: no {table}_cb.cbm -> None, no model loading attempted.
+    # Empty model dir: no {table}_cb.cbm - None, no model loading attempted.
     assert scoring.score_asset(_df(), "BTC", "btc", None, {}, str(tmp_path)) is None
 
 
 def test_score_asset_returns_none_on_short_history(tmp_path):
-    # A cb model exists but the df is too short (<50 rows) -> None.
+    # A cb model exists but the df is too short (<50 rows) - None.
     open(os.path.join(tmp_path, "btc_cb.cbm"), "w").close()
     assert scoring.score_asset(_df(n=10), "BTC", "btc", None, {}, str(tmp_path)) is None
 

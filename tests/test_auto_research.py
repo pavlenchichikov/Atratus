@@ -405,7 +405,7 @@ def test_run_axis_select_best_budget_is_per_run():
 
 
 def test_benjamini_hochberg_known_vector():
-    # m=4, alpha=0.05: thresholds 0.0125, 0.025, 0.0375, 0.05 -> reject first two
+    # m=4, alpha=0.05: thresholds 0.0125, 0.025, 0.0375, 0.05 - reject first two
     assert ar.benjamini_hochberg([0.01, 0.02, 0.2, 0.5], 0.05) == [True, True, False, False]
     # input order preserved
     assert ar.benjamini_hochberg([0.5, 0.01, 0.2, 0.02], 0.05) == [False, True, False, True]
@@ -419,7 +419,7 @@ def test_objective_env(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_OBJECTIVE", "min")
     assert ar._objective() == "min"
     monkeypatch.setenv("GTRADE_AR_OBJECTIVE", "bogus")
-    assert ar._objective() == "mean"          # unknown -> mean
+    assert ar._objective() == "mean"          # unknown - mean
 
 
 def test_holdout_stats_mean_vs_min():
@@ -434,12 +434,12 @@ def test_holdout_stats_mean_vs_min():
 
 
 def test_is_adoptable_mean_backward_compat():
-    # all held-out improve a lot -> adoptable under the default mean path (ab_labeling parity)
+    # all held-out improve a lot - adoptable under the default mean path (ab_labeling parity)
     base = _rows2({a: 1.0 for a in ("A", "B", "C", "D", "E")})
     var = _rows2({a: 3.0 for a in ("A", "B", "C", "D", "E")})
     ok, why = ar.is_adoptable(base, var, 1, 1)
     assert ok is True
-    # min objective: one asset regresses -> worst delta negative -> not practically over the bar
+    # min objective: one asset regresses - worst delta negative - not practically over the bar
     var2 = _rows2({"A": 3.0, "B": 3.0, "C": 3.0, "D": 3.0, "E": 0.0})
     ok2, _ = ar.is_adoptable(base, var2, 1, 1, objective="min")
     assert ok2 is False
@@ -453,7 +453,7 @@ def test_run_axis_uses_min_objective(monkeypatch):
                    to_env=lambda c: {"NAMES": c["name"]}, kind="select_best")
 
     def train(subset, env):
-        # x lifts A by +3 but tanks B by -1 -> mean +1 (good) but min -1 (bad)
+        # x lifts A by +3 but tanks B by -1 - mean +1 (good) but min -1 (bad)
         return [{"Asset": "A", "Score": 4.0}, {"Asset": "B", "Score": 0.0}]
 
     res = ar.run_axis(axis, 3, base, train, persist=lambda log: None)
@@ -461,18 +461,18 @@ def test_run_axis_uses_min_objective(monkeypatch):
 
 
 def test_main_applies_bh_across_axes(monkeypatch):
-    # two axis winners -> main collects their held-out p-values and runs ONE BH
+    # two axis winners - main collects their held-out p-values and runs ONE BH
     monkeypatch.setattr(ar, "_try_sample_frame", lambda: None)
     monkeypatch.setattr(ar, "load_state", lambda: {})
     monkeypatch.setattr(ar, "save_state", lambda s: None)
-    monkeypatch.setenv("GTRADE_AR_SCREEN", "0")   # screen off -> simpler full-eval path
+    monkeypatch.setenv("GTRADE_AR_SCREEN", "0")   # screen off - simpler full-eval path
     monkeypatch.delenv("GTRADE_AR_OBJECTIVE", raising=False)
     captured = {"bh_input": None}
     real_bh = ar.benjamini_hochberg
     monkeypatch.setattr(ar, "benjamini_hochberg",
                         lambda p, alpha=0.05: (captured.__setitem__("bh_input", list(p)), real_bh(p, alpha))[1])
 
-    # base (no NAMES) scores 1.0; any candidate (NAMES set) scores 5.0 -> beats base
+    # base (no NAMES) scores 1.0; any candidate (NAMES set) scores 5.0 - beats base
     def fake_train_env(subset, env):
         s = 5.0 if env.get("NAMES") else 1.0
         return [{"Asset": a, "Score": s} for a in subset.split(",")]
@@ -546,7 +546,7 @@ def test_mutate_stays_valid_and_changes(monkeypatch):
 
 
 def test_mutate_floor_constrained_stays_valid(monkeypatch):
-    # active of 8 with floor 8 -> add_drop can never fire (would breach the floor);
+    # active of 8 with floor 8 - add_drop can never fire (would breach the floor);
     # mutate must still return a VALID genome via the other ops (flip_label, etc.)
     # and must never produce a drop that breaches the floor.
     monkeypatch.setenv("GTRADE_AR_PRUNE_MIN", "8")
@@ -576,7 +576,7 @@ def test_crossover_mixes_parents_and_is_valid(monkeypatch):
 def test_crossover_resolves_drop_extra_conflict():
     import random as _r
     _r.seed(1)
-    # g1 drops 'b', g2 adds extra named 'b' -> if child takes both, the drop must lose
+    # g1 drops 'b', g2 adds extra named 'b' - if child takes both, the drop must lose
     g1 = ar.Genome(drops=["rsi"], extra=[])
     g2 = ar.Genome(drops=[], extra=[_spec("rsi")])   # extra name collides with g1's drop
     for seed in range(20):
@@ -594,9 +594,9 @@ def test_bin_edges():
 
 def test_fitness_is_mean_delta():
     base = {"A": 1.0, "B": 1.0}
-    rows = _rows2({"A": 2.0, "B": 0.0})       # deltas +1, -1 -> mean 0
+    rows = _rows2({"A": 2.0, "B": 0.0})       # deltas +1, -1 - mean 0
     assert ar.fitness(rows, base) == 0.0
-    rows2 = _rows2({"A": 3.0, "B": 3.0})       # +2, +2 -> mean 2
+    rows2 = _rows2({"A": 3.0, "B": 3.0})       # +2, +2 - mean 2
     assert ar.fitness(rows2, base) == 2.0
 
 
@@ -604,11 +604,11 @@ def test_behavior_floor_and_count():
     active = ["ret_1", "ret_5", "ret_10", "ret_20", "rsi", "atr",
               "vol_z", "sma_20", "macd_hist", "bb_pos"]   # 10
     base = {"A": 1.0, "B": 1.0}
-    rows = _rows2({"A": 3.0, "B": 0.5})        # min delta = -0.5 -> floor bin 1
+    rows = _rows2({"A": 3.0, "B": 0.5})        # min delta = -0.5 - floor bin 1
     g = ar.Genome(drops=["rsi", "atr"], extra=[_spec("gx")])   # count 10 - 2 + 1 = 9
     bd1, bd2 = ar.behavior(g, rows, base, active)
-    assert bd1 == 1                             # -0.5 in [-1.0, -0.25) -> bin 1
-    assert bd2 == 0                             # 9 < 12 -> count bin 0
+    assert bd1 == 1                             # -0.5 in [-1.0, -0.25) - bin 1
+    assert bd2 == 0                             # 9 < 12 - count bin 0
 
 
 _QD_ACTIVE = ["ret_1", "ret_5", "ret_10", "ret_20", "rsi", "atr",
@@ -620,10 +620,10 @@ def test_archive_put_store_displace_keep():
     arch = {}
     g1 = ar.Genome(drops=["rsi"])
     assert ar.archive_put(arch, g1, _rows2({"A": 2.0, "B": 2.0}), base, _QD_ACTIVE) is True
-    # same niche, higher mean fitness -> displaces
+    # same niche, higher mean fitness - displaces
     g2 = ar.Genome(drops=["atr"])
     assert ar.archive_put(arch, g2, _rows2({"A": 3.0, "B": 3.0}), base, _QD_ACTIVE) is True
-    # same niche, lower fitness -> kept (False)
+    # same niche, lower fitness - kept (False)
     # NOTE: deltas must keep min_delta >= 1.0 (same floor bin as g1/g2) while the
     # mean stays below g2's fitness of 2.0; {"A": 1.5, "B": 1.5} (deltas +0.5,+0.5)
     # would land in floor bin 3 (a different niche), so it is corrected here.
@@ -665,7 +665,7 @@ def test_run_qd_illuminates_and_gates(monkeypatch):
         screen = env.get("GTRADE_SCREEN_ONLY") == "1"
         if subset == ar.HELDOUT_ASSETS and not screen:
             calls["holdout_full"] += 1
-        # more drops -> higher score, so dropping spreads cells and lifts fitness
+        # more drops - higher score, so dropping spreads cells and lifts fitness
         n_drop = len([d for d in env.get("GTRADE_DROP_FEATURES", "").split(",") if d])
         s = 1.0 + 0.7 * n_drop
         return [{"Asset": a, "Score": s} for a in subset.split(",")]
@@ -743,10 +743,10 @@ def test_next_child_skips_seen_genomes(monkeypatch):
     g = ar.Genome(drops=["rsi"])
     monkeypatch.setattr(ar, "mutate", lambda parent, active, bf: g)
     archive = {"0_0": {"genome": ar.Genome(), "fitness": 0.0, "rows": []}}
-    # unseen -> returned
+    # unseen - returned
     child = ar.next_child(archive, _ACTIVE, ["ret_1"])
     assert child is not None and ar.genome_sig(child) == ar.genome_sig(g)
-    # seen -> None (every attempt produces the same seen genome)
+    # seen - None (every attempt produces the same seen genome)
     ar_memory.tried_add("genome", ar.genome_sig(ar._canon_genome(g)))
     assert ar.next_child(archive, _ACTIVE, ["ret_1"]) is None
 
@@ -814,12 +814,12 @@ def test_llm_child_valid_invalid_and_error(monkeypatch):
     monkeypatch.setattr(llm_proposer, "propose_genome", lambda *a, **k: good)
     g = ar._llm_child(elites, _ACTIVE, ["ret_1"])
     assert isinstance(g, ar.Genome) and g.drops == ["rsi"]
-    # invalid genome (unknown drop) -> None
+    # invalid genome (unknown drop) - None
     bad = {"drops": ["not_a_feature"], "extra": [], "label_mode": "direction",
            "label_window": 30}
     monkeypatch.setattr(llm_proposer, "propose_genome", lambda *a, **k: bad)
     assert ar._llm_child(elites, _ACTIVE, ["ret_1"]) is None
-    # backend blowing up -> None (silent fallback)
+    # backend blowing up - None (silent fallback)
     def boom(*a, **k):
         raise RuntimeError("ollama down")
     monkeypatch.setattr(llm_proposer, "propose_genome", boom)
@@ -836,7 +836,7 @@ def test_next_child_llm_first_then_fallback(monkeypatch):
     monkeypatch.setattr(llm_proposer, "propose_genome", lambda *a, **k: llm_genome)
     child = ar.next_child(archive, _ACTIVE, ["ret_1"])
     assert child is not None and child.drops == ["rsi"]     # the LLM child won
-    # LLM fails -> evolutionary fallback still yields a child
+    # LLM fails - evolutionary fallback still yields a child
     def boom(*a, **k):
         raise RuntimeError("down")
     monkeypatch.setattr(llm_proposer, "propose_genome", boom)
@@ -1026,7 +1026,7 @@ def test_run_axis_neural_basis_scores_contribution(monkeypatch):
     axis = ar.Axis(name="s", propose=lambda log: [{"name": "x"}],
                    to_env=lambda c: {"NAMES": c["name"]}, kind="select_best")
     res = ar.run_axis(axis, 3, base, ar.train_env, persist=lambda log: None)
-    # candidate contribution (4.5) beats base contribution (0.5) -> accepted
+    # candidate contribution (4.5) beats base contribution (0.5) - accepted
     assert res["best"] is not None and res["best"]["name"] == "x"
     assert res["best_delta"] > 0
     assert abs(res["best_delta"] - 4.0) < 1e-9   # 4.5 candidate - 0.5 base contribution
@@ -1088,7 +1088,7 @@ def test_winner_sig_stable_across_temp_envs():
 
 def test_wilcoxon_p_accepts_consistent_small_improvement():
     import auto_research as ar
-    # 11 clear positives + 3 tiny negatives -> real magnitude-backed improvement
+    # 11 clear positives + 3 tiny negatives - real magnitude-backed improvement
     assert ar._wilcoxon_p([0.3] * 11 + [-0.1] * 3) < 0.05
 
 
@@ -1147,7 +1147,7 @@ def test_run_qd_records_neural_lift_and_replication(monkeypatch):
     from core import ar_memory
 
     def fake_train(subset, env):
-        # full: more drops -> higher Score; screen (CB-only): flat low
+        # full: more drops - higher Score; screen (CB-only): flat low
         if env.get("GTRADE_SCREEN_ONLY") == "1":
             s = 0.5
         else:
@@ -1176,7 +1176,7 @@ def test_run_axis_additive_neural_basis(monkeypatch):
                    to_env=lambda selected: {"NAMES": ",".join(c["name"] for c in selected)},
                    kind="additive")
     res = ar.run_axis(axis, 1, base, ar.train_env, persist=lambda log: None)
-    # candidate contribution (4.5) beats base contribution (0.5) -> kept
+    # candidate contribution (4.5) beats base contribution (0.5) - kept
     assert res["kept"] and res["kept_delta"] > 0
 
 
@@ -1323,8 +1323,8 @@ def test_reduce_deltas_objectives():
     assert ar._reduce_deltas(d, "mean") == 4.0
     assert ar._reduce_deltas(d, "min") == 1.0
     assert ar._reduce_deltas(d, "median") == 3.0
-    assert ar._reduce_deltas(d, "cvar") == 1.5          # worst ceil(5*0.25)=2 -> mean(1,2)
-    assert ar._reduce_deltas(d, "trimmed_mean") == 3.0  # drop min+max -> mean(2,3,4)
+    assert ar._reduce_deltas(d, "cvar") == 1.5          # worst ceil(5*0.25)=2 - mean(1,2)
+    assert ar._reduce_deltas(d, "trimmed_mean") == 3.0  # drop min+max - mean(2,3,4)
     assert abs(ar._reduce_deltas(d, "sharpe") - (4.0 / (10 ** 0.5))) < 1e-9
     assert ar._reduce_deltas([], "mean") == 0.0
 

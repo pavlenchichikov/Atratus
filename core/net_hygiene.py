@@ -49,7 +49,7 @@ def uniqueness_weights(n, horizon):
     """Lopez de Prado average-uniqueness weights for a fixed forward-window label of
     length `horizon` over `n` samples, normalized to mean 1.0. Sample i occupies bars
     [i, i+horizon); a bar's concurrency is how many samples' windows cover it; sample
-    i's weight is the mean of 1/concurrency over its window. horizon <= 1 -> all-ones
+    i's weight is the mean of 1/concurrency over its window. horizon <= 1 - all-ones
     (direction labels do not overlap)."""
     n = int(n)
     horizon = int(horizon)

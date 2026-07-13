@@ -45,7 +45,7 @@ def make_target(close: pd.Series, mode: str = "direction", window: int = 30,
     `triple_barrier`: 1 if the price hits the upper barrier close_t*(1+k*sigma_t)
     before the lower barrier close_t*(1-k*sigma_t) within `horizon` bars, else 0.
     Touch is checked intrabar via high/low; sigma_t is the EWM std of close-to-close
-    returns up to t (no look-ahead). No touch within the (fully available) horizon ->
+    returns up to t (no look-ahead). No touch within the (fully available) horizon -
     sign of the horizon return. Warm-up rows and the final horizon-incomplete rows
     are NaN and dropped downstream. high/low None falls back to close for touch."""
     if mode == "direction":
@@ -445,7 +445,7 @@ def add_chronos_features(df, table, engine):
     """LEFT-JOIN cached Chronos forecast columns onto df by date, when GTRADE_CHRONOS
     is set and a cache exists for `table`. The model is auto-detected from the cache (see
     _chronos_model), so precomputing one model is enough - no GTRADE_CHRONOS_MODEL needed.
-    Off / no cache -> df unchanged (so the production feature space and feature_version are
+    Off / no cache - df unchanged (so the production feature space and feature_version are
     untouched). The column names enter training only via GTRADE_EXTRA_FEATURES."""
     if not _chronos_on():
         return df
@@ -456,20 +456,20 @@ def add_chronos_features(df, table, engine):
                 ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
             cache = pd.read_sql(q, engine, params=(table, model))
         else:
-            # legacy cache without a model column (pre-migration) -> un-filtered read
+            # legacy cache without a model column (pre-migration) - un-filtered read
             q = "SELECT date, %s FROM %s WHERE asset = ?" % (
                 ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
             cache = pd.read_sql(q, engine, params=(table,))
     except Exception:
-        return df                                   # no cache table -> no-op
+        return df                                   # no cache table - no-op
     if cache.empty:
         return df
     cache["date"] = pd.to_datetime(cache["date"])
     cache = cache.set_index("date")
-    cache = cache[~cache.index.duplicated(keep="last")]   # unique right index -> no row multiplication
+    cache = cache[~cache.index.duplicated(keep="last")]   # unique right index - no row multiplication
     cache.index = cache.index.normalize()
     # Follow the sibling add_* convention: in the pipeline df carries a Date/date
-    # COLUMN (each add_* does set_index(date) -> work -> reset_index), so join on
+    # COLUMN (each add_* does set_index(date) - work - reset_index), so join on
     # that column and restore the frame. Without this, a df that arrives with a
     # RangeIndex after a sibling reset_index would join dates-vs-integers and yield
     # SILENTLY all-NaN Chronos columns. When df is already date-indexed (isolated

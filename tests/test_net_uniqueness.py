@@ -6,7 +6,7 @@ is available and GTRADE_NET_UNIQUENESS=1 should be exercised end-to-end:
     pytest tests/test_net_uniqueness.py -m slow -s
 
 The test trains one tiny asset with GTRADE_NET_UNIQUENESS=1 (direction mode,
-so horizon=1 -> all-ones weights, exercising the 3-tuple dataset code path),
+so horizon=1 - all-ones weights, exercising the 3-tuple dataset code path),
 asserts the run completes, and checks that a quality_report.json is written
 with at least one row containing a 'Score' key.
 """

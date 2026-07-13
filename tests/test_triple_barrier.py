@@ -11,7 +11,7 @@ import pandas as pd
 
 from core.features import make_target
 
-# bars 0..5 oscillate, then flat -> finite positive sigma at the entry bar (5)
+# bars 0..5 oscillate, then flat - finite positive sigma at the entry bar (5)
 BASE = [100, 102, 100, 102, 100, 100, 100, 100, 100, 100]
 
 
@@ -38,7 +38,7 @@ def test_lower_barrier_touched_first_is_0():
 
 
 def test_vertical_barrier_uses_sign_of_horizon_return():
-    # k=5 -> barriers unreachable; label = sign(close[5+3] - close[5]).
+    # k=5 - barriers unreachable; label = sign(close[5+3] - close[5]).
     close = _s([100, 102, 100, 102, 100, 100, 100.1, 100.2, 100.3, 100.4])
     high = close.copy()
     low = close.copy()
@@ -55,8 +55,8 @@ def test_intrabar_touch_is_via_high_low_not_close():
     low = _s(BASE)
     withwick = make_target(close, "triple_barrier", high=high, low=low,
                            horizon=3, barrier_k=1.0, vol_window=3)
-    # same close, no wick (fall back to close): no touch -> vertical barrier,
-    # close[8]=100 == close[5]=100 -> sign false -> 0. Proves high/low drove the touch.
+    # same close, no wick (fall back to close): no touch - vertical barrier,
+    # close[8]=100 == close[5]=100 - sign false - 0. Proves high/low drove the touch.
     noclose = make_target(close, "triple_barrier", high=None, low=None,
                           horizon=3, barrier_k=1.0, vol_window=3)
     assert withwick.iloc[5] == 1.0
@@ -90,7 +90,7 @@ def test_warmup_and_tail_are_nan():
 
 
 def test_same_bar_tiebreak_uses_close_sign():
-    # both barriers pierced on the same bar j=6; close[6]=100 == close[5]=100 -> 1
+    # both barriers pierced on the same bar j=6; close[6]=100 == close[5]=100 - 1
     close = _s(BASE)
     high = _s([100, 102, 100, 102, 100, 100, 115, 100, 100, 100])
     low = _s([100, 102, 100, 102, 100, 100, 85, 100, 100, 100])

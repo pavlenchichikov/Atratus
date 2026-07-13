@@ -31,7 +31,7 @@ SELECTION = "SP500,NVDA,BTC,ETH,EURUSD,GBPJPY,GAS,AAPL,SBER,DAX"
 
 
 def resolve_assets(spec):
-    """The asset list for --assets: 'all' -> the full 181-asset universe, else the
+    """The asset list for --assets: 'all' - the full 181-asset universe, else the
     comma-separated names given."""
     if (spec or "").strip().lower() == "all":
         from config import FULL_ASSET_MAP
@@ -73,7 +73,7 @@ def clear_cache(db_path=DB_PATH):
 
 
 def _cached_dates(engine, table, model):
-    """Dates already cached for (asset, model). A missing table/column -> empty set (so
+    """Dates already cached for (asset, model). A missing table/column - empty set (so
     the bars are (re)computed)."""
     try:
         df = pd.read_sql(

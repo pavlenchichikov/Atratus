@@ -15,10 +15,10 @@ def _ms(monkeypatch, mode=None, thr=None):
 
 
 def test_meta_enabled_reads_env(monkeypatch):
-    assert _ms(monkeypatch).meta_enabled() == "off"                 # unset -> off
+    assert _ms(monkeypatch).meta_enabled() == "off"                 # unset - off
     assert _ms(monkeypatch, "shadow").meta_enabled() == "shadow"
     assert _ms(monkeypatch, "active").meta_enabled() == "active"
-    assert _ms(monkeypatch, "bogus").meta_enabled() == "off"        # unknown -> off
+    assert _ms(monkeypatch, "bogus").meta_enabled() == "off"        # unknown - off
 
 
 def test_gate_active_suppresses_weak_signal(monkeypatch):
@@ -28,7 +28,7 @@ def test_gate_active_suppresses_weak_signal(monkeypatch):
     out2, info2 = ms.gate("BUY", 0.7)
     assert out2 == "BUY" and info2["meta_gated"] is False
     assert ms.gate("WAIT", 0.1)[0] == "WAIT"                        # WAIT stays WAIT
-    assert ms.gate("SELL", None)[0] == "SELL"                       # no meta_prob -> no gate
+    assert ms.gate("SELL", None)[0] == "SELL"                       # no meta_prob - no gate
 
 
 def test_gate_shadow_keeps_signal_but_reports(monkeypatch):
@@ -67,7 +67,7 @@ def test_save_load_meta_roundtrip(tmp_path, monkeypatch):
     m = ms.load_meta("BTC")
     assert m is not None
     assert abs(ms.meta_prob(m, [0.0, 1.0, 2.0]) - 0.7) < 1e-9
-    assert ms.load_meta("NOPE") is None                            # absent -> None
+    assert ms.load_meta("NOPE") is None                            # absent - None
 
 
 @pytest.mark.skipif(not _cb_ok(), reason="catboost not installed")

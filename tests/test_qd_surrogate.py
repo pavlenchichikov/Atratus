@@ -57,4 +57,4 @@ def test_env_readers(monkeypatch):
     assert qs.surrogate_on() is True
     assert qs.n_candidates() == 10
     monkeypatch.setenv("GTRADE_AR_SURROGATE_K", "bad")
-    assert qs.n_candidates() == 6                                       # bad -> default
+    assert qs.n_candidates() == 6                                       # bad - default

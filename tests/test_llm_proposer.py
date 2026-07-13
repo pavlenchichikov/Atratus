@@ -204,7 +204,7 @@ def test_reflect_hypothesis_empty_when_off_or_error(monkeypatch):
     def boom(prompt):
         raise RuntimeError("down")
     monkeypatch.setattr(lp, "_call_openai", boom)
-    assert lp._reflect_hypothesis() == ""              # error -> ""
+    assert lp._reflect_hypothesis() == ""              # error - ""
 
 
 def test_propose_specs_includes_reflection(monkeypatch):
@@ -268,7 +268,7 @@ def test_propose_specs_avoid_appended_only_when_given(monkeypatch):
     monkeypatch.setattr(lp, "_call_openai", capture)
     lp.propose_specs([], ["ret_1"])
     without = seen["prompt"]
-    assert "Already tried" not in without                 # None -> unchanged prompt
+    assert "Already tried" not in without                 # None - unchanged prompt
 
     lp.propose_specs([], ["ret_1"], avoid=["sig-A", "sig-B"])
     assert "Already tried" in seen["prompt"] and "sig-A" in seen["prompt"]
@@ -303,4 +303,4 @@ def test_wiki_off_prompt_unchanged(monkeypatch):
     monkeypatch.delenv("GTRADE_AR_REFLECT", raising=False)
     monkeypatch.setattr(lp, "_call_openai", lambda p: seen.setdefault("prompt", p) or "[]")
     lp.propose_specs([], ["ret_1"])
-    assert "research wiki" not in seen["prompt"].lower()          # off -> unchanged
+    assert "research wiki" not in seen["prompt"].lower()          # off - unchanged

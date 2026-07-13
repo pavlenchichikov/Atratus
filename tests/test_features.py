@@ -396,7 +396,7 @@ def test_active_candidate_features_drop(monkeypatch):
     dropped = active_candidate_features()
     assert "rsi" not in dropped and "atr" not in dropped
     assert dropped == [f for f in full if f not in ("rsi", "atr")]
-    # unset again -> byte-identical list + same feature_version (production safety)
+    # unset again - byte-identical list + same feature_version (production safety)
     monkeypatch.delenv("GTRADE_DROP_FEATURES", raising=False)
     assert active_candidate_features() == full
     assert feature_version() == v_full
@@ -476,7 +476,7 @@ def test_add_chronos_features_pipeline_date_column(monkeypatch, tmp_path):
 
 
 def test_add_chronos_features_enabled_but_no_cache(monkeypatch, tmp_path):
-    """GTRADE_CHRONOS set but no cache table -> no-op (df unchanged), not a crash."""
+    """GTRADE_CHRONOS set but no cache table - no-op (df unchanged), not a crash."""
     import pandas as pd
     from sqlalchemy import create_engine
     from core import features as F

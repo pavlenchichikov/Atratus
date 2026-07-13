@@ -41,7 +41,7 @@ def test_row_mapping_and_missing_action():
     rows, stats = build_payload([{"asset": "GOLD", "date": "2026-07-11", "probability": 0.58}])
     row = rows[0]
     assert row["asset"] == "GOLD"
-    assert row["action"] == "WAIT"        # missing signal -> WAIT
+    assert row["action"] == "WAIT"        # missing signal - WAIT
     assert row["prob"] == 0.58
     assert row["mode"] is None and row["taleb"] is None
     assert stats["n_wait"] == 1

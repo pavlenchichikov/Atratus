@@ -26,7 +26,7 @@ def test_forecast_features_values():
                       index=pd.date_range("2020-01-01", periods=80))
     out = cf.forecast_features(close, context=64, horizon=5, forecaster=_fake_forecaster)
     row = out.iloc[70]
-    # q50=101 -> ret = 101/100 - 1 = 0.01; spread = (104-98)/100 = 0.06; dir = 1 (q50>close)
+    # q50=101 - ret = 101/100 - 1 = 0.01; spread = (104-98)/100 = 0.06; dir = 1 (q50>close)
     assert abs(row["chronos_ret"] - 0.01) < 1e-9
     assert abs(row["chronos_spread"] - 0.06) < 1e-9
     assert row["chronos_dir"] == 1.0

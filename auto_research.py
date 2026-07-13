@@ -55,7 +55,7 @@ def _reduce_deltas(deltas, objective):
     average), 'cvar' (mean of the worst quartile - a softer, less-noisy floor than min),
     'trimmed_mean' (average without the single best/worst), and 'sharpe' (mean/std =
     consistency; a DIFFERENT, dimensionless scale gated by GTRADE_AR_ADOPT_SHARPE, not
-    the Score-delta floor). Unknown -> mean."""
+    the Score-delta floor). Unknown - mean."""
     n = len(deltas)
     if n == 0:
         return 0.0
@@ -280,8 +280,8 @@ def _score_basis():
 
 
 def score_rows(subset, env, full_fn):
-    """Scoring rows for a config under the active basis. raw -> full_fn(subset, env)
-    (current behavior, caching preserved). neural -> neural-contribution rows."""
+    """Scoring rows for a config under the active basis. raw - full_fn(subset, env)
+    (current behavior, caching preserved). neural - neural-contribution rows."""
     if _score_basis() == "neural":
         return contribution_rows(subset, env, full_fn)
     return full_fn(subset, env)
@@ -315,7 +315,7 @@ class Genome:
 
 
 def genome_to_env(g):
-    """Compose the genome into one training env-override dict (empty -> no overrides)."""
+    """Compose the genome into one training env-override dict (empty - no overrides)."""
     env = dict(_feature_env(g.extra, [s["name"] for s in g.extra]))
     if g.drops:
         env["GTRADE_DROP_FEATURES"] = ",".join(g.drops)
@@ -690,7 +690,7 @@ def _regate_candidates(archive_raw, findings, k):
     (they carry a held-out `value` + neural_lift) rank first by that value; archive-
     only elites (a bare selection `fitness`) fill the remaining slots. Pure - no
     training. archive_raw is the raw JSON dict {cell: {"genome": <dict>, "fitness"}}."""
-    by_sig = {}  # sig -> (Genome, value, neural_lift)
+    by_sig = {}  # sig - (Genome, value, neural_lift)
     for rec in findings or []:
         for w in rec.get("winners", []):
             gd, v = w.get("genome"), w.get("value")
@@ -774,7 +774,7 @@ def regate(k=8, screen=False):
                                 "neural_lift": nl, "replicated": bool(replicated),
                                 "clears": clears or 0})
         nl_str = "" if nl is None else " | neural_lift %+.2f" % nl
-        print("[regate] old %.2f -> %s | %s%s" % (
+        print("[regate] old %.2f - %s | %s%s" % (
             old_score, _gate_verdict(ok, bool(replicated), clears), tag, nl_str))
     ar_memory.findings_append({"ts": ts, "mode": "regate", "k": k,
                                "screen": bool(screen), "winners": finding_winners})
