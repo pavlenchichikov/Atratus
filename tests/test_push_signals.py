@@ -110,16 +110,16 @@ def test_push_history_full_refresh(monkeypatch):
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr(push_signals.requests, "delete",
-                        lambda url, **kw: calls.append(("DELETE", url)) or R())
-    monkeypatch.setattr(push_signals.requests, "post",
-                        lambda url, **kw: calls.append(("POST", url)) or R())
-    bars = [{"asset": "BTC", "date": "2026-07-13"}] * 2500  # forces 3 chunks
+    # All Supabase traffic now flows through requests.request (proxy + retry).
+    monkeypatch.setattr(push_signals.requests, "request",
+                        lambda method, url, **kw:
+                        calls.append((method, url)) or R())
+    bars = [{"asset": "BTC", "date": "2026-07-13"}] * (push_signals.CHUNK * 3)
     push_signals.push_history("https://x.supabase.co", "k", bars, [], [], None)
     deletes = [u for m, u in calls if m == "DELETE"]
     posts = [u for m, u in calls if m == "POST"]
     assert sum("/bars" in u for u in deletes) == 1
-    assert sum("/bars" in u for u in posts) == 3          # 2500 rows / 1000 chunk
+    assert sum("/bars" in u for u in posts) == 3          # CHUNK*3 rows / CHUNK
     assert sum("/signal_history" in u for u in deletes) == 1
     assert sum("/guru?" in u or u.endswith("/guru") for u in deletes) == 1
     assert not any("/guru_stats" in u for u in posts)      # guru_stats None - skipped

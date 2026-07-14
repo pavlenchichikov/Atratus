@@ -11,11 +11,16 @@ vars, so it can be scheduled (Task Scheduler) once you are happy with it.
     set SUPABASE_URL=...            (Project URL)
     set SUPABASE_SERVICE_KEY=...    (service_role key - keep secret, local only)
     python push_signals.py
+
+If SOCKS5_PROXY is set in .env, all Supabase traffic is routed through it and
+every request is retried with backoff - Supabase is EU-hosted and a direct
+connection is reset on some networks, which used to abort the bulk history push.
 """
 
 import datetime
 import os
 import sys
+import time
 
 import requests
 
@@ -91,7 +96,45 @@ def _rest_base(url: str) -> str:
     return root + "/rest/v1"
 
 
-def _chunked(seq, n=1000):
+CHUNK = 300  # rows per PostgREST upsert; smaller bodies survive a shaky tunnel
+
+# Errors worth retrying: a VPN tunnel drops the connection mid-transfer
+# (ConnectionReset / SSL EOF / timeout). A non-2xx HTTP status is NOT retried.
+_TRANSIENT = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.SSLError,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.Timeout,
+)
+
+
+def _proxies():
+    """Route Supabase traffic through SOCKS5_PROXY when set (Supabase is EU and
+    a direct connection is reset on some networks); otherwise connect directly."""
+    p = os.getenv("SOCKS5_PROXY")
+    return {"http": p, "https": p} if p else None
+
+
+def _send(method, url, *, retries=5, **kw):
+    """One Supabase request via the optional SOCKS5 proxy, retried with backoff
+    on transient network errors so a single reset does not abort a bulk push.
+    Raises on a non-2xx status or once retries are exhausted."""
+    kw.setdefault("proxies", _proxies())
+    delay = 1.5
+    for attempt in range(retries):
+        try:
+            r = requests.request(method, url, **kw)
+            r.raise_for_status()
+            return r
+        except _TRANSIENT:
+            if attempt == retries - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 20)
+    raise RuntimeError("unreachable")
+
+
+def _chunked(seq, n=CHUNK):
     """Yield n-sized slices so PostgREST request bodies stay small."""
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
@@ -179,23 +222,17 @@ def push_history(url, key, bars, hist, guru_rows, guru_stats):
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+    merge = {**headers, "Prefer": "resolution=merge-duplicates"}
     for table, rows in (("bars", bars), ("signal_history", hist),
                         ("guru", guru_rows)):
-        d = requests.delete(f"{base}/{table}?asset=not.is.null",
-                            headers=headers, timeout=60)
-        d.raise_for_status()
+        _send("DELETE", f"{base}/{table}?asset=not.is.null",
+              headers=headers, timeout=60)
         for chunk in _chunked(rows):
-            r = requests.post(
-                f"{base}/{table}",
-                headers={**headers, "Prefer": "resolution=merge-duplicates"},
-                json=chunk, timeout=120)
-            r.raise_for_status()
+            _send("POST", f"{base}/{table}", headers=merge, json=chunk,
+                  timeout=120)
     if guru_stats:
-        r = requests.post(
-            f"{base}/guru_stats?on_conflict=id",
-            headers={**headers, "Prefer": "resolution=merge-duplicates"},
-            json=guru_stats, timeout=30)
-        r.raise_for_status()
+        _send("POST", f"{base}/guru_stats?on_conflict=id", headers=merge,
+              json=guru_stats, timeout=30)
 
 
 def build_push_text(rows, stats):
@@ -238,9 +275,8 @@ def send_push(url, key, rows, stats):
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
-    r = requests.post(f"{base}/rpc/allowed_device_tokens", headers=headers,
-                      json={}, timeout=30)
-    r.raise_for_status()
+    r = _send("POST", f"{base}/rpc/allowed_device_tokens", headers=headers,
+              json={}, timeout=30)
     tokens = [row["token"] for row in r.json()]
     if not tokens:
         return 0
@@ -256,8 +292,8 @@ def send_push(url, key, rows, stats):
             continue
         name = res.exception.__class__.__name__ if res.exception else ""
         if name in ("UnregisteredError", "SenderIdMismatchError"):
-            requests.delete(f"{base}/device_tokens?token=eq.{tokens[i]}",
-                            headers=headers, timeout=30)
+            _send("DELETE", f"{base}/device_tokens?token=eq.{tokens[i]}",
+                  headers=headers, timeout=30)
     return resp.success_count
 
 
@@ -268,24 +304,13 @@ def push(rows, stats, url: str, key: str):
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+    merge = {**headers, "Prefer": "resolution=merge-duplicates"}
     # Full snapshot: clear the table, then insert fresh (drops delisted assets).
-    d = requests.delete(f"{base}/signals?asset=not.is.null", headers=headers, timeout=30)
-    d.raise_for_status()
-    if rows:
-        r = requests.post(
-            f"{base}/signals",
-            headers={**headers, "Prefer": "resolution=merge-duplicates"},
-            json=rows,
-            timeout=60,
-        )
-        r.raise_for_status()
-    r = requests.post(
-        f"{base}/public_stats?on_conflict=id",
-        headers={**headers, "Prefer": "resolution=merge-duplicates"},
-        json=stats,
-        timeout=30,
-    )
-    r.raise_for_status()
+    _send("DELETE", f"{base}/signals?asset=not.is.null", headers=headers, timeout=30)
+    for chunk in _chunked(rows):
+        _send("POST", f"{base}/signals", headers=merge, json=chunk, timeout=120)
+    _send("POST", f"{base}/public_stats?on_conflict=id", headers=merge,
+          json=stats, timeout=30)
 
 
 def main():
