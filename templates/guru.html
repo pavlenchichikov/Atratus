@@ -50,7 +50,9 @@
 {% endif %}
 
 <section class="panel fade">
-  <div class="panel-head"><h2>Verdicts by asset</h2></div>
+  <div class="panel-head"><h2>Verdicts by asset</h2>
+    <button class="fbtn" id="guru-recalc-all" title="Re-fetch fundamentals (Smart-Lab + yfinance) and re-score every stock. Runs for a few minutes.">Recalculate all</button>
+  </div>
   {% if verdicts %}
   <table class="grid">
     <thead>
@@ -113,6 +115,51 @@ gtPoll('/api/guru', 20000, function (d) {
     if (changed) gtFlash(tr);
   }
 });
+
+// "Recalculate all": one click re-scores every stock in the background
+// (Smart-Lab scraped once + yfinance per US/EU name). The button shows live
+// progress; the page reloads when the batch finishes so new verdicts and the
+// refreshed accuracy appear.
+(function () {
+  var btn = document.getElementById('guru-recalc-all');
+  if (!btn) return;
+  var idle = btn.textContent;
+  var timer = null;
+
+  function poll() {
+    fetch('/api/guru/recalculate-all/status').then(function (r) { return r.json(); }).then(function (s) {
+      if (s.running) {
+        btn.textContent = 'Recalculating ' + s.done + '/' + (s.total || '?') + '...';
+        return;
+      }
+      if (timer) { clearInterval(timer); timer = null; }
+      if (s.error) { btn.textContent = 'Error - click to retry'; btn.disabled = false; return; }
+      btn.textContent = 'Done: ' + s.updated + ' updated, ' + s.skipped + ' skipped';
+      setTimeout(function () { location.reload(); }, 1400);
+    }).catch(function () { /* transient - keep polling */ });
+  }
+
+  function start() {
+    if (timer) return;
+    timer = setInterval(poll, 2000);
+    poll();
+  }
+
+  btn.addEventListener('click', function () {
+    if (timer) return;
+    btn.disabled = true;
+    btn.textContent = 'Starting...';
+    fetch('/api/guru/recalculate-all', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function () { start(); })
+      .catch(function () { btn.disabled = false; btn.textContent = idle; });
+  });
+
+  // Resume the UI if a batch is already running (started here or in another tab).
+  fetch('/api/guru/recalculate-all/status').then(function (r) { return r.json(); }).then(function (s) {
+    if (s.running) { btn.disabled = true; start(); }
+  }).catch(function () {});
+})();
 </script>
 
 {% endblock %}

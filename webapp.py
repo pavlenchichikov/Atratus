@@ -9,6 +9,7 @@ Run:
 
 import json
 import os
+import threading
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
@@ -669,6 +670,56 @@ def api_guru_recalculate(asset: str):
         "lynch": analysis['lynch'], "buffett": analysis['buffett'],
         "graham": analysis['graham'], "munger": analysis['munger'],
     }
+
+
+# Background state for the "recalculate all guru verdicts" batch. The batch
+# scrapes Smart-Lab once and hits yfinance per US/EU stock, so it runs for
+# minutes - too long for a blocking request. One batch runs at a time; the UI
+# polls /status and reloads when it finishes.
+_guru_recalc_lock = threading.Lock()
+_guru_recalc = {"running": False, "done": 0, "total": 0, "updated": 0,
+                "skipped": 0, "errors": 0, "error": None, "finished": None}
+
+
+def _run_guru_recalc():
+    import guru_report
+    try:
+        def _prog(done, total, _asset):
+            with _guru_recalc_lock:
+                _guru_recalc["done"] = done
+                _guru_recalc["total"] = total
+        res = guru_report.recalc_all_stocks(progress=_prog)
+        with _guru_recalc_lock:
+            _guru_recalc.update(updated=res["updated"], skipped=res["skipped"],
+                                errors=res["errors"])
+    except Exception as exc:
+        with _guru_recalc_lock:
+            _guru_recalc["error"] = str(exc)[:200]
+    finally:
+        with _guru_recalc_lock:
+            _guru_recalc["running"] = False
+            _guru_recalc["finished"] = datetime.now().strftime("%H:%M:%S")
+
+
+@app.post("/api/guru/recalculate-all")
+def api_guru_recalculate_all():
+    """Kick off a background re-score of every stock (Smart-Lab once + yfinance
+    per US/EU name). Returns immediately with the initial status; a second call
+    while a batch is running is a no-op that returns the live status."""
+    with _guru_recalc_lock:
+        if _guru_recalc["running"]:
+            return dict(_guru_recalc)
+        _guru_recalc.update(running=True, done=0, total=0, updated=0,
+                            skipped=0, errors=0, error=None, finished=None)
+    threading.Thread(target=_run_guru_recalc, daemon=True).start()
+    with _guru_recalc_lock:
+        return dict(_guru_recalc)
+
+
+@app.get("/api/guru/recalculate-all/status")
+def api_guru_recalculate_status():
+    with _guru_recalc_lock:
+        return dict(_guru_recalc)
 
 
 @app.get("/api/news")

@@ -668,3 +668,55 @@ def test_radar_shows_live_gate_badge(client, monkeypatch):
     monkeypatch.setattr(track_record, "latest_signals", lambda *a, **k: [sig])
     html = client.get("/").text
     assert "gated" in html and "live-gate" in html
+
+
+def test_api_guru_recalculate_all_starts_and_reports(client, monkeypatch):
+    """One POST kicks off the batch in a real (daemon) thread; polling status
+    reflects the finished counts. The stub returns instantly - no threading
+    internals are patched (that would clobber the global module TestClient uses)."""
+    import time
+
+    import guru_report
+    import webapp
+
+    with webapp._guru_recalc_lock:
+        webapp._guru_recalc["running"] = False  # isolate from other tests
+
+    def _stub(progress=None):
+        if progress:
+            progress(0, 3, None)
+        return {"total": 3, "updated": 2, "skipped": 1, "errors": 0}
+
+    monkeypatch.setattr(guru_report, "recalc_all_stocks", _stub)
+
+    assert client.post("/api/guru/recalculate-all").status_code == 200
+    st = {}
+    for _ in range(60):
+        st = client.get("/api/guru/recalculate-all/status").json()
+        if not st["running"]:
+            break
+        time.sleep(0.05)
+    assert st["running"] is False
+    assert st["total"] == 3 and st["updated"] == 2 and st["skipped"] == 1
+
+
+def test_api_guru_recalculate_all_no_double_start(client, monkeypatch):
+    """A POST while a batch is running is a no-op: it returns the live status
+    and does NOT launch a second batch."""
+    import guru_report
+    import webapp
+
+    ran = {"n": 0}
+    monkeypatch.setattr(guru_report, "recalc_all_stocks",
+                        lambda progress=None: ran.__setitem__("n", ran["n"] + 1) or {
+                            "total": 0, "updated": 0, "skipped": 0, "errors": 0})
+    with webapp._guru_recalc_lock:
+        webapp._guru_recalc["running"] = True
+    try:
+        r = client.post("/api/guru/recalculate-all")
+        assert r.status_code == 200
+        assert r.json()["running"] is True
+        assert ran["n"] == 0  # no second batch spawned
+    finally:
+        with webapp._guru_recalc_lock:
+            webapp._guru_recalc["running"] = False

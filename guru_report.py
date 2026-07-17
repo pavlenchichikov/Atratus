@@ -633,6 +633,77 @@ def print_full(name, symbol, fund, tech, guru):
 # MAIN
 # ==============================================================================
 
+NON_STOCK_GROUPS = {
+    "TOP SIGNALS", "CRYPTO", "COMMODITIES", "INDICES & MACRO",
+    "EU INDICES", "FOREX MAJORS", "FOREX CROSSES", "FOREX EXOTIC",
+}
+
+
+def stock_assets():
+    """Asset codes that can carry real fundamentals (US / EU / RU stock groups).
+
+    Crypto, forex, indices and commodities are excluded - they resolve to a
+    technical/backup source and would only waste yfinance calls on a full
+    recalc. An asset listed in several groups is returned once.
+    """
+    from config import ASSET_TYPES
+    out, seen = [], set()
+    for group, members in ASSET_TYPES.items():
+        if group in NON_STOCK_GROUPS:
+            continue
+        for a in members:
+            if a in FULL_ASSET_MAP and a not in seen:
+                seen.add(a)
+                out.append(a)
+    return out
+
+
+def recalc_all_stocks(progress=None):
+    """Re-fetch fundamentals and persist a fresh Guru verdict for every stock.
+
+    Smart-Lab is scraped ONCE (it covers all RU stocks); US/EU stocks each hit
+    yfinance via resolve_fundamentals. Only assets that resolve to REAL
+    fundamentals (smartlab / yfinance_live) are logged - technical/backup
+    resolutions are skipped, matching the per-asset recalc's honesty gate, so
+    the accuracy track record stays clean.
+
+    `progress(done, total, asset)` is called once before the scrape with
+    done=0 (so a caller can show the total immediately) and after each asset.
+    Returns {total, updated, skipped, errors}.
+    """
+    import guru_tracker
+    assets = stock_assets()
+    total = len(assets)
+    if progress:
+        progress(0, total, None)
+    smartlab = fetch_smartlab_data()
+    updated = skipped = errors = 0
+    for i, name in enumerate(assets, 1):
+        try:
+            symbol = FULL_ASSET_MAP[name]
+            fund = resolve_fundamentals(name, symbol, smartlab)
+            tech = technical_context(get_technical(name))
+            analysis = get_guru_analysis(fund, tech)
+            source = analysis["data_source"]
+            if source in ("technical", "backup"):
+                skipped += 1
+            else:
+                council = analysis["council"]
+                price = (fund or {}).get("price") or (tech["close"] if tech else 0)
+                guru_tracker.log_guru_verdict(
+                    name,
+                    analysis["lynch"]["_score"], analysis["buffett"]["_score"],
+                    analysis["graham"]["_score"], analysis["munger"]["_score"],
+                    council["pct"], council["verdict"], source, price,
+                )
+                updated += 1
+        except Exception:
+            errors += 1
+        if progress:
+            progress(i, total, name)
+    return {"total": total, "updated": updated, "skipped": skipped, "errors": errors}
+
+
 def main():
     args = sys.argv[1:]
 
