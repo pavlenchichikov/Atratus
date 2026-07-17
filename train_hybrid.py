@@ -176,11 +176,10 @@ from core.features import engineer_features, add_weekly_features, add_crossasset
 from core.feature_dsl import add_dsl_features, load_dsl_specs
 from core.backtesting import (
     adaptive_split_params, make_walk_forward_splits,
-    pnl_from_signals, max_drawdown_from_returns, score_strategy,
-    sharpe_from_returns,
+    score_strategy,
     make_signals, apply_regime_filter,
     COMMISSION, SLIPPAGE, FOREX_COMMISSION, FOREX_SLIPPAGE,
-    MAX_TRADE_RET,
+    evaluate_signals, evaluate_signals_v2, objective_v2_on,
 )
 from core.ensemble import build_stacking_features
 from core.ensemble import ensemble_with_gating, tune_ensemble_weights  # noqa: F401 (re-exported for signal_engine.py)
@@ -939,6 +938,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             comm = FOREX_COMMISSION if asset in FOREX else COMMISSION
             slip = FOREX_SLIPPAGE if asset in FOREX else SLIPPAGE
             _regime_mode = (os.getenv("GTRADE_REGIME_MODE") or "both").strip() or "both"
+            _min_trades = 5 if objective_v2_on() else 10
             all_configs = []
             for b in profile['thr_buy_grid']:
                 for s in profile['thr_sell_grid']:
@@ -946,10 +946,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         continue
                     sig = make_signals(val_prob, b, s, band_for(profile))
                     sig = apply_regime_filter(sig, val_close, val_sma200, val_taleb, profile['regime_risk_cap'], mode=_regime_mode)
-                    ret_stream = [(float(np.clip((r if g > 0 else -r), -MAX_TRADE_RET, MAX_TRADE_RET)) - (comm + slip)) for g, r in zip(sig, val_ret) if g != 0 and not np.isnan(r)]
-                    p, t, w = pnl_from_signals(sig, val_ret, commission=comm, slippage=slip)
-                    mdd = max_drawdown_from_returns(ret_stream)
-                    score = score_strategy(p, mdd, w, t, sharpe=sharpe_from_returns(ret_stream))
+                    p, t, w, mdd, sh = evaluate_signals(sig, val_ret, comm, slip)
+                    score = score_strategy(p, mdd, w, t, sharpe=sh, min_trades=_min_trades)
                     all_configs.append((b, s, p, t, w, mdd, score))
 
             # Average top-3 thresholds for stability (reduces overfitting)
@@ -964,11 +962,14 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
 
             sig_test = make_signals(test_prob, buy_thr, sell_thr, band_for(profile))
             sig_test = apply_regime_filter(sig_test, test_close, test_sma200, test_taleb, profile['regime_risk_cap'], mode=_regime_mode)
-            test_returns = [(float(np.clip((r if g > 0 else -r), -MAX_TRADE_RET, MAX_TRADE_RET)) - (comm + slip)) for g, r in zip(sig_test, test_ret) if g != 0 and not np.isnan(r)]
-            test_profit, test_trades, test_win = pnl_from_signals(sig_test, test_ret, commission=comm, slippage=slip)
-            test_mdd = max_drawdown_from_returns(test_returns)
+            test_profit, test_trades, test_win, test_mdd, _test_sh = \
+                evaluate_signals(sig_test, test_ret, comm, slip)
             test_score = score_strategy(test_profit, test_mdd, test_win, test_trades,
-                                        sharpe=sharpe_from_returns(test_returns))
+                                        sharpe=_test_sh, min_trades=_min_trades)
+            # dual emission: the v2 yardstick is always recorded so A/B arms
+            # (selection under v1 vs v2) can be compared on one scale
+            _p2, _t2, _w2, _mdd2, _sh2 = evaluate_signals_v2(sig_test, test_ret, comm, slip)
+            test_score_v2 = score_strategy(_p2, _mdd2, _w2, _t2, sharpe=_sh2, min_trades=5)
 
             # Apply adversarial weight to score (penalize distribution-shifted folds)
             test_score_weighted = test_score * adv_weight
@@ -983,6 +984,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'val_profit': val_profit,
                 'val_mdd': val_mdd,
                 'test_profit': test_profit,
+                'test_score_v2': test_score_v2,
                 'test_mdd': test_mdd,
                 'test_trades': int(test_trades),
                 'test_winrate': test_win,
@@ -1012,7 +1014,12 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 _free_keras_from_fold(fold_info)
 
         # --- Post-processing ---
-        valid_folds = [f for f in fold_metrics if f['score'] > -999 and f['test_trades'] >= 10]
+        # Positional trade counts (objective v2) run about half the per-bar
+        # counts, so the fold-admission and TRUSTED floors scale down with the
+        # flag - otherwise v2 would spuriously drop folds/assets and bias any
+        # objective A/B toward HOLD.
+        _fold_floor, _trusted_floor = (5, 10) if objective_v2_on() else (10, 20)
+        valid_folds = [f for f in fold_metrics if f['score'] > -999 and f['test_trades'] >= _fold_floor]
         if not valid_folds:
             _safe_print(f"  [WARN] {asset:<12} no robust folds")
             return None
@@ -1098,12 +1105,13 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 registry_update = None
                 policy_status = "FROZEN_CHAMPION"
 
-        status = "TRUSTED" if (best_fold['score'] > 1.5 and best_fold['test_trades'] >= 20) else "UNSTABLE"
+        status = "TRUSTED" if (best_fold['score'] > 1.5 and best_fold['test_trades'] >= _trusted_floor) else "UNSTABLE"
         quality_row = {
             'Asset': asset,
             'CB_Acc': float(best_fold['cb_acc']),
             'LSTM_Acc': float(best_fold['lstm_acc']),
             'Score': float(best_fold['score']),
+            'Score_v2': float(best_fold.get('test_score_v2', 0.0)),
             'Profit': float(best_fold['test_profit']),
             'Trades': int(best_fold['test_trades']),
             'Status': status,

@@ -137,3 +137,16 @@ def test_findings_all_returns_full_journal(tmp_path, monkeypatch):
     am.findings_append({"ts": "t2", "mode": "regate", "winners": []})
     allf = am.findings_all()
     assert [r["ts"] for r in allf] == ["t1", "t2"]
+
+
+def test_cache_keys_carry_objective_marker(monkeypatch):
+    from core import ar_memory
+    monkeypatch.setattr(ar_memory, "data_fingerprint", lambda subset: "frozen")
+    monkeypatch.delenv("GTRADE_OBJECTIVE_V2", raising=False)
+    b1 = ar_memory.base_key("SP500", {})
+    g1 = ar_memory.genome_key("SP500", "sig", "full")
+    monkeypatch.setenv("GTRADE_OBJECTIVE_V2", "1")
+    assert ar_memory.base_key("SP500", {}) != b1
+    assert ar_memory.genome_key("SP500", "sig", "full") != g1
+    monkeypatch.setenv("GTRADE_OBJECTIVE_V2", "0")
+    assert ar_memory.base_key("SP500", {}) == b1

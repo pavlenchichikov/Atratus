@@ -1,6 +1,9 @@
 """Walk-forward splits, PnL simulation, fold scoring."""
 
+import os
+
 import numpy as np
+import pandas as pd
 
 # Trading cost defaults
 COMMISSION = 0.001
@@ -122,6 +125,7 @@ def score_strategy(
     winrate: float,
     trades: int,
     sharpe: float | None = None,
+    min_trades: int = 10,
 ) -> float:
     """Risk-adjusted strategy score.
 
@@ -132,9 +136,11 @@ def score_strategy(
     few lucky large trades. Omitting `sharpe` reproduces the original composite,
     keeping older callers unchanged.
 
-    Returns -999 if fewer than 10 trades (unreliable signal).
+    Returns -999 if fewer than `min_trades` trades (unreliable signal); the
+    position-aware v2 objective passes 5 because positions run about half the
+    per-bar count.
     """
-    if trades < 10:
+    if trades < min_trades:
         return -999.0
     base = profit - 0.5 * max_dd + 0.1 * winrate
     if sharpe is not None:
@@ -202,3 +208,108 @@ def apply_regime_filter(
             if filt[i] < 0 and close[i] > sma200[i]:
                 filt[i] = 0
     return filt
+
+
+# --- objective v2: position-aware simulation (env-gated) ----------------------
+# The old pnl_from_signals charges a round-trip on EVERY signal bar; the serve
+# side (core/positions.py) holds a position while the signal repeats and exits
+# on WAIT or the opposite call. simulate_positions models exactly that display
+# convention: costs only on side CHANGES (a flip = 2 legs), a daily equity
+# series (zeros when flat) for honest Sharpe/drawdown, and a per-asset
+# vol-scaled cap instead of the fixed +-4% clip. All of it activates only via
+# GTRADE_OBJECTIVE_V2; the old functions stay untouched.
+
+
+def objective_v2_on() -> bool:
+    return (os.getenv("GTRADE_OBJECTIVE_V2") or "").strip() in ("1", "true", "True")
+
+
+def vol_cap(next_ret, window: int = 20, k: float = 6.0,
+            floor: float = MAX_TRADE_RET) -> np.ndarray:
+    """Per-bar |return| cap = max(floor, k * causal rolling std).
+
+    Keeps the dirty-data protection of the old fixed clip (a bad feed bar
+    cannot flip a champion selection) without truncating honest volatile
+    bars: the cap is never TIGHTER than the old 4%. Warm-up bars (fewer than
+    min_periods=10 observations) fall back to the floor."""
+    s = pd.Series(np.asarray(next_ret, dtype=float))
+    sd = s.rolling(window, min_periods=10).std().shift(1)
+    cap = (k * sd).clip(lower=floor)
+    return cap.fillna(floor).to_numpy()
+
+
+def simulate_positions(signals, next_ret, commission: float = COMMISSION,
+                       slippage: float = SLIPPAGE, cap=None):
+    """Position-aware PnL under the core/positions.py convention.
+
+    Returns (profit_pct, n_trades, win_rate_pct, daily_returns):
+    - side per bar = the signal itself (0 = flat); legs on a change =
+      abs(new - old), each leg costing commission+slippage;
+    - daily_returns[i] = side_i * capped_ret_i - legs_i * leg_cost, INCLUDING
+      zeros on flat bars, UNSCALED by POSITION_FRACTION (Sharpe/drawdown
+      input); profit compounds with POSITION_FRACTION like pnl_from_signals;
+    - n_trades = opened positions; win rate = share of segments whose chained
+      return net of their legs is positive (a still-open final segment is
+      judged on its to-date return, matching the display's open trade);
+    - a NaN return bar earns 0 and does not break the position."""
+    sig = np.asarray(signals)
+    ret = np.asarray(next_ret, dtype=float)
+    leg_cost = commission + slippage
+    n = len(sig)
+    daily = np.zeros(n, dtype=float)
+    bal = INITIAL_CAPITAL
+    pos = 0
+    trades = wins = 0
+    seg_factor = 1.0
+    seg_costs = 0.0
+    for i in range(n):
+        s = int(sig[i])
+        legs = abs(s - pos)
+        if legs:
+            if pos != 0:  # closing (or flipping out of) the old segment
+                if seg_factor - 1.0 - seg_costs - leg_cost > 0:
+                    wins += 1
+            if s != 0:    # opening a new segment (its entry leg)
+                trades += 1
+                seg_factor, seg_costs = 1.0, leg_cost
+            pos = s
+        r = 0.0 if np.isnan(ret[i]) else float(ret[i])
+        if cap is not None and r != 0.0:
+            c = float(cap[i])
+            r = float(np.clip(r, -c, c))
+        bar_ret = pos * r - legs * leg_cost
+        daily[i] = bar_ret
+        bal *= (1.0 + bar_ret * POSITION_FRACTION)
+        if pos != 0:
+            seg_factor *= (1.0 + pos * r)
+    if pos != 0 and seg_factor - 1.0 - seg_costs > 0:  # open final segment
+        wins += 1
+    profit = (bal / INITIAL_CAPITAL - 1.0) * 100.0
+    winrate = (wins / trades * 100.0) if trades else 0.0
+    return profit, trades, winrate, daily
+
+
+def evaluate_signals_v2(sig, ret, comm, slip):
+    """(profit, trades, winrate, mdd, sharpe) under the v2 position-aware
+    objective, regardless of the flag - used for the always-on dual-score
+    emission (quality rows carry Score_v2 so A/B arms share one yardstick)."""
+    ret_arr = np.asarray(ret, dtype=float)
+    profit, trades, winrate, daily = simulate_positions(
+        sig, ret_arr, commission=comm, slippage=slip, cap=vol_cap(ret_arr))
+    return (profit, trades, winrate,
+            max_drawdown_from_returns(daily), sharpe_from_returns(daily))
+
+
+def evaluate_signals(sig, ret, comm, slip):
+    """(profit, trades, winrate, mdd, sharpe) under the ACTIVE objective.
+
+    GTRADE_OBJECTIVE_V2 on: the position-aware path (see simulate_positions).
+    Off (default): the original per-bar path, byte-identical to the inline
+    computation train_hybrid carried before this helper existed."""
+    if objective_v2_on():
+        return evaluate_signals_v2(sig, ret, comm, slip)
+    ret_stream = [(float(np.clip((r if g > 0 else -r), -MAX_TRADE_RET, MAX_TRADE_RET)) - (comm + slip))
+                  for g, r in zip(sig, ret) if g != 0 and not np.isnan(r)]
+    p, t, w = pnl_from_signals(sig, ret, commission=comm, slippage=slip)
+    return (p, t, w,
+            max_drawdown_from_returns(ret_stream), sharpe_from_returns(ret_stream))

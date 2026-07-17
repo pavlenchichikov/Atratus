@@ -108,6 +108,14 @@ def findings_all():
     return _load(FINDINGS_PATH, [])
 
 
+def _objective_suffix():
+    """Cache-key marker for the selection objective. Present ONLY under
+    GTRADE_OBJECTIVE_V2 so every pre-existing cache entry keeps its key;
+    v1 and v2 Score generations can never hit each other's entries."""
+    on = (os.getenv("GTRADE_OBJECTIVE_V2") or "").strip() in ("1", "true", "True")
+    return ["objective-v2"] if on else []
+
+
 def data_fingerprint(subset):
     """Newest bar date per asset table of the subset; changes when new data
     arrives. A missing table is a deterministic marker; a whole-DB failure
@@ -136,7 +144,7 @@ def base_key(subset, env):
     data snapshot means the same quality rows."""
     from core.features import feature_version
     payload = json.dumps(
-        [subset, env, feature_version(), data_fingerprint(subset)],
+        [subset, env, feature_version(), data_fingerprint(subset)] + _objective_suffix(),
         sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
@@ -148,7 +156,7 @@ def genome_key(subset, gsig, kind=""):
     invalidation rules as base_key: feature space or new data means a MISS."""
     from core.features import feature_version
     payload = json.dumps(
-        [subset, gsig, kind, feature_version(), data_fingerprint(subset)],
+        [subset, gsig, kind, feature_version(), data_fingerprint(subset)] + _objective_suffix(),
         sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 

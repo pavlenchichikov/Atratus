@@ -1,6 +1,7 @@
 """Tests for core.backtesting - walk-forward splits, PnL, scoring."""
 
 import numpy as np
+import pytest
 
 from core.backtesting import (
     adaptive_split_params,
@@ -275,3 +276,125 @@ class TestRegimeFilter:
         assert apply_regime_filter(sig, close, sma, taleb, cap, mode="taleb_only").tolist() == [1, -1, 0, 0]
         # unknown mode falls back to both
         assert apply_regime_filter(sig, close, sma, taleb, cap, mode="bogus").tolist() == [0, 0, 0, 0]
+
+
+def test_vol_cap_floor_and_scaling():
+    import numpy as np
+    from core.backtesting import MAX_TRADE_RET, vol_cap
+    quiet = np.full(60, 0.001)
+    cap = vol_cap(quiet)
+    assert (cap >= MAX_TRADE_RET - 1e-12).all()  # never tighter than the old clip
+    wild = np.random.default_rng(0).normal(0, 0.05, 60)
+    cap_w = vol_cap(wild)
+    assert cap_w[-1] > MAX_TRADE_RET  # 6 sigma of a 5% vol series ~ 0.3
+    # warm-up (first bars, < min_periods) falls back to the floor
+    assert cap_w[0] == MAX_TRADE_RET
+    # NaN-safe: NaNs in the input do not poison the cap
+    wild[5] = np.nan
+    assert np.isfinite(vol_cap(wild)).all()
+
+
+def test_simulate_positions_single_long_segment():
+    import numpy as np
+    from core.backtesting import COMMISSION, SLIPPAGE, simulate_positions
+    # long held 3 bars then WAIT: 1 entry leg + 1 exit leg, not 3 round-trips
+    sig = np.array([1, 1, 1, 0, 0])
+    ret = np.array([0.01, 0.02, -0.005, 0.03, 0.01])
+    leg = COMMISSION + SLIPPAGE
+    profit, trades, win, daily = simulate_positions(sig, ret)
+    assert trades == 1
+    assert win == 100.0  # chained (1.01*1.02*0.995 - 1) ~ +2.47% > 2 legs
+    # daily: entry bar charged 1 leg, exit bar charged 1 leg, flat bars are 0
+    assert daily[0] == pytest.approx(0.01 - leg)
+    assert daily[1] == pytest.approx(0.02)
+    assert daily[2] == pytest.approx(-0.005)
+    assert daily[3] == pytest.approx(0.0 - leg)
+    assert daily[4] == 0.0
+
+
+def test_simulate_positions_flip_charges_two_legs():
+    import numpy as np
+    from core.backtesting import COMMISSION, SLIPPAGE, simulate_positions
+    sig = np.array([1, -1, -1, 0])
+    ret = np.array([0.01, -0.02, 0.005, 0.0])
+    leg = COMMISSION + SLIPPAGE
+    profit, trades, win, daily = simulate_positions(sig, ret)
+    assert trades == 2  # long, then short
+    assert daily[0] == pytest.approx(0.01 - leg)          # enter long: 1 leg
+    assert daily[1] == pytest.approx(-1 * -0.02 - 2 * leg)  # flip: 2 legs
+    assert daily[2] == pytest.approx(-1 * 0.005)
+    assert daily[3] == pytest.approx(0.0 - leg)           # exit short: 1 leg
+
+
+def test_simulate_positions_flat_and_nan():
+    import numpy as np
+    from core.backtesting import simulate_positions
+    profit, trades, win, daily = simulate_positions(
+        np.zeros(5), np.array([0.01, np.nan, 0.02, -0.01, 0.0]))
+    assert trades == 0 and win == 0.0 and profit == 0.0
+    assert (daily == 0).all()
+    # NaN bar while holding: position stays, earns 0 that bar
+    p2, t2, w2, d2 = simulate_positions(
+        np.array([1, 1, 1]), np.array([0.01, np.nan, 0.02]))
+    assert t2 == 1
+    assert d2[1] == 0.0
+
+
+def test_simulate_positions_open_final_segment_counts():
+    import numpy as np
+    from core.backtesting import simulate_positions
+    profit, trades, win, daily = simulate_positions(
+        np.array([0, 1, 1]), np.array([0.0, 0.05, 0.05]))
+    assert trades == 1 and win == 100.0  # judged on its to-date return
+
+
+def test_simulate_positions_respects_cap():
+    import numpy as np
+    from core.backtesting import simulate_positions
+    sig = np.array([1, 0])
+    ret = np.array([0.50, 0.0])
+    cap = np.array([0.04, 0.04])
+    _, _, _, daily = simulate_positions(sig, ret, cap=cap)
+    assert daily[0] < 0.05  # 50% bar capped to 4% minus entry leg
+
+
+def test_score_strategy_min_trades_kw():
+    from core.backtesting import score_strategy
+    assert score_strategy(10.0, 1.0, 60.0, 7) == -999.0          # default 10
+    assert score_strategy(10.0, 1.0, 60.0, 7, min_trades=5) != -999.0
+
+
+def test_evaluate_signals_off_matches_legacy_inline(monkeypatch):
+    import numpy as np
+    from core import backtesting as bt
+    monkeypatch.delenv("GTRADE_OBJECTIVE_V2", raising=False)
+    rng = np.random.default_rng(3)
+    sig = rng.choice([-1, 0, 1], 80)
+    ret = rng.normal(0, 0.02, 80)
+    ret[7] = np.nan
+    comm, slip = bt.COMMISSION, bt.SLIPPAGE
+    # the legacy inline computation train_hybrid used verbatim
+    ret_stream = [(float(np.clip((r if g > 0 else -r), -bt.MAX_TRADE_RET, bt.MAX_TRADE_RET)) - (comm + slip))
+                  for g, r in zip(sig, ret) if g != 0 and not np.isnan(r)]
+    p0, t0, w0 = bt.pnl_from_signals(sig, ret, commission=comm, slippage=slip)
+    mdd0 = bt.max_drawdown_from_returns(ret_stream)
+    sh0 = bt.sharpe_from_returns(ret_stream)
+    p, t, w, mdd, sh = bt.evaluate_signals(sig, ret, comm, slip)
+    assert (p, t, w, mdd, sh) == (p0, t0, w0, mdd0, sh0)
+
+
+def test_evaluate_signals_v2_branch(monkeypatch):
+    import numpy as np
+    from core import backtesting as bt
+    monkeypatch.setenv("GTRADE_OBJECTIVE_V2", "1")
+    sig = np.array([1, 1, 0, -1, 0])
+    ret = np.array([0.01, 0.02, 0.0, -0.01, 0.0])
+    p, t, w, mdd, sh = bt.evaluate_signals(sig, ret, bt.COMMISSION, bt.SLIPPAGE)
+    p2, t2, w2, d2 = bt.simulate_positions(sig, ret, bt.COMMISSION, bt.SLIPPAGE,
+                                           cap=bt.vol_cap(ret))
+    assert (p, t, w) == (p2, t2, w2)
+    assert mdd == bt.max_drawdown_from_returns(d2)
+    assert sh == bt.sharpe_from_returns(d2)
+    # the always-v2 twin ignores the flag
+    monkeypatch.delenv("GTRADE_OBJECTIVE_V2", raising=False)
+    assert bt.evaluate_signals_v2(sig, ret, bt.COMMISSION, bt.SLIPPAGE)[:3] == (p2, t2, w2)

@@ -219,6 +219,15 @@ Optional env flags for `train_hybrid.py`:
 - `GTRADE_WORKERS`, `GTRADE_MAX_FOLDS` - parallel workers and the walk-forward fold cap
 - `GTRADE_CB_DEVICE=GPU` - run CatBoost on GPU (benchmark first; often slower on the small per-asset datasets)
 
+The walk-forward selection objective has an env-gated v2
+(`GTRADE_OBJECTIVE_V2=1`): costs are charged on position CHANGES instead of
+every signal bar (matching how the asset pages display positions), Sharpe and
+drawdown come from the daily equity curve, and the fixed 4% per-bar clip
+becomes a per-asset vol-scaled cap. `python ab_objective.py` trains a subset
+under both objectives into isolated dirs and compares the champions on the
+shared `Score_v2` yardstick; the default stays v1 until that A/B and a full
+retrain say otherwise.
+
 ## Network
 
 If `SOCKS5_PROXY` is set in `.env`, outbound requests go through it; `net.py` checks the proxy is alive and falls back to a direct connection.
