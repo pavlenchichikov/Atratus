@@ -293,6 +293,13 @@ def send_push(url, key, rows, stats):
     creds_path = os.getenv("GTRADE_FCM_CREDS")
     if not creds_path:
         return 0
+    if not os.path.exists(creds_path):
+        # Configured but the service-account JSON is not there yet: treat it as
+        # "push not set up" and skip quietly, rather than raising every run.
+        print(f"note: GTRADE_FCM_CREDS points to {creds_path}, which does not "
+              "exist - skipping FCM push (add the Firebase service-account "
+              "JSON there to enable notifications)")
+        return 0
     import firebase_admin
     from firebase_admin import credentials, messaging
     if not firebase_admin._apps:
@@ -342,6 +349,47 @@ def push(rows, stats, url: str, key: str):
           json=stats, timeout=30)
 
 
+def build_risk_payload():
+    """A single risk-snapshot row (id=1) for the mobile Risk screen: capital,
+    drawdown, halt state, open positions and the active risk limits. Read-only
+    - just reflects risk_manager's persisted state."""
+    from risk_manager import RISK_CONFIG, RiskManager
+    rm = RiskManager()
+    halted, reason = rm.is_trading_halted()
+    positions = [
+        {"asset": a, "direction": p.get("direction"),
+         "size_usd": p.get("size_usd"), "entry_price": p.get("entry_price")}
+        for a, p in (rm.open_positions or {}).items()
+    ]
+    limit_keys = ("max_portfolio_exposure", "max_single_position",
+                  "max_daily_loss", "max_drawdown_halt", "kelly_fraction",
+                  "taleb_risk_cap", "taleb_soft_cap")
+    limits = {k: RISK_CONFIG[k] for k in limit_keys if RISK_CONFIG.get(k) is not None}
+    return {
+        "id": 1,
+        "halted": bool(halted),
+        "halt_reason": reason if halted else None,
+        "capital": round(rm.current_capital, 2),
+        "peak_capital": round(rm.peak_capital, 2),
+        "drawdown": round(rm.current_drawdown, 4),
+        "positions": positions,
+        "limits": limits,
+        "snapshot_date": datetime.date.today().isoformat(),
+    }
+
+
+def push_risk(url, key, risk_row):
+    """Upsert the single risk row (id=1)."""
+    base = _rest_base(url)
+    merge = {
+        "apikey": key, "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+    _send("POST", f"{base}/risk?on_conflict=id", headers=merge, json=risk_row,
+          timeout=30)
+
+
 def main():
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_KEY")
@@ -365,6 +413,11 @@ def main():
               f"{len(guru_rows)} guru verdicts")
     except Exception as e:
         print(f"WARNING: history push failed: {e}")
+    try:
+        push_risk(url, key, build_risk_payload())
+        print("pushed risk snapshot")
+    except Exception as e:
+        print(f"WARNING: risk push failed: {e}")
     try:
         sent = send_push(url, key, rows, stats)
         if sent:
