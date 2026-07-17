@@ -12,6 +12,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 
 ACC_LAST_N = 20  # how many of the most recent verified signals feed accuracy
+# Below this many verified signals in the CURRENT model generation, the accuracy
+# falls back to the lifetime record across all generations - otherwise every
+# retrain (feature_version change) resets the panel to "no verified signals"
+# even for assets with a long history.
+_ACC_MIN_SCOPED = 5
 
 
 def _table_name(asset: str) -> str:
@@ -34,23 +39,41 @@ def _has_model_version(con) -> bool:
     return "model_version" in _plog_cols(con)
 
 
-def _accuracy(con, asset: str, last_n: int) -> dict:
-    """Hit-rate over the last verified signals. When prediction_log carries a
-    model_version, scope to the current feature generation so an old model's
-    forward record never blends into the active model's accuracy."""
+def _hit_rate(con, asset: str, last_n: int, model_version=None):
+    """(n, correct) over the most recent verified signals, optionally scoped to
+    one model_version."""
     where = "asset=? AND correct IS NOT NULL"
     params = [asset]
-    if _has_model_version(con):
-        from core.features import feature_version
+    if model_version is not None:
         where += " AND model_version=?"
-        params.append(feature_version())
+        params.append(model_version)
     rows = con.execute(
         f"SELECT correct FROM prediction_log WHERE {where} ORDER BY date DESC LIMIT ?",
         (*params, last_n),
     ).fetchall()
-    n = len(rows)
-    correct = sum(r[0] for r in rows)
-    return {"n": n, "correct": correct, "acc": (correct / n) if n else None}
+    return len(rows), sum(r[0] for r in rows)
+
+
+def _accuracy(con, asset: str, last_n: int) -> dict:
+    """Hit-rate over the last verified signals. Scoped to the current feature
+    generation (so an old model's record never blends into the active model),
+    but when that generation has too few verified signals - e.g. right after a
+    retrain - it falls back to the lifetime record across all generations, so
+    the panel is not misleadingly empty for an asset with real history. The
+    `all_versions` flag says whether the returned figure is that lifetime
+    fallback."""
+    all_versions = False
+    if _has_model_version(con):
+        from core.features import feature_version
+        n, correct = _hit_rate(con, asset, last_n, feature_version())
+        if n < _ACC_MIN_SCOPED:
+            ln, lc = _hit_rate(con, asset, last_n)  # lifetime, all generations
+            if ln > n:
+                n, correct, all_versions = ln, lc, True
+    else:
+        n, correct = _hit_rate(con, asset, last_n)
+    return {"n": n, "correct": correct, "acc": (correct / n) if n else None,
+            "all_versions": all_versions}
 
 
 def asset_accuracy(asset: str, last_n: int = ACC_LAST_N, db_path=None) -> dict:

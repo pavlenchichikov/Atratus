@@ -45,7 +45,7 @@
   <div class="stat fade">
     <span class="stat-label">Accuracy (last {{ acc.n if acc.n else 0 }})</span>
     <span class="stat-value">{% if acc.n %}{{ "%.0f"|format(acc.acc * 100) }}<small>%</small>{% else %}-{% endif %}</span>
-    <span class="stat-sub">{% if acc.n %}{{ acc.correct }} correct of {{ acc.n }}{% else %}no verified signals{% endif %}</span>
+    <span class="stat-sub">{% if acc.n %}{{ acc.correct }} correct of {{ acc.n }}{% if acc.all_versions %} (all model versions){% endif %}{% else %}no verified signals{% endif %}</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Correct / missed</span>

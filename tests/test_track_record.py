@@ -49,9 +49,8 @@ def test_latest_signals_empty_table(tmp_path):
     assert track_record.latest_signals(db_path=path) == []
 
 
-def test_accuracy_scoped_to_current_version_when_column_present(tmp_path):
-    """With a model_version column, accuracy must ignore legacy-generation rows."""
-    from core.features import feature_version
+def _make_versioned_db(tmp_path, rows):
+    """rows: (date, asset, correct, model_version)."""
     path = str(tmp_path / "market.db")
     con = sqlite3.connect(path)
     con.execute(
@@ -59,16 +58,48 @@ def test_accuracy_scoped_to_current_version_when_column_present(tmp_path):
         "probability REAL, actual_next_ret REAL, correct INTEGER, cb_prob REAL, "
         "lstm_prob REAL, model_version TEXT)"
     )
-    cur_v = feature_version()
-    con.executemany("INSERT INTO prediction_log VALUES (?,?,?,?,?,?,?,?,?)", [
-        ("2026-06-01", "BTC", "BUY", 0.6, 0.01, 1, None, None, "legacy"),
-        ("2026-06-02", "BTC", "BUY", 0.6, 0.01, 1, None, None, "legacy"),
-        ("2026-06-03", "BTC", "BUY", 0.6, -0.01, 0, None, None, cur_v),
-    ])
+    con.executemany(
+        "INSERT INTO prediction_log VALUES (?,?,'BUY',0.6,0.0,?,NULL,NULL,?)",
+        [(d, a, c, mv) for (d, a, c, mv) in rows])
     con.commit(); con.close()
-    acc = track_record.asset_accuracy("BTC", db_path=path)
-    assert acc["n"] == 1        # only the current-generation row counts
-    assert acc["acc"] == 0.0
+    return path
+
+
+def test_accuracy_scopes_to_current_version_when_enough(tmp_path):
+    """With >= _ACC_MIN_SCOPED verified in the current generation, accuracy
+    ignores legacy-generation rows (an old model's record never blends in)."""
+    from core.features import feature_version
+    cur_v = feature_version()
+    rows = [("2026-06-0%d" % i, "BTC", 1 if i <= 3 else 0, cur_v) for i in range(1, 6)]
+    rows += [("2026-05-01", "BTC", 1, "legacy"), ("2026-05-02", "BTC", 1, "legacy"),
+             ("2026-05-03", "BTC", 1, "legacy")]
+    acc = track_record.asset_accuracy("BTC", db_path=_make_versioned_db(tmp_path, rows))
+    assert acc["n"] == 5              # only the current generation
+    assert acc["acc"] == 0.6         # 3 of 5
+    assert acc["all_versions"] is False
+
+
+def test_accuracy_falls_back_to_lifetime_when_current_gen_thin(tmp_path):
+    """Right after a retrain the current generation has too few verified signals;
+    accuracy falls back to the lifetime record (flagged all_versions) instead of
+    resetting to 'no verified signals'."""
+    from core.features import feature_version
+    cur_v = feature_version()
+    rows = [("2026-06-03", "BTC", 0, cur_v),          # 1 current-gen row (< floor)
+            ("2026-06-01", "BTC", 1, "legacy"),
+            ("2026-06-02", "BTC", 1, "legacy")]
+    acc = track_record.asset_accuracy("BTC", db_path=_make_versioned_db(tmp_path, rows))
+    assert acc["n"] == 3             # lifetime across all generations
+    assert acc["correct"] == 2
+    assert acc["all_versions"] is True
+
+
+def test_accuracy_stays_empty_when_no_verified_anywhere(tmp_path):
+    """An asset that never produced a verifiable signal (all WAIT) stays honestly
+    empty - the fallback fabricates nothing."""
+    acc = track_record.asset_accuracy(
+        "AUDCHF", db_path=_make_versioned_db(tmp_path, []))
+    assert acc["n"] == 0 and acc["acc"] is None and acc["all_versions"] is False
 
 
 def test_asset_accuracy_counts_only_verified(db):
