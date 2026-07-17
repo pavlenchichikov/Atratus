@@ -7,6 +7,8 @@
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
 
+**English** · [Русский](README.ru.md)
+
 **Multi-asset machine-learning trading-signal engine.** A per-asset ensemble (CatBoost + LSTM + Transformer + TCN) over ~208 markets - crypto, US / European / Russian equities, indices, forex and commodities - with walk-forward selection, calibrated probabilities, Kelly sizing, tail-risk controls, a FastAPI dashboard, and an autonomous, statistically-gated research agent. Signals only, human-in-the-loop - no auto-execution.
 
 > **Disclaimer.** Atratus is a research and educational project. Its output is a set of model predictions - **not financial advice and not a recommendation to buy or sell any security**. Markets carry risk and you can lose money. The software is provided "as is", without warranty of any kind. Use it at your own risk; do your own research and consult a licensed professional before making any financial decision. See [Disclaimer](#disclaimer) in full.
@@ -19,14 +21,17 @@
 - [Screenshots](#screenshots)
 - [Auto-research agent](#auto-research-agent)
 - [Self-maintaining loop](#self-maintaining-loop)
+- [Live-accuracy gate and recalibration](#live-accuracy-gate-and-live-recalibration)
 - [Telegram bot](#telegram-bot)
 - [Publishing signals to the landing site](#publishing-signals-to-the-landing-site)
+- [Mobile app](#mobile-app)
 - [Tech stack](#tech-stack)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Training](#training)
 - [Network](#network)
 - [Configuration](#configuration)
+- [Project layout](#project-layout)
 - [Tests](#tests)
 - [License](#license)
 - [Disclaimer](#disclaimer)
@@ -67,7 +72,7 @@ Lightweight web interface - no TensorFlow needed, reads predictions from the dat
 - `/whatif` - what-if simulator: "what if I had invested $X, N days ago, following the signals", with an equity curve and per-asset breakdown
 - `/risk` - interactive risk manager: open / close positions, edit and persist risk limits, halt / resume trading, plus a Taleb tail-risk watchlist
 - `/loop` - self-maintaining loop: daily cycle status and drift proposals, with one-click approve of a champion-challenger retrain
-- `/guru` - value overlay: the council verdict next to the ML signal, with a 60-day accuracy track record
+- `/guru` - value overlay: the council verdict next to the ML signal, with a 60-day accuracy track record and a one-click **Recalculate all** that re-scores every stock in the background
 - `/market`, `/sectors`, `/correlations`, `/performance`, `/news`, `/models` - analytics pages
 
 Same data as JSON under `/api/...`. Pages auto-refresh; a Cmd-K palette jumps to any asset or page; a ticker tape of top movers runs along the bottom. Works from a phone on the same network.
@@ -139,6 +144,11 @@ reason. `GTRADE_LIVE_GATE=0` disables the gate; the thresholds live in
 raw serve probabilities to the live P(up) from verified outcomes
 (`models/live_calib_global.pkl`; delete the file to roll back).
 
+The accuracy shown per asset is scoped to the current model generation, but
+falls back to the lifetime record across all generations when the active model
+has too few verified signals yet - so a retrain never blanks the panel for an
+asset with real history.
+
 ## Telegram bot
 
 `python alert_bot.py` runs the hourly scan over the full asset universe, scoring each asset through the same shared pipeline as `predict.py` (`core/scoring.py`), so its Telegram calls match the dashboard. It also serves `/top`, `/signal BTC`, `/risk`, `/digest` (owner only), a morning digest (`GTRADE_DIGEST_HOUR`, default 9), and degradation warnings (data older than 7 days, or accuracy below 40% on the last 20 verified signals).
@@ -169,11 +179,25 @@ python push_signals.py          # or option [SG] in run_gtrade.bat
 
 Run it by hand daily, or schedule it (Task Scheduler) once you are happy with it.
 
+## Mobile app
+
+A companion **Flutter** app (Android) is a thin client of the same Supabase
+snapshot: no models and no market data ship in the app, it only reads the gated
+feed `push_signals.py` publishes. Magic-link sign-in plus the same per-user
+allow-list (row-level security) gate every screen. It offers a signal radar,
+per-asset detail with charts, the Guru value overlay, a market-sector
+breakdown, an accuracy leaderboard, a recent-verified-calls feed and a
+client-side what-if simulator, refreshing on resume and pull-to-refresh.
+Optional Firebase Cloud Messaging (`GTRADE_FCM_CREDS`) delivers the day's top
+signals as a push notification. The Supabase schema for these tables lives in
+[`supabase/mobile_app.sql`](supabase/mobile_app.sql).
+
 ## Tech stack
 
 - **Language:** Python 3.12
 - **ML:** CatBoost, TensorFlow / Keras (LSTM, Transformer, TCN), scikit-learn, Optuna, scipy; optional Amazon Chronos (zero-shot forecasts)
 - **Serving / UI:** FastAPI + Uvicorn (web UI), Streamlit (`app.py`), Jinja2
+- **Mobile:** Flutter (Android) thin client over Supabase; Firebase Cloud Messaging
 - **Data:** SQLite (`market.db`), pandas / numpy, Yahoo Finance + MOEX
 - **Research agent:** MAP-Elites quality-diversity search; pluggable LLM proposer (Anthropic / OpenAI / local Ollama)
 - **Ops / tooling:** Ruff, pytest, GitHub Actions CI, Telegram Bot API
@@ -241,6 +265,28 @@ If `SOCKS5_PROXY` is set in `.env`, outbound requests go through it; `net.py` ch
 - `config.py` - asset list and buy/sell thresholds
 - `auto_trader_config.json` - paper-trading settings
 - `pyproject.toml` - Ruff and pytest configuration
+
+## Project layout
+
+```text
+data_engine.py        fetch daily/weekly quotes (Yahoo + MOEX) into market.db
+train_hybrid.py       train the per-asset ensemble + walk-forward selection
+train_chunked.py      RAM-safe full retrain (fresh process per chunk)
+predict.py            console signal radar
+backtest.py           held-out evaluation (PnL, Sharpe, Brier, alpha)
+webapp.py             FastAPI dashboard (app.py = Streamlit)
+alert_bot.py          Telegram bot (hourly scan)
+risk_manager.py       Kelly sizing, loss/drawdown limits, Taleb gate
+guru_report.py        Guru Council fundamentals overlay
+auto_research.py      autonomous research agent (run via auto_research.bat)
+push_signals.py       publish the snapshot to Supabase (web + mobile)
+scheduler.py          daemon: data / predict / DB-check on a schedule
+launcher.py           text menu over the whole pipeline
+core/                 shared library: features, ensemble, scoring, calibration,
+                      backtesting, risk, live_gate, guru, dashboard, ...
+tests/                pytest suite (600+ tests)
+supabase/             SQL schema for the mobile/web Supabase backend
+```
 
 ## Tests
 
