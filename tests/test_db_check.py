@@ -77,3 +77,47 @@ def test_coverage_matches_registry():
     cov = dbc.check_coverage(["btc", "btc_weekly"])
     assert set(cov) == {"missing", "orphan", "no_weekly"}
     assert "btc" not in cov["orphan"]  # btc is a real config asset
+
+
+class TestSparseHeads:
+    def _mk(self, cur, name, rows):
+        """Create an OHLCV price table from (Date, Close) tuples."""
+        full_rows = [(date, close, close, close, close, 1.0)
+                     for date, close in rows]
+        cur.execute(
+            f"CREATE TABLE {name} "
+            "(Date TEXT, Open REAL, High REAL, Low REAL, Close REAL, Volume REAL)"
+        )
+        cur.executemany(f"INSERT INTO {name} VALUES (?,?,?,?,?,?)", full_rows)
+
+    def _daily(self, start, n):
+        """Generate n consecutive daily rows starting from start (YYYY-MM-DD)."""
+        d0 = dt.date.fromisoformat(start)
+        return [((d0 + dt.timedelta(days=i)).isoformat(), 100.0 + i)
+                for i in range(n)]
+
+    def test_quarterly_head_flagged_and_fixed(self):
+        cur = _cur()
+        head = [(f"20{y:02d}-01-01", 50.0) for y in range(0, 10)]  # yearly rows
+        body = self._daily("2024-01-01", 400)
+        self._mk(cur, "spx", head + body)
+        report = dbc.check_sparse_heads(cur, ["spx"])
+        assert any("spx" in line for line in report)
+        deleted = dbc.fix_sparse_heads(cur, ["spx"])
+        assert deleted == len(head)
+        left = cur.execute('SELECT COUNT(*) FROM spx').fetchone()[0]
+        assert left == len(body)
+
+    def test_clean_table_untouched(self):
+        cur = _cur()
+        body = self._daily("2024-01-01", 400)
+        self._mk(cur, "clean", body)
+        assert dbc.fix_sparse_heads(cur, ["clean"]) == 0
+
+    def test_dense_older_block_kept(self):
+        cur = _cur()
+        old_dense = self._daily("2020-01-01", 200)   # dense old block
+        gap_then_recent = self._daily("2024-01-01", 300)
+        self._mk(cur, "twoblock", old_dense + gap_then_recent)
+        # one big hole between two DENSE blocks - nothing is sparse
+        assert dbc.fix_sparse_heads(cur, ["twoblock"]) == 0

@@ -37,6 +37,7 @@ STALE_WEEKLY_DAYS = 21    # weekly
 MAX_GAP_DAYS = 10         # gap between adjacent daily bars larger than this - a hole
 GAP_RECENT_DAYS = 730     # don't report gaps older than this (Yahoo gives sparse early history)
 MIN_ROWS_TRAIN = 100      # fewer rows than this - too little for training
+SPARSE_GAP_DAYS = 10      # max spacing (days) in contiguous recent run; older rows with median spacing > this are sparse
 
 
 # -- Utilities ------------------------------------------------------------------
@@ -153,6 +154,33 @@ def _price_tables(cur, tables):
     return out
 
 
+def _sparse_head_rows(cur, table):
+    """Dates in the sparse pre-window head of `table` (possibly empty).
+    The contiguous recent run = trailing bars spaced <= SPARSE_GAP_DAYS;
+    older rows are a sparse head only when their own median spacing also
+    exceeds the threshold (a dense older block behind one hole is kept)."""
+    rows = [r[0] for r in cur.execute(
+        f'SELECT Date FROM {table} ORDER BY Date').fetchall()]
+    dates = [_parse_date(s) for s in rows]
+    if any(d is None for d in dates) or len(dates) < 3:
+        return []
+    run_start = 0
+    for i in range(len(dates) - 1, 0, -1):
+        if (dates[i] - dates[i - 1]).days > SPARSE_GAP_DAYS:
+            run_start = i
+            break
+    if run_start == 0:
+        return []
+    head = dates[:run_start]
+    if len(head) >= 2:
+        spacings = sorted((head[i + 1] - head[i]).days
+                          for i in range(len(head) - 1))
+        median = spacings[len(spacings) // 2]
+        if median <= SPARSE_GAP_DAYS:
+            return []  # dense older block - keep
+    return rows[:run_start]
+
+
 def check_freshness(cur, tables):
     """How many days ago the last bar was; flags stale tables.
 
@@ -233,6 +261,18 @@ def check_low_data(cur, tables):
         if 0 < cnt < MIN_ROWS_TRAIN:
             low[t] = cnt
     return dict(sorted(low.items(), key=lambda kv: kv[1]))
+
+
+def check_sparse_heads(cur, tables):
+    """Price tables with sparse pre-window rows (quarterly-bug artifacts).
+    Returns list of report lines."""
+    lines = []
+    for t in _price_tables(cur, tables):
+        head = _sparse_head_rows(cur, t)
+        if head:
+            lines.append(f"  [SPARSE] {t}: {len(head)} sparse pre-window rows "
+                         f"({head[0]} .. {head[-1]}) - quarterly-bug artifacts")
+    return lines
 
 
 def _norm_key(key):
@@ -386,6 +426,19 @@ def fix_ohlc(cur, tables):
     return repaired, deleted
 
 
+def fix_sparse_heads(cur, tables):
+    """Removes sparse pre-window rows from price tables.
+    Returns count of rows deleted."""
+    deleted = 0
+    for t in _price_tables(cur, tables):
+        head = _sparse_head_rows(cur, t)
+        if head:
+            ph = ",".join("?" * len(head))
+            cur.execute(f'DELETE FROM {t} WHERE Date IN ({ph})', head)
+            deleted += cur.rowcount if cur.rowcount != -1 else len(head)
+    return deleted
+
+
 def fix_vacuum(conn):
     """VACUUM - compacts the DB file after deletions."""
     before = os.path.getsize(DB_PATH)
@@ -430,7 +483,7 @@ def run_diagnostics(cur, tables):
     results["price"] = price
 
     # 1
-    print("\n  [1/5] Duplicates by Date")
+    print("\n  [1/6] Duplicates by Date")
     dups = check_duplicates(cur, price)
     results["dups"] = dups
     if dups:
@@ -442,7 +495,7 @@ def run_diagnostics(cur, tables):
         print("  [OK] No duplicates")
 
     # 2
-    print("\n  [2/5] Date format (YYYY-MM-DD)")
+    print("\n  [2/6] Date format (YYYY-MM-DD)")
     bad_fmt = check_date_formats(cur, tables)
     results["bad_fmt"] = bad_fmt
     if bad_fmt:
@@ -453,7 +506,7 @@ def run_diagnostics(cur, tables):
         print("  [OK] All dates in correct format")
 
     # 3
-    print("\n  [3/5] Hidden duplicates (mixed date formats)")
+    print("\n  [3/6] Hidden duplicates (mixed date formats)")
     hidden = check_hidden_duplicates(cur, price)
     results["hidden"] = hidden
     if hidden:
@@ -464,7 +517,7 @@ def run_diagnostics(cur, tables):
         print("  [OK] No hidden duplicates")
 
     # 4
-    print("\n  [4/5] NULL values (Date, Close columns)")
+    print("\n  [4/6] NULL values (Date, Close columns)")
     nulls = check_nulls(cur, tables)
     results["nulls"] = nulls
     if nulls:
@@ -475,7 +528,7 @@ def run_diagnostics(cur, tables):
         print("  [OK] No NULL values")
 
     # 5
-    print("\n  [5/5] Empty tables")
+    print("\n  [5/6] Empty tables")
     empty = check_empty_tables(cur, tables)
     results["empty"] = empty
     if empty:
@@ -488,8 +541,19 @@ def run_diagnostics(cur, tables):
     ohlc = check_ohlc(cur, price)
     results["ohlc_crit"] = {t: v["critical"] for t, v in ohlc.items() if v["critical"]}
 
+    # 6
+    print("\n  [6/6] Sparse pre-window rows (quarterly-bug artifacts)")
+    sparse = check_sparse_heads(cur, price)
+    results["sparse_heads"] = bool(sparse)
+    if sparse:
+        print(f"  [!] Found in {len(sparse)} tables:")
+        for line in sparse:
+            print(line)
+    else:
+        print("  [OK] No sparse heads")
+
     results["has_problems"] = bool(
-        dups or bad_fmt or hidden or nulls or results["ohlc_crit"]
+        dups or bad_fmt or hidden or nulls or results["ohlc_crit"] or results["sparse_heads"]
     )
     return results
 
@@ -613,6 +677,10 @@ def run_fix(conn, cur, tables, results):
         rep, dele = fix_ohlc(cur, price)
         fixed_total += rep + dele
 
+    if results.get("sparse_heads"):
+        print("\n  [FIX] Removing sparse pre-window rows:")
+        fixed_total += fix_sparse_heads(cur, price)
+
     conn.commit()
 
     print("\n  [FIX] Compacting DB:")
@@ -627,11 +695,12 @@ def run_fix(conn, cur, tables, results):
     hidden2 = check_hidden_duplicates(cur, price)
     nulls2 = check_nulls(cur, tables)
     ohlc2 = {t: v["critical"] for t, v in check_ohlc(cur, price).items() if v["critical"]}
+    sparse2 = check_sparse_heads(cur, price)
 
-    if not dups2 and not bad2 and not hidden2 and not nulls2 and not ohlc2:
+    if not dups2 and not bad2 and not hidden2 and not nulls2 and not ohlc2 and not sparse2:
         print(f"\n  DONE: fixed {fixed_total} rows. Database is clean.")
     else:
-        remaining = len(dups2) + len(bad2) + len(hidden2) + len(nulls2) + len(ohlc2)
+        remaining = len(dups2) + len(bad2) + len(hidden2) + len(nulls2) + len(ohlc2) + len(sparse2)
         print(f"\n  WARNING: {remaining} problems remain. Run again.")
 
     return fixed_total

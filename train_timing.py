@@ -105,7 +105,10 @@ def build_asset_series(asset, engine=None):
     from catboost import CatBoostClassifier
 
     import config
-    from core.features import add_weekly_features, compute_taleb_risk, engineer_features
+    from core.features import (
+        add_cross_lag_features, add_crossasset_features, add_macro_features,
+        add_weekly_features, compute_taleb_risk, engineer_features,
+    )
     from core.scaling import load_or_fit_scaler
     from core.track_record import _table_name
     from whatif_simulator import _load_registry
@@ -131,8 +134,14 @@ def build_asset_series(asset, engine=None):
     df_raw = df_raw[~df_raw.index.duplicated(keep="last")].sort_index()
 
     try:
+        # Full production feature chain (mirrors predict.py lines 93-97) so
+        # champions trained with cross-asset / macro / lead-lag features find
+        # every column they expect in the pool.
         df_feat = engineer_features(df_raw.copy())
         df_feat = add_weekly_features(df_feat, table, engine)
+        df_feat = add_crossasset_features(df_feat, table, engine)
+        df_feat = add_macro_features(df_feat, engine)
+        df_feat = add_cross_lag_features(df_feat, engine)
     except Exception as e:
         print(f"[timing] skip {asset}: feature engineering failed ({e})")
         return None
@@ -151,8 +160,9 @@ def build_asset_series(asset, engine=None):
         drop_cols = {"target", "next_ret", "close", "open", "high", "low", "volume"}
         feat_list = [c for c in df_feat.columns
                      if c not in drop_cols and pd.api.types.is_numeric_dtype(df_feat[c])]
-    feat_list = [f for f in feat_list if f in df_feat.columns]
-    if not feat_list:
+    lost = [f for f in feat_list if f not in df_feat.columns]
+    if lost:
+        print(f"[timing] skip {asset}: features missing from pool {lost}")
         return None
 
     df_feat = df_feat.dropna(subset=feat_list)
@@ -162,9 +172,14 @@ def build_asset_series(asset, engine=None):
         return None
 
     X = df_feat[feat_list].values
-    # Load saved train-fold scaler (train/serve parity) or fit on first 80%
-    # (fallback for legacy models). Matches production pattern in core.scoring.
+    # Scaler parity with production serve (core.scoring): prefer the SAVED
+    # train-fold scaler. With it, the champion can be scored over the WHOLE
+    # engineered history without leakage (the scaler saw only its own train
+    # fold). Legacy models without a saved scaler fall back to an ad-hoc fit
+    # on the first 80% and are scored only on the remaining 20%.
     scaler, _src = load_or_fit_scaler(MODEL_DIR, table, X[:split])
+    if _src == "saved":
+        split = 0
     X_pred_scaled = scaler.transform(X[split:])
 
     try:
@@ -253,7 +268,7 @@ def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
     es.seed_from(_P(dict(tp.DEFAULT_PARAMS)))
     best_params, best_val = dict(tp.DEFAULT_PARAMS), float("-inf")
     val_by_asset = val_by_asset or train_by_asset
-    for _ in range(budget):
+    for it in range(budget):
         cand = es.ask(_P(dict(tp.DEFAULT_PARAMS)))
         params = _params_of(cand)
         pol = tp.RulesPolicy(params)
@@ -262,6 +277,10 @@ def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
         es.tell(es.vector_of(cand), train_fit)
         val_fit = fitness([eval_policy(s, pol)["score"]
                            for s in val_by_asset.values()])
+        if it % 10 == 0 or it == budget - 1:
+            print(f"[timing]   ES {it + 1}/{budget}  train={train_fit:+.2f}  "
+                  f"val={val_fit:+.2f}  best_val={max(best_val, val_fit):+.2f}",
+                  flush=True)
         if val_fit > best_val:
             best_val, best_params = val_fit, params
     return best_params
@@ -318,10 +337,14 @@ def main():
     assets = ([a.strip() for a in args.assets.split(",") if a.strip()]
               or [a for grp in config.ASSET_TYPES.values() for a in grp])
     series = {}
-    for a in assets:
+    for i, a in enumerate(assets, 1):
         s = build_asset_series(a)
         if s is not None:
             series[a] = s
+            print(f"[timing] [{i}/{len(assets)}] {a}: {len(s['probs'])} bars",
+                  flush=True)
+        else:
+            print(f"[timing] [{i}/{len(assets)}] {a}: skipped", flush=True)
     print(f"[timing] {len(series)}/{len(assets)} assets with usable history")
     tr = {a: split_series(s)[0] for a, s in series.items()}
     va = {a: split_series(s)[1] for a, s in series.items()}

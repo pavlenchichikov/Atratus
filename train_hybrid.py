@@ -139,17 +139,133 @@ _EP_TCN = _env_int("GTRADE_EPOCHS_TCN", 80)
 
 
 def _ws_load(model, key, store):
-    """Warm-start: load the previous fold's weights when shapes match (best effort)."""
+    """Warm-start: load the previous fold's weights when shapes match (best effort).
+
+    Returns True when the weights were actually applied, False when there was
+    nothing to load or the shapes did not match (fresh init). Existing call
+    sites that don't need the result may ignore the return value.
+    """
     if _NET_WARMSTART and store.get(key) is not None:
         try:
             model.set_weights(store[key])
+            return True
         except Exception:
-            pass  # shape changed - fall back to fresh init
+            return False  # shape changed - fall back to fresh init
+    return False
+
+
+def _log_foundation_transfer(asset, net_label, loaded):
+    """Honest fold-1 transfer log for a foundation-seeded net (see _ws_load)."""
+    _safe_print(
+        f"  [foundation] {asset}: {net_label} transfer "
+        + ("OK" if loaded else "FAILED (shape mismatch) - fresh init")
+    )
 
 
 def _ws_save(model, key, store):
     if _NET_WARMSTART:
         store[key] = model.get_weights()
+
+# -- Foundation pretraining warm-start (GTRADE_FOUNDATION, default OFF) -------
+# When on, each asset's fold-1 nets are seeded from a shared cross-asset
+# pretrained model (models/foundation/, built by pretrain_foundation.py)
+# instead of random init, via the existing warm-start store above. Best
+# effort: _ws_load already falls back silently on a shape mismatch.
+_FOUNDATION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "models", "foundation")
+_FOUNDATION_CACHE = None  # None=not tried yet, False=tried+failed, dict=loaded
+
+
+def foundation_on():
+    return os.getenv("GTRADE_FOUNDATION") == "1"
+
+
+def _load_foundation():
+    """Manifest + per-net weight lists from models/foundation/, cached after
+    the first call. Returns None (logging one line) when the directory or
+    manifest is missing or corrupt, a weight file fails to load, or this run's
+    GTRADE_MAX_FOLDS exceeds the number of folds the foundation's own cutoff
+    protected against (using more folds than that would let pretraining leak
+    into bars this run's eval folds need)."""
+    global _FOUNDATION_CACHE
+    if _FOUNDATION_CACHE is not None:
+        return _FOUNDATION_CACHE or None
+    try:
+        with open(os.path.join(_FOUNDATION_DIR, "manifest.json"),
+                  encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        _run_max_folds = _env_int("GTRADE_MAX_FOLDS", 10)
+        _cutoff_max_folds = manifest.get("max_folds", 0)
+        if _run_max_folds > _cutoff_max_folds:
+            _safe_print(
+                f"  [foundation] refused: GTRADE_MAX_FOLDS={_run_max_folds} > "
+                f"manifest max_folds={_cutoff_max_folds} - would leak eval bars "
+                f"into pretraining, training without it"
+            )
+            _FOUNDATION_CACHE = False
+            return None
+        # Foundation nets are built by the same core.architectures builders as
+        # the champions, so reuse the serve-side native .keras loader (Lambda
+        # patch + custom_objects) rather than a bare keras.models.load_model.
+        from core.model_io import load_keras_native
+        weights = {}
+        for key, fname in (("lstm", "lstm.keras"),
+                           ("tf", "transformer.keras"),
+                           ("tcn", "tcn.keras")):
+            m = load_keras_native(os.path.join(_FOUNDATION_DIR, fname))
+            if m is None:
+                raise RuntimeError(f"could not load {fname}")
+            weights[key] = m.get_weights()
+        _FOUNDATION_CACHE = {"manifest": manifest, "weights": weights}
+    except Exception as e:
+        _safe_print(f"  [foundation] unavailable ({e}) - training without it")
+        _FOUNDATION_CACHE = False
+        return None
+    return _FOUNDATION_CACHE
+
+
+def _foundation_seed_warm(warm, foundation, asset):
+    """Pre-seed the warm-start store from the foundation weights, BEFORE the
+    fold loop starts, so _ws_load applies them at fold 1. This only stages the
+    weights - whether the transfer actually took (shapes matched) is reported
+    per-net at the fold-1 _ws_load call sites, not here, since staging always
+    "succeeds" even when the eventual set_weights will fall back to fresh init."""
+    for key in ("lstm", "tf", "tcn"):
+        warm[key] = foundation["weights"][key]
+
+
+def _foundation_onehot(asset, classes):
+    from pretrain_foundation import class_of
+    v = np.zeros(len(classes), dtype=np.float32)
+    cls = class_of(asset)
+    if cls in classes:
+        v[classes.index(cls)] = 1.0
+    return v
+
+
+def _fit_frozen_then_full(model, freeze_epochs, compile_fn, fit_fn):
+    """Two-stage fine-tune for a foundation-seeded net: all layers but the
+    last Dense are frozen for `freeze_epochs` epochs (head-only adaptation),
+    then everything is unfrozen and fit resumes for the remaining epochs.
+    `compile_fn` recompiles after each trainable-flag flip (required for the
+    frozen layers to actually stop updating); `fit_fn(n)` runs the fit call
+    for `n` epochs (fit_fn(None) means "the net's own full epoch budget").
+
+    The frozen stage runs inside try/finally so a raise from compile_fn() or
+    fit_fn() during that stage can never leave `model` stuck with most of its
+    layers frozen - trainable is always restored before the exception
+    propagates."""
+    for layer in model.layers[:-1]:
+        layer.trainable = False
+    try:
+        compile_fn()
+        fit_fn(freeze_epochs)
+    finally:
+        for layer in model.layers:
+            layer.trainable = True
+    compile_fn()
+    fit_fn(None)
+
 
 # --- SHARED EPOCH STATE (callback - ticker thread) ---
 _progress_state = {'label': '-', 'epoch': 0, 'total_ep': 0, 'loss': float('nan')}
@@ -167,6 +283,7 @@ if _HAS_GPU:
 from core.architectures import (
     build_transformer_encoder,
     build_lstm_multitask, build_tcn, adaptive_units,
+    _Adam as _lstm_optimizer_cls,
 )
 from core.profiles import (
     FOREX,
@@ -529,6 +646,35 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         # Optuna lookback overrides profile default (plus the relative delta knob)
         lookback = lookback_for(opt, profile)
 
+        # Foundation pretraining (GTRADE_FOUNDATION=1, default OFF): best-effort
+        # load once per asset. None when off, or when models/foundation/ is
+        # absent/corrupt - in which case everything below is untouched and the
+        # net feature schema/dim fall back to the CatBoost `selected` set.
+        _foundation = _load_foundation() if foundation_on() else None
+        if _foundation is not None:
+            _f_feats = [f for f in _foundation['manifest']['features']
+                       if f in df.columns]
+            _f_onehot = _foundation_onehot(asset, _foundation['manifest']['classes'])
+            _net_feat_dim = len(_f_feats) + len(_foundation['manifest']['classes'])
+        else:
+            _f_feats = None
+            _f_onehot = None
+            _net_feat_dim = len(selected)
+        _freeze_epochs = _env_int("GTRADE_FOUNDATION_FREEZE_EPOCHS", 0)
+
+        # Foundation lookback: the LSTM's attention Dense(time, time) makes
+        # lookback part of the net weight shapes, so under the flag every
+        # asset's sequences must be built at the foundation's OWN lookback
+        # (manifest["lookback"]) rather than this asset's Optuna-tuned
+        # lookback, or set_weights below would shape-mismatch on nearly every
+        # asset. `_embargo`/`splits` above were already computed with the
+        # asset's own tuned lookback and are left untouched here - CatBoost
+        # (built from `selected`/`splits`, not this `lookback`) stays
+        # completely unaffected. Flag off (or foundation unavailable): the
+        # asset's own tuned lookback applies, unchanged.
+        if _foundation is not None:
+            lookback = _foundation['manifest']['lookback']
+
         # --- PRE-COMPUTE: all fold data computed up front ---
         precomputed = []
         for tr, va, te in splits:
@@ -543,6 +689,22 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             X_all_seq = np.vstack([X_tr, X_va, X_te])
             y_all_seq = np.concatenate([y_tr, y_va, y_te])
             X_seq, y_seq = build_sequences(X_all_seq, y_all_seq, lookback)
+
+            if _foundation is not None:
+                # Parallel net-only matrix on the foundation's own feature
+                # schema (+ class one-hot); a second StandardScaler fit on
+                # this fold's train rows, mirroring the CatBoost scaler above.
+                # CatBoost's X_tr/X_va/X_te (built from `selected`) are
+                # untouched - only the sequence matrix below is swapped.
+                _f_scaler = StandardScaler()
+                Xf_tr = _f_scaler.fit_transform(df.loc[tr, _f_feats].values)
+                Xf_va = _f_scaler.transform(df.loc[va, _f_feats].values)
+                Xf_te = _f_scaler.transform(df.loc[te, _f_feats].values)
+                Xf_tr = np.hstack([Xf_tr, np.tile(_f_onehot, (len(Xf_tr), 1))])
+                Xf_va = np.hstack([Xf_va, np.tile(_f_onehot, (len(Xf_va), 1))])
+                Xf_te = np.hstack([Xf_te, np.tile(_f_onehot, (len(Xf_te), 1))])
+                Xf_all_seq = np.vstack([Xf_tr, Xf_va, Xf_te])
+                X_seq, _ = build_sequences(Xf_all_seq, y_all_seq, lookback)
 
             seq_tr_end = max(0, len(X_tr) - lookback)
             seq_va_end = seq_tr_end + len(X_va)
@@ -577,7 +739,17 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         # so the architecture is constant across folds and warm-start can reuse
         # weights. Flag off means empty kwargs, so builders keep their flat defaults.
         _max_seq = max((len(p['X_seq_train']) for p in precomputed), default=0)
-        if _ADAPTIVE_NETS and _max_seq > 0:
+        if _foundation is not None:
+            # Guarantee shape-match: build every asset's nets at the
+            # foundation's OWN architecture (manifest["net_kwargs"], the exact
+            # kwargs train_foundation used) instead of the adaptive per-asset
+            # sizing below, so the _ws_load calls below always shape-match
+            # instead of silently falling back to fresh init.
+            _nk = _foundation['manifest'].get('net_kwargs', {})
+            _lstm_kw = dict(_nk.get('lstm', {}))
+            _tf_kw = dict(_nk.get('transformer', {}))
+            _tcn_kw = dict(_nk.get('tcn', {}))
+        elif _ADAPTIVE_NETS and _max_seq > 0:
             _u1 = adaptive_units(_max_seq, lo=32, hi=_NET_CAP, divisor=16)
             # No recurrent_dropout: it forces Keras off the fused LSTM kernel and
             # is ~1.4x slower on CPU. L2 + the data-adaptive (smaller) size carry
@@ -592,6 +764,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         else:
             _lstm_kw, _tf_kw, _tcn_kw = {}, {}, {}
         _warm = {}  # per-asset weight carry across folds (warm-start)
+        if _foundation is not None:
+            _foundation_seed_warm(_warm, _foundation, asset)
 
         for k, fold_data in enumerate(precomputed, 1):
             if _stop_requested:
@@ -699,11 +873,13 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                             f"  train={len(X_seq_train)} seq  batch={_batch}{_vram}"
                         )
                     # -- Multi-task LSTM --------------------------------------------
-                    lstm_mt = build_lstm_multitask((lookback, len(selected)),
+                    lstm_mt = build_lstm_multitask((lookback, _net_feat_dim),
                                                    n_train_samples=len(X_seq_train),
                                                    **_lstm_kw)
                     if not multi_seed:
-                        _ws_load(lstm_mt, 'lstm', _warm)
+                        _lstm_loaded = _ws_load(lstm_mt, 'lstm', _warm)
+                        if _foundation is not None and k == 1:
+                            _log_foundation_transfer(asset, 'lstm', _lstm_loaded)
                     if _uniq_w is not None:
                         # A single sample_weight array applies to all outputs. A dict
                         # sample_weight (even keyed by output name) is rejected by this
@@ -733,8 +909,43 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                                             mode='min', restore_best_weights=True)
                     _lstm_cb = EpochStateCallback(asset, k, _EP_LSTM,
                                                  label="LSTM", val_metric="val_direction_loss")
-                    lstm_mt.fit(train_ds, validation_data=val_ds, epochs=_EP_LSTM,
-                                callbacks=[es_lstm, _lstm_cb], verbose=0)
+                    # Foundation freeze knob (GTRADE_FOUNDATION_FREEZE_EPOCHS, default
+                    # 0=off): only on the fold-1 foundation-seeded, non-multi-seed fit -
+                    # head-only warm-up before unfreezing the transferred layers. When
+                    # off (the default), the else branch below is unchanged from before.
+                    if (_freeze_epochs > 0 and _foundation is not None
+                            and k == 1 and not multi_seed):
+                        def _compile_lstm():
+                            # A FRESH optimizer every recompile (not
+                            # lstm_mt.optimizer, the same instance across the
+                            # frozen -> unfrozen flip): reusing one optimizer
+                            # across a trainable-set change carries over stale
+                            # slot-variable/iteration state built for the
+                            # frozen stage's smaller variable set. Config
+                            # cloned from build_lstm_multitask's own compile
+                            # (core/architectures.py) so behaviour matches the
+                            # non-foundation path.
+                            _steps_per_epoch = max(1, len(X_seq_train) // 128)
+                            _lr_schedule = tf.keras.optimizers.schedules.CosineDecay(
+                                initial_learning_rate=0.002,
+                                decay_steps=_steps_per_epoch * 120,
+                                alpha=0.0001,
+                            )
+                            lstm_mt.compile(
+                                optimizer=_lstm_optimizer_cls(_lr_schedule),
+                                loss={'direction': 'binary_crossentropy', 'magnitude': 'huber'},
+                                loss_weights={'direction': 1.0, 'magnitude': 0.2},
+                                metrics={'direction': 'accuracy'},
+                            )
+                        def _fit_lstm_stage(n_epochs):
+                            _ep = n_epochs if n_epochs is not None else _EP_LSTM
+                            lstm_mt.fit(train_ds, validation_data=val_ds, epochs=_ep,
+                                        callbacks=[es_lstm, _lstm_cb], verbose=0)
+                        _fit_frozen_then_full(lstm_mt, _freeze_epochs,
+                                              _compile_lstm, _fit_lstm_stage)
+                    else:
+                        lstm_mt.fit(train_ds, validation_data=val_ds, epochs=_EP_LSTM,
+                                    callbacks=[es_lstm, _lstm_cb], verbose=0)
                     if not multi_seed:
                         _ws_save(lstm_mt, 'lstm', _warm)
                     lstm_test_prob = lstm_mt.predict(
@@ -747,11 +958,13 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     del lstm_mt  # Python obj freed; shared layers still in lstm - OK
 
                     # -- Transformer encoder ------------------------------------------
-                    tf_enc = build_transformer_encoder((lookback, len(selected)),
+                    tf_enc = build_transformer_encoder((lookback, _net_feat_dim),
                                                        n_train_samples=len(X_seq_train),
                                                        **_tf_kw)
                     if not multi_seed:
-                        _ws_load(tf_enc, 'tf', _warm)
+                        _tf_loaded = _ws_load(tf_enc, 'tf', _warm)
+                        if _foundation is not None and k == 1:
+                            _log_foundation_transfer(asset, 'transformer', _tf_loaded)
                     if _uniq_w is not None:
                         train_ds_tf = tf.data.Dataset.from_tensor_slices(
                             (X_seq_train.astype('float32'),
@@ -779,11 +992,13 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         X_seq_val.astype('float32'),  batch_size=BATCH, verbose=0).flatten()
 
                     # -- TCN (4th ensemble member) ------------------------------------
-                    tcn_model = build_tcn((lookback, len(selected)),
+                    tcn_model = build_tcn((lookback, _net_feat_dim),
                                           n_train_samples=len(X_seq_train),
                                           **_tcn_kw)
                     if not multi_seed:
-                        _ws_load(tcn_model, 'tcn', _warm)
+                        _tcn_loaded = _ws_load(tcn_model, 'tcn', _warm)
+                        if _foundation is not None and k == 1:
+                            _log_foundation_transfer(asset, 'tcn', _tcn_loaded)
                     if _uniq_w is not None:
                         train_ds_tcn = tf.data.Dataset.from_tensor_slices(
                             (X_seq_train.astype('float32'),
