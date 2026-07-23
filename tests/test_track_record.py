@@ -7,6 +7,36 @@ import pytest
 from core import track_record
 
 
+def db_legacy(tmp_path):
+    path = str(tmp_path / "legacy.db")
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE prediction_log (date TEXT, asset TEXT, signal TEXT, "
+        "probability REAL, actual_next_ret REAL, correct INTEGER, "
+        "cb_prob REAL, lstm_prob REAL)")
+    con.execute("INSERT INTO prediction_log VALUES "
+                "('2026-07-23','BTC','BUY',0.6,NULL,NULL,0.6,NULL)")
+    con.commit()
+    con.close()
+    return path
+
+
+def _db_with_timing(tmp_path):
+    path = str(tmp_path / "timing.db")
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE prediction_log (date TEXT, asset TEXT, signal TEXT, "
+        "probability REAL, actual_next_ret REAL, correct INTEGER, "
+        "cb_prob REAL, lstm_prob REAL, sig_shown TEXT, gate_reason TEXT, "
+        "timing_action TEXT, timing_reason TEXT)")
+    con.execute(
+        "INSERT INTO prediction_log VALUES ('2026-07-23','BTC','BUY',0.62,"
+        "NULL,NULL,0.62,NULL,'BUY',NULL,'STAY_OUT','confirm')")
+    con.commit()
+    con.close()
+    return path
+
+
 @pytest.fixture
 def db(tmp_path):
     path = str(tmp_path / "market.db")
@@ -237,3 +267,24 @@ def test_latest_gated_missing_table(tmp_path):
     path = str(tmp_path / "empty.db")
     sqlite3.connect(path).close()
     assert track_record.latest_gated("BTC", db_path=path) == {}
+
+
+def test_latest_signals_includes_timing(tmp_path):
+    db = _db_with_timing(tmp_path)
+    s = {r["asset"]: r for r in track_record.latest_signals(db_path=db)}["BTC"]
+    assert s["timing_action"] == "STAY_OUT"
+    assert s["timing_reason"] == "confirm"
+
+
+def test_latest_signals_timing_none_when_columns_absent(tmp_path):
+    # legacy DB from the existing `db` fixture has no timing columns
+    s = {r["asset"]: r for r in track_record.latest_signals(db_path=db_legacy(tmp_path))}["BTC"]
+    assert s["timing_action"] is None
+    assert s["timing_reason"] is None
+
+
+def test_latest_gated_includes_timing(tmp_path):
+    db = _db_with_timing(tmp_path)
+    g = track_record.latest_gated("BTC", db_path=db)
+    assert g["timing_action"] == "STAY_OUT"
+    assert g["timing_reason"] == "confirm"

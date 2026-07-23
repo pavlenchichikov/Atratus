@@ -93,7 +93,9 @@ def latest_signals(db_path=None, acc_last_n: int = ACC_LAST_N) -> list:
     radar, push_signals) read `signal` and inherit the gate for free."""
     with _connect(db_path) as con:
         gated = "sig_shown" in _plog_cols(con)
+        has_timing = "timing_action" in _plog_cols(con)
         extra = ", p.sig_shown, p.gate_reason" if gated else ", NULL, NULL"
+        extra += ", p.timing_action, p.timing_reason" if has_timing else ", NULL, NULL"
         try:
             rows = con.execute(
                 "SELECT p.asset, p.date, p.signal, p.probability" + extra + " "
@@ -105,7 +107,7 @@ def latest_signals(db_path=None, acc_last_n: int = ACC_LAST_N) -> list:
         except sqlite3.OperationalError:
             return []
         out = []
-        for asset, date, signal, prob, shown, reason in rows:
+        for asset, date, signal, prob, shown, reason, t_act, t_rsn in rows:
             out.append({
                 "asset": asset,
                 "date": date,
@@ -114,6 +116,8 @@ def latest_signals(db_path=None, acc_last_n: int = ACC_LAST_N) -> list:
                 "gate_reason": reason,
                 "probability": prob,
                 "acc": _accuracy(con, asset, acc_last_n),
+                "timing_action": t_act,
+                "timing_reason": t_rsn,
             })
         return out
 
@@ -124,7 +128,9 @@ def latest_gated(asset: str, db_path=None) -> dict:
     Empty dict when the asset has no rows or the table/columns are absent."""
     with _connect(db_path) as con:
         gated = "sig_shown" in _plog_cols(con)
+        has_timing = "timing_action" in _plog_cols(con)
         extra = ", sig_shown, gate_reason" if gated else ", NULL, NULL"
+        extra += ", timing_action, timing_reason" if has_timing else ", NULL, NULL"
         try:
             row = con.execute(
                 "SELECT signal" + extra + " FROM prediction_log "
@@ -135,9 +141,10 @@ def latest_gated(asset: str, db_path=None) -> dict:
             return {}
         if not row:
             return {}
-        signal, shown, reason = row
+        signal, shown, reason, t_act, t_rsn = row
         return {"signal": shown or signal, "signal_raw": signal,
-                "gate_reason": reason}
+                "gate_reason": reason,
+                "timing_action": t_act, "timing_reason": t_rsn}
 
 
 def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
