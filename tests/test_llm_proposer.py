@@ -106,9 +106,10 @@ def test_call_ollama_defaults(monkeypatch):
             return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
 
     class FakeClient:
-        def __init__(self, base_url=None, api_key=None):
+        def __init__(self, base_url=None, api_key=None, **kwargs):
             captured["base_url"] = base_url
             captured["api_key"] = api_key
+            captured.update(kwargs)
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeClient))
@@ -132,7 +133,7 @@ def test_call_ollama_model_env_override(monkeypatch):
             return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
 
     class FakeClient:
-        def __init__(self, base_url=None, api_key=None):
+        def __init__(self, base_url=None, api_key=None, **kwargs):
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeClient))

@@ -81,7 +81,8 @@ def _call_openai(prompt):
     (Mistral, LM Studio, etc.) via GTRADE_AR_LLM_BASE_URL. Model via
     GTRADE_AR_LLM_MODEL (default gpt-4o)."""
     import openai
-    client = openai.OpenAI(base_url=os.getenv("GTRADE_AR_LLM_BASE_URL") or None)
+    client = openai.OpenAI(base_url=os.getenv("GTRADE_AR_LLM_BASE_URL") or None,
+                           timeout=_llm_timeout())
     model = os.getenv("GTRADE_AR_LLM_MODEL") or "gpt-4o"
     last_err = None
     for _attempt in range(3):
@@ -93,6 +94,21 @@ def _call_openai(prompt):
         except Exception as exc:
             last_err = exc
     raise RuntimeError("openai proposer failed after 3 attempts: %s" % last_err)
+
+
+def _llm_timeout():
+    """Client-side timeout (seconds) for a single LLM HTTP call. The OpenAI SDK
+    default is 600s (10 min); a slow local reasoning model on CPU can blow far
+    past that and get stuck in a retry storm (one wall-clock timeout per attempt,
+    compounded by the SDK's own retries). GTRADE_AR_LLM_TIMEOUT overrides in
+    seconds; 0/none/unlimited disables the timeout entirely."""
+    raw = (os.getenv("GTRADE_AR_LLM_TIMEOUT") or "600").strip().lower()
+    if raw in ("0", "none", "unlimited"):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return 600.0
 
 
 def _ollama_base_url():
@@ -162,7 +178,11 @@ def _call_ollama(prompt):
             max_toks = int(raw)
         except ValueError:
             max_toks = 8000
-    client = openai.OpenAI(base_url=base, api_key="ollama")
+    # max_retries=0: this function already loops 3x below, and the SDK's own
+    # retries each wait a full timeout -> without this a slow local model turns
+    # one stuck call into a multi-hour retry storm (the 10-min-apart retries).
+    client = openai.OpenAI(base_url=base, api_key="ollama",
+                           timeout=_llm_timeout(), max_retries=0)
     last_err = None
     for _attempt in range(3):
         try:
