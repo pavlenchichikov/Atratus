@@ -197,8 +197,8 @@ allow-list (row-level security) gate every screen. It offers a signal radar,
 per-asset detail with charts, the Guru value overlay, a market-sector
 breakdown, an accuracy leaderboard, a recent-verified-calls feed and a
 client-side what-if simulator, refreshing on resume and pull-to-refresh.
-Optional Firebase Cloud Messaging (`GTRADE_FCM_CREDS`) delivers the day's top
-signals as a push notification. The Supabase schema for these tables lives in
+Optional Firebase Cloud Messaging (`GTRADE_FCM_CREDS`) delivers a push
+notification when signals change, opening the Today screen. The Supabase schema for these tables lives in
 [`supabase/mobile_app.sql`](supabase/mobile_app.sql).
 
 ## Tech stack
@@ -471,7 +471,7 @@ python push_signals.py          # или пункт [SG] в run_gtrade.bat
 
 ## Мобильное приложение
 
-Компаньон — приложение на **Flutter** (Android) — это тонкий клиент того же снимка Supabase: в приложении нет ни моделей, ни рыночных данных, оно лишь читает гейтнутый фид, который публикует `push_signals.py`. Вход по magic-link и тот же пер-пользовательский allow-list (row-level security) гейтят каждый экран. Есть радар сигналов, детализация по активу с графиками, value-оверлей гуру, разбивка по секторам рынка, топ по точности, лента недавних проверенных сигналов и клиентский what-if-симулятор; данные обновляются при возврате в приложение и по «потянуть вниз». Опциональный Firebase Cloud Messaging (`GTRADE_FCM_CREDS`) доставляет топ-сигналы дня push-уведомлением. Схема Supabase для этих таблиц — в [`supabase/mobile_app.sql`](supabase/mobile_app.sql).
+Компаньон — приложение на **Flutter** (Android) — это тонкий клиент того же снимка Supabase: в приложении нет ни моделей, ни рыночных данных, оно лишь читает гейтнутый фид, который публикует `push_signals.py`. Вход по magic-link и тот же пер-пользовательский allow-list (row-level security) гейтят каждый экран. Есть радар сигналов, детализация по активу с графиками, value-оверлей гуру, разбивка по секторам рынка, топ по точности, лента недавних проверенных сигналов и клиентский what-if-симулятор; данные обновляются при возврате в приложение и по «потянуть вниз». Опциональный Firebase Cloud Messaging (`GTRADE_FCM_CREDS`) присылает push-уведомление, когда сигналы меняются, и по тапу открывает экран Today. Схема Supabase для этих таблиц — в [`supabase/mobile_app.sql`](supabase/mobile_app.sql).
 
 ## Технологии
 
