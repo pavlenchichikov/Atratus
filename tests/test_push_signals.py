@@ -228,7 +228,96 @@ def test_build_push_text_is_ascii_only():
 def test_send_push_noop_without_creds(monkeypatch):
     monkeypatch.delenv("GTRADE_FCM_CREDS", raising=False)
     # must not touch the network or firebase at all
-    assert push_signals.send_push("https://x.supabase.co", "k", [], {}) == 0
+    assert push_signals.send_push("https://x.supabase.co", "k", []) == 0
+
+
+def _fake_creds(monkeypatch, tmp_path):
+    creds = tmp_path / "creds.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GTRADE_FCM_CREDS", str(creds))
+    calls = []
+    monkeypatch.setattr(push_signals.requests, "request",
+                        lambda method, url, **kw: calls.append((method, url)))
+    return calls
+
+
+def test_send_push_silent_without_signal_events(monkeypatch, tmp_path):
+    calls = _fake_creds(monkeypatch, tmp_path)
+    timing_only = [ev("T1", digest.TIMING_CHANGE, "BUY", "BUY", 0.55,
+                      None, "policy: entering")]
+    # No firebase import, no token RPC: a timing-only diff is not push-worthy.
+    assert push_signals.send_push("https://x.supabase.co", "k", timing_only) == 0
+    assert push_signals.send_push("https://x.supabase.co", "k", []) == 0
+    assert calls == []
+
+
+def test_send_push_skips_a_repeat_of_the_last_push(monkeypatch, tmp_path):
+    calls = _fake_creds(monkeypatch, tmp_path)
+    events = [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]
+    state = tmp_path / "push_state.json"
+    monkeypatch.setattr(push_signals, "PUSH_STATE", str(state))
+    push_signals._save_push_state(push_signals._event_hash(events),
+                                  "2026-07-24", str(state))
+    assert push_signals.send_push("https://x.supabase.co", "k", events) == 0
+    assert calls == []      # dedupe happens before any network or firebase use
+
+
+def _fake_firebase(monkeypatch):
+    """Stand-in for firebase_admin so send_push runs without creds or network."""
+    import sys
+    import types
+
+    seen = {}
+
+    class _Resp:
+        success_count = 1
+        responses = []
+
+    messaging = types.SimpleNamespace(
+        Notification=lambda title, body: {"title": title, "body": body},
+        MulticastMessage=lambda notification, data, tokens: seen.update(
+            notification=notification, data=data, tokens=tokens) or "msg",
+        send_each_for_multicast=lambda msg: _Resp(),
+    )
+    fake = types.ModuleType("firebase_admin")
+    fake._apps = ["already-initialised"]     # skips credentials.Certificate
+    fake.credentials = types.SimpleNamespace(Certificate=lambda path: path)
+    fake.messaging = messaging
+    monkeypatch.setitem(sys.modules, "firebase_admin", fake)
+    monkeypatch.setitem(sys.modules, "firebase_admin.messaging", messaging)
+    return seen
+
+
+def test_send_push_carries_the_today_deeplink_and_records_state(monkeypatch,
+                                                               tmp_path):
+    creds = tmp_path / "creds.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GTRADE_FCM_CREDS", str(creds))
+    state = tmp_path / "push_state.json"
+    monkeypatch.setattr(push_signals, "PUSH_STATE", str(state))
+
+    class R:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"token": "t1"}]
+
+    monkeypatch.setattr(push_signals.requests, "request",
+                        lambda method, url, **kw: R())
+    seen = _fake_firebase(monkeypatch)
+    events = [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]
+
+    assert push_signals.send_push("https://x.supabase.co", "k", events) == 1
+    assert seen["data"] == {"screen": "today"}          # the Today deep-link
+    assert seen["tokens"] == ["t1"]
+    assert seen["notification"]["title"] == "Atratus: 1 change"
+    assert push_signals._load_push_state(str(state))["hash"] == \
+        push_signals._event_hash(events)
+    # The fingerprint is now on disk, so an identical second run is deduped.
+    assert push_signals.send_push("https://x.supabase.co", "k", events) == 0
 
 
 def test_build_payload_includes_timing_label_on_divergence(monkeypatch):

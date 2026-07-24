@@ -360,10 +360,13 @@ def _save_push_state(event_hash, snapshot_date, path=None):
         print(f"note: could not write {target}: {e}")
 
 
-def send_push(url, key, rows, stats):
+def send_push(url, key, events):
     """Personal FCM push to allow-listed devices. Silent no-op without creds.
 
-    Requires GTRADE_FCM_CREDS (path to the Firebase service-account JSON,
+    Sends only when something worth acting on changed: at least one signal event
+    (flip, entry, exit), and an event set that differs from the last one pushed.
+    Timing-only diffs ride along as a counter but never trigger a push on their
+    own. Requires GTRADE_FCM_CREDS (path to the Firebase service-account JSON,
     secret, never committed) and the allowed_device_tokens() RPC. Tokens that
     FCM reports as unregistered are deleted (self-cleanup after reinstalls).
     """
@@ -377,6 +380,16 @@ def send_push(url, key, rows, stats):
               "exist - skipping FCM push (add the Firebase service-account "
               "JSON there to enable notifications)")
         return 0
+
+    if not any(e.kind in digest.SIGNAL_KINDS for e in events):
+        print("note: no signal changes this run - staying quiet")
+        return 0
+
+    event_hash = _event_hash(events)
+    if _load_push_state().get("hash") == event_hash:
+        print("note: same changes as the last push - staying quiet")
+        return 0
+
     import firebase_admin
     from firebase_admin import credentials, messaging
     if not firebase_admin._apps:
@@ -394,9 +407,10 @@ def send_push(url, key, rows, stats):
     if not tokens:
         return 0
 
-    title, body = build_push_text(rows, stats)
+    title, body = build_push_text(events)
     msg = messaging.MulticastMessage(
         notification=messaging.Notification(title=title, body=body),
+        data={"screen": "today"},
         tokens=tokens,
     )
     resp = messaging.send_each_for_multicast(msg)
@@ -407,6 +421,10 @@ def send_push(url, key, rows, stats):
         if name in ("UnregisteredError", "SenderIdMismatchError"):
             _send("DELETE", f"{base}/device_tokens?token=eq.{tokens[i]}",
                   headers=headers, timeout=30)
+    if resp.success_count:
+        # Only a delivered push updates the fingerprint, so a total failure is
+        # retried on the next run instead of being deduped away.
+        _save_push_state(event_hash, max(e.date for e in events))
     return resp.success_count
 
 
@@ -441,18 +459,28 @@ def main():
 
     # Optional extras for the mobile app - each fail-safe: a failure here must
     # never undo or block the signals upsert above.
+    hist = None
+    history_ok = False
     try:
         bars, hist = fetch_history_rows()
         guru_rows, guru_stats = fetch_guru_rows()
         push_history(url, key, bars, hist, guru_rows, guru_stats)
+        history_ok = True
         print(f"pushed history: {len(bars)} bars | {len(hist)} signal rows | "
               f"{len(guru_rows)} guru verdicts")
     except Exception as e:
         print(f"WARNING: history push failed: {e}")
     try:
-        sent = send_push(url, key, rows, stats)
-        if sent:
-            print(f"FCM push sent to {sent} device(s)")
+        if not history_ok:
+            # Nothing to diff, and the phone could not show the events a
+            # notification would announce. No fallback text: a push that cannot
+            # say what changed has no reason to exist.
+            print("note: history unavailable - skipping the change push")
+        else:
+            events = digest.build_digest(hist)
+            sent = send_push(url, key, events)
+            if sent:
+                print(f"FCM push sent to {sent} device(s)")
     except Exception as e:
         print(f"WARNING: FCM push failed: {e}")
 
