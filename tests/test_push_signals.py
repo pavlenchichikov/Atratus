@@ -71,9 +71,11 @@ def _seed_history_db(tmp_path):
         d = f"2026-{i:03d}"  # synthetic ascending dates, 8 chars (str[:10]-safe)
         con.execute("INSERT INTO btc VALUES (?, 1, 2, 3, 0.5, 9)", (d,))
     con.execute('CREATE TABLE prediction_log (date TEXT, asset TEXT, signal TEXT,'
-                ' probability REAL, actual_next_ret REAL, correct INTEGER)')
+                ' probability REAL, actual_next_ret REAL, correct INTEGER,'
+                ' timing_action TEXT, timing_reason TEXT)')
     for i in range(120):
-        con.execute("INSERT INTO prediction_log VALUES (?, 'BTC', 'BUY', 0.6, 0.01, 1)",
+        con.execute("INSERT INTO prediction_log VALUES "
+                    "(?, 'BTC', 'BUY', 0.6, 0.01, 1, 'STAY_OUT', 'confirm')",
                     (f"2026-{i:03d}",))
     con.commit()
     con.close()
@@ -92,7 +94,7 @@ def test_fetch_history_rows_limits_and_order(tmp_path, monkeypatch):
     assert bars[-1]["date"] == "2026-199"
     assert set(bars[0]) == {"asset", "date", "open", "high", "low", "close"}
     assert set(hist[0]) == {"asset", "date", "signal", "prob", "actual_next_ret",
-                            "correct"}
+                            "correct", "timing_action", "timing_label"}
 
 
 def test_fetch_history_rows_skips_missing_table(tmp_path, monkeypatch):
@@ -101,6 +103,27 @@ def test_fetch_history_rows_skips_missing_table(tmp_path, monkeypatch):
     db = _seed_history_db(tmp_path)
     bars, hist = push_signals.fetch_history_rows(db_path=db)
     assert {b["asset"] for b in bars} == {"BTC"}  # NEWCO has no table - skipped
+
+
+def test_fetch_history_rows_timing_label_on(tmp_path, monkeypatch):
+    monkeypatch.setattr(push_signals, "FULL_ASSET_MAP", {"BTC": "BTC-USD"},
+                        raising=False)
+    monkeypatch.setattr(timing_policy, "timing_on", lambda: True)
+    monkeypatch.setattr(timing_policy, "load_policy", lambda path=None: object())
+    db = _seed_history_db(tmp_path)
+    _bars, hist = push_signals.fetch_history_rows(db_path=db)
+    assert hist[0]["timing_action"] == "STAY_OUT"
+    assert hist[0]["timing_label"] == "policy: waiting for confirmation"
+
+
+def test_fetch_history_rows_timing_none_when_flag_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(push_signals, "FULL_ASSET_MAP", {"BTC": "BTC-USD"},
+                        raising=False)
+    monkeypatch.setattr(timing_policy, "timing_on", lambda: False)
+    db = _seed_history_db(tmp_path)
+    _bars, hist = push_signals.fetch_history_rows(db_path=db)
+    assert hist[0]["timing_action"] is None
+    assert hist[0]["timing_label"] is None
 
 
 def test_push_history_full_refresh(monkeypatch):

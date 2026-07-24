@@ -30,6 +30,11 @@ create table if not exists signal_history (
   primary key (asset, date)
 );
 
+-- Timing-policy annotation for the Today digest (nullable; populated only when
+-- GTRADE_TIMING_POLICY is on). Idempotent so re-running the file is safe.
+alter table signal_history add column if not exists timing_action text;
+alter table signal_history add column if not exists timing_label text;
+
 create table if not exists guru (
   asset text primary key,
   verdict text,

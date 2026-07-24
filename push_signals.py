@@ -192,6 +192,8 @@ def fetch_history_rows(db_path=None, bar_limit=BAR_LIMIT, sig_limit=SIG_LIMIT):
     db = db_path or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  "market.db")
     bars, hist = [], []
+    show_timing = (timing_policy.timing_on()
+                   and timing_policy.load_policy() is not None)
     con = sqlite3.connect(db)
     try:
         cur = con.cursor()
@@ -207,14 +209,21 @@ def fetch_history_rows(db_path=None, bar_limit=BAR_LIMIT, sig_limit=SIG_LIMIT):
                              "high": h, "low": lo, "close": c})
             try:
                 sig = cur.execute(
-                    "SELECT date, signal, probability, actual_next_ret, correct "
-                    "FROM prediction_log WHERE asset = ? ORDER BY date DESC "
-                    "LIMIT ?", (asset, sig_limit)).fetchall()
+                    "SELECT date, signal, probability, actual_next_ret, correct, "
+                    "timing_action, timing_reason FROM prediction_log "
+                    "WHERE asset = ? ORDER BY date DESC LIMIT ?",
+                    (asset, sig_limit)).fetchall()
             except sqlite3.OperationalError:
                 sig = []
-            for d, s, p, r, cr in reversed(sig):
+            for d, s, p, r, cr, t_act, t_rsn in reversed(sig):
+                if show_timing and t_act is not None:
+                    _text, _div = timing_policy.display_label(t_act, t_rsn)
+                    t_label = _text if _div else None
+                else:
+                    t_act = t_label = None
                 hist.append({"asset": asset, "date": str(d)[:10], "signal": s,
-                             "prob": p, "actual_next_ret": r, "correct": cr})
+                             "prob": p, "actual_next_ret": r, "correct": cr,
+                             "timing_action": t_act, "timing_label": t_label})
     finally:
         con.close()
     return bars, hist
