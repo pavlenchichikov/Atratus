@@ -272,3 +272,49 @@ def test_build_payload_no_timing_when_flag_off(monkeypatch):
     assert row["timing_action"] is None
     assert row["timing_reason"] is None
     assert row["timing_label"] is None
+
+
+def test_event_hash_ignores_order_but_not_content():
+    a = ev("AAA", digest.ENTRY_BUY, conf=0.7)
+    b = ev("BBB", digest.EXIT, "BUY", "WAIT")
+    assert push_signals._event_hash([a, b]) == push_signals._event_hash([b, a])
+    other = ev("AAA", digest.ENTRY_SELL, "WAIT", "SELL", 0.7)
+    assert push_signals._event_hash([a]) != push_signals._event_hash([other])
+
+
+def test_event_hash_includes_the_date():
+    # Same events on a later day must NOT be mistaken for a duplicate.
+    today = ev("AAA", digest.ENTRY_BUY, conf=0.7, date="2026-07-24")
+    tomorrow = ev("AAA", digest.ENTRY_BUY, conf=0.7, date="2026-07-25")
+    assert push_signals._event_hash([today]) != push_signals._event_hash([tomorrow])
+
+
+def test_event_hash_includes_timing_labels():
+    before = ev("AAA", digest.TIMING_CHANGE, "BUY", "BUY", 0.7, None, "policy: entering")
+    after = ev("AAA", digest.TIMING_CHANGE, "BUY", "BUY", 0.7, None, "policy: exiting")
+    assert push_signals._event_hash([before]) != push_signals._event_hash([after])
+
+
+def test_push_state_roundtrip(tmp_path):
+    path = str(tmp_path / "push_state.json")
+    assert push_signals._load_push_state(path) == {}      # missing file
+    push_signals._save_push_state("abc", "2026-07-24", path)
+    state = push_signals._load_push_state(path)
+    assert state["hash"] == "abc"
+    assert state["snapshot_date"] == "2026-07-24"
+    assert state["sent_at"]
+
+
+def test_load_push_state_tolerates_garbage(tmp_path):
+    path = tmp_path / "push_state.json"
+    path.write_text("{not json", encoding="utf-8")
+    assert push_signals._load_push_state(str(path)) == {}
+
+
+def test_save_push_state_never_raises(tmp_path, capsys):
+    # A directory where the file should be: open() fails, and that must not
+    # break a run whose push already succeeded.
+    path = tmp_path / "push_state.json"
+    path.mkdir()
+    push_signals._save_push_state("abc", "2026-07-24", str(path))
+    assert "could not write" in capsys.readouterr().out

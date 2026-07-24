@@ -18,6 +18,8 @@ connection is reset on some networks, which used to abort the bulk history push.
 """
 
 import datetime
+import hashlib
+import json
 import os
 import socket
 import sys
@@ -317,6 +319,45 @@ def build_push_text(events):
     n = len(events)
     title = f"Atratus: {n} change" if n == 1 else f"Atratus: {n} changes"
     return title, " | ".join(parts)
+
+
+PUSH_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "push_state.json")
+
+
+def _event_hash(events):
+    """Stable fingerprint of an event set.
+
+    The date is part of the key on purpose: without it an identical event set on
+    a later day would hash equal and be silently suppressed. Timing labels are
+    included so a changed timing counter still reads as new.
+    """
+    canon = "\n".join(sorted(
+        f"{e.date}|{e.asset}|{e.kind}|{e.from_signal}|{e.to_signal}|"
+        f"{e.from_timing}|{e.to_timing}" for e in events))
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def _load_push_state(path=None):
+    """Last pushed fingerprint, or {} when there is none we can read."""
+    try:
+        with open(path or PUSH_STATE, encoding="utf-8") as fh:
+            state = json.load(fh)
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_push_state(event_hash, snapshot_date, path=None):
+    """Record what was just sent. A failure here costs one duplicate push."""
+    target = path or PUSH_STATE
+    try:
+        with open(target, "w", encoding="utf-8") as fh:
+            json.dump({"hash": event_hash, "snapshot_date": snapshot_date,
+                       "sent_at": datetime.datetime.now().isoformat(
+                           timespec="seconds")}, fh)
+    except Exception as e:
+        print(f"note: could not write {target}: {e}")
 
 
 def send_push(url, key, rows, stats):
