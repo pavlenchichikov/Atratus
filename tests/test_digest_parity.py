@@ -22,12 +22,26 @@ def _cases():
 
 
 def _mobile_fixture():
-    """The client copy: GTRADE_MOBILE_DIR wins, else a sibling mobile_app dir."""
-    root = os.getenv("GTRADE_MOBILE_DIR")
-    if not root:
-        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        root = os.path.join(os.path.dirname(repo), "mobile_app")
-    return os.path.join(root, "test", "fixtures", "digest_cases.json")
+    """The client copy. Tried in order: GTRADE_MOBILE_DIR, the sibling
+    mobile_app checkout (present in the main checkout, absent in a worktree -
+    which is exactly where this branch's work happens), then the known
+    absolute client path. Returns (path_or_None, [every path tried]) so a
+    skip can say exactly what it looked for instead of failing mysteriously."""
+    roots = []
+    env_root = os.getenv("GTRADE_MOBILE_DIR")
+    if env_root:
+        roots.append(env_root)
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    roots.append(os.path.join(os.path.dirname(repo), "mobile_app"))
+    # Known absolute client path (ASCII source, Cyrillic value via \uXXXX so
+    # the .py file itself stays ASCII-only).
+    roots.append("C:/\u041d\u043e\u0432\u0430\u044f_\u043f\u0430\u043f\u043a\u0430/mobile_app")
+
+    tried = [os.path.join(root, "test", "fixtures", "digest_cases.json") for root in roots]
+    for path in tried:
+        if os.path.exists(path):
+            return path, tried
+    return None, tried
 
 
 @pytest.mark.parametrize("case", _cases(), ids=lambda c: c["name"])
@@ -49,10 +63,9 @@ def test_fixture_case(case):
 
 
 def test_mobile_copy_is_identical():
-    path = _mobile_fixture()
-    if not os.path.exists(path):
-        pytest.skip(f"client tree not next to the repo and GTRADE_MOBILE_DIR "
-                    f"unset: {path}")
+    path, tried = _mobile_fixture()
+    if path is None:
+        pytest.skip("client tree not found - tried: " + ", ".join(tried))
     with open(FIXTURE, "rb") as fh:
         want = fh.read()
     with open(path, "rb") as fh:

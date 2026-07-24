@@ -48,7 +48,13 @@ def _confidence(signal, prob):
 
 
 def _signal_of(row):
-    return (row.get("signal") or "WAIT").upper()
+    """Signal for a row, with a missing/empty/whitespace-only value treated as
+    WAIT. Falsy-only coalescing (`signal or "WAIT"`) misses a whitespace-only
+    string, which is truthy in Python but not a real signal."""
+    sig = row.get("signal")
+    if sig is None or not sig.strip():
+        return "WAIT"
+    return sig.upper()
 
 
 def _classify(asset, frm, to):
@@ -69,7 +75,7 @@ def _classify(asset, frm, to):
                        from_timing=frm.get("timing_label"),
                        to_timing=to.get("timing_label"),
                        confidence=_confidence(ts, to.get("prob")),
-                       date=to.get("date"))
+                       date=to["date"])
 
 
 def _baseline(rows, current, since_date):

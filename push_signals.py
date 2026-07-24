@@ -41,6 +41,16 @@ from core import digest, timing_policy, track_record
 BAR_LIMIT = 180   # bars per asset exported for the mobile price chart
 SIG_LIMIT = 90    # prediction_log rows per asset for the mobile track record
 
+# The digest must not announce an event the Today screen cannot render: Today
+# diffs the same signal_history data, but through api.allHistory(21), which
+# becomes a Supabase gte('date', today - 21 days) filter. If we diffed the
+# full, unbounded SIG_LIMIT row set here, an asset whose previous row is more
+# than 21 days back (newly trained, or a stale data source) would produce an
+# event on a baseline the client's window cannot see - the client would then
+# see only one row, render "no changes", and the deep-link push would point at
+# a screen showing nothing.
+DIGEST_WINDOW_DAYS = 21   # must match the client's api.allHistory(21) window
+
 
 def build_payload(signals: list):
     """Turn track_record.latest_signals() into (signal_rows, stats_row)."""
@@ -405,6 +415,7 @@ def send_push(url, key, events):
               json={}, timeout=30)
     tokens = [row["token"] for row in r.json()]
     if not tokens:
+        print("note: no allow-listed device tokens - staying quiet")
         return 0
 
     title, body = build_push_text(events)
@@ -425,6 +436,9 @@ def send_push(url, key, events):
         # Only a delivered push updates the fingerprint, so a total failure is
         # retried on the next run instead of being deduped away.
         _save_push_state(event_hash, max(e.date for e in events))
+    else:
+        print(f"WARNING: FCM push delivered to 0 of {len(tokens)} device(s) - "
+              "not recording the fingerprint, will retry next run")
     return resp.success_count
 
 
@@ -442,6 +456,20 @@ def push(rows, stats, url: str, key: str):
         _send("POST", f"{base}/signals", headers=merge, json=chunk, timeout=120)
     _send("POST", f"{base}/public_stats?on_conflict=id", headers=merge,
           json=stats, timeout=30)
+
+
+def _digest_rows(hist, today=None):
+    """The subset of hist rows the digest is allowed to diff: the trailing
+    DIGEST_WINDOW_DAYS window, matching what the client's Today screen fetches.
+
+    This does NOT touch what gets pushed to signal_history - push_history keeps
+    shipping the full row set unfiltered. Only the rows fed to the digest are
+    bounded, so an asset whose baseline falls outside the window produces no
+    event here, which is correct: Today would show nothing for it either.
+    """
+    day = today or datetime.date.today()
+    floor = (day - datetime.timedelta(days=DIGEST_WINDOW_DAYS)).isoformat()
+    return [row for row in hist if row["date"] >= floor]
 
 
 def main():
@@ -477,7 +505,7 @@ def main():
             # say what changed has no reason to exist.
             print("note: history unavailable - skipping the change push")
         else:
-            events = digest.build_digest(hist)
+            events = digest.build_digest(_digest_rows(hist))
             sent = send_push(url, key, events)
             if sent:
                 print(f"FCM push sent to {sent} device(s)")

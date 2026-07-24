@@ -116,6 +116,28 @@
         {"asset": "AAA", "date": "2026-07-24", "signal": "BUY", "prob": 0.7, "timing_label": null}
       ],
       "expected": []
+    },
+    {
+      "name": "empty_signal_treated_as_wait",
+      "since_date": null,
+      "rows": [
+        {"asset": "FFF", "date": "2026-07-23", "signal": "", "prob": null, "timing_label": null},
+        {"asset": "FFF", "date": "2026-07-24", "signal": "BUY", "prob": 0.65, "timing_label": null}
+      ],
+      "expected": [
+        {"asset": "FFF", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "from_timing": null, "to_timing": null, "confidence": 0.65, "date": "2026-07-24"}
+      ]
+    },
+    {
+      "name": "null_signal_treated_as_wait",
+      "since_date": null,
+      "rows": [
+        {"asset": "GGG", "date": "2026-07-23", "signal": null, "prob": null, "timing_label": null},
+        {"asset": "GGG", "date": "2026-07-24", "signal": "SELL", "prob": 0.2, "timing_label": null}
+      ],
+      "expected": [
+        {"asset": "GGG", "kind": "entry_sell", "from_signal": "WAIT", "to_signal": "SELL", "from_timing": null, "to_timing": null, "confidence": 0.8, "date": "2026-07-24"}
+      ]
     }
   ]
 }

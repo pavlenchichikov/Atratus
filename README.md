@@ -173,8 +173,10 @@ The same run also feeds the mobile app: it exports per-asset OHLC history
 (`bars`), the recent signal track record (`signal_history`) and Guru Council
 verdicts (`guru`, `guru_stats`) - all gated by the same allow-list - and, when
 `GTRADE_FCM_CREDS` points to a Firebase service-account JSON, sends a personal
-push notification with the day's top signals to registered devices of
-allow-listed users.
+push notification reporting what changed since the previous snapshot (a flip,
+a new entry, an exit) to registered devices of allow-listed users. It stays
+silent when nothing changed, and tapping it opens the app straight to the
+Today screen.
 
 Set `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` in `.env` (the service key is
 secret and must never be committed or shipped to the browser), then run it after
@@ -457,7 +459,7 @@ $ python predict.py
 
 `push_signals.py` экспортирует свежий снимок сигналов в проект Supabase, который питает публичный лендинг. Он читает пер-активный последний сигнал и точность из локального журнала (модели не грузятся), затем upsert-ит полную таблицу `signals` (гейтнутую пер-пользовательским allow-list через row-level security) и анонимизированную строку `public_stats` (публичный тизер: счётчики BUY / SELL / WAIT, точность, ширина рынка и дата снимка).
 
-Тот же запуск питает мобильное приложение: он экспортирует пер-активную историю OHLC (`bars`), недавний трек-рекорд сигналов (`signal_history`) и вердикты Совета гуру (`guru`, `guru_stats`) — всё гейтнуто тем же allow-list — и, когда `GTRADE_FCM_CREDS` указывает на JSON сервис-аккаунта Firebase, шлёт персональное push-уведомление с топ-сигналами дня на зарегистрированные устройства allow-list-пользователей.
+Тот же запуск питает мобильное приложение: он экспортирует пер-активную историю OHLC (`bars`), недавний трек-рекорд сигналов (`signal_history`) и вердикты Совета гуру (`guru`, `guru_stats`), всё гейтнуто тем же allow-list, и, когда `GTRADE_FCM_CREDS` указывает на JSON сервис-аккаунта Firebase, шлёт персональное push-уведомление о том, что изменилось с прошлого снимка (смена сигнала, новый вход, выход из позиции), на зарегистрированные устройства allow-list-пользователей. Если ничего не изменилось, уведомление не отправляется, а по тапу оно открывает экран Today.
 
 Задайте `SUPABASE_URL` и `SUPABASE_SERVICE_KEY` в `.env` (service-ключ секретен и не должен попадать в git или в браузер), затем запускайте после `predict.py`:
 

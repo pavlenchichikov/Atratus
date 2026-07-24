@@ -56,6 +56,7 @@ def test_empty_snapshot_uses_today():
     assert stats["breadth"] == 0.0
     assert stats["snapshot_date"]          # today's date, non-empty
 
+import datetime
 import sqlite3
 
 import push_signals
@@ -130,6 +131,39 @@ def test_fetch_history_rows_timing_none_when_flag_off(tmp_path, monkeypatch):
     _bars, hist = push_signals.fetch_history_rows(db_path=db)
     assert hist[0]["timing_action"] is None
     assert hist[0]["timing_label"] is None
+
+
+def test_digest_rows_drops_a_baseline_outside_the_window():
+    today = datetime.date(2026, 7, 24)
+    hist = [
+        # baseline ~60 days back: outside the client's 21-day Today window.
+        {"asset": "OLD", "date": "2026-05-25", "signal": "WAIT", "prob": None,
+         "timing_label": None},
+        {"asset": "OLD", "date": "2026-07-24", "signal": "BUY", "prob": 0.7,
+         "timing_label": None},
+        # baseline 14 days back: inside the window.
+        {"asset": "NEW", "date": "2026-07-10", "signal": "WAIT", "prob": None,
+         "timing_label": None},
+        {"asset": "NEW", "date": "2026-07-24", "signal": "BUY", "prob": 0.7,
+         "timing_label": None},
+    ]
+    filtered = push_signals._digest_rows(hist, today=today)
+    events = digest.build_digest(filtered)
+    kinds = {e.asset: e.kind for e in events}
+    # OLD's baseline row got filtered out, leaving a single row for OLD -
+    # build_digest requires >=2 rows per asset, so no event, matching what
+    # the client's 21-day window would also fail to show.
+    assert "OLD" not in kinds
+    assert kinds["NEW"] == digest.ENTRY_BUY
+
+
+def test_digest_rows_keeps_the_full_row_at_the_window_boundary():
+    today = datetime.date(2026, 7, 24)
+    # Exactly 21 days back: the floor date itself must be kept (>=, not >).
+    hist = [{"asset": "AAA", "date": "2026-07-03", "signal": "WAIT",
+             "prob": None, "timing_label": None}]
+    filtered = push_signals._digest_rows(hist, today=today)
+    assert filtered == hist
 
 
 def test_push_history_full_refresh(monkeypatch):
@@ -262,7 +296,7 @@ def test_send_push_skips_a_repeat_of_the_last_push(monkeypatch, tmp_path):
     assert calls == []      # dedupe happens before any network or firebase use
 
 
-def _fake_firebase(monkeypatch):
+def _fake_firebase(monkeypatch, success_count=1):
     """Stand-in for firebase_admin so send_push runs without creds or network."""
     import sys
     import types
@@ -270,8 +304,10 @@ def _fake_firebase(monkeypatch):
     seen = {}
 
     class _Resp:
-        success_count = 1
-        responses = []
+        pass
+
+    _Resp.success_count = success_count
+    _Resp.responses = []
 
     messaging = types.SimpleNamespace(
         Notification=lambda title, body: {"title": title, "body": body},
@@ -318,6 +354,58 @@ def test_send_push_carries_the_today_deeplink_and_records_state(monkeypatch,
         push_signals._event_hash(events)
     # The fingerprint is now on disk, so an identical second run is deduped.
     assert push_signals.send_push("https://x.supabase.co", "k", events) == 0
+
+
+def test_send_push_notes_when_no_tokens(monkeypatch, tmp_path, capsys):
+    creds = tmp_path / "creds.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GTRADE_FCM_CREDS", str(creds))
+    _fake_firebase(monkeypatch)
+
+    class R:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return []      # allow-list RPC returned no tokens
+
+    monkeypatch.setattr(push_signals.requests, "request",
+                        lambda method, url, **kw: R())
+    events = [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]
+
+    assert push_signals.send_push("https://x.supabase.co", "k", events) == 0
+    assert "no allow-listed device tokens" in capsys.readouterr().out
+
+
+def test_send_push_warns_on_zero_delivery(monkeypatch, tmp_path, capsys):
+    creds = tmp_path / "creds.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GTRADE_FCM_CREDS", str(creds))
+    state = tmp_path / "push_state.json"
+    monkeypatch.setattr(push_signals, "PUSH_STATE", str(state))
+
+    class R:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"token": "t1"}, {"token": "t2"}]
+
+    monkeypatch.setattr(push_signals.requests, "request",
+                        lambda method, url, **kw: R())
+    _fake_firebase(monkeypatch, success_count=0)
+    events = [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]
+
+    assert push_signals.send_push("https://x.supabase.co", "k", events) == 0
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "0 of 2 device" in out
+    # A total failure must not save the fingerprint, so the next run retries.
+    assert push_signals._load_push_state(str(state)) == {}
 
 
 def test_build_payload_includes_timing_label_on_divergence(monkeypatch):
