@@ -1,0 +1,121 @@
+{
+  "_note": "Shared parity fixture for core/digest.py and lib/digest.dart. Keep byte-identical with mobile_app/test/fixtures/digest_cases.json. Confidence compares with a 1e-9 tolerance. Expected lists are in exact order.",
+  "cases": [
+    {
+      "name": "entry_flip_exit",
+      "since_date": null,
+      "rows": [
+        {"asset": "AAA", "date": "2026-07-23", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-24", "signal": "BUY", "prob": 0.7, "timing_label": null},
+        {"asset": "BBB", "date": "2026-07-23", "signal": "BUY", "prob": 0.6, "timing_label": null},
+        {"asset": "BBB", "date": "2026-07-24", "signal": "SELL", "prob": 0.3, "timing_label": null},
+        {"asset": "CCC", "date": "2026-07-23", "signal": "BUY", "prob": 0.6, "timing_label": null},
+        {"asset": "CCC", "date": "2026-07-24", "signal": "WAIT", "prob": null, "timing_label": null}
+      ],
+      "expected": [
+        {"asset": "BBB", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "from_timing": null, "to_timing": null, "confidence": 0.7, "date": "2026-07-24"},
+        {"asset": "AAA", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "from_timing": null, "to_timing": null, "confidence": 0.7, "date": "2026-07-24"},
+        {"asset": "CCC", "kind": "exit", "from_signal": "BUY", "to_signal": "WAIT", "from_timing": null, "to_timing": null, "confidence": null, "date": "2026-07-24"}
+      ]
+    },
+    {
+      "name": "entry_sell_confidence",
+      "since_date": null,
+      "rows": [
+        {"asset": "DDD", "date": "2026-07-23", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "DDD", "date": "2026-07-24", "signal": "SELL", "prob": 0.25, "timing_label": null}
+      ],
+      "expected": [
+        {"asset": "DDD", "kind": "entry_sell", "from_signal": "WAIT", "to_signal": "SELL", "from_timing": null, "to_timing": null, "confidence": 0.75, "date": "2026-07-24"}
+      ]
+    },
+    {
+      "name": "timing_change_only",
+      "since_date": null,
+      "rows": [
+        {"asset": "AAA", "date": "2026-07-23", "signal": "BUY", "prob": 0.7, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-24", "signal": "BUY", "prob": 0.7, "timing_label": "policy: entering"}
+      ],
+      "expected": [
+        {"asset": "AAA", "kind": "timing_change", "from_signal": "BUY", "to_signal": "BUY", "from_timing": null, "to_timing": "policy: entering", "confidence": 0.7, "date": "2026-07-24"}
+      ]
+    },
+    {
+      "name": "no_change_or_single_row",
+      "since_date": null,
+      "rows": [
+        {"asset": "AAA", "date": "2026-07-23", "signal": "BUY", "prob": 0.7, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-24", "signal": "BUY", "prob": 0.7, "timing_label": null},
+        {"asset": "BBB", "date": "2026-07-24", "signal": "BUY", "prob": 0.9, "timing_label": null}
+      ],
+      "expected": []
+    },
+    {
+      "name": "baseline_is_previous_distinct_date",
+      "since_date": null,
+      "rows": [
+        {"asset": "AAA", "date": "2026-07-23", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-24", "signal": "BUY", "prob": 0.7, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-24", "signal": "BUY", "prob": 0.7, "timing_label": null}
+      ],
+      "expected": [
+        {"asset": "AAA", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "from_timing": null, "to_timing": null, "confidence": 0.7, "date": "2026-07-24"}
+      ]
+    },
+    {
+      "name": "ties_broken_by_asset",
+      "since_date": null,
+      "rows": [
+        {"asset": "EEE", "date": "2026-07-23", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "EEE", "date": "2026-07-24", "signal": "BUY", "prob": 0.8, "timing_label": null},
+        {"asset": "BBB", "date": "2026-07-23", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "BBB", "date": "2026-07-24", "signal": "BUY", "prob": 0.8, "timing_label": null},
+        {"asset": "ZZZ", "date": "2026-07-23", "signal": "SELL", "prob": 0.4, "timing_label": null},
+        {"asset": "ZZZ", "date": "2026-07-24", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "MMM", "date": "2026-07-23", "signal": "BUY", "prob": 0.6, "timing_label": null},
+        {"asset": "MMM", "date": "2026-07-24", "signal": "WAIT", "prob": null, "timing_label": null}
+      ],
+      "expected": [
+        {"asset": "BBB", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "from_timing": null, "to_timing": null, "confidence": 0.8, "date": "2026-07-24"},
+        {"asset": "EEE", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "from_timing": null, "to_timing": null, "confidence": 0.8, "date": "2026-07-24"},
+        {"asset": "MMM", "kind": "exit", "from_signal": "BUY", "to_signal": "WAIT", "from_timing": null, "to_timing": null, "confidence": null, "date": "2026-07-24"},
+        {"asset": "ZZZ", "kind": "exit", "from_signal": "SELL", "to_signal": "WAIT", "from_timing": null, "to_timing": null, "confidence": null, "date": "2026-07-24"}
+      ]
+    },
+    {
+      "name": "mixed_entry_kinds_tie",
+      "since_date": null,
+      "rows": [
+        {"asset": "CCC", "date": "2026-07-23", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "CCC", "date": "2026-07-24", "signal": "BUY", "prob": 0.75, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-23", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-24", "signal": "SELL", "prob": 0.25, "timing_label": null}
+      ],
+      "expected": [
+        {"asset": "AAA", "kind": "entry_sell", "from_signal": "WAIT", "to_signal": "SELL", "from_timing": null, "to_timing": null, "confidence": 0.75, "date": "2026-07-24"},
+        {"asset": "CCC", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "from_timing": null, "to_timing": null, "confidence": 0.75, "date": "2026-07-24"}
+      ]
+    },
+    {
+      "name": "since_date_baseline",
+      "since_date": "2026-07-21",
+      "rows": [
+        {"asset": "AAA", "date": "2026-07-20", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-22", "signal": "BUY", "prob": 0.7, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-24", "signal": "BUY", "prob": 0.7, "timing_label": null}
+      ],
+      "expected": [
+        {"asset": "AAA", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "from_timing": null, "to_timing": null, "confidence": 0.7, "date": "2026-07-24"}
+      ]
+    },
+    {
+      "name": "since_date_on_current_date",
+      "since_date": "2026-07-24",
+      "rows": [
+        {"asset": "AAA", "date": "2026-07-20", "signal": "WAIT", "prob": null, "timing_label": null},
+        {"asset": "AAA", "date": "2026-07-24", "signal": "BUY", "prob": 0.7, "timing_label": null}
+      ],
+      "expected": []
+    }
+  ]
+}

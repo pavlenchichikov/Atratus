@@ -55,6 +55,9 @@ _loop.lock
 *.json
 !*.example.json
 
+# Test fixtures are hand-written inputs, not generated state: keep them tracked.
+!tests/fixtures/*.json
+
 # Internal docs (outdated)
 PLAN.md
 
