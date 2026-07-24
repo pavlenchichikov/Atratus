@@ -1,6 +1,6 @@
 """Unit tests for push_signals.build_payload (pure, no network / no DB)."""
 
-from core import timing_policy
+from core import digest, timing_policy
 from push_signals import _rest_base, build_payload
 
 
@@ -56,10 +56,16 @@ def test_empty_snapshot_uses_today():
     assert stats["breadth"] == 0.0
     assert stats["snapshot_date"]          # today's date, non-empty
 
-
 import sqlite3
 
 import push_signals
+
+
+def ev(asset, kind, from_signal="WAIT", to_signal="BUY", conf=None,
+       from_timing=None, to_timing=None, date="2026-07-24"):
+    return digest.DigestEvent(asset=asset, kind=kind, from_signal=from_signal,
+                              to_signal=to_signal, from_timing=from_timing,
+                              to_timing=to_timing, confidence=conf, date=date)
 
 
 def _seed_history_db(tmp_path):
@@ -169,22 +175,54 @@ def test_fetch_guru_rows_maps_dashboard_payload(monkeypatch):
     assert stats == {"id": 1, "accuracy": 0.61, "n": 40, "horizon": "60d"}
 
 
-def test_build_push_text_ranks_by_confidence():
-    rows = [
-        {"asset": "BTC", "action": "BUY", "prob": 0.60},
-        {"asset": "SBER", "action": "SELL", "prob": 0.30},   # conf 0.70 - first
-        {"asset": "ETH", "action": "WAIT", "prob": 0.50},    # excluded
-        {"asset": "GOLD", "action": "BUY", "prob": None},    # excluded
+
+
+def test_build_push_text_names_signal_events():
+    events = [
+        ev("SBER", digest.FLIP, "BUY", "SELL", 0.62),
+        ev("GAZP", digest.ENTRY_BUY, "WAIT", "BUY", 0.61),
+        ev("DAX", digest.EXIT, "BUY", "WAIT", None),
     ]
-    stats = {"n_buy": 2, "n_sell": 1}
-    title, body = push_signals.build_push_text(rows, stats)
-    assert title == "Atratus: 2 BUY / 1 SELL"
-    assert body == "SBER SELL 70% | BTC BUY 60%"
+    title, body = push_signals.build_push_text(events)
+    assert title == "Atratus: 3 changes"
+    assert body == "SBER BUY>SELL | GAZP BUY 61% | DAX exit"
 
 
-def test_build_push_text_empty_body_fallback():
-    title, body = push_signals.build_push_text([], {"n_buy": 0, "n_sell": 0})
-    assert body == "New signals snapshot"
+def test_build_push_text_singular_title():
+    title, _body = push_signals.build_push_text([ev("GAZP", digest.ENTRY_BUY,
+                                                    conf=0.6)])
+    assert title == "Atratus: 1 change"
+
+
+def test_build_push_text_truncates_and_counts_the_rest():
+    events = [ev(f"A{i}", digest.ENTRY_BUY, conf=0.9 - i / 100) for i in range(6)]
+    title, body = push_signals.build_push_text(events)
+    assert title == "Atratus: 6 changes"
+    assert body == "A0 BUY 90% | A1 BUY 89% | A2 BUY 88% | A3 BUY 87% | +2 more"
+
+
+def test_build_push_text_appends_timing_counter():
+    events = [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]
+    events += [ev(f"T{i}", digest.TIMING_CHANGE, "BUY", "BUY", 0.55,
+                  None, "policy: entering") for i in range(7)]
+    title, body = push_signals.build_push_text(events)
+    assert title == "Atratus: 8 changes"
+    assert body == "SBER BUY>SELL | +7 timing"
+
+
+def test_build_push_text_entry_without_confidence_omits_percent():
+    title, body = push_signals.build_push_text([ev("GOLD", digest.ENTRY_SELL,
+                                                   "WAIT", "SELL", None)])
+    assert (title, body) == ("Atratus: 1 change", "GOLD SELL")
+
+
+def test_build_push_text_is_ascii_only():
+    events = [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62),
+              ev("T1", digest.TIMING_CHANGE, "BUY", "BUY", 0.55)]
+    title, body = push_signals.build_push_text(events)
+    # Guards the repo convention: no arrows, dashes or smart quotes in copy.
+    (title + body).encode("ascii")
+    assert "->" not in body
 
 
 def test_send_push_noop_without_creds(monkeypatch):

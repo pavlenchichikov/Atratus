@@ -34,7 +34,7 @@ except Exception:
     pass
 
 from config import FULL_ASSET_MAP
-from core import timing_policy, track_record
+from core import digest, timing_policy, track_record
 
 BAR_LIMIT = 180   # bars per asset exported for the mobile price chart
 SIG_LIMIT = 90    # prediction_log rows per asset for the mobile track record
@@ -285,23 +285,38 @@ def push_history(url, key, bars, hist, guru_rows, guru_stats):
               json=guru_stats, timeout=30)
 
 
-def build_push_text(rows, stats):
-    """Notification title/body: top-5 non-WAIT signals ranked by confidence.
+def build_push_text(events):
+    """Notification title/body from digest events.
 
-    prob is the calibrated up-move probability, so confidence is prob for BUY
-    and 1-prob for SELL (ASCII separators only - repo convention).
+    The title counts every event so it reconciles with the body counters. The
+    body names up to 4 signal events (flip, entry, exit), then reports how many
+    signal events were left out, then how many timing-only moves happened.
+    ASCII only, no arrows - repo convention.
     """
-    ranked = []
-    for r in rows:
-        action, prob = r.get("action"), r.get("prob")
-        if action not in ("BUY", "SELL") or prob is None:
-            continue
-        conf = prob if action == "BUY" else 1.0 - prob
-        ranked.append((conf, r["asset"], action))
-    ranked.sort(reverse=True)
-    title = f"Atratus: {stats.get('n_buy', 0)} BUY / {stats.get('n_sell', 0)} SELL"
-    body = " | ".join(f"{a} {act} {conf * 100:.0f}%" for conf, a, act in ranked[:5])
-    return title, body or "New signals snapshot"
+    signal_events = [e for e in events if e.kind in digest.SIGNAL_KINDS]
+    n_timing = len(events) - len(signal_events)
+
+    named = []
+    for e in signal_events[:4]:
+        if e.kind == digest.FLIP:
+            named.append(f"{e.asset} {e.from_signal}>{e.to_signal}")
+        elif e.kind == digest.EXIT:
+            named.append(f"{e.asset} exit")
+        elif e.confidence is None:
+            named.append(f"{e.asset} {e.to_signal}")
+        else:
+            named.append(f"{e.asset} {e.to_signal} {e.confidence * 100:.0f}%")
+
+    parts = list(named)
+    left_out = len(signal_events) - len(named)
+    if left_out > 0:
+        parts.append(f"+{left_out} more")
+    if n_timing:
+        parts.append(f"+{n_timing} timing")
+
+    n = len(events)
+    title = f"Atratus: {n} change" if n == 1 else f"Atratus: {n} changes"
+    return title, " | ".join(parts)
 
 
 def send_push(url, key, rows, stats):
