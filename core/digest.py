@@ -1,7 +1,8 @@
 """Pure diff over prediction_log history rows: what changed, per asset.
 
-Mirror of the client's lib/digest.dart. Both implementations are driven by the
-shared fixture tests/fixtures/digest_cases.json, so they cannot drift silently.
+Mirror of the client's lib/digest.dart. Paired with a shared fixture
+(tests/fixtures/digest_cases.json) that serves as the parity harness,
+validating both implementations to prevent silent drift.
 Timing behaviour is inherited, not re-implemented: fetch_history_rows already
 sets timing_label to None unless the timing policy is on AND the label diverges
 from the signal, so with the flag off no timing event can be produced here.
