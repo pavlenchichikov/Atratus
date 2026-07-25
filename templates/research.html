@@ -32,14 +32,16 @@
     <div class="stat"><span class="stat-label">Left in the run</span>
       <span class="stat-value mono">{{ progress.eta.run_left_s | hms }}</span></div>
   </div>
-  <p class="dim">Estimate basis: {{ progress.eta.basis }}; run total: {{ progress.eta.run_basis }}.</p>
+  <p class="dim">Estimate basis: {{ progress.eta.basis | default("unknown", true) }}; run total:
+    {{ progress.eta.run_basis | default("unknown", true) }}.</p>
   {% if progress.unit.in_flight %}
   <p class="mono">Training now ({{ progress.unit.workers }} workers): {{ progress.unit.in_flight | join(", ") }}</p>
   {% endif %}
   {% if progress.stale %}
   <p class="dim">No update for {{ progress.age_s | hms }}. The run may have stopped; pid {{ progress.pid }}.</p>
   {% else %}
-  <p class="dim">Updated {{ progress.age_s | hms }} ago. Run started {{ progress.run_started }}.</p>
+  <p class="dim">Updated {{ progress.age_s | hms }} ago. Run started
+    {{ progress.run_started | default("unknown", true) }}.</p>
   {% endif %}
   {% else %}
   <p class="dim">The agent has not published any progress yet.</p>

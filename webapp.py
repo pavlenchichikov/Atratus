@@ -35,10 +35,15 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 
 def _hms(seconds):
-    """Seconds as a compact human duration; "unknown" when seconds is None."""
+    """Seconds as a compact human duration; "unknown" when seconds is None or
+    otherwise not a usable number. Total, because a filter that raises inside a
+    render turns the page the owner is watching into a 500."""
     if seconds is None:
         return "unknown"
-    total = int(seconds)
+    try:
+        total = int(seconds)
+    except (TypeError, ValueError):
+        return "unknown"
     if total < 60:
         return "%ds" % total
     if total < 3600:
