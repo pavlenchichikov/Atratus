@@ -18,13 +18,13 @@ def test_no_pending_assets_means_nothing_left():
 
 
 def test_expensive_asset_last_is_not_the_average():
-    # Three cheap assets already done, the slow one is what remains. A naive
-    # average-based estimate would say 945 s; the truth is 3600 s.
+    # Three cheap assets already done, the slow one is what remains. The per-asset
+    # median correctly prices the remaining work, not the pooled median of history.
     hist = {"C1": [60], "C2": [60], "C3": [60], "SLOW": [3600]}
     est, basis = ar_progress.unit_remaining(["SLOW"], hist, workers=4)
-    naive = ar_progress.median([60, 60, 60, 3600])
+    pooled_median = ar_progress.median([60, 60, 60, 3600])
     assert est == 3600.0
-    assert est > naive
+    assert est > pooled_median
     assert "per-asset history" in basis
 
 
@@ -62,6 +62,43 @@ def test_without_per_asset_history_it_uses_the_unit_kind_median():
 def test_without_any_history_it_says_so_instead_of_guessing():
     est, basis = ar_progress.unit_remaining(["A"], {}, workers=4,
                                             unit_kind="holdout_14", unit_hist={})
+    assert est is None
+    assert basis == "no history yet"
+
+
+def test_multiple_different_cost_assets_on_single_lane():
+    # Several pending assets with different costs show why per-asset medians
+    # matter: a naive average-based estimate is visibly wrong.
+    hist = {"A": [90, 100, 110], "B": [190, 200], "C": [490, 500, 510]}
+    pending = ["A", "B", "C"]
+    est, _basis = ar_progress.unit_remaining(pending, hist, workers=1)
+
+    # Correct: sum of per-asset medians
+    correct = 100.0 + 195.0 + 500.0
+    assert est == correct
+
+    # Naive: average of all history times length of pending
+    all_times = [90, 100, 110, 190, 200, 490, 500, 510]
+    avg_all = sum(all_times) / len(all_times)
+    naive = len(pending) * avg_all
+
+    # They differ; per-asset sum beats naive average
+    assert est != naive
+
+
+def test_unit_remaining_defends_against_non_numeric_workers():
+    # workers parameter may come from JSON and be corrupted; should not raise.
+    hist = {"A": [100]}
+    est, basis = ar_progress.unit_remaining(["A"], hist, workers="four")
+    assert est == 100.0
+
+    est, basis = ar_progress.unit_remaining(["A"], hist, workers=None)
+    assert est == 100.0
+
+
+def test_run_remaining_defends_against_non_numeric_unit_left():
+    # unit_left parameter may come from JSON and be corrupted; should not raise.
+    est, basis = ar_progress.run_remaining("soon", ["tier_4"], {"tier_4": [4000]})
     assert est is None
     assert basis == "no history yet"
 

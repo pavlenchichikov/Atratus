@@ -48,7 +48,8 @@ def unit_remaining(pending, asset_hist, workers, unit_kind=None, unit_hist=None)
     schedule puts the expensive assets last, so an average is biased low. And the
     assets run in parallel, so their times do not add up - the remaining wall
     clock is the work spread over the lanes, and never less than the single
-    longest asset left.
+    longest asset left. Unknown pending assets are priced at the population median
+    of known assets (one vote per asset), not at pooled samples.
     """
     if not pending:
         return 0.0, "unit finished"
@@ -59,14 +60,15 @@ def unit_remaining(pending, asset_hist, workers, unit_kind=None, unit_hist=None)
         if fallback is None:
             return None, "no history yet"
         return fallback, "unit-kind median, no per-asset history yet"
-    # Collect all raw times from asset_hist for unknown assets
-    all_times = []
-    for times_list in (asset_hist or {}).values():
-        if times_list:
-            all_times.extend(times_list)
-    typical = median(all_times) if all_times else median(have)
+    # Collect per-asset medians from asset_hist for unknown assets
+    asset_medians = [median(times_list) for times_list in (asset_hist or {}).values()
+                     if times_list]
+    typical = median(asset_medians)
     times = [known[asset] if known[asset] is not None else typical for asset in pending]
-    lanes = max(1, int(workers or 1))
+    try:
+        lanes = max(1, int(workers or 1))
+    except (TypeError, ValueError):
+        lanes = 1
     est = max(max(times), sum(times) / lanes)
     if len(have) < len(pending):
         return est, "per-asset history (unknown assets at the median of known ones)"
@@ -82,7 +84,10 @@ def run_remaining(unit_left, pending_units, unit_hist):
     """
     if unit_left is None:
         return None, "no history yet"
-    total = float(unit_left)
+    try:
+        total = float(unit_left)
+    except (TypeError, ValueError):
+        return None, "no history yet"
     unmeasured = 0
     for kind in (pending_units or []):
         typical = median((unit_hist or {}).get(kind))
