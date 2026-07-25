@@ -110,3 +110,51 @@ def test_tier_off_never_folds_tier_4_or_pends_it(monkeypatch, tmp_path):
     assert all("tier_4" not in (c.get("pending_units") or []) for c in calls)
     # sanity: the gate phase actually ran (the assertions above are not vacuous)
     assert any(c.get("phase") == "gate" for c in calls)
+
+
+def test_search_step_publishes_unit_kind_and_gets_an_estimate(monkeypatch, tmp_path):
+    """Found by actually running the agent (2026-07-25 smoke test): search and
+    warmup steps published no unit_kind, so unit_remaining() had nothing to
+    look up and the entire search phase read "no history yet" even though
+    screen_10 was seeded - the owner had no ETA for the phase that runs first."""
+    _isolate(monkeypatch, tmp_path)
+    auto_research._progress_publish(
+        "search", step={"i": 1, "n": 15, "kind": "screen", "unit_kind": "screen_10"})
+    ar_progress.write_unit({"order": ["SP500"], "workers": 1, "done": []})
+    snap = ar_progress.snapshot()
+    assert snap["eta"]["basis"] == "unit-kind median, no per-asset history yet"
+    assert snap["eta"]["unit_left_s"] is not None
+
+
+def test_fold_screen_unit_grows_screen_history_but_not_assets(monkeypatch, tmp_path):
+    """A screen unit trains CatBoost only, so its assets finish in seconds; a
+    holdout/tier (gate) unit trains the full ensemble and takes hours for the
+    same asset. Folding a screen unit's per-asset times into history["assets"]
+    would mix those two populations and poison the per-asset median the whole
+    ETA rests on, so fold_assets=False must keep them out - even though
+    unit.json genuinely has "done" entries a careless unconditional fold would
+    happily absorb.
+    """
+    _isolate(monkeypatch, tmp_path)
+    auto_research._progress_publish(
+        "search", step={"i": 1, "n": 15, "kind": "screen", "unit_kind": "screen_10"})
+    before = len(ar_progress.read_agent()["history"]["screen_10"])
+    ar_progress.write_unit({"done": [["SP500", 12], ["NVDA", 9]]})
+    auto_research._progress_fold_unit("screen_10", 45, fold_assets=False)
+    hist = ar_progress.read_agent()["history"]
+    assert len(hist["screen_10"]) == before + 1
+    assert 45 in hist["screen_10"]
+    assert hist["assets"] == {}
+
+
+def test_fold_gate_unit_still_absorbs_per_asset_times_by_default(monkeypatch, tmp_path):
+    """fold_assets defaults to True: a gate unit (tier_4/holdout_14) trains the
+    full ensemble, so its assets' own service times are exactly what the
+    per-asset ETA needs - unlike a screen unit's CatBoost-only seconds."""
+    _isolate(monkeypatch, tmp_path)
+    auto_research._progress_publish(
+        "gate", step={"i": 1, "n": 1, "kind": "elite_holdout", "unit_kind": "holdout_14"})
+    ar_progress.write_unit({"done": [["USDJPY", 7200]]})
+    auto_research._progress_fold_unit("holdout_14", 9000)
+    hist = ar_progress.read_agent()["history"]
+    assert hist["assets"]["USDJPY"] == [7200]

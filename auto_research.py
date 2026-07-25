@@ -1008,7 +1008,13 @@ def run_qd(train_fn=None):
     init = int(os.getenv("GTRADE_AR_QD_INIT", "8"))
     n_final = int(os.getenv("GTRADE_AR_QD_FINAL", "3"))
 
+    # Derived, not hardcoded, so a changed SELECTION_ASSETS still finds its own
+    # seeded/measured history bucket (see PROGRESS_SEED's "screen_10").
+    screen_kind = "screen_%d" % len(SELECTION_ASSETS.split(","))
+
+    _t0 = time.time()
     screen_base = base_fn(SELECTION_ASSETS, {"GTRADE_SCREEN_ONLY": "1"})
+    _progress_fold_unit(screen_kind, time.time() - _t0, fold_assets=False)
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in screen_base}
 
     try:
@@ -1016,7 +1022,7 @@ def run_qd(train_fn=None):
         _prog.start_heartbeat("agent")
     except Exception:
         pass
-    _progress_publish("warmup")
+    _progress_publish("warmup", step={"kind": "screen", "unit_kind": screen_kind})
 
     def _screen_eval(g):
         return train_fn(SELECTION_ASSETS, screen_env(genome_to_env(g)))
@@ -1026,7 +1032,10 @@ def run_qd(train_fn=None):
         for _ in range(init):
             g = _canon_genome(random_genome(active, base_features))
             ar_memory.tried_add("genome", genome_sig(g))
-            archive_put(archive, g, _screen_eval(g), base_score, active)
+            _t0 = time.time()
+            rows = _screen_eval(g)
+            _progress_fold_unit(screen_kind, time.time() - _t0, fold_assets=False)
+            archive_put(archive, g, rows, base_score, active)
         _qd_save(archive)
 
     # NOTE: archive illumination always uses the cheap raw CB screen (fitness vs the
@@ -1036,7 +1045,8 @@ def run_qd(train_fn=None):
     max_misses = int(os.getenv("GTRADE_AR_QD_MAX_MISSES", "5"))
     misses = 0
     for _step in range(BUDGET):
-        _progress_publish("search", step={"i": _step + 1, "n": BUDGET, "kind": "screen"})
+        _progress_publish("search", step={"i": _step + 1, "n": BUDGET, "kind": "screen",
+                                          "unit_kind": screen_kind})
         if not archive:
             break
         child = next_child(archive, active, base_features)
@@ -1052,7 +1062,9 @@ def run_qd(train_fn=None):
         misses = 0
         csig = genome_sig(child)
         ar_memory.tried_add("genome", csig)
+        _t0 = time.time()
         crows = _screen_eval(child)
+        _progress_fold_unit(screen_kind, time.time() - _t0, fold_assets=False)
         stored = archive_put(archive, child, crows, base_score, active)
         if ar_rl.rl_on():
             ctl = _rl_controller()
@@ -1516,8 +1528,20 @@ def _progress_publish(phase, step=None, pending_units=None):
         pass
 
 
-def _progress_fold_unit(unit_kind, seconds):
-    """Record a finished unit: its wall time and each asset's own service time."""
+def _progress_fold_unit(unit_kind, seconds, fold_assets=True):
+    """Record a finished unit: its wall time, and (for gate units) each asset's
+    own service time.
+
+    fold_assets=False for screen units, and this is load-bearing, not a style
+    choice: a screen unit trains CatBoost only, so an asset there finishes in
+    SECONDS, while the same asset in a holdout/tier unit runs the full ensemble
+    and takes HOURS. Folding both into history["assets"] would mix two
+    different populations into one list, poisoning the per-asset median that
+    unit_remaining() rests the entire ETA on - worse than having no per-asset
+    history at all. A screen unit's wall time still folds into
+    history[unit_kind] (e.g. "screen_10") so the search phase gets an estimate;
+    it just never touches history["assets"]. Do not make this unconditional.
+    """
     try:
         from core import ar_progress
         record = ar_progress.read_agent()
@@ -1525,14 +1549,15 @@ def _progress_fold_unit(unit_kind, seconds):
         history.setdefault("assets", {})
         if unit_kind and seconds:
             history[unit_kind] = (history.get(unit_kind) or [])[-(PROGRESS_KEEP - 1):] + [int(seconds)]
-        for pair in (ar_progress.read_unit().get("done") or []):
-            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                continue
-            asset, took = pair
-            if not took:
-                continue
-            prior = history["assets"].get(asset) or []
-            history["assets"][asset] = prior[-(PROGRESS_KEEP - 1):] + [int(took)]
+        if fold_assets:
+            for pair in (ar_progress.read_unit().get("done") or []):
+                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                    continue
+                asset, took = pair
+                if not took:
+                    continue
+                prior = history["assets"].get(asset) or []
+                history["assets"][asset] = prior[-(PROGRESS_KEEP - 1):] + [int(took)]
         record["history"] = history
         ar_progress.write_agent(record)
     except Exception:
