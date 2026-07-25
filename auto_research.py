@@ -284,8 +284,8 @@ def _heldout_eval(subset, env, full_fn, done_out=None):
     writer of ar_progress_unit.json while it runs, and the CB train always runs
     SECOND here - so a caller that waits until both finish and then reads the
     unit file always sees the CB train's second-scale per-asset times, never
-    the full train's hour-scale ones (2026-07-25 review, finding 1). The entry
-    is None when the full train did not actually publish a fresh unit record
+    the full train's hour-scale ones. The entry is None when the full train
+    did not actually publish a fresh unit record
     (e.g. it was satisfied from cache and unit_begin never ran), so a caller
     never mistakes a stale leftover file for this training's own times."""
     mark = _progress_unit_marker() if done_out is not None else None
@@ -1116,7 +1116,6 @@ def run_qd(train_fn=None):
         basis = _score_basis()
         # Honest about which units will actually run: with GTRADE_AR_TIER=0 there
         # is no tier check at all, so pending_units and the tier_4 fold must not
-        # assume one - see FIX in the 2026-07-25 code review.
         unit_seq = ["tier_4", "holdout_14"] if tier_on() else ["holdout_14"]
         _progress_publish("gate", step={"i": 0, "n": len(elites), "kind": "base_holdout",
                                         "unit_kind": "holdout_14"},
@@ -1535,7 +1534,7 @@ def _load_history(record):
     only copies the top level, so history["assets"] would still be the exact
     same nested dict object as PROGRESS_SEED["assets"], and every fold on a
     fresh progress file would then permanently corrupt the seed for the rest of
-    the process (2026-07-25 review, finding 6).
+    the process.
 
     Also discards a legacy FLAT assets bucket - {"USDJPY": [7200], ...}, asset
     name straight to a list of numbers, from before per-unit-kind keying (see
@@ -1583,7 +1582,7 @@ def _progress_unit_marker():
     unit file yet), for a caller to capture BEFORE an evaluation and pass back
     to _progress_fold_unit as since=. An unchanged stamp after the evaluation
     means no unit_begin ran, i.e. the evaluation was satisfied entirely from
-    cache and the unit file was never touched (2026-07-25 review, finding 3)."""
+    cache and the unit file was never touched."""
     try:
         from core import ar_progress
         return ar_progress.read_unit().get("started")
@@ -1616,8 +1615,7 @@ def _progress_fold_unit(unit_kind, seconds, since=_NO_MARK, done_pairs=_NO_MARK)
     land there, so keying by kind is what makes folding every unit's per-asset
     times safe. (Earlier this was gated by a fold_assets=False flag that kept
     screen units out of one flat history["assets"] dict entirely; keying
-    replaced that gate structurally, and the flag was removed - 2026-07-25
-    review, findings 1 and 2.)
+    replaced that gate structurally, and the flag was removed.)
 
     since, when given (see _progress_unit_marker), is the unit file's 'started'
     stamp captured right BEFORE the evaluation ran; if it is unchanged
@@ -1625,8 +1623,8 @@ def _progress_fold_unit(unit_kind, seconds, since=_NO_MARK, done_pairs=_NO_MARK)
     skipped entirely - neither the wall time nor any per-asset time - because
     folding a cache hit would otherwise record a near-zero wall time and
     re-absorb the PREVIOUS unit's per-asset samples under this unit_kind's
-    label (2026-07-25 review, finding 3). The wall time is also floored to at
-    least one second so a sub-second measurement can never enter a median.
+    label. The wall time is also floored to at least one second so a
+    sub-second measurement can never enter a median.
 
     done_pairs, when given (see _heldout_eval's done_out), overrides the live
     unit-file read for the per-asset fold: use exactly this list (possibly

@@ -27,7 +27,7 @@ def test_publish_does_not_mutate_the_progress_seed_constant(monkeypatch, tmp_pat
     """dict(PROGRESS_SEED) is a SHALLOW copy: history["assets"] would be the exact
     same nested dict object as PROGRESS_SEED["assets"], so folding into a fresh
     progress file would permanently poison the seed for the rest of the process
-    (2026-07-25 review, finding 6)."""
+  ."""
     _isolate(monkeypatch, tmp_path)
     auto_research._progress_publish("gate", step={"i": 1, "n": 1, "unit_kind": "holdout_14"})
     ar_progress.write_unit({"done": [["USDJPY", 7200]]})
@@ -73,7 +73,7 @@ def test_publish_never_raises_when_storage_fails(monkeypatch, tmp_path):
 
 
 def test_legacy_flat_assets_history_is_discarded_not_migrated(monkeypatch, tmp_path):
-    """A smoke run before the 2026-07-25 fix left a FLAT history["assets"] on disk
+    """An earlier build left a FLAT history["assets"] on disk
     (asset name straight to a list of numbers). Those samples are exactly the
     poisoned, cross-population contamination the per-unit-kind keying exists to
     prevent, so they must be dropped rather than carried forward under some
@@ -142,10 +142,10 @@ def test_seam_gate_unit_never_reads_the_trailing_cb_trains_asset_times(monkeypat
     runs a full-ensemble train then a CatBoost-only (screen) train over the SAME
     held-out assets, and the CB train - always second - is what a naive
     "read the unit file after both finish" fold would absorb into
-    history["assets"]["holdout_14"] (2026-07-25 review, finding 1). A fake_train
+    history["assets"]["holdout_14"]. A fake_train
     that never calls unit_begin/unit_asset_* cannot exercise this at all, which is
-    exactly how the bug got past six task reviews - so this test drives a REAL
-    run_qd through a fake_train that does call them, with screen-scale durations
+    the seam where the two files meet - so this test drives a REAL run_qd
+    through a fake_train that does call them, with screen-scale durations
     orders of magnitude smaller than full-scale ones, and asserts a holdout
     estimate can never read a screen-scale sample."""
     _isolate(monkeypatch, tmp_path)
@@ -184,10 +184,10 @@ def test_tier_off_never_folds_tier_4_or_pends_it(monkeypatch, tmp_path):
 
 
 def test_search_step_publishes_unit_kind_and_gets_an_estimate(monkeypatch, tmp_path):
-    """Found by actually running the agent (2026-07-25 smoke test): search and
+    """Search and
     warmup steps published no unit_kind, so unit_remaining() had nothing to
     look up and the entire search phase read "no history yet" even though
-    screen_10 was seeded - the owner had no ETA for the phase that runs first."""
+    screen_10 was seeded, leaving no ETA for the phase that runs first."""
     _isolate(monkeypatch, tmp_path)
     auto_research._progress_publish(
         "search", step={"i": 1, "n": 15, "kind": "screen", "unit_kind": "screen_10"})
@@ -237,7 +237,7 @@ def test_fold_skips_entirely_on_a_cache_hit_since_marker_unchanged(monkeypatch, 
     unchanged: the fold must be skipped ENTIRELY - neither the wall time nor any
     per-asset time - because folding it would record a near-zero wall time and
     re-absorb the PREVIOUS unit's per-asset samples under a fresh label
-    (2026-07-25 review, finding 3)."""
+  ."""
     _isolate(monkeypatch, tmp_path)
     auto_research._progress_publish(
         "gate", step={"i": 1, "n": 1, "kind": "elite_holdout", "unit_kind": "holdout_14"})

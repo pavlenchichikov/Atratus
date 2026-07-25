@@ -37,7 +37,7 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 def _hms(seconds):
     """Seconds as a compact human duration; "unknown" when seconds is None or
     otherwise not a usable number. Total, because a filter that raises inside a
-    render turns the page the owner is watching into a 500."""
+    render turns the status page into a 500."""
     if seconds is None:
         return "unknown"
     try:

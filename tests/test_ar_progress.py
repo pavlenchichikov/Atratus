@@ -248,7 +248,7 @@ def test_snapshot_uses_fresh_unit_over_a_stale_leftover_agent(monkeypatch, tmp_p
     unit record next to a STALE leftover agent record from the last qd run.
     age used to be age_seconds(agent or unit, ...), which always picked the
     (stale) agent whenever one existed at all, so a live run rendered as "may
-    have stopped" (2026-07-25 review, finding 4)."""
+    have stopped"."""
     agent, unit = _isolate(monkeypatch, tmp_path)
     now = datetime.datetime(2026, 7, 25, 12, 0, 0)
     ar_progress.write_agent({
@@ -301,7 +301,7 @@ def test_start_heartbeat_rejects_an_unknown_which_instead_of_defaulting(monkeypa
     """which must be "agent" or "unit". A typo used to fall through to the unit
     file via `agent_file if which == "agent" else unit_file`, silently landing
     a heartbeat on the wrong record - a healthy run would then look stale
-    forever (2026-07-25 review, finding 5)."""
+    forever."""
     _isolate(monkeypatch, tmp_path)
     ar_progress.write_agent({"phase": "gate"})
     ar_progress.start_heartbeat("agnet")   # typo
@@ -314,7 +314,7 @@ def test_start_heartbeat_rejects_an_unknown_which_instead_of_defaulting(monkeypa
 def test_heartbeat_degrades_on_a_corrupt_beats_value(monkeypatch, tmp_path):
     """A hand-edited "beats": "x" used to raise inside int(record.get("beats")
     or 0) + 1, killing the heartbeat thread for the rest of a long run and
-    silently disabling staleness detection (2026-07-25 review, finding 5)."""
+    silently disabling staleness detection."""
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr(ar_progress, "HEARTBEAT_S", 0.05)
     ar_progress.write_agent({"phase": "gate", "beats": "not a number"})
