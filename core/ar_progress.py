@@ -260,10 +260,20 @@ def unit_asset_done(asset):
 
 
 def unit_end():
+    """End a training unit. Trims `order` down to the assets that actually ran
+    (finished or still in flight at this moment), so a run stopped early -
+    Ctrl+C breaks the submit loop before every asset is submitted - does not
+    leave never-started assets looking "pending" on a unit that has ended.
+    """
     try:
         with _lock:
             _unit_started_at.clear()
             record = _read(UNIT_FILE)
+            order = record.get("order") or []
+            done_names = {pair[0] for pair in (record.get("done") or [])
+                          if isinstance(pair, (list, tuple)) and pair}
+            ran = done_names | set(record.get("in_flight") or [])
+            record["order"] = [asset for asset in order if asset in ran]
             record["in_flight"] = []
             record["ended"] = _now().isoformat(timespec="seconds")
             _write(UNIT_FILE, record)

@@ -73,3 +73,32 @@ def test_unit_end_clears_in_flight(monkeypatch, tmp_path):
     ar_progress.unit_asset_start("A")
     ar_progress.unit_end()
     assert ar_progress.read_unit()["in_flight"] == []
+
+
+def test_unit_end_trims_order_to_assets_that_ran(monkeypatch, tmp_path):
+    # Ctrl+C stops the submit loop early: three of five assets are never
+    # submitted, so they never start and never finish. unit_end() must not
+    # leave them looking "pending" on an ended unit.
+    _isolate(monkeypatch, tmp_path)
+    ar_progress.unit_begin(["A", "B", "C", "D", "E"], workers=2)
+    ar_progress.unit_asset_start("A")
+    ar_progress.unit_asset_done("A")
+    ar_progress.unit_asset_start("B")
+    ar_progress.unit_asset_done("B")
+    ar_progress.unit_end()
+    snap = ar_progress.snapshot()
+    assert snap["unit"]["pending"] == []
+    assert snap["eta"]["unit_left_s"] == 0.0
+
+
+def test_unit_end_normal_completion_still_reports_no_pending(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    ar_progress.unit_begin(["A", "B"], workers=2)
+    ar_progress.unit_asset_start("A")
+    ar_progress.unit_asset_done("A")
+    ar_progress.unit_asset_start("B")
+    ar_progress.unit_asset_done("B")
+    ar_progress.unit_end()
+    snap = ar_progress.snapshot()
+    assert snap["unit"]["pending"] == []
+    assert snap["eta"]["unit_left_s"] == 0.0
