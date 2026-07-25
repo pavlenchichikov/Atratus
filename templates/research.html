@@ -17,6 +17,36 @@
 </div>
 
 <section class="panel fade">
+  <div class="panel-head"><h2>Agent status</h2></div>
+  {% if progress.state == "running" %}
+  <div class="statgrid">
+    <div class="stat"><span class="stat-label">Phase</span>
+      <span class="stat-value mono">{{ progress.phase }}</span></div>
+    <div class="stat"><span class="stat-label">Step</span>
+      <span class="stat-value mono">{{ progress.step.i }}/{{ progress.step.n }}
+        {% if progress.step.kind %}<span class="dim">{{ progress.step.kind }}</span>{% endif %}</span></div>
+    <div class="stat"><span class="stat-label">Assets in this step</span>
+      <span class="stat-value mono">{{ progress.unit.assets_done }}/{{ progress.unit.assets_total or 0 }}</span></div>
+    <div class="stat"><span class="stat-label">Left in this step</span>
+      <span class="stat-value mono">{{ progress.eta.unit_left_s | hms }}</span></div>
+    <div class="stat"><span class="stat-label">Left in the run</span>
+      <span class="stat-value mono">{{ progress.eta.run_left_s | hms }}</span></div>
+  </div>
+  <p class="dim">Estimate basis: {{ progress.eta.basis }}; run total: {{ progress.eta.run_basis }}.</p>
+  {% if progress.unit.in_flight %}
+  <p class="mono">Training now ({{ progress.unit.workers }} workers): {{ progress.unit.in_flight | join(", ") }}</p>
+  {% endif %}
+  {% if progress.stale %}
+  <p class="dim">No update for {{ progress.age_s | hms }}. The run may have stopped; pid {{ progress.pid }}.</p>
+  {% else %}
+  <p class="dim">Updated {{ progress.age_s | hms }} ago. Run started {{ progress.run_started }}.</p>
+  {% endif %}
+  {% else %}
+  <p class="dim">The agent has not published any progress yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel fade">
   <div class="panel-head"><h2>Recent winners</h2></div>
   <table class="grid">
     <thead>

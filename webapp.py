@@ -32,6 +32,21 @@ THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
 
 app = FastAPI(title="Atratus")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+
+def _hms(seconds):
+    """Seconds as a compact human duration; "unknown" when seconds is None."""
+    if seconds is None:
+        return "unknown"
+    total = int(seconds)
+    if total < 60:
+        return "%ds" % total
+    if total < 3600:
+        return "%dm" % (total // 60)
+    return "%dh %02dm" % (total // 3600, (total % 3600) // 60)
+
+
+templates.env.filters["hms"] = _hms
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 LOOP_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "loop_state.json")
@@ -158,7 +173,9 @@ def _research_snapshot():
             })
     # Two independent caps: findings_recent(15) bounds the RECORDS read; rows[:40]
     # bounds the flattened winner-ROWS shown (one record can hold many winners).
-    return {"summary": summary, "rows": rows[:40], "runs": len(recent)}
+    from core import ar_progress
+    return {"summary": summary, "rows": rows[:40], "runs": len(recent),
+            "progress": ar_progress.snapshot()}
 
 
 def _spark(closes, w=110, h=26):
