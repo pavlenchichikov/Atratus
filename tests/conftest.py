@@ -14,6 +14,9 @@ def _isolate_ar_memory(tmp_path, monkeypatch):
     monkeypatch.setattr(ar_memory, "REPLICATION_PATH", str(tmp_path / "_ar_replication.json"))
     import core.ar_wiki as _ar_wiki
     monkeypatch.setattr(_ar_wiki, "WIKI_DIR", str(tmp_path / "_ar_wiki"))
+    from core import ar_progress
+    monkeypatch.setattr(ar_progress, "AGENT_FILE", str(tmp_path / "ar_progress.json"))
+    monkeypatch.setattr(ar_progress, "UNIT_FILE", str(tmp_path / "ar_progress_unit.json"))
     # Tests must never talk to a real LLM, no matter what the local .env enables:
     # GTRADE_AR_WIKI=1 + GTRADE_AR_LLM=ollama would otherwise make any test that
     # walks a run_qd/regate path fire compile_wiki() and load a real local model

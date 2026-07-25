@@ -23,6 +23,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
@@ -41,6 +42,17 @@ SELECTION_ASSETS = "SP500,NVDA,BTC,ETH,EURUSD,GBPJPY,GAS,AAPL,SBER,DAX"
 HELDOUT_ASSETS = "MSFT,GOLD,USDJPY,ADA,CAC40,XOM,GOOGL,SOL,SILVER,GBPUSD,NASDAQ,DXY,TNX,AIRBUS"
 BUDGET = int(os.getenv("AR_BUDGET", "15"))
 ADOPT_MEAN_SCORE_DELTA = 0.5
+
+PROGRESS_KEEP = 12          # measurements kept per key, newest last
+# Unit-kind wall times measured on the 2026-07-23 run, seeded so the first run
+# after this change can already estimate instead of saying "no history yet".
+# Per-asset service times are NOT seedable: the console only shows completion
+# stamps of overlapping workers, so assets starts empty and fills as runs go.
+PROGRESS_SEED = {"holdout_14": [35765, 37058, 46714, 29930],
+                 "tier_4": [4183, 3817, 3735, 3533],
+                 "screen_10": [90, 107, 162, 90],
+                 "screen_14": [222, 94, 215, 116],
+                 "assets": {}}
 
 LIGHT_ENV = {
     "GTRADE_WORKERS": "4", "GTRADE_NEURAL_SLOTS": "4", "GTRADE_TF_THREADS": "2",
@@ -999,6 +1011,13 @@ def run_qd(train_fn=None):
     screen_base = base_fn(SELECTION_ASSETS, {"GTRADE_SCREEN_ONLY": "1"})
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in screen_base}
 
+    try:
+        from core import ar_progress as _prog
+        _prog.start_heartbeat("agent")
+    except Exception:
+        pass
+    _progress_publish("warmup")
+
     def _screen_eval(g):
         return train_fn(SELECTION_ASSETS, screen_env(genome_to_env(g)))
 
@@ -1016,7 +1035,8 @@ def run_qd(train_fn=None):
     # contribution into illumination would require a full ensemble train per step.
     max_misses = int(os.getenv("GTRADE_AR_QD_MAX_MISSES", "5"))
     misses = 0
-    for _ in range(BUDGET):
+    for _step in range(BUDGET):
+        _progress_publish("search", step={"i": _step + 1, "n": BUDGET, "kind": "screen"})
         if not archive:
             break
         child = next_child(archive, active, base_features)
@@ -1064,12 +1084,21 @@ def run_qd(train_fn=None):
     else:
         obj = _objective()
         basis = _score_basis()
+        _progress_publish("gate", step={"i": 0, "n": len(elites), "kind": "base_holdout",
+                                        "unit_kind": "holdout_14"},
+                          pending_units=["tier_4", "holdout_14"] * len(elites))
+        _t0 = time.time()
         ho_base_full, ho_base_contrib = _heldout_eval(HELDOUT_ASSETS, {}, base_fn)
+        _progress_fold_unit("holdout_14", time.time() - _t0)
         qd_tier_base = _tier_base(base_fn) if tier_on() else None
         base_contrib = {r["Asset"]: r["Score"] for r in ho_base_contrib}
         results = []
-        for e in elites:
+        for _i, e in enumerate(elites, 1):
             g = e["genome"]
+            _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_tier",
+                                            "unit_kind": "tier_4"},
+                              pending_units=(["tier_4", "holdout_14"] * (len(elites) - _i)) + ["holdout_14"])
+            _t0 = time.time()
             if qd_tier_base is not None:
                 tp, td = _passes_tier(genome_to_env(g), genome_sig(g),
                                       qd_tier_base, obj, train_fn=train_fn)
@@ -1077,8 +1106,14 @@ def run_qd(train_fn=None):
                     print("[qd] elite tiered out (mini dScore %+.2f): drops=%s "
                           "label=%s/%d" % (td, g.drops, g.label_mode, g.label_window))
                     continue
+            _progress_fold_unit("tier_4", time.time() - _t0)
+            _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_holdout",
+                                            "unit_kind": "holdout_14"},
+                              pending_units=["tier_4", "holdout_14"] * (len(elites) - _i))
+            _t0 = time.time()
             var_full, var_contrib = _heldout_eval(
                 HELDOUT_ASSETS, genome_to_env(g), train_fn)
+            _progress_fold_unit("holdout_14", time.time() - _t0)
             nl, _d = _objective_delta(var_contrib, base_contrib, "mean")
             nl = round(nl, 4) if _d else None
             if basis == "neural":
@@ -1131,6 +1166,12 @@ def run_qd(train_fn=None):
                         for p in ar_rl.PHASES for a in ar_rl.ARMS))
             except Exception:
                 pass
+    _progress_publish("done")
+    try:
+        from core import ar_progress as _prog
+        _prog.stop_heartbeat()
+    except Exception:
+        pass
     return archive
 
 
@@ -1445,6 +1486,53 @@ SCREEN_MIN = float(os.getenv("GTRADE_AR_SCREEN_MIN", "0.0"))
 def _screen_on():
     """Whether the cheap CatBoost-only screen runs before the full eval (default on)."""
     return (os.getenv("GTRADE_AR_SCREEN", "1") or "1").strip() not in ("0", "false", "False", "")
+
+
+def _progress_publish(phase, step=None, pending_units=None):
+    """Publish where the run is. Fail-safe: progress must never break the run."""
+    try:
+        from core import ar_progress
+        record = ar_progress.read_agent()
+        history = record.get("history") or dict(PROGRESS_SEED)
+        history.setdefault("assets", {})
+        ar_progress.write_agent({
+            "run_started": record.get("run_started") or datetime.utcnow().isoformat(),
+            "phase": phase,
+            "step": step or {},
+            "pending_units": pending_units or [],
+            "results": ar_memory.findings_summary(),
+            "history": history,
+        })
+        if step:
+            print("[progress] %s: step %s/%s (%s)"
+                  % (phase, step.get("i"), step.get("n"), step.get("kind") or ""))
+        else:
+            print("[progress] %s" % phase)
+    except Exception:
+        pass
+
+
+def _progress_fold_unit(unit_kind, seconds):
+    """Record a finished unit: its wall time and each asset's own service time."""
+    try:
+        from core import ar_progress
+        record = ar_progress.read_agent()
+        history = record.get("history") or dict(PROGRESS_SEED)
+        history.setdefault("assets", {})
+        if unit_kind and seconds:
+            history[unit_kind] = (history.get(unit_kind) or [])[-(PROGRESS_KEEP - 1):] + [int(seconds)]
+        for pair in (ar_progress.read_unit().get("done") or []):
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                continue
+            asset, took = pair
+            if not took:
+                continue
+            prior = history["assets"].get(asset) or []
+            history["assets"][asset] = prior[-(PROGRESS_KEEP - 1):] + [int(took)]
+        record["history"] = history
+        ar_progress.write_agent(record)
+    except Exception:
+        pass
 
 
 def screen_env(env):
