@@ -214,6 +214,63 @@ def stop_heartbeat():
     _hb_thread = None
 
 
+_unit_started_at = {}
+
+
+def unit_begin(order, workers):
+    """Start a training unit. Called once by the trainer before the pool runs."""
+    try:
+        with _lock:
+            _unit_started_at.clear()
+            _write(UNIT_FILE, {
+                "started": _now().isoformat(timespec="seconds"),
+                "order": list(order or []), "assets_total": len(order or []),
+                "workers": int(workers or 1), "in_flight": [], "done": [],
+            })
+    except Exception:
+        pass
+
+
+def unit_asset_start(asset):
+    """One asset entered a worker lane."""
+    try:
+        with _lock:
+            _unit_started_at[asset] = _now()
+            record = _read(UNIT_FILE)
+            flight = [a for a in (record.get("in_flight") or []) if a != asset]
+            record["in_flight"] = flight + [asset]
+            _write(UNIT_FILE, record)
+    except Exception:
+        pass
+
+
+def unit_asset_done(asset):
+    """One asset left its lane. Records ITS OWN service time, not wall clock,
+    because up to `workers` assets overlap and their times must not be summed."""
+    try:
+        with _lock:
+            began = _unit_started_at.pop(asset, None)
+            took = int((_now() - began).total_seconds()) if began else 0
+            record = _read(UNIT_FILE)
+            record["in_flight"] = [a for a in (record.get("in_flight") or []) if a != asset]
+            record["done"] = (record.get("done") or []) + [[asset, took]]
+            _write(UNIT_FILE, record)
+    except Exception:
+        pass
+
+
+def unit_end():
+    try:
+        with _lock:
+            _unit_started_at.clear()
+            record = _read(UNIT_FILE)
+            record["in_flight"] = []
+            record["ended"] = _now().isoformat(timespec="seconds")
+            _write(UNIT_FILE, record)
+    except Exception:
+        pass
+
+
 def snapshot(now=None):
     """Merged read-only view of both files for the page and the console banner."""
     agent, unit = read_agent(), read_unit()

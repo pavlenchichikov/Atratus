@@ -584,6 +584,8 @@ def _free_keras_from_fold(fold_info):
 
 def _train_one_asset(asset, candidate_features, prev_registry_entry):
     """Train a single asset. Runs inside a ThreadPoolExecutor."""
+    from core import ar_progress as _prog
+    _prog.unit_asset_start(asset)
     profile = get_profile(asset)
     table = asset.lower().replace("^", "").replace(".", "").replace("-", "")
     # -- Load Optuna-tuned hyperparams if available ----------------------
@@ -1599,6 +1601,10 @@ def train_system():
     _ticker_thread = threading.Thread(target=_ticker, daemon=True)
     _ticker_thread.start()
 
+    from core import ar_progress as _prog
+    _prog.unit_begin(list(asset_list), _N_WORKERS)
+    _prog.start_heartbeat("unit")
+
     # --- N ASSETS SIMULTANEOUSLY ---
     with ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
         futures = {}
@@ -1613,6 +1619,7 @@ def train_system():
         for future in as_completed(futures):
             asset = futures[future]
             completed_assets += 1
+            _prog.unit_asset_done(asset)
             try:
                 result = future.result()
                 if result is not None:
@@ -1636,6 +1643,9 @@ def train_system():
                 err_short = str(e).split('\n')[0][:60]
                 with _print_lock:
                     _write_result(f"  [{completed_assets:>3}/{total_assets}]  {asset:<12} ERR: {err_short}")
+
+    _prog.unit_end()
+    _prog.stop_heartbeat()
 
     _bar_stop.set()
     _ticker_thread.join(timeout=2)
