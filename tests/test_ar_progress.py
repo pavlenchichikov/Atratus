@@ -175,6 +175,17 @@ def test_a_failing_write_never_raises(monkeypatch, tmp_path):
     ar_progress.write_unit({"assets_total": 14})   # must return normally
 
 
+def test_a_failing_replace_never_raises_and_cleans_up_temp_file(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+
+    def boom(*_a, **_kw):
+        raise OSError("replace failed: destination locked")
+
+    monkeypatch.setattr(ar_progress.os, "replace", boom)
+    ar_progress.write_agent({"phase": "gate"})     # must return normally
+    assert list(tmp_path.iterdir()) == []          # no leftover *.tmp file
+
+
 def test_age_and_staleness(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     now = datetime.datetime(2026, 7, 25, 12, 0, 0)
@@ -184,6 +195,7 @@ def test_age_and_staleness(monkeypatch, tmp_path):
     assert ar_progress.age_seconds(old, now) == 3600
     assert ar_progress.age_seconds({}, now) is None
     assert ar_progress.age_seconds({"updated_at": "not a date"}, now) is None
+    assert ar_progress.age_seconds(["not", "a", "dict"], now) is None
 
 
 def test_snapshot_without_files_reports_no_data(monkeypatch, tmp_path):
@@ -226,6 +238,24 @@ def test_snapshot_marks_a_silent_run_stale(monkeypatch, tmp_path):
     snap = ar_progress.snapshot(later)
     assert snap["stale"] is True
     assert snap["age_s"] > ar_progress.STALE_AFTER_S
+
+
+def test_snapshot_survives_malformed_nested_structures(monkeypatch, tmp_path):
+    # A hand-edited or partially-written file can put anything where a nested dict
+    # is expected. snapshot() must degrade, never raise.
+    _isolate(monkeypatch, tmp_path)
+
+    ar_progress.write_agent({"phase": "gate", "history": ["not", "a", "dict"]})
+    snap = ar_progress.snapshot()
+    assert snap["state"] == "running"
+
+    ar_progress.write_agent({"phase": "gate", "step": "not a dict"})
+    snap = ar_progress.snapshot()
+    assert snap["state"] == "running"
+
+    ar_progress.write_agent({"phase": "gate", "history": {"assets": 42}})
+    snap = ar_progress.snapshot()
+    assert snap["state"] == "running"
 
 
 def test_heartbeat_refreshes_updated_at(monkeypatch, tmp_path):

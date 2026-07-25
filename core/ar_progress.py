@@ -107,21 +107,34 @@ def _now():
     return datetime.datetime.now()
 
 
+def _as_dict(value):
+    """value when it is a dict, else {}. Nested structures come from a JSON file
+    another process wrote and a human may have hand-edited, so a reader must
+    degrade instead of assuming shape.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 def _write(path, payload):
     """Atomic and fail-safe. A progress write must never reach the caller as an
     exception, and a reader must never see half a document, so the body goes to a
-    temp file in the same directory and is moved into place with os.replace.
+    temp file in the same directory and is moved into place with os.replace. If
+    the write fails partway, the temp file is removed on a best-effort basis so
+    nothing leaks into the worktree.
     """
+    tmp = "%s.%d.tmp" % (path, os.getpid())
     try:
         body = dict(payload)
         body.setdefault("pid", os.getpid())
         body["updated_at"] = _now().isoformat(timespec="seconds")
-        tmp = "%s.%d.tmp" % (path, os.getpid())
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(body, fh)
         os.replace(tmp, path)
     except Exception:
-        pass
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
 
 
 def _read(path):
@@ -153,7 +166,7 @@ def read_unit():
 
 def age_seconds(record, now=None):
     """Seconds since the record was written; None when that cannot be known."""
-    stamp = (record or {}).get("updated_at")
+    stamp = _as_dict(record).get("updated_at")
     if not stamp:
         return None
     try:
@@ -207,14 +220,14 @@ def snapshot(now=None):
     if not agent and not unit:
         return {"state": "no data"}
     age = age_seconds(agent or unit, now)
-    history = agent.get("history") or {}
-    step = agent.get("step") or {}
+    history = _as_dict(agent.get("history"))
+    step = _as_dict(agent.get("step"))
     done_pairs = unit.get("done") or []
     done = [pair[0] for pair in done_pairs if isinstance(pair, (list, tuple)) and pair]
     order = unit.get("order") or []
     pending = [asset for asset in order if asset not in done]
     unit_left, unit_basis = unit_remaining(
-        pending, history.get("assets") or {}, unit.get("workers"),
+        pending, _as_dict(history.get("assets")), unit.get("workers"),
         step.get("unit_kind"), history)
     run_left, run_basis = run_remaining(unit_left, agent.get("pending_units"), history)
     return {
