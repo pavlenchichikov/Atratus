@@ -204,8 +204,17 @@ def start_heartbeat(which):
 
     Without this, age says nothing: a single asset can hold a worker for over
     three hours, so a perfectly healthy run would look abandoned.
+
+    which must be "agent" or "unit". Anything else (a typo, most likely)
+    returns without starting a thread rather than silently defaulting to the
+    unit file: a heartbeat that lands on the wrong file never refreshes the
+    record snapshot() actually reads for age, so a healthy multi-hour run
+    would read as stopped - failing toward the dangerous side is worse than
+    failing loudly, so this fails by doing nothing.
     """
     global _hb_stop, _hb_thread
+    if which not in ("agent", "unit"):
+        return
     if _hb_thread is not None:
         return
     agent_file, unit_file = progress_paths()
@@ -218,7 +227,14 @@ def start_heartbeat(which):
                 record = _read(path)
                 if not record:
                     continue
-                record["beats"] = int(record.get("beats") or 0) + 1
+                try:
+                    record["beats"] = int(record.get("beats") or 0) + 1
+                except (TypeError, ValueError):
+                    # A hand-edited "beats" value (e.g. a string) must not kill
+                    # this thread: every other function in this module degrades
+                    # instead of raising, and the heartbeat is the one thing a
+                    # 51-hour run cannot afford to lose silently.
+                    record["beats"] = 1
                 _write(path, record)
 
     _hb_stop = stop
@@ -306,20 +322,40 @@ def unit_end():
 
 
 def snapshot(now=None):
-    """Merged read-only view of both files for the page and the console banner."""
+    """Merged read-only view of both files for the page and the console banner.
+
+    The agent and unit files are written by SEPARATE processes on independent
+    schedules (only run_qd publishes the agent file; the default CLI path and
+    --regate only ever touch the unit file via their trainer subprocesses), so
+    one can be fresh while the other is a leftover from an earlier run. Ages
+    are tracked and reported separately and "stale" is driven off whichever
+    record is FRESHER, so a live training run under a stale leftover agent
+    record never reads as "may have stopped". Symmetrically, a stale leftover
+    UNIT record is not trusted for the estimate even when the agent is fresh -
+    "unknown" beats a confident number built on data nobody is updating.
+    """
     agent, unit = read_agent(), read_unit()
     if not agent and not unit:
         return {"state": "no data"}
-    age = age_seconds(agent or unit, now)
+    agent_age = age_seconds(agent, now)
+    unit_age = age_seconds(unit, now)
+    ages = [a for a in (agent_age, unit_age) if a is not None]
+    age = min(ages) if ages else None
     history = _as_dict(agent.get("history"))
     step = _as_dict(agent.get("step"))
     done_pairs = unit.get("done") or []
     done = [pair[0] for pair in done_pairs if isinstance(pair, (list, tuple)) and pair]
     order = unit.get("order") or []
     pending = [asset for asset in order if asset not in done]
-    unit_left, unit_basis = unit_remaining(
-        pending, _as_dict(history.get("assets")), unit.get("workers"),
-        step.get("unit_kind"), history)
+    unit_kind = step.get("unit_kind")
+    assets_by_kind = _as_dict(history.get("assets"))
+    asset_hist = _as_dict(assets_by_kind.get(unit_kind)) if unit_kind else {}
+    unit_is_stale = unit_age is not None and unit_age > STALE_AFTER_S
+    if unit_is_stale:
+        unit_left, unit_basis = None, "unit data is stale, ignored for the estimate"
+    else:
+        unit_left, unit_basis = unit_remaining(
+            pending, asset_hist, unit.get("workers"), unit_kind, history)
     run_left, run_basis = run_remaining(unit_left, agent.get("pending_units"), history)
     return {
         "state": "running",
@@ -337,6 +373,8 @@ def snapshot(now=None):
         "eta": {"unit_left_s": unit_left, "run_left_s": run_left,
                 "basis": unit_basis, "run_basis": run_basis},
         "age_s": age,
+        "agent_age_s": agent_age,
+        "unit_age_s": unit_age,
         "stale": bool(age is not None and age > STALE_AFTER_S),
         "pid": agent.get("pid") or unit.get("pid"),
         "run_started": agent.get("run_started"),

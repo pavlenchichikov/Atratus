@@ -26,7 +26,7 @@ def test_api_and_page_show_phase_step_and_estimate(monkeypatch, tmp_path):
     ar_progress.write_agent({
         "phase": "gate",
         "step": {"i": 2, "n": 3, "kind": "elite_holdout", "unit_kind": "holdout_14"},
-        "history": {"holdout_14": [30000], "assets": {"SLOW": [3600]}},
+        "history": {"holdout_14": [30000], "assets": {"holdout_14": {"SLOW": [3600]}}},
         "pending_units": [],
     })
     ar_progress.write_unit({"workers": 4, "assets_total": 1, "order": ["SLOW"], "done": []})

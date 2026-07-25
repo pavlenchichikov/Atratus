@@ -1,6 +1,7 @@
 """Unit tests for core.ar_progress: the estimate math is pure and testable."""
 
 import datetime
+import json
 import os
 import time
 
@@ -213,7 +214,7 @@ def test_snapshot_merges_agent_and_unit_and_estimates(monkeypatch, tmp_path):
         "pending_units": ["tier_4", "holdout_14"],
         "results": {"tried": 985, "adoptable": 2, "replicated": 0},
         "history": {"holdout_14": [30000], "tier_4": [4000],
-                     "assets": {"SLOW": [3600], "FAST": [600]}},
+                     "assets": {"holdout_14": {"SLOW": [3600], "FAST": [600]}}},
     })
     ar_progress.write_unit({
         "workers": 4, "assets_total": 2, "order": ["FAST", "SLOW"],
@@ -238,6 +239,98 @@ def test_snapshot_marks_a_silent_run_stale(monkeypatch, tmp_path):
     snap = ar_progress.snapshot(later)
     assert snap["stale"] is True
     assert snap["age_s"] > ar_progress.STALE_AFTER_S
+
+
+def test_snapshot_uses_fresh_unit_over_a_stale_leftover_agent(monkeypatch, tmp_path):
+    """Only run_qd publishes the agent file; the default CLI path (features,
+    labeling) and --regate only ever touch the unit file via their trainer
+    subprocesses. So a live training run under those paths can leave a FRESH
+    unit record next to a STALE leftover agent record from the last qd run.
+    age used to be age_seconds(agent or unit, ...), which always picked the
+    (stale) agent whenever one existed at all, so a live run rendered as "may
+    have stopped" (2026-07-25 review, finding 4)."""
+    agent, unit = _isolate(monkeypatch, tmp_path)
+    now = datetime.datetime(2026, 7, 25, 12, 0, 0)
+    ar_progress.write_agent({
+        "phase": "gate",
+        "step": {"i": 2, "n": 3, "kind": "elite_holdout", "unit_kind": "holdout_14"},
+        "history": {"holdout_14": [30000], "assets": {"holdout_14": {"SLOW": [3600]}}},
+    })
+    ar_progress.write_unit({"workers": 4, "assets_total": 1, "order": ["SLOW"], "done": []})
+    stale_stamp = (now - datetime.timedelta(seconds=ar_progress.STALE_AFTER_S + 120)).isoformat(timespec="seconds")
+    with open(agent, encoding="utf-8") as fh:
+        rec = json.load(fh)
+    rec["updated_at"] = stale_stamp
+    with open(agent, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh)
+
+    snap = ar_progress.snapshot(now)
+    assert snap["stale"] is False              # a live unit must win over a stale agent
+    assert snap["agent_age_s"] > ar_progress.STALE_AFTER_S
+    assert snap["unit_age_s"] < 5
+    assert snap["eta"]["unit_left_s"] == 3600.0   # the fresh unit still yields an estimate
+
+
+def test_snapshot_ignores_a_stale_leftover_unit_for_the_estimate(monkeypatch, tmp_path):
+    """Symmetric case: the AGENT is fresh but the UNIT file is a stale leftover
+    (e.g. from a run that stopped between units). Its pending/order must not be
+    trusted for an estimate - "unknown" beats a confident number built on data
+    nobody is updating."""
+    agent, unit = _isolate(monkeypatch, tmp_path)
+    now = datetime.datetime(2026, 7, 25, 12, 0, 0)
+    ar_progress.write_unit({"workers": 4, "assets_total": 1, "order": ["SLOW"], "done": []})
+    stale_stamp = (now - datetime.timedelta(seconds=ar_progress.STALE_AFTER_S + 60)).isoformat(timespec="seconds")
+    with open(unit, encoding="utf-8") as fh:
+        rec = json.load(fh)
+    rec["updated_at"] = stale_stamp
+    with open(unit, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh)
+    ar_progress.write_agent({
+        "phase": "gate",
+        "step": {"i": 1, "n": 1, "kind": "elite_holdout", "unit_kind": "holdout_14"},
+        "history": {"holdout_14": [30000], "assets": {"holdout_14": {"SLOW": [3600]}}},
+    })
+
+    snap = ar_progress.snapshot(now)
+    assert snap["stale"] is False               # the fresh agent still wins overall staleness
+    assert snap["eta"]["unit_left_s"] is None    # but the stale unit is not trusted for an estimate
+    assert "stale" in snap["eta"]["basis"]
+
+
+def test_start_heartbeat_rejects_an_unknown_which_instead_of_defaulting(monkeypatch, tmp_path):
+    """which must be "agent" or "unit". A typo used to fall through to the unit
+    file via `agent_file if which == "agent" else unit_file`, silently landing
+    a heartbeat on the wrong record - a healthy run would then look stale
+    forever (2026-07-25 review, finding 5)."""
+    _isolate(monkeypatch, tmp_path)
+    ar_progress.write_agent({"phase": "gate"})
+    ar_progress.start_heartbeat("agnet")   # typo
+    try:
+        assert ar_progress._hb_thread is None
+    finally:
+        ar_progress.stop_heartbeat()
+
+
+def test_heartbeat_degrades_on_a_corrupt_beats_value(monkeypatch, tmp_path):
+    """A hand-edited "beats": "x" used to raise inside int(record.get("beats")
+    or 0) + 1, killing the heartbeat thread for the rest of a long run and
+    silently disabling staleness detection (2026-07-25 review, finding 5)."""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(ar_progress, "HEARTBEAT_S", 0.05)
+    ar_progress.write_agent({"phase": "gate", "beats": "not a number"})
+    ar_progress.start_heartbeat("agent")
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            rec = ar_progress.read_agent()
+            if isinstance(rec.get("beats"), int):
+                break
+            time.sleep(0.05)
+    finally:
+        ar_progress.stop_heartbeat()
+    rec = ar_progress.read_agent()
+    assert isinstance(rec.get("beats"), int)   # degraded instead of killing the thread
+    assert rec["phase"] == "gate"
 
 
 def test_snapshot_survives_malformed_nested_structures(monkeypatch, tmp_path):

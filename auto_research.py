@@ -270,13 +270,28 @@ def contribution_rows(subset, env, full_fn):
             for a, c in neural_contribution(full, cb).items()]
 
 
-def _heldout_eval(subset, env, full_fn):
+def _heldout_eval(subset, env, full_fn, done_out=None):
     """(full_rows, contribution_rows) for one config, sharing the single full train
     so the metric never pays for a redundant full train. The CB train uses full_fn
     (with GTRADE_SCREEN_ONLY added): a cached base gets a cached CB train, and an
     injected fake trainer intercepts the CB train in tests. For candidates and winners
-    full_fn is train_env, so their CB train is unchanged."""
+    full_fn is train_env, so their CB train is unchanged.
+
+    done_out, if given, must be a list; it receives exactly one entry: the
+    training-unit file's per-asset done pairs from the FULL train specifically,
+    captured immediately after it returns and before the CB-only train starts.
+    Both trains are separate train_hybrid.py subprocesses and each is the sole
+    writer of ar_progress_unit.json while it runs, and the CB train always runs
+    SECOND here - so a caller that waits until both finish and then reads the
+    unit file always sees the CB train's second-scale per-asset times, never
+    the full train's hour-scale ones (2026-07-25 review, finding 1). The entry
+    is None when the full train did not actually publish a fresh unit record
+    (e.g. it was satisfied from cache and unit_begin never ran), so a caller
+    never mistakes a stale leftover file for this training's own times."""
+    mark = _progress_unit_marker() if done_out is not None else None
     full = full_fn(subset, env)
+    if done_out is not None:
+        done_out.append(_progress_unit_done_since(mark))
     cb = full_fn(subset, screen_env(env))
     contrib = [{"Asset": a, "Score": c}
                for a, c in neural_contribution(full, cb).items()]
@@ -1013,8 +1028,9 @@ def run_qd(train_fn=None):
     screen_kind = "screen_%d" % len(SELECTION_ASSETS.split(","))
 
     _t0 = time.time()
+    _mark = _progress_unit_marker()
     screen_base = base_fn(SELECTION_ASSETS, {"GTRADE_SCREEN_ONLY": "1"})
-    _progress_fold_unit(screen_kind, time.time() - _t0, fold_assets=False)
+    _progress_fold_unit(screen_kind, time.time() - _t0, since=_mark)
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in screen_base}
 
     try:
@@ -1033,8 +1049,9 @@ def run_qd(train_fn=None):
             g = _canon_genome(random_genome(active, base_features))
             ar_memory.tried_add("genome", genome_sig(g))
             _t0 = time.time()
+            _mark = _progress_unit_marker()
             rows = _screen_eval(g)
-            _progress_fold_unit(screen_kind, time.time() - _t0, fold_assets=False)
+            _progress_fold_unit(screen_kind, time.time() - _t0, since=_mark)
             archive_put(archive, g, rows, base_score, active)
         _qd_save(archive)
 
@@ -1063,8 +1080,9 @@ def run_qd(train_fn=None):
         csig = genome_sig(child)
         ar_memory.tried_add("genome", csig)
         _t0 = time.time()
+        _mark = _progress_unit_marker()
         crows = _screen_eval(child)
-        _progress_fold_unit(screen_kind, time.time() - _t0, fold_assets=False)
+        _progress_fold_unit(screen_kind, time.time() - _t0, since=_mark)
         stored = archive_put(archive, child, crows, base_score, active)
         if ar_rl.rl_on():
             ctl = _rl_controller()
@@ -1104,8 +1122,11 @@ def run_qd(train_fn=None):
                                         "unit_kind": "holdout_14"},
                           pending_units=unit_seq * len(elites))
         _t0 = time.time()
-        ho_base_full, ho_base_contrib = _heldout_eval(HELDOUT_ASSETS, {}, base_fn)
-        _progress_fold_unit("holdout_14", time.time() - _t0)
+        _mark = _progress_unit_marker()
+        _snap = []
+        ho_base_full, ho_base_contrib = _heldout_eval(HELDOUT_ASSETS, {}, base_fn, done_out=_snap)
+        _progress_fold_unit("holdout_14", time.time() - _t0, since=_mark,
+                            done_pairs=(_snap[0] if _snap else None))
         qd_tier_base = _tier_base(base_fn) if tier_on() else None
         base_contrib = {r["Asset"]: r["Score"] for r in ho_base_contrib}
         results = []
@@ -1116,9 +1137,10 @@ def run_qd(train_fn=None):
                                                 "unit_kind": "tier_4"},
                                   pending_units=(unit_seq * (len(elites) - _i)) + ["holdout_14"])
                 _t0 = time.time()
+                _mark = _progress_unit_marker()
                 tp, td = _passes_tier(genome_to_env(g), genome_sig(g),
                                       qd_tier_base, obj, train_fn=train_fn)
-                _progress_fold_unit("tier_4", time.time() - _t0)
+                _progress_fold_unit("tier_4", time.time() - _t0, since=_mark)
                 if not tp:
                     print("[qd] elite tiered out (mini dScore %+.2f): drops=%s "
                           "label=%s/%d" % (td, g.drops, g.label_mode, g.label_window))
@@ -1127,9 +1149,12 @@ def run_qd(train_fn=None):
                                             "unit_kind": "holdout_14"},
                               pending_units=unit_seq * (len(elites) - _i))
             _t0 = time.time()
+            _mark = _progress_unit_marker()
+            _snap = []
             var_full, var_contrib = _heldout_eval(
-                HELDOUT_ASSETS, genome_to_env(g), train_fn)
-            _progress_fold_unit("holdout_14", time.time() - _t0)
+                HELDOUT_ASSETS, genome_to_env(g), train_fn, done_out=_snap)
+            _progress_fold_unit("holdout_14", time.time() - _t0, since=_mark,
+                                done_pairs=(_snap[0] if _snap else None))
             nl, _d = _objective_delta(var_contrib, base_contrib, "mean")
             nl = round(nl, 4) if _d else None
             if basis == "neural":
@@ -1504,13 +1529,35 @@ def _screen_on():
     return (os.getenv("GTRADE_AR_SCREEN", "1") or "1").strip() not in ("0", "false", "False", "")
 
 
+def _load_history(record):
+    """The history bucket out of a read agent record, seeded via a DEEP copy so
+    folding never mutates the PROGRESS_SEED module constant: dict(PROGRESS_SEED)
+    only copies the top level, so history["assets"] would still be the exact
+    same nested dict object as PROGRESS_SEED["assets"], and every fold on a
+    fresh progress file would then permanently corrupt the seed for the rest of
+    the process (2026-07-25 review, finding 6).
+
+    Also discards a legacy FLAT assets bucket - {"USDJPY": [7200], ...}, asset
+    name straight to a list of numbers, from before per-unit-kind keying (see
+    _progress_fold_unit) - rather than migrating it: those samples are exactly
+    the cross-population contamination keying exists to prevent, so keeping
+    them around under any key would just re-poison the estimate they are
+    meant to feed.
+    """
+    history = record.get("history") or copy.deepcopy(PROGRESS_SEED)
+    assets = history.get("assets")
+    if not isinstance(assets, dict) or any(not isinstance(v, dict) for v in assets.values()):
+        assets = {}
+    history["assets"] = assets
+    return history
+
+
 def _progress_publish(phase, step=None, pending_units=None):
     """Publish where the run is. Fail-safe: progress must never break the run."""
     try:
         from core import ar_progress
         record = ar_progress.read_agent()
-        history = record.get("history") or dict(PROGRESS_SEED)
-        history.setdefault("assets", {})
+        history = _load_history(record)
         ar_progress.write_agent({
             "run_started": record.get("run_started") or datetime.utcnow().isoformat(),
             "phase": phase,
@@ -1528,36 +1575,87 @@ def _progress_publish(phase, step=None, pending_units=None):
         pass
 
 
-def _progress_fold_unit(unit_kind, seconds, fold_assets=True):
-    """Record a finished unit: its wall time, and (for gate units) each asset's
-    own service time.
+_NO_MARK = object()
 
-    fold_assets=False for screen units, and this is load-bearing, not a style
-    choice: a screen unit trains CatBoost only, so an asset there finishes in
-    SECONDS, while the same asset in a holdout/tier unit runs the full ensemble
-    and takes HOURS. Folding both into history["assets"] would mix two
-    different populations into one list, poisoning the per-asset median that
-    unit_remaining() rests the entire ETA on - worse than having no per-asset
-    history at all. A screen unit's wall time still folds into
-    history[unit_kind] (e.g. "screen_10") so the search phase gets an estimate;
-    it just never touches history["assets"]. Do not make this unconditional.
+
+def _progress_unit_marker():
+    """The training-unit file's 'started' stamp right now (None if there is no
+    unit file yet), for a caller to capture BEFORE an evaluation and pass back
+    to _progress_fold_unit as since=. An unchanged stamp after the evaluation
+    means no unit_begin ran, i.e. the evaluation was satisfied entirely from
+    cache and the unit file was never touched (2026-07-25 review, finding 3)."""
+    try:
+        from core import ar_progress
+        return ar_progress.read_unit().get("started")
+    except Exception:
+        return None
+
+
+def _progress_unit_done_since(mark):
+    """The unit file's current per-asset done pairs, but only if a fresh
+    unit_begin happened since `mark` (see _progress_unit_marker); None when the
+    stamp is unchanged, because then the done list on disk belongs to whatever
+    training ran before, not to the one the caller is trying to measure."""
+    try:
+        from core import ar_progress
+        rec = ar_progress.read_unit()
+        if rec.get("started") == mark:
+            return None
+        return rec.get("done") or []
+    except Exception:
+        return None
+
+
+def _progress_fold_unit(unit_kind, seconds, since=_NO_MARK, done_pairs=_NO_MARK):
+    """Record a finished unit: its wall time, and each asset's own service
+    time, both keyed under history["assets"][unit_kind] so populations with
+    wildly different per-asset costs (a screen unit finishes an asset in
+    seconds; a holdout/tier unit takes hours for that very same asset) never
+    share a bucket. A holdout estimate only ever reads
+    history["assets"]["holdout_14"]; nothing a screen or tier unit folds can
+    land there, so keying by kind is what makes folding every unit's per-asset
+    times safe. (Earlier this was gated by a fold_assets=False flag that kept
+    screen units out of one flat history["assets"] dict entirely; keying
+    replaced that gate structurally, and the flag was removed - 2026-07-25
+    review, findings 1 and 2.)
+
+    since, when given (see _progress_unit_marker), is the unit file's 'started'
+    stamp captured right BEFORE the evaluation ran; if it is unchanged
+    afterward, no training actually happened (a cache hit) and the fold is
+    skipped entirely - neither the wall time nor any per-asset time - because
+    folding a cache hit would otherwise record a near-zero wall time and
+    re-absorb the PREVIOUS unit's per-asset samples under this unit_kind's
+    label (2026-07-25 review, finding 3). The wall time is also floored to at
+    least one second so a sub-second measurement can never enter a median.
+
+    done_pairs, when given (see _heldout_eval's done_out), overrides the live
+    unit-file read for the per-asset fold: use exactly this list (possibly
+    empty or None) instead of ar_progress.read_unit()["done"], because for a
+    _heldout_eval-driven fold the live file may already belong to the CB-only
+    train that ran after the one this measurement is actually for.
     """
     try:
         from core import ar_progress
+        if since is not _NO_MARK and ar_progress.read_unit().get("started") == since:
+            return
         record = ar_progress.read_agent()
-        history = record.get("history") or dict(PROGRESS_SEED)
-        history.setdefault("assets", {})
+        history = _load_history(record)
         if unit_kind and seconds:
-            history[unit_kind] = (history.get(unit_kind) or [])[-(PROGRESS_KEEP - 1):] + [int(seconds)]
-        if fold_assets:
-            for pair in (ar_progress.read_unit().get("done") or []):
+            history[unit_kind] = (history.get(unit_kind) or [])[-(PROGRESS_KEEP - 1):] + [max(1, int(seconds))]
+        if unit_kind:
+            if done_pairs is _NO_MARK:
+                pairs = ar_progress.read_unit().get("done") or []
+            else:
+                pairs = done_pairs or []
+            bucket = history["assets"].setdefault(unit_kind, {})
+            for pair in pairs:
                 if not isinstance(pair, (list, tuple)) or len(pair) != 2:
                     continue
                 asset, took = pair
                 if not took:
                     continue
-                prior = history["assets"].get(asset) or []
-                history["assets"][asset] = prior[-(PROGRESS_KEEP - 1):] + [int(took)]
+                prior = bucket.get(asset) or []
+                bucket[asset] = prior[-(PROGRESS_KEEP - 1):] + [int(took)]
         record["history"] = history
         ar_progress.write_agent(record)
     except Exception:
