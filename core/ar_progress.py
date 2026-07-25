@@ -27,6 +27,21 @@ STALE_AFTER_S = 300
 _lock = threading.Lock()
 
 
+def progress_paths():
+    """The two progress files: AR_PROGRESS_DIR when set, else the repo root.
+
+    An environment variable rather than a module constant, because the trainer is
+    a CHILD PROCESS: it inherits the environment but not a monkeypatched module
+    attribute, so tests could otherwise redirect the parent while the child wrote
+    the production files that the web page reads.
+    """
+    root = os.getenv("AR_PROGRESS_DIR")
+    if not root:
+        return AGENT_FILE, UNIT_FILE
+    return (os.path.join(root, os.path.basename(AGENT_FILE)),
+            os.path.join(root, os.path.basename(UNIT_FILE)))
+
+
 def median(values):
     """Median of the non-negative numbers in values; None when there are none."""
     nums = sorted(v for v in (values or [])
@@ -147,21 +162,25 @@ def _read(path):
 
 
 def write_agent(payload):
+    agent_file, _unit_file = progress_paths()
     with _lock:
-        _write(AGENT_FILE, payload)
+        _write(agent_file, payload)
 
 
 def write_unit(payload):
+    _agent_file, unit_file = progress_paths()
     with _lock:
-        _write(UNIT_FILE, payload)
+        _write(unit_file, payload)
 
 
 def read_agent():
-    return _read(AGENT_FILE)
+    agent_file, _unit_file = progress_paths()
+    return _read(agent_file)
 
 
 def read_unit():
-    return _read(UNIT_FILE)
+    _agent_file, unit_file = progress_paths()
+    return _read(unit_file)
 
 
 def age_seconds(record, now=None):
@@ -189,7 +208,8 @@ def start_heartbeat(which):
     global _hb_stop, _hb_thread
     if _hb_thread is not None:
         return
-    path = AGENT_FILE if which == "agent" else UNIT_FILE
+    agent_file, unit_file = progress_paths()
+    path = agent_file if which == "agent" else unit_file
     stop = threading.Event()
 
     def _beat():
@@ -220,9 +240,10 @@ _unit_started_at = {}
 def unit_begin(order, workers):
     """Start a training unit. Called once by the trainer before the pool runs."""
     try:
+        _agent_file, unit_file = progress_paths()
         with _lock:
             _unit_started_at.clear()
-            _write(UNIT_FILE, {
+            _write(unit_file, {
                 "started": _now().isoformat(timespec="seconds"),
                 "order": list(order or []), "assets_total": len(order or []),
                 "workers": int(workers or 1), "in_flight": [], "done": [],
@@ -234,12 +255,13 @@ def unit_begin(order, workers):
 def unit_asset_start(asset):
     """One asset entered a worker lane."""
     try:
+        _agent_file, unit_file = progress_paths()
         with _lock:
             _unit_started_at[asset] = _now()
-            record = _read(UNIT_FILE)
+            record = _read(unit_file)
             flight = [a for a in (record.get("in_flight") or []) if a != asset]
             record["in_flight"] = flight + [asset]
-            _write(UNIT_FILE, record)
+            _write(unit_file, record)
     except Exception:
         pass
 
@@ -248,13 +270,14 @@ def unit_asset_done(asset):
     """One asset left its lane. Records ITS OWN service time, not wall clock,
     because up to `workers` assets overlap and their times must not be summed."""
     try:
+        _agent_file, unit_file = progress_paths()
         with _lock:
             began = _unit_started_at.pop(asset, None)
             took = int((_now() - began).total_seconds()) if began else 0
-            record = _read(UNIT_FILE)
+            record = _read(unit_file)
             record["in_flight"] = [a for a in (record.get("in_flight") or []) if a != asset]
             record["done"] = (record.get("done") or []) + [[asset, took]]
-            _write(UNIT_FILE, record)
+            _write(unit_file, record)
     except Exception:
         pass
 
@@ -266,9 +289,10 @@ def unit_end():
     leave never-started assets looking "pending" on a unit that has ended.
     """
     try:
+        _agent_file, unit_file = progress_paths()
         with _lock:
             _unit_started_at.clear()
-            record = _read(UNIT_FILE)
+            record = _read(unit_file)
             order = record.get("order") or []
             done_names = {pair[0] for pair in (record.get("done") or [])
                           if isinstance(pair, (list, tuple)) and pair}
@@ -276,7 +300,7 @@ def unit_end():
             record["order"] = [asset for asset in order if asset in ran]
             record["in_flight"] = []
             record["ended"] = _now().isoformat(timespec="seconds")
-            _write(UNIT_FILE, record)
+            _write(unit_file, record)
     except Exception:
         pass
 

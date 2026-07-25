@@ -14,9 +14,14 @@ def _isolate_ar_memory(tmp_path, monkeypatch):
     monkeypatch.setattr(ar_memory, "REPLICATION_PATH", str(tmp_path / "_ar_replication.json"))
     import core.ar_wiki as _ar_wiki
     monkeypatch.setattr(_ar_wiki, "WIKI_DIR", str(tmp_path / "_ar_wiki"))
-    from core import ar_progress
-    monkeypatch.setattr(ar_progress, "AGENT_FILE", str(tmp_path / "ar_progress.json"))
-    monkeypatch.setattr(ar_progress, "UNIT_FILE", str(tmp_path / "ar_progress_unit.json"))
+    # AR_PROGRESS_DIR, not monkeypatch.setattr, is what isolates ar_progress here:
+    # the trainer runs as a subprocess (see progress_paths() in core/ar_progress.py),
+    # so only an inherited environment variable reaches it. Individual test files
+    # that also do monkeypatch.setattr(ar_progress, "AGENT_FILE"/"UNIT_FILE", ...)
+    # keep working - progress_paths() takes the directory from this env var and
+    # the filename from whatever AGENT_FILE/UNIT_FILE currently is, so the two
+    # mechanisms agree as long as both point at this same tmp_path, which they do.
+    monkeypatch.setenv("AR_PROGRESS_DIR", str(tmp_path))
     # Tests must never talk to a real LLM, no matter what the local .env enables:
     # GTRADE_AR_WIKI=1 + GTRADE_AR_LLM=ollama would otherwise make any test that
     # walks a run_qd/regate path fire compile_wiki() and load a real local model

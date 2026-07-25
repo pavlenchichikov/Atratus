@@ -275,3 +275,21 @@ def test_heartbeat_refreshes_updated_at(monkeypatch, tmp_path):
     assert ar_progress.read_agent().get("beats")
     assert ar_progress.read_agent()["phase"] == "gate"    # heartbeat preserves content
     assert first is not None
+
+
+def test_progress_paths_follow_the_environment(monkeypatch, tmp_path):
+    """A child process inherits env, not monkeypatched module attributes.
+
+    The trainer runs as a subprocess, so redirecting the files for tests has to
+    survive a fresh interpreter or the child writes the production paths.
+    """
+    monkeypatch.setenv("AR_PROGRESS_DIR", str(tmp_path))
+    agent, unit = ar_progress.progress_paths()
+    assert agent == os.path.join(str(tmp_path), "ar_progress.json")
+    assert unit == os.path.join(str(tmp_path), "ar_progress_unit.json")
+
+
+def test_progress_paths_default_to_the_repo_root(monkeypatch):
+    monkeypatch.delenv("AR_PROGRESS_DIR", raising=False)
+    agent, _unit = ar_progress.progress_paths()
+    assert agent == os.path.join(ar_progress.BASE, "ar_progress.json")
