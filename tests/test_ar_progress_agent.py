@@ -56,3 +56,57 @@ def test_publish_never_raises_when_storage_fails(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr(ar_progress, "write_agent", lambda *_a, **_k: (_ for _ in ()).throw(OSError("x")))
     auto_research._progress_publish("search", step={"i": 1, "n": 15})   # must return
+
+
+def _run_qd_smoke(monkeypatch, tier_env):
+    """Drive a real run_qd with a cheap fake trainer, the same pattern
+    test_run_qd_illuminates_and_gates in test_auto_research.py uses."""
+    monkeypatch.setattr(auto_research, "_qd_load", lambda: {})
+    monkeypatch.setattr(auto_research, "_qd_save", lambda a: None)
+    monkeypatch.setattr(auto_research, "BUDGET", 2, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "2")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "1")
+    monkeypatch.setenv("GTRADE_AR_TIER", tier_env)
+    monkeypatch.delenv("GTRADE_AR_OBJECTIVE", raising=False)
+    import random as _r
+    _r.seed(0)
+
+    def fake_train(subset, env):
+        n_drop = len([d for d in env.get("GTRADE_DROP_FEATURES", "").split(",") if d])
+        s = 1.0 + 0.7 * n_drop
+        return [{"Asset": a, "Score": s} for a in subset.split(",")]
+
+    calls = []
+    real_write_agent = ar_progress.write_agent
+
+    def spy_write_agent(payload):
+        calls.append(dict(payload))
+        real_write_agent(payload)
+
+    monkeypatch.setattr(ar_progress, "write_agent", spy_write_agent)
+    auto_research.run_qd(train_fn=fake_train)
+    return calls
+
+
+def test_tier_check_folds_a_tier_4_measurement_when_tier_is_on(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    _run_qd_smoke(monkeypatch, "1")
+    hist = ar_progress.read_agent()["history"]
+    # a real tier check ran, so a fresh measurement landed past the seeded four
+    assert len(hist["tier_4"]) > len(auto_research.PROGRESS_SEED["tier_4"])
+
+
+def test_tier_off_never_folds_tier_4_or_pends_it(monkeypatch, tmp_path):
+    """GTRADE_AR_TIER=0 is a supported configuration: no tier check ever runs,
+    so neither a tier_4 measurement nor a tier_4 pending unit should appear in
+    any published record - a near-zero tier_4 fold would drag its median
+    toward zero and make run_remaining under-estimate the time left."""
+    _isolate(monkeypatch, tmp_path)
+    calls = _run_qd_smoke(monkeypatch, "0")
+    hist = ar_progress.read_agent()["history"]
+    # no new measurement: the list is exactly the untouched seed
+    assert hist["tier_4"] == list(auto_research.PROGRESS_SEED["tier_4"])
+    # no call ever advertised a tier_4 unit as pending
+    assert all("tier_4" not in (c.get("pending_units") or []) for c in calls)
+    # sanity: the gate phase actually ran (the assertions above are not vacuous)
+    assert any(c.get("phase") == "gate" for c in calls)

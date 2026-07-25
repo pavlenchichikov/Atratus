@@ -1084,9 +1084,13 @@ def run_qd(train_fn=None):
     else:
         obj = _objective()
         basis = _score_basis()
+        # Honest about which units will actually run: with GTRADE_AR_TIER=0 there
+        # is no tier check at all, so pending_units and the tier_4 fold must not
+        # assume one - see FIX in the 2026-07-25 code review.
+        unit_seq = ["tier_4", "holdout_14"] if tier_on() else ["holdout_14"]
         _progress_publish("gate", step={"i": 0, "n": len(elites), "kind": "base_holdout",
                                         "unit_kind": "holdout_14"},
-                          pending_units=["tier_4", "holdout_14"] * len(elites))
+                          pending_units=unit_seq * len(elites))
         _t0 = time.time()
         ho_base_full, ho_base_contrib = _heldout_eval(HELDOUT_ASSETS, {}, base_fn)
         _progress_fold_unit("holdout_14", time.time() - _t0)
@@ -1095,21 +1099,21 @@ def run_qd(train_fn=None):
         results = []
         for _i, e in enumerate(elites, 1):
             g = e["genome"]
-            _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_tier",
-                                            "unit_kind": "tier_4"},
-                              pending_units=(["tier_4", "holdout_14"] * (len(elites) - _i)) + ["holdout_14"])
-            _t0 = time.time()
             if qd_tier_base is not None:
+                _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_tier",
+                                                "unit_kind": "tier_4"},
+                                  pending_units=(unit_seq * (len(elites) - _i)) + ["holdout_14"])
+                _t0 = time.time()
                 tp, td = _passes_tier(genome_to_env(g), genome_sig(g),
                                       qd_tier_base, obj, train_fn=train_fn)
+                _progress_fold_unit("tier_4", time.time() - _t0)
                 if not tp:
                     print("[qd] elite tiered out (mini dScore %+.2f): drops=%s "
                           "label=%s/%d" % (td, g.drops, g.label_mode, g.label_window))
                     continue
-            _progress_fold_unit("tier_4", time.time() - _t0)
             _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_holdout",
                                             "unit_kind": "holdout_14"},
-                              pending_units=["tier_4", "holdout_14"] * (len(elites) - _i))
+                              pending_units=unit_seq * (len(elites) - _i))
             _t0 = time.time()
             var_full, var_contrib = _heldout_eval(
                 HELDOUT_ASSETS, genome_to_env(g), train_fn)
