@@ -1,5 +1,9 @@
 """Unit tests for core.ar_progress: the estimate math is pure and testable."""
 
+import datetime
+import os
+import time
+
 from core import ar_progress
 
 
@@ -122,3 +126,122 @@ def test_run_remaining_without_a_current_estimate_is_unknown():
     est, basis = ar_progress.run_remaining(None, ["tier_4"], {"tier_4": [4000]})
     assert est is None
     assert basis == "no history yet"
+
+
+def _isolate(monkeypatch, tmp_path):
+    """Point both progress files at tmp_path so tests never touch the repo root."""
+    agent = str(tmp_path / "ar_progress.json")
+    unit = str(tmp_path / "ar_progress_unit.json")
+    monkeypatch.setattr(ar_progress, "AGENT_FILE", agent)
+    monkeypatch.setattr(ar_progress, "UNIT_FILE", unit)
+    return agent, unit
+
+
+def test_write_then_read_roundtrip_stamps_pid_and_time(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    ar_progress.write_agent({"phase": "search", "step": {"i": 3, "n": 15}})
+    rec = ar_progress.read_agent()
+    assert rec["phase"] == "search"
+    assert rec["step"]["n"] == 15
+    assert rec["pid"] == os.getpid()
+    assert rec["updated_at"]
+
+
+def test_missing_and_corrupt_files_read_as_no_data(monkeypatch, tmp_path):
+    agent, _unit = _isolate(monkeypatch, tmp_path)
+    assert ar_progress.read_agent() == {}
+    with open(agent, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    assert ar_progress.read_agent() == {}
+    with open(agent, "w", encoding="utf-8") as fh:
+        fh.write("[1, 2, 3]")
+    assert ar_progress.read_agent() == {}
+
+
+def test_write_leaves_no_temp_file_behind(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    ar_progress.write_agent({"phase": "gate"})
+    assert [p.name for p in tmp_path.iterdir()] == ["ar_progress.json"]
+
+
+def test_a_failing_write_never_raises(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+
+    def boom(*_a, **_kw):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr("builtins.open", boom)
+    ar_progress.write_agent({"phase": "gate"})     # must return normally
+    ar_progress.write_unit({"assets_total": 14})   # must return normally
+
+
+def test_age_and_staleness(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    now = datetime.datetime(2026, 7, 25, 12, 0, 0)
+    fresh = {"updated_at": (now - datetime.timedelta(seconds=30)).isoformat(timespec="seconds")}
+    old = {"updated_at": (now - datetime.timedelta(seconds=3600)).isoformat(timespec="seconds")}
+    assert ar_progress.age_seconds(fresh, now) == 30
+    assert ar_progress.age_seconds(old, now) == 3600
+    assert ar_progress.age_seconds({}, now) is None
+    assert ar_progress.age_seconds({"updated_at": "not a date"}, now) is None
+
+
+def test_snapshot_without_files_reports_no_data(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    snap = ar_progress.snapshot()
+    assert snap["state"] == "no data"
+
+
+def test_snapshot_merges_agent_and_unit_and_estimates(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    now = datetime.datetime(2026, 7, 25, 12, 0, 0)
+    ar_progress.write_agent({
+        "phase": "gate",
+        "step": {"i": 2, "n": 3, "kind": "elite_holdout", "unit_kind": "holdout_14"},
+        "pending_units": ["tier_4", "holdout_14"],
+        "results": {"tried": 985, "adoptable": 2, "replicated": 0},
+        "history": {"holdout_14": [30000], "tier_4": [4000],
+                     "assets": {"SLOW": [3600], "FAST": [600]}},
+    })
+    ar_progress.write_unit({
+        "workers": 4, "assets_total": 2, "order": ["FAST", "SLOW"],
+        "done": [["FAST", 600]],
+    })
+    snap = ar_progress.snapshot(now)
+    assert snap["state"] == "running"
+    assert snap["phase"] == "gate"
+    assert snap["step"]["i"] == 2
+    assert snap["unit"]["assets_done"] == 1
+    assert snap["unit"]["pending"] == ["SLOW"]
+    assert snap["eta"]["unit_left_s"] == 3600.0          # only SLOW is left
+    assert snap["eta"]["run_left_s"] == 3600.0 + 4000.0 + 30000.0
+    assert "per-asset history" in snap["eta"]["basis"]
+    assert snap["results"]["adoptable"] == 2
+
+
+def test_snapshot_marks_a_silent_run_stale(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    ar_progress.write_agent({"phase": "gate"})
+    later = datetime.datetime.now() + datetime.timedelta(seconds=ar_progress.STALE_AFTER_S + 60)
+    snap = ar_progress.snapshot(later)
+    assert snap["stale"] is True
+    assert snap["age_s"] > ar_progress.STALE_AFTER_S
+
+
+def test_heartbeat_refreshes_updated_at(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(ar_progress, "HEARTBEAT_S", 0.05)
+    ar_progress.write_agent({"phase": "gate"})
+    first = ar_progress.read_agent()["updated_at"]
+    ar_progress.start_heartbeat("agent")
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if ar_progress.read_agent().get("beats"):
+                break
+            time.sleep(0.05)
+    finally:
+        ar_progress.stop_heartbeat()
+    assert ar_progress.read_agent().get("beats")
+    assert ar_progress.read_agent()["phase"] == "gate"    # heartbeat preserves content
+    assert first is not None

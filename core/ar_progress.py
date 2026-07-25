@@ -10,6 +10,8 @@ Everything here is fail-safe on purpose: a progress write must never break a
 twelve-hour training run, so no function in this module raises into its caller.
 """
 
+import datetime
+import json
 import os
 import threading
 
@@ -99,3 +101,139 @@ def run_remaining(unit_left, pending_units, unit_hist):
         return total, ("current unit plus unit-kind medians (%d future unit(s) "
                        "unmeasured, not counted)" % unmeasured)
     return total, "current unit plus unit-kind medians"
+
+
+def _now():
+    return datetime.datetime.now()
+
+
+def _write(path, payload):
+    """Atomic and fail-safe. A progress write must never reach the caller as an
+    exception, and a reader must never see half a document, so the body goes to a
+    temp file in the same directory and is moved into place with os.replace.
+    """
+    try:
+        body = dict(payload)
+        body.setdefault("pid", os.getpid())
+        body["updated_at"] = _now().isoformat(timespec="seconds")
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(body, fh)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _read(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_agent(payload):
+    with _lock:
+        _write(AGENT_FILE, payload)
+
+
+def write_unit(payload):
+    with _lock:
+        _write(UNIT_FILE, payload)
+
+
+def read_agent():
+    return _read(AGENT_FILE)
+
+
+def read_unit():
+    return _read(UNIT_FILE)
+
+
+def age_seconds(record, now=None):
+    """Seconds since the record was written; None when that cannot be known."""
+    stamp = (record or {}).get("updated_at")
+    if not stamp:
+        return None
+    try:
+        then = datetime.datetime.fromisoformat(stamp)
+    except Exception:
+        return None
+    return max(0.0, ((now or _now()) - then).total_seconds())
+
+
+_hb_stop = None
+_hb_thread = None
+
+
+def start_heartbeat(which):
+    """Rewrite updated_at every HEARTBEAT_S so silence is evidence of a stop.
+
+    Without this, age says nothing: a single asset can hold a worker for over
+    three hours, so a perfectly healthy run would look abandoned.
+    """
+    global _hb_stop, _hb_thread
+    if _hb_thread is not None:
+        return
+    path = AGENT_FILE if which == "agent" else UNIT_FILE
+    stop = threading.Event()
+
+    def _beat():
+        while not stop.wait(HEARTBEAT_S):
+            with _lock:
+                record = _read(path)
+                if not record:
+                    continue
+                record["beats"] = int(record.get("beats") or 0) + 1
+                _write(path, record)
+
+    _hb_stop = stop
+    _hb_thread = threading.Thread(target=_beat, name="ar-progress-hb", daemon=True)
+    _hb_thread.start()
+
+
+def stop_heartbeat():
+    global _hb_stop, _hb_thread
+    if _hb_stop is not None:
+        _hb_stop.set()
+    _hb_stop = None
+    _hb_thread = None
+
+
+def snapshot(now=None):
+    """Merged read-only view of both files for the page and the console banner."""
+    agent, unit = read_agent(), read_unit()
+    if not agent and not unit:
+        return {"state": "no data"}
+    age = age_seconds(agent or unit, now)
+    history = agent.get("history") or {}
+    step = agent.get("step") or {}
+    done_pairs = unit.get("done") or []
+    done = [pair[0] for pair in done_pairs if isinstance(pair, (list, tuple)) and pair]
+    order = unit.get("order") or []
+    pending = [asset for asset in order if asset not in done]
+    unit_left, unit_basis = unit_remaining(
+        pending, history.get("assets") or {}, unit.get("workers"),
+        step.get("unit_kind"), history)
+    run_left, run_basis = run_remaining(unit_left, agent.get("pending_units"), history)
+    return {
+        "state": "running",
+        "phase": agent.get("phase"),
+        "step": step,
+        "results": agent.get("results") or {},
+        "unit": {
+            "assets_total": unit.get("assets_total"),
+            "assets_done": len(done),
+            "in_flight": unit.get("in_flight") or [],
+            "pending": pending,
+            "workers": unit.get("workers"),
+            "started": unit.get("started"),
+        },
+        "eta": {"unit_left_s": unit_left, "run_left_s": run_left,
+                "basis": unit_basis, "run_basis": run_basis},
+        "age_s": age,
+        "stale": bool(age is not None and age > STALE_AFTER_S),
+        "pid": agent.get("pid") or unit.get("pid"),
+        "run_started": agent.get("run_started"),
+    }
