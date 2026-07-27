@@ -35,6 +35,26 @@ logger = get_logger("scoring")
 MIN_TRUST_SCORE = 0.0
 
 
+def _adopted_record():
+    """Indirected so tests can substitute a record without touching a file."""
+    from core import adopted
+    return adopted.load()
+
+
+def missing_adopted_features(df):
+    """Adopted DSL feature names that this frame does not carry.
+
+    Non-empty means the frame cannot support a model trained with the adoption in
+    force, so the caller must not publish a signal from it. select_features would
+    otherwise drop the column silently, which is how a truncated feature vector
+    reaches a model that was fit on the full one.
+    """
+    from core import adopted
+    names = [s.get("name") for s in adopted.specs(_adopted_record())
+             if isinstance(s, dict) and s.get("name")]
+    return [n for n in names if n not in df.columns]
+
+
 def select_features(df, reg_entry):
     """Champion feature list intersected with what the df actually has.
 
@@ -71,6 +91,15 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
     """
     cb_path = os.path.join(model_dir, f"{table}_cb.cbm")
     if not os.path.exists(cb_path) or len(df) < 50:
+        return None
+
+    # An adopted feature that could not be computed for this asset means the model
+    # would be scored on a vector it was never fit on. No signal is better than a
+    # wrong one, and this must be loud rather than silently dropped downstream.
+    missing = missing_adopted_features(df)
+    if missing:
+        print("  [SKIP] %s: adopted feature(s) unavailable: %s"
+              % (name, ", ".join(missing)))
         return None
 
     features = select_features(df, reg_entry)
