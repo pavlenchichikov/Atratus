@@ -117,6 +117,21 @@ def proxies_for(route: str = "auto") -> dict | None:
     return None
 
 
+def yf_session():
+    """A requests session through the SOCKS5 proxy, ONLY when the proxy is
+    alive. Otherwise None, so yfinance keeps its own session and completes its
+    cookie/crumb handshake - injecting a custom session on the direct path
+    breaks that handshake and yields an empty .info.
+    """
+    proxies = proxies_for("auto")
+    if not proxies:
+        return None
+    s = requests.Session()
+    s.proxies.update(proxies)
+    s.verify = ssl_verify()
+    return s
+
+
 # --------------------------------------------------------------------------
 # Sticky per-host route cache
 # --------------------------------------------------------------------------

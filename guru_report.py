@@ -29,7 +29,7 @@ if BASE_DIR not in sys.path:
 from config import FULL_ASSET_MAP
 from core.features import compute_rsi
 from core.guru import calc_graham_number, get_guru_analysis, technical_context
-from net import proxies_for, ssl_verify
+from net import ssl_verify, yf_session
 from sqlalchemy import create_engine
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
@@ -88,20 +88,6 @@ GLOBAL_BACKUP = {
 # DATA FETCHING
 # ==============================================================================
 
-def _yf_session():
-    """A requests session through net.py's SOCKS5 proxy, ONLY when the proxy is
-    alive. Otherwise return None so yfinance uses its own session (and its
-    cookie/crumb handshake) - injecting a custom session on the direct path
-    breaks that handshake and yields an empty .info."""
-    proxies = proxies_for("auto")
-    if not proxies:
-        return None
-    s = requests.Session()
-    s.proxies.update(proxies)
-    s.verify = ssl_verify()
-    return s
-
-
 def _yf_fetch_info(symbol, attempts=3):
     """Get (Ticker, .info) with retries. yfinance's .info over a foreign exit is
     flaky (a single transient miss otherwise drops the asset to N/A). Routes
@@ -109,7 +95,7 @@ def _yf_fetch_info(symbol, attempts=3):
     quote could be fetched."""
     for _ in range(attempts):
         try:
-            t = yf.Ticker(symbol, session=_yf_session())
+            t = yf.Ticker(symbol, session=yf_session())
             info = t.info or {}
             if info.get('currentPrice', 0) or info.get('regularMarketPrice', 0):
                 return t, info
