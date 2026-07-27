@@ -537,10 +537,11 @@ def test_fetch_news_rows_survives_a_failing_general_digest(monkeypatch):
                                               "weighted_score": 0.2,
                                               "sentiment_label": "POSITIVE"}])
     hist = [{"asset": "BTC", "date": "2026-07-26", "signal": "BUY", "prob": 0.8}]
-    rows = push_signals.fetch_news_rows(hist,
-                                        today=datetime.date(2026, 7, 26))
+    rows, items = push_signals.fetch_news_rows(hist,
+                                               today=datetime.date(2026, 7, 26))
     # The general feed failed, the per-asset fetch still delivered.
     assert [r["asset"] for r in rows] == ["BTC"]
+    assert list(items) == ["BTC"]
 
 
 def test_fetch_news_rows_skips_one_failing_asset(monkeypatch):
@@ -558,6 +559,44 @@ def test_fetch_news_rows_skips_one_failing_asset(monkeypatch):
     monkeypatch.setattr(news_analyzer, "fetch_news", per_asset)
     hist = [{"asset": "BAD", "date": "2026-07-26", "signal": "BUY", "prob": 0.9},
             {"asset": "OK", "date": "2026-07-26", "signal": "BUY", "prob": 0.8}]
-    rows = push_signals.fetch_news_rows(hist,
-                                        today=datetime.date(2026, 7, 26))
+    rows, items = push_signals.fetch_news_rows(hist,
+                                               today=datetime.date(2026, 7, 26))
     assert [r["asset"] for r in rows] == ["OK"]
+    assert list(items) == ["OK"]
+
+
+def test_fetch_news_context_groups_bars_by_asset():
+    # 25 closes: enough returns for a sigma, and every date stays a real July
+    # day so the published timestamp below can match the last bar.
+    bars = []
+    for asset, closes in (("A", [100.0] * 24 + [130.0]), ("B", [50.0] * 25)):
+        for i, c in enumerate(closes):
+            bars.append({"asset": asset, "date": f"2026-07-{i + 1:02d}",
+                         "close": c})
+    items = {"A": [{"title": "t", "published": "25 Jul 2026 09:00:00 GMT",
+                    "weighted_score": 0.6}]}
+    rows = push_signals.fetch_news_context(bars, items)
+    by_asset = {r["asset"]: r for r in rows}
+    assert set(by_asset) == {"A", "B"}
+    assert by_asset["A"]["notable"] is True
+    assert by_asset["B"]["notable"] is False
+    # Proves the per-asset items actually reached context_row, not just the bars.
+    assert by_asset["A"]["consistency"] == "consistent"
+    assert by_asset["B"]["consistency"] == "no_news"
+
+
+def test_fetch_news_context_skips_an_asset_without_bars():
+    rows = push_signals.fetch_news_context([], {"A": []})
+    assert rows == []
+
+
+def test_push_news_context_deletes_on_asset(monkeypatch):
+    # asset is this table's primary key and never null, unlike in `news`.
+    calls = []
+    monkeypatch.setattr(push_signals, "_send",
+                        lambda method, url, **kw: calls.append((method, url)))
+    push_signals.push_news_context("https://p.supabase.co", "k",
+                                   [{"asset": "A", "date": "2026-07-26"}])
+    assert [m for m, _ in calls] == ["DELETE", "POST"]
+    assert "news_context?asset=not.is.null" in calls[0][1]
+    assert "on_conflict=asset" in calls[1][1]

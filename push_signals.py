@@ -36,7 +36,7 @@ except Exception:
     pass
 
 from config import FULL_ASSET_MAP
-from core import digest, news_export, timing_policy, track_record
+from core import digest, news_export, news_link, timing_policy, track_record
 
 BAR_LIMIT = 180   # bars per asset exported for the mobile price chart
 SIG_LIMIT = 90    # prediction_log rows per asset for the mobile track record
@@ -475,8 +475,12 @@ def _digest_rows(hist, today=None):
 def fetch_news_rows(hist, today=None):
     """General digest plus per-asset news for today's actionable calls.
 
-    Every fetch is guarded on its own: news is an extra, and one dead feed
-    must not cost the rest of the export.
+    Returns (rows, items_by_asset). The raw items come back too because the
+    news context needs the same ones, and re-fetching would lean on
+    news_analyzer's 30-minute cache still being warm.
+
+    Every fetch is guarded on its own: news is an extra, and one dead feed must
+    not cost the rest of the export.
     """
     import news_analyzer
 
@@ -489,15 +493,55 @@ def fetch_news_rows(hist, today=None):
         print(f"note: general news unavailable: {e}")
         items = []
     rows.extend(news_export.general_rows(items, day))
+    by_asset = {}
     for asset in news_export.pick_assets(hist, day):
         try:
-            items = news_analyzer.fetch_news(
+            found = news_analyzer.fetch_news(
                 asset, max_articles=news_export.PER_ASSET,
                 fetch_summaries=False)
         except Exception:
             continue
-        rows.extend(news_export.asset_rows(asset, items, day))
+        by_asset[asset] = found
+        rows.extend(news_export.asset_rows(asset, found, day))
+    return rows, by_asset
+
+
+def fetch_news_context(bars, items_by_asset):
+    """One news_context row per asset that has bars.
+
+    Assets without news still get a row: the move and its notability are worth
+    reporting even when nothing was found to sit beside it.
+    """
+    by_asset = {}
+    for bar in bars:
+        by_asset.setdefault(bar["asset"], []).append(bar)
+    rows = []
+    for asset, asset_bars in by_asset.items():
+        row = news_link.context_row(asset, asset_bars,
+                                    items_by_asset.get(asset, []))
+        if row is not None:
+            rows.append(row)
     return rows
+
+
+def push_news_context(url, key, rows):
+    """Full-refresh upsert of the news_context table.
+
+    Deletes on asset, which is this table's primary key and never null. The
+    news table differs because its asset is nullable.
+    """
+    base = _rest_base(url)
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    merge = {**headers, "Prefer": "resolution=merge-duplicates"}
+    _send("DELETE", f"{base}/news_context?asset=not.is.null", headers=headers,
+          timeout=60)
+    for chunk in _chunked(rows):
+        _send("POST", f"{base}/news_context?on_conflict=asset", headers=merge,
+              json=chunk, timeout=120)
 
 
 def push_news(url, key, rows):
@@ -534,6 +578,7 @@ def main():
 
     # Optional extras for the mobile app - each fail-safe: a failure here must
     # never undo or block the signals upsert above.
+    bars = None
     hist = None
     history_ok = False
     try:
@@ -564,9 +609,12 @@ def main():
             if not history_ok:
                 print("note: history unavailable - skipping the news export")
             else:
-                news_rows = fetch_news_rows(hist)
+                news_rows, news_items = fetch_news_rows(hist)
                 push_news(url, key, news_rows)
-                print(f"pushed news: {len(news_rows)} rows")
+                ctx = fetch_news_context(bars, news_items)
+                push_news_context(url, key, ctx)
+                print(f"pushed news: {len(news_rows)} rows | "
+                      f"{len(ctx)} context rows")
         except Exception as e:
             print(f"WARNING: news export failed: {e}")
 

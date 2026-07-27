@@ -94,3 +94,17 @@ create table if not exists news (
 alter table news enable row level security;
 drop policy if exists news_read on news;
 create policy news_read on news for select using (is_allowed());
+
+-- One row per asset: whether its last move was unusual for that asset, and
+-- whether the day's news sentiment agreed with the direction. Kept out of the
+-- news table so it does not repeat on every article.
+create table if not exists news_context (
+  asset       text primary key,
+  date        date not null,
+  move_pct    double precision,
+  notable     boolean,
+  consistency text
+);
+alter table news_context enable row level security;
+drop policy if exists news_context_read on news_context;
+create policy news_context_read on news_context for select using (is_allowed());
