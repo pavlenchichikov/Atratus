@@ -63,11 +63,14 @@ def test_a_search_candidate_is_not_validated_and_carries_no_p(tmp_path):
     assert "NOT validated" in adopt_genome.describe(search)
 
 
-def test_a_measured_candidate_is_described_as_measured(tmp_path):
+def test_a_passing_candidate_is_described_as_passed(tmp_path):
+    # The verdict, not just the provenance: "measured" would be true of a failed
+    # A/B row too, and that distinction is the whole point of the listing.
     got = adopt_genome.candidates(_fixtures(tmp_path))
     measured = [c for c in got if c["kind"] == "measured"][0]
     line = adopt_genome.describe(measured)
-    assert "MEASURED" in line and "p=0.0067" in line
+    assert "PASSED" in line and "p=0.0067" in line
+    assert "FAILED" not in line
 
 
 def test_write_adoption_records_the_evidence(tmp_path):
@@ -132,3 +135,83 @@ def test_adopting_resets_the_chunk_progress(tmp_path):
 
 def test_resetting_when_there_is_no_progress_is_harmless(tmp_path):
     assert adopt_genome.reset_chunk_progress(str(tmp_path)) == []
+
+
+# --- the gate that decides what may be adopted at all ---
+
+def _failed_ab(sig):
+    """An A/B row that missed its own alpha and floor."""
+    return {"holdout": "AMZN,JPM", "objective": "mean", "floor": 0.5,
+            "alpha": 0.05,
+            "results": {"B": {"sig": sig, "value_raw": 0.40, "p_raw": 0.3349,
+                              "n_raw": 14, "value_neural": -0.45,
+                              "p_neural": 0.729, "label": "B"}}}
+
+
+def _fixtures_failed(tmp_path):
+    import auto_research as ar
+    io.open(str(tmp_path / "_qd_archive.json"), "w", encoding="utf-8").write(
+        json.dumps(ARCHIVE))
+    sig = ar.genome_sig(ar.Genome(**ARCHIVE["3_4_5"]["genome"]))
+    io.open(str(tmp_path / "_ab_genomes_20260101-0000.json"), "w",
+            encoding="utf-8").write(json.dumps(_failed_ab(sig)))
+    return str(tmp_path)
+
+
+def test_an_ab_candidate_that_missed_its_own_alpha_is_not_validated(tmp_path):
+    # Coming from an A/B file is provenance, not a pass. Offering a failed
+    # candidate as a decision is how a p=0.33 result reaches production.
+    got = adopt_genome.candidates(_fixtures_failed(tmp_path))
+    failed = [c for c in got if c["label"] == "B"][0]
+    assert failed["kind"] == "measured"
+    assert failed["validated"] is False
+    assert "FAILED" in adopt_genome.describe(failed)
+
+
+def test_a_row_with_no_p_value_does_not_crash_the_listing(tmp_path):
+    import auto_research as ar
+    io.open(str(tmp_path / "_qd_archive.json"), "w", encoding="utf-8").write(
+        json.dumps(ARCHIVE))
+    sig = ar.genome_sig(ar.Genome(**ARCHIVE["3_4_5"]["genome"]))
+    io.open(str(tmp_path / "_ab_genomes_20260101-0000.json"), "w",
+            encoding="utf-8").write(json.dumps(
+                {"holdout": "AMZN", "results": {"X": {"sig": sig}}}))
+    got = adopt_genome.candidates(str(tmp_path))
+    line = adopt_genome.describe([c for c in got if c["label"] == "X"][0])
+    assert "n/a" in line
+
+
+def test_main_refuses_a_search_elite_without_the_flag(tmp_path, monkeypatch,
+                                                     capsys):
+    # Without this the whole --unvalidated gate is untested: deleting it would
+    # make every search elite adoptable by default and no test would notice.
+    monkeypatch.setattr(adopt_genome, "BASE", _fixtures_failed(tmp_path))
+    monkeypatch.setattr("sys.argv", ["adopt_genome.py"])
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    adopt_genome.main()
+    out = capsys.readouterr().out
+    # The only A/B row failed, and search elites need the flag, so nothing is
+    # offered at all.
+    assert "No validated candidates" in out
+    assert "0_0_1" not in out
+
+
+def test_main_offers_search_elites_only_with_the_flag(tmp_path, monkeypatch,
+                                                     capsys):
+    monkeypatch.setattr(adopt_genome, "BASE", _fixtures_failed(tmp_path))
+    monkeypatch.setattr("sys.argv", ["adopt_genome.py", "--unvalidated"])
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    adopt_genome.main()
+    out = capsys.readouterr().out
+    assert "search fitness" in out
+    assert "Cancelled" in out
+
+
+def test_the_written_record_carries_the_caveat(tmp_path):
+    got = adopt_genome.candidates(_fixtures(tmp_path))
+    measured = [c for c in got if c["validated"]][0]
+    dest = str(tmp_path / "adopted_genome.json")
+    adopt_genome.write_adoption(measured, dest)
+    rec = json.loads(io.open(dest, encoding="utf-8").read())
+    caveat = rec["evidence"]["caveat"]
+    assert "assumption" in caveat and "2 held-out" in caveat

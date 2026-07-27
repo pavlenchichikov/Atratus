@@ -35,24 +35,20 @@ logger = get_logger("scoring")
 MIN_TRUST_SCORE = 0.0
 
 
-def _adopted_record():
-    """Indirected so tests can substitute a record without touching a file."""
-    from core import adopted
-    return adopted.load()
+def missing_champion_features(df, reg_entry):
+    """Features this champion was fit on that the frame does not carry.
 
+    Keyed off the champion's OWN stored list, not off the adopted file, because
+    that is the real invariant and it holds in both directions. In particular it
+    still fires in the window between a revert and the retrain that follows it,
+    when the models still expect an adopted feature that is no longer computed -
+    a window an adopted-file check would sit through in silence.
 
-def missing_adopted_features(df):
-    """Adopted DSL feature names that this frame does not carry.
-
-    Non-empty means the frame cannot support a model trained with the adoption in
-    force, so the caller must not publish a signal from it. select_features would
-    otherwise drop the column silently, which is how a truncated feature vector
-    reaches a model that was fit on the full one.
+    Non-empty means select_features would truncate the vector and the model would
+    be scored on inputs it was never fit on.
     """
-    from core import adopted
-    names = [s.get("name") for s in adopted.specs(_adopted_record())
-             if isinstance(s, dict) and s.get("name")]
-    return [n for n in names if n not in df.columns]
+    return [f for f in ((reg_entry or {}).get("features") or [])
+            if f not in df.columns]
 
 
 def select_features(df, reg_entry):
@@ -93,12 +89,12 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
     if not os.path.exists(cb_path) or len(df) < 50:
         return None
 
-    # An adopted feature that could not be computed for this asset means the model
-    # would be scored on a vector it was never fit on. No signal is better than a
-    # wrong one, and this must be loud rather than silently dropped downstream.
-    missing = missing_adopted_features(df)
+    # A feature this champion was fit on but the frame lacks means the model would
+    # be scored on a vector it was never fit on. No signal is better than a wrong
+    # one, and this must be loud rather than silently dropped downstream.
+    missing = missing_champion_features(df, reg_entry)
     if missing:
-        print("  [SKIP] %s: adopted feature(s) unavailable: %s"
+        print("  [SKIP] %s: feature(s) the champion needs are unavailable: %s"
               % (name, ", ".join(missing)))
         return None
 

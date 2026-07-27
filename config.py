@@ -15,8 +15,13 @@ try:
     _ADOPTED = _adopted.load()
     if _ADOPTED:
         _adopted.apply(_ADOPTED.get("genome") or {})
-except Exception:
-    _ADOPTED = None  # a broken adoption must never stop a run
+except Exception as _exc:
+    # A broken adoption must never stop a run, but it must never be silent
+    # either: a hand-edited value of the wrong type would otherwise leave a
+    # tens-of-hours retrain running on production defaults while the owner
+    # believes the genome is live.
+    print("[adopt] adopted genome ignored: %s" % _exc)
+    _ADOPTED = None
 
 # --- 1. MODEL PARAMETERS ---
 SEQ_LEN = 10

@@ -89,8 +89,12 @@ def test_the_chain_is_defined_in_exactly_one_place():
     root = os.path.dirname(os.path.dirname(os.path.abspath(features.__file__)))
     offenders = []
     for dirpath, _dirs, names in os.walk(root):
+        # backups/ and exports/ can hold untracked copies of a switched file,
+        # which would fail this locally while CI stays green.
         if any(part in dirpath for part in (".git", "__pycache__", "tests",
-                                            ".superpowers", "docs")):
+                                            ".superpowers", "docs", "backups",
+                                            "exports", "graphify-out",
+                                            "market_data", ".venv")):
             continue
         for fn in names:
             if not fn.endswith(".py") or fn in CHAIN_EXEMPT:

@@ -23,7 +23,10 @@ def _env_without_genome_vars(adopted_path):
     env = dict(os.environ)
     env["GTRADE_ADOPTED_PATH"] = adopted_path
     for k in ("GTRADE_DROP_FEATURES", "GTRADE_LABEL_MODE", "GTRADE_LABEL_WINDOW",
-              "GTRADE_THR_MARGIN", "GTRADE_EXTRA_FEATURES", "GTRADE_DSL_SPECS"):
+              "GTRADE_THR_MARGIN", "GTRADE_EXTRA_FEATURES", "GTRADE_DSL_SPECS",
+              # GTRADE_FEATURE_SET=base would give 24 features and fail the pin
+              # for a reason that has nothing to do with adoption.
+              "GTRADE_FEATURE_SET"):
         env.pop(k, None)
     return env
 

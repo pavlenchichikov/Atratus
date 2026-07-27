@@ -206,6 +206,13 @@ def _train(subset, env_overrides, model_dir):
     env.update(LIGHT_ENV)
     env["GTRADE_ASSETS"] = subset
     env["GTRADE_MODEL_DIR"] = model_dir
+    # A genome is an ABSOLUTE specification, so research children must never
+    # inherit a production adoption. This module does not import config, but the
+    # train_hybrid child does, and config fills in any GTRADE_* key the genome
+    # left unset - which would silently train every candidate as candidate plus
+    # the adopted genome while genome_sig recorded the candidate alone, and would
+    # compare it against a base cached before the adoption.
+    env["GTRADE_ADOPTED_PATH"] = os.path.join(BASE, "_no_adoption.json")
     env.update(env_overrides)
     subprocess.run([sys.executable, "train_hybrid.py"], cwd=BASE, env=env)
     path = os.path.join(model_dir, "quality_report.json")

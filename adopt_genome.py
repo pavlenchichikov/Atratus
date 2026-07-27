@@ -69,6 +69,8 @@ def candidates(base=None):
     for path in sorted(glob.glob(os.path.join(base, "_ab_genomes_*.json"))):
         data = _read_json(path) or {}
         holdout = data.get("holdout")
+        alpha = data.get("alpha") or 0.05
+        floor = data.get("floor") or 0.0
         for label, res in (data.get("results") or {}).items():
             if not isinstance(res, dict):
                 continue
@@ -76,13 +78,21 @@ def candidates(base=None):
             if not hit:
                 continue
             seen.add(res.get("sig"))
+            p = res.get("p_raw")
+            value = res.get("value_raw")
+            # Coming from an A/B file is provenance, not a pass. The run records
+            # its own alpha and floor; a candidate that missed either FAILED and
+            # must not be offered as a decision.
+            passed = (p is not None and value is not None
+                      and p <= alpha and value >= floor)
             out.append({
-                "kind": "measured", "validated": True, "label": label,
+                "kind": "measured", "validated": passed, "label": label,
                 "genome": hit["genome"], "bucket": hit["bucket"],
-                "value": res.get("value_raw"), "p": res.get("p_raw"),
+                "value": value, "p": p,
                 "n": res.get("n_raw"), "holdout": holdout,
                 "source": os.path.basename(path),
                 "neural": res.get("value_neural"),
+                "alpha": alpha, "floor": floor,
             })
     for sig, hit in sorted(by_sig.items(), key=lambda kv: kv[1]["bucket"]):
         if sig in seen:
@@ -103,13 +113,35 @@ def describe(cand):
             "%d extra" % len(g.get("extra") or []),
             "label %s/%s" % (g.get("label_mode", "direction"),
                              g.get("label_window", 30))]
-    if cand["validated"]:
-        head = "MEASURED  value %+.2f  p=%.4f  n=%d" % (
-            cand["value"], cand["p"], cand["n"])
+    value = "%+.2f" % cand["value"] if cand["value"] is not None else "n/a"
+    if cand["kind"] == "measured":
+        p = "%.4f" % cand["p"] if cand["p"] is not None else "n/a"
+        n = cand["n"] if cand["n"] is not None else "?"
+        verdict = "PASSED" if cand["validated"] else "FAILED its own A/B"
+        head = "%s  value %s  p=%s  n=%s" % (verdict, value, p, n)
     else:
-        head = "search fitness %+.2f  (NOT validated on a fresh holdout)" % (
-            cand["value"] or 0.0)
+        head = "search fitness %s  (NOT validated on a fresh holdout)" % value
     return "%-6s %s | %s" % (cand["label"], head, ", ".join(bits))
+
+
+def _caveat(cand):
+    """The honest limitation of this candidate's evidence, recorded with it.
+
+    Without this the record says what is live but not what the measurement did
+    not cover, and the next reader cannot tell a replicated finding from a guess.
+    """
+    if cand["kind"] != "measured":
+        return ("search fitness only; never validated on a holdout it had not "
+                "seen. Search values shrink: genome A scored 5.30 in the search "
+                "and 1.63 on a fresh holdout.")
+    if not cand["validated"]:
+        return ("this candidate FAILED its own A/B (p=%s against alpha %s, value "
+                "%s against floor %s)" % (cand["p"], cand.get("alpha"),
+                                          cand["value"], cand.get("floor")))
+    holdout = cand.get("holdout") or ""
+    return ("measured on %d held-out assets it had not seen (%s). "
+            "Generalisation to the full asset list is an assumption, not a "
+            "measurement." % (len([a for a in holdout.split(",") if a]), holdout))
 
 
 def write_adoption(cand, path=None):
@@ -135,6 +167,9 @@ def write_adoption(cand, path=None):
             "source": cand["source"],
             "bucket": cand["bucket"],
             "neural_value": cand["neural"],
+            "alpha": cand.get("alpha"),
+            "floor": cand.get("floor"),
+            "caveat": _caveat(cand),
         },
         "genome": cand["genome"],
     }
