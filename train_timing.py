@@ -101,10 +101,7 @@ def build_asset_series(asset, engine=None):
     from catboost import CatBoostClassifier
 
     import config
-    from core.features import (
-        add_cross_lag_features, add_crossasset_features, add_macro_features,
-        add_weekly_features, compute_taleb_risk, engineer_features,
-    )
+    from core.features import build_features, compute_taleb_risk
     from core.scaling import load_or_fit_scaler
     from core.track_record import _table_name
     from whatif_simulator import _load_registry
@@ -133,11 +130,7 @@ def build_asset_series(asset, engine=None):
         # Full production feature chain (mirrors predict.py lines 93-97) so
         # champions trained with cross-asset / macro / lead-lag features find
         # every column they expect in the pool.
-        df_feat = engineer_features(df_raw.copy())
-        df_feat = add_weekly_features(df_feat, table, engine)
-        df_feat = add_crossasset_features(df_feat, table, engine)
-        df_feat = add_macro_features(df_feat, engine)
-        df_feat = add_cross_lag_features(df_feat, engine)
+        df_feat, _ = build_features(df_raw.copy(), table, engine)
     except Exception as e:
         print(f"[timing] skip {asset}: feature engineering failed ({e})")
         return None

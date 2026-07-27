@@ -51,9 +51,8 @@ except ImportError:
     sys.exit("[ERR] optuna not installed. Run: pip install optuna")
 
 from config import FULL_ASSET_MAP
+from core.features import build_features
 from train_hybrid import (
-    engineer_features, add_weekly_features, add_crossasset_features, add_macro_features,
-    add_cross_lag_features,
     make_walk_forward_splits, adaptive_split_params,
     pnl_from_signals, max_drawdown_from_returns, score_strategy,
     make_signals, apply_regime_filter, get_profile,
@@ -89,11 +88,7 @@ def _load_asset_df(asset):
                              index_col="Date", parse_dates=["Date"])
         df_raw.index = pd.to_datetime(df_raw.index).normalize()
         df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
-        df = engineer_features(df_raw)
-        df = add_weekly_features(df, table, engine)
-        df = add_crossasset_features(df, table, engine)
-        df = add_macro_features(df, engine)
-        df = add_cross_lag_features(df, engine)
+        df, _ = build_features(df_raw, table, engine)
         return df
     except Exception:
         return None

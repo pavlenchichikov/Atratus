@@ -4,7 +4,6 @@ import io
 import os
 
 import pandas as pd
-import pytest
 
 from core import features
 
@@ -68,11 +67,25 @@ def test_no_adoption_leaves_the_frame_untouched_by_the_last_two_steps(monkeypatc
     assert skipped == []
 
 
-@pytest.mark.xfail(reason="callers are switched in the following two changes",
-                   strict=True)
+# Files allowed to build a chain by hand, each for a stated reason.
+#
+# auto_research measures candidates by spawning train_hybrid as a subprocess; its
+# own chain feeds the correlation screen, which calls materialize directly.
+#
+# pretrain_foundation deliberately uses its own fixed FOUNDATION_FEATURES schema
+# rather than the active candidate list, so the full chain would be wrong for it.
+CHAIN_EXEMPT = ("features.py", "feature_dsl.py", "auto_research.py",
+                "pretrain_foundation.py")
+
+
 def test_the_chain_is_defined_in_exactly_one_place():
     # The drift guard. This bug arrived because the chain is copy-pasted: the DSL
-    # step was added to training and forgotten in six other callers.
+    # step was added to training and forgotten in every other caller.
+    #
+    # engineer_features is the signal, not the last two steps: a caller that had
+    # only the first five never called add_dsl_features either, so guarding on
+    # that would let a hand-built five-step chain pass unnoticed. Anyone building
+    # the chain by hand starts here.
     root = os.path.dirname(os.path.dirname(os.path.abspath(features.__file__)))
     offenders = []
     for dirpath, _dirs, names in os.walk(root):
@@ -80,13 +93,12 @@ def test_the_chain_is_defined_in_exactly_one_place():
                                             ".superpowers", "docs")):
             continue
         for fn in names:
-            if not fn.endswith(".py"):
+            if not fn.endswith(".py") or fn in CHAIN_EXEMPT:
                 continue
-            path = os.path.join(dirpath, fn)
-            if os.path.basename(path) in ("features.py", "feature_dsl.py"):
-                continue
-            src = io.open(path, encoding="utf-8", errors="ignore").read()
-            for step in ("add_dsl_features(", "add_chronos_features("):
+            src = io.open(os.path.join(dirpath, fn), encoding="utf-8",
+                          errors="ignore").read()
+            for step in ("engineer_features(", "add_dsl_features(",
+                         "add_chronos_features("):
                 if step in src:
                     offenders.append("%s calls %s" % (fn, step))
     assert offenders == [], (

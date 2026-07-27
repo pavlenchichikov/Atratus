@@ -23,10 +23,8 @@ except Exception:
     pass
 
 from config import FULL_ASSET_MAP
-from train_hybrid import (
-    engineer_features, add_weekly_features,
-    ensemble_with_gating,
-)
+from core.features import build_features
+from train_hybrid import ensemble_with_gating
 from core.model_io import (
     get_lookback as _get_lookback,
     load_json as _load_json,
@@ -149,8 +147,7 @@ def get_all_signals(progress=True):
             )
             df_raw.index = pd.to_datetime(df_raw.index).normalize()
             df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
-            df = engineer_features(df_raw)
-            df = add_weekly_features(df, table, engine)
+            df, _ = build_features(df_raw, table, engine)
             if len(df) < 60:
                 continue
         except Exception:

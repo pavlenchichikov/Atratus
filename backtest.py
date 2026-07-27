@@ -38,7 +38,7 @@ except ImportError:
     sys.exit(f"config.py not found in {BASE_DIR}")
 
 # Import shared components from core modules
-from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features, add_cross_lag_features
+from core.features import build_features
 from core.ensemble import ensemble_with_gating, build_stacking_features
 from core.model_io import (
     get_lookback as _get_lookback,
@@ -124,11 +124,7 @@ def run_forensic_test():
                                  index_col="Date", parse_dates=["Date"])
             df_raw.index = pd.to_datetime(df_raw.index).normalize()
             df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
-            df = engineer_features(df_raw)
-            df = add_weekly_features(df, table, engine)
-            df = add_crossasset_features(df, table, engine)
-            df = add_macro_features(df, engine)
-            df = add_cross_lag_features(df, engine)
+            df, _ = build_features(df_raw, table, engine)
             if len(df) < 200:
                 continue
         except Exception as exc:

@@ -93,7 +93,7 @@ def _predict_cb(asset: str, df_full: pd.DataFrame, days_back: int, engine) -> pd
     """
     from catboost import CatBoostClassifier
     from sklearn.preprocessing import StandardScaler
-    from train_hybrid import engineer_features, add_weekly_features
+    from core.features import build_features
 
     table = _asset_to_table(asset)
     model_path = os.path.join(MODEL_DIR, f"{table}_cb.cbm")
@@ -103,8 +103,7 @@ def _predict_cb(asset: str, df_full: pd.DataFrame, days_back: int, engine) -> pd
 
     # Feature engineering on full history
     try:
-        df_feat = engineer_features(df_full.copy())
-        df_feat = add_weekly_features(df_feat, table, engine)
+        df_feat, _ = build_features(df_full.copy(), table, engine)
     except Exception as e:
         print(f"  [SKIP] {asset}: feature engineering failed - {e}")
         return None
