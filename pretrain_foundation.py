@@ -1,11 +1,10 @@
-"""Foundation pretraining for the neural members (spec 2026-07-18).
+"""Foundation pretraining for the neural members.
 
-Part 1 (this task): builds a pooled cross-asset dataset on the common feature
-schema, with a leakage-safe cutoff derived from each asset's own walk-forward
-folds. Part 2 (a later task) adds the training loop and CLI entry point that
-trains one foundation net per architecture; train_hybrid (GTRADE_FOUNDATION=1)
-will then seed each asset's fold-1 nets from these weights via the existing
-warm-start store.
+Part 1 builds a pooled cross-asset dataset on the common feature schema, with a
+leakage-safe cutoff derived from each asset's own walk-forward folds. Part 2 is
+the training loop and CLI entry point that trains one foundation net per
+architecture; train_hybrid (GTRADE_FOUNDATION=1) then seeds each asset's fold-1
+nets from these weights via the existing warm-start store.
 
 Leakage guard: the foundation must never see any bar inside a kept fold's
 val/test window. compute_cutoff() backs each asset's cutoff date off by

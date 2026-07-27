@@ -1,4 +1,4 @@
-"""Tests for core/timing_policy.py (spec 2026-07-18-rl-timing-policy)."""
+"""Tests for core/timing_policy.py."""
 import numpy as np
 
 from core import timing_policy as tp
@@ -145,15 +145,13 @@ def _seed_bar(db_path, asset, day, close=100.0):
 
 
 class TestServeShadow:
-    """Serve-side shadow integration (Task 5): log_prediction gains two
-    optional timing_* columns and performance_tracker.timing_state rebuilds
-    the policy's position state from them. NOTE: the brief's sketch assumed
-    log_prediction had no date-override hook and asked for a new
-    `_day_override` kwarg; the real signature already has `date=` for this
-    exact purpose (see its docstring), so these tests reuse that instead of
-    adding a redundant parameter. The real signature also gates every insert
-    on `_has_bar` (a real price bar must exist for that asset/date), so each
-    test seeds a matching price bar first."""
+    """Serve-side shadow integration: log_prediction gains two optional
+    timing_* columns and performance_tracker.timing_state rebuilds the policy's
+    position state from them. NOTE: log_prediction already takes a `date=`
+    argument for exactly this purpose (see its docstring), so these tests reuse
+    it rather than adding a redundant override kwarg. The real signature also
+    gates every insert on `_has_bar` (a real price bar must exist for that
+    asset/date), so each test seeds a matching price bar first."""
 
     def test_log_prediction_accepts_timing_fields(self, tmp_path, monkeypatch):
         import sqlite3

@@ -1,6 +1,5 @@
 """RL search controller for auto_research: emitter/scheduler architecture.
 
-Spec: docs/superpowers/specs/2026-07-18-rl-search-controller-design.md
 Discounted Thompson sampling over child-generation arms (two-phase context),
 curiosity-based parent selection, sep-CMA-ES-lite emitter over the numeric
 genes, empty-cell-targeting novelty emitter, and QC (exploration floor,

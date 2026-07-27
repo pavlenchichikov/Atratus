@@ -1,4 +1,4 @@
-"""Slow test: per-net calibration + abstention wiring in train_hybrid.py (SP-2 Task 4).
+"""Slow test: per-net calibration + abstention wiring in train_hybrid.py.
 
 Excluded from the fast suite (marker 'slow').  Run manually when a market.db
 is available and GTRADE_NET_CALIBRATE=1 GTRADE_NET_ABSTAIN_EPS=0.02 should be

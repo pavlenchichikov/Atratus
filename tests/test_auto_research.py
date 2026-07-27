@@ -973,7 +973,7 @@ def test_run_qd_no_elites_still_journals(monkeypatch):
     assert called["findings"]["winners"] == []
 
 
-# --- Task 2: neural-lift primitives ---
+# --- neural-lift primitives ---
 
 
 def _basis_train(subset, env):
@@ -1038,7 +1038,7 @@ def test_run_axis_neural_basis_scores_contribution(monkeypatch):
     assert abs(res["best_delta"] - 4.0) < 1e-9   # 4.5 candidate - 0.5 base contribution
 
 
-# --- Task 4: neural_lift metric + replication gate in main() ---
+# --- neural_lift metric + replication gate in main() ---
 
 
 def _fake_axes_for_main(monkeypatch):
@@ -1089,7 +1089,7 @@ def test_winner_sig_stable_across_temp_envs():
         ar._winner_sig("labeling", {"window": 20, "mode": "rel_median"})
 
 
-# --- Task 1: auto-research gate power (enlarged held-out + Wilcoxon signed-rank) ---
+# --- auto-research gate power (enlarged held-out + Wilcoxon signed-rank) ---
 
 
 def test_wilcoxon_p_accepts_consistent_small_improvement():
@@ -1138,7 +1138,7 @@ def test_held_out_set_is_fourteen_disjoint_from_selection():
     assert not (set(ho) & sel)
 
 
-# --- Task 5: neural_lift metric + replication gate in run_qd() ---
+# --- neural_lift metric + replication gate in run_qd() ---
 
 
 def test_run_qd_records_neural_lift_and_replication(monkeypatch):
@@ -1186,7 +1186,7 @@ def test_run_axis_additive_neural_basis(monkeypatch):
     assert res["kept"] and res["kept_delta"] > 0
 
 
-# --- Task 2: surrogate-guided next_child ---
+# --- surrogate-guided next_child ---
 
 
 def test_surrogate_child_picks_higher_predicted(monkeypatch):

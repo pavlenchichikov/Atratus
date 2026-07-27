@@ -1,4 +1,4 @@
-"""Slow test: seed-averaging wiring in train_hybrid.py (SP-2 Task 2).
+"""Slow test: seed-averaging wiring in train_hybrid.py.
 
 Excluded from the fast suite (marker 'slow').  Run manually when a market.db
 is available and GTRADE_NET_SEEDS >= 2 should be exercised end-to-end:

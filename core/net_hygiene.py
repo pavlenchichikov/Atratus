@@ -1,6 +1,6 @@
 """Pure, testable neural-hygiene helpers for the ensemble trainer.
 
-All logic for the SP-2 levers (seed-averaging, uniqueness sample-weights, per-net
+All logic for the net-hygiene levers (seed-averaging, uniqueness sample-weights, per-net
 calibration + abstention) lives here so train_hybrid.py stays thin and the feature
 is testable without real training. Every lever is env-gated and default-OFF; when a
 flag is unset the trainer's behavior is byte-identical to before.

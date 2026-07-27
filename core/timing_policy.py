@@ -1,4 +1,4 @@
-"""Entry/exit timing policy (Stage A rules), spec 2026-07-18-rl-timing-policy.
+"""Entry/exit timing policy (Stage A rules).
 
 The policy decides WHEN to act on the ensemble's signal - never direction
 (the ensemble's job) and never size (Kelly + Taleb's job). Actions are
@@ -76,8 +76,8 @@ _TIMING_LABELS = {
 def display_label(action, reason):
     """Map a (timing_action, timing_reason) pair to (text, is_divergence).
 
-    Single source of the display wording (spec 2026-07-23-timing-policy-
-    display-layer section 3). `text` is None when nothing should be shown
+    Single source of the display wording. `text` is None when nothing should
+    be shown
     (aligned/flat states); `is_divergence` is True when the policy blocks or
     exits against a live signal, which the radar/mobile use to decide whether
     to show a badge at all. `action` may be "ENTER:+1"/"ENTER:-1"."""

@@ -4,7 +4,7 @@
 Suppresses BUY/SELL on segments with PROVEN bad live accuracy (verified
 outcomes in prediction_log) while the measurement stream keeps flowing:
 predict.py logs the RAW signal, so a gated class rehabilitates itself when
-fresh statistics improve. Spec: docs/superpowers/specs/2026-07-16-live-gate-design.md
+fresh statistics improve.
 
 Rules (first match wins; every threshold is env-tunable; GTRADE_LIVE_GATE=0
 turns the whole gate off):

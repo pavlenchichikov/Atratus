@@ -445,7 +445,7 @@ META_SHADOW_THRESHOLDS = (0.40, 0.45, 0.50, 0.55, 0.60)
 
 
 def meta_shadow_report(days=30, model_version=None):
-    """Shadow evaluation of the SP-6 meta-sizing gate. Over reconciled directional
+    """Shadow evaluation of the meta-sizing gate. Over reconciled directional
     predictions that carry a meta_prob (logged while GTRADE_META_SIZING=shadow), it
     asks: if we gated - kept only signals with meta_prob >= thr and sent the rest to
     WAIT - would the acted-on accuracy beat acting on all of them? That is the

@@ -314,7 +314,7 @@ def test_log_prediction_records_meta_prob(tmp_path, monkeypatch):
 
 def test_log_prediction_records_gated_display(tmp_path, monkeypatch):
     """signal stays the raw model output; sig_shown/gate_reason capture what the
-    live gate actually displayed to the user (Task 6 passes both, Task 7 reads them)."""
+    live gate actually displayed to the user."""
     import performance_tracker as pt
     db = str(tmp_path / "gate.db")
     today = datetime.utcnow().strftime("%Y-%m-%d")

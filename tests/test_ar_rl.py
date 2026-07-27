@@ -1,4 +1,4 @@
-"""Tests for core/ar_rl.py - RL search controller (spec 2026-07-18)."""
+"""Tests for core/ar_rl.py - RL search controller."""
 import random
 
 import pytest

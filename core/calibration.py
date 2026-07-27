@@ -76,7 +76,7 @@ def load_calibrator(model_dir: str, table: str):
 # --- global LIVE calibration layer (fitted on real outcomes) -----------------
 # A second isotonic layer over the per-asset calibrators, fitted by
 # recalibrate_live.py on verified prediction_log outcomes. Missing file =
-# identity, so nothing changes until the owner runs the CLI. The pkl stores
+# identity, so nothing changes until the CLI is run. The pkl stores
 # {"model": IsotonicRegression, ...metadata...}; a tiny mtime cache avoids a
 # disk read per asset per radar run.
 

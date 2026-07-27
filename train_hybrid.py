@@ -838,7 +838,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 lstm = tf_enc = tcn_model = None
                 lstm_acc = 0.5
             else:
-                # SP-2 Task 3: uniqueness sample-weights (Lopez de Prado).  Off by default;
+                # Net hygiene: uniqueness sample-weights (Lopez de Prado).  Off by default;
                 # set GTRADE_NET_UNIQUENESS=1 to enable.  When unset, _uniq_w is None and
                 # every dataset construction below falls through to the else-branch which is
                 # byte-identical to the original code.
@@ -859,7 +859,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         len(X_seq_train), _horizon
                     ).astype("float32")
 
-                # SP-2 Task 2: seed-averaging closure.  When GTRADE_NET_SEEDS is unset
+                # Net hygiene: seed-averaging closure.  When GTRADE_NET_SEEDS is unset
                 # (default), net_seeds()==1 and _fit_all_nets() runs once with NO
                 # set_random_seed call, structurally identical to the original code.
                 def _fit_all_nets(multi_seed=False):
@@ -1111,7 +1111,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             tcn_val_al  = tcn_val_prob[:n_val]
             tcn_test_al = tcn_test_prob[:n_test]
 
-            # SP-2 Task 4: per-net calibration + abstention (off by default). When
+            # Net hygiene: per-net calibration + abstention (off by default). When
             # GTRADE_NET_CALIBRATE is set, calibrate each NET's probs (not CatBoost)
             # on validation and abstain near 0.5, so the meta-learner sees honest,
             # decisive net inputs. When unset, lstm_val_cal/lstm_test_cal are the raw
@@ -1288,7 +1288,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 save_scaler(best_fold['models']['scaler'], MODEL_DIR, table)
                 _calib = fit_calibrator(best_fold.get('val_prob'), best_fold.get('val_target'))
                 save_calibrator(_calib, MODEL_DIR, table)
-                # SP-6 Phase 2b: optionally train + persist a per-asset meta-sizing model
+                # Meta-sizing: optionally train + persist a per-asset model
                 # (P(CB correct)). Env-gated (GTRADE_META_SIZING); default off = skipped.
                 # Never allowed to break champion training.
                 if meta_sizer.meta_enabled() != "off":

@@ -1,20 +1,16 @@
-"""Fit and gate the Stage-A timing policy (spec 2026-07-18-rl-timing-policy).
+"""Fit and gate the Stage-A timing policy.
 
 Offline pipeline: reconstruct per-asset historical CatBoost-champion
 probabilities (the What-If pattern), replay the rules policy on the
 position-persistent simulator (core.backtesting.simulate_positions - the
-Stage-0 timing environment), fit the 8 rule parameters with the SP-1
-separable ES on a global time split, and gate policy-vs-baseline with a
+Stage-0 timing environment), fit the 8 rule parameters with a separable
+ES on a global time split, and gate policy-vs-baseline with a
 one-sided Wilcoxon before writing timing_policy.json.
 
 Usage:
     python train_timing.py                # fit + gate + report
     python train_timing.py --assets SP500,NVDA,BTC   # subset
     python train_timing.py --budget 400   # ES evaluations
-
-This module (part 1) provides the dataset builder and the policy/baseline
-evaluators; the ES fit + gate + save CLI lands in a later part of the same
-file.
 """
 import argparse
 import json

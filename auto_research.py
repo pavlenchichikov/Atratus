@@ -2001,7 +2001,7 @@ def make_hyper_axis():
     )
 
 
-# --- net-hygiene axis (SP-2 levers as searchable candidates) ------------------
+# --- net-hygiene axis (levers as searchable candidates) ------------------
 
 NETS_CANDIDATES = (
     {"seeds": 3},

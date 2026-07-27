@@ -1,4 +1,4 @@
-"""Meta-probability sizing gate for the production predictor (SP-6 Phase 2b).
+"""Meta-probability sizing gate for the production predictor.
 
 P(CB is correct on this bar), learned from a leakage-free walk-forward CB, used as an
 env-gated confidence gate: a weak-meta BUY/SELL is suppressed to WAIT. Default OFF -
