@@ -18,8 +18,8 @@ try:
 except Exception as _exc:
     # A broken adoption must never stop a run, but it must never be silent
     # either: a hand-edited value of the wrong type would otherwise leave a
-    # tens-of-hours retrain running on production defaults while the owner
-    # believes the genome is live.
+    # tens-of-hours retrain running on production defaults with no adoption in
+    # force and nothing on screen to say so.
     print("[adopt] adopted genome ignored: %s" % _exc)
     _ADOPTED = None
 
