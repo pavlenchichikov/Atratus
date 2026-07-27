@@ -33,6 +33,17 @@ def test_a_date_range_reads_as_an_estimate():
     assert got["AAPL"]["date"] == "2026-08-05"
 
 
+def test_an_unparseable_bound_does_not_promote_a_range_to_confirmed():
+    # The range is what makes it an estimate. Dropping a junk bound must not
+    # turn the survivor into a confirmed date.
+    def fetch(symbol, session):
+        return {"Earnings Date": ["2026-08-05", "NaT"]}
+
+    got = events.earnings_for({"AAPL": "AAPL"}, fetch=fetch)
+    assert got["AAPL"]["date"] == "2026-08-05"
+    assert got["AAPL"]["confirmed"] is False
+
+
 def test_assets_without_earnings_are_absent():
     def fetch(symbol, session):
         return {"Earnings Date": []}

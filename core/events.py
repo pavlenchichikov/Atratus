@@ -63,7 +63,11 @@ def _next_earnings(calendar):
     parsed = [d for d in (_as_date(x) for x in candidates) if d is not None]
     if not parsed:
         return None
-    return {"date": min(parsed).isoformat(), "confirmed": len(parsed) == 1}
+    # Confirmation is the SHAPE yfinance returned, not how many of its entries
+    # parsed. A two-element range with one unparseable bound is still an
+    # estimate, and reporting it as confirmed would be the exact lie this
+    # field exists to prevent.
+    return {"date": min(parsed).isoformat(), "confirmed": len(candidates) == 1}
 
 
 def _yf_calendar(symbol, session):
