@@ -66,11 +66,16 @@ def test_consistency_labels():
     assert news_link.consistency(0.04, 0.5) == "consistent"
 
 
-def test_consistency_is_unclear_without_an_opinion():
+def test_consistency_is_unclear_when_measured_but_flat():
     assert news_link.consistency(-0.04, 0.02) == "unclear"
-    assert news_link.consistency(-0.04, None) == "unclear"
-    assert news_link.consistency(None, 0.5) == "unclear"
     assert news_link.consistency(0.0, 0.5) == "unclear"
+    assert news_link.consistency(None, 0.5) == "unclear"
+
+
+def test_absent_sentiment_is_its_own_answer():
+    # "no news that day" is a data gap, not a measured neutral. Reporting it as
+    # "unclear" would dress an absence up as a finding.
+    assert news_link.consistency(-0.04, None) == "no_news"
 
 
 def test_context_row_uses_the_last_bar_date_not_today():

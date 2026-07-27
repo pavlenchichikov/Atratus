@@ -87,12 +87,17 @@ def mean_sentiment(items):
 def consistency(move, sentiment):
     """Whether sentiment agreed with the move.
 
-    Returns "consistent", "conflicting" or "unclear". "unclear" is a real
-    answer rather than a fallback: it reports that no explanation was found,
-    which is what the reader needs before inventing one.
+    Returns "consistent", "conflicting", "unclear" or "no_news".
+
+    "unclear" is a real answer rather than a fallback: the day's news was read
+    and carried no lean, which is what the reader needs before inventing an
+    explanation. "no_news" is the different case where there was nothing to
+    read at all. Collapsing the two would let a data gap read as a measurement.
     """
-    if move is None or sentiment is None:
+    if move is None:
         return "unclear"
+    if sentiment is None:
+        return "no_news"
     if move == 0 or abs(sentiment) < UNCLEAR_BAND:
         return "unclear"
     return "consistent" if (move > 0) == (sentiment > 0) else "conflicting"
