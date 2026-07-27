@@ -108,3 +108,19 @@ create table if not exists news_context (
 alter table news_context enable row level security;
 drop policy if exists news_context_read on news_context;
 create policy news_context_read on news_context for select using (is_allowed());
+
+-- Known-date event risk. `kind` is 'earnings' or 'macro'; `asset` is null for
+-- macro. `confirmed` is false for a yfinance estimate, which the client labels
+-- as expected rather than showing it as fact.
+create table if not exists events (
+  id         text primary key,
+  kind       text not null,
+  asset      text,
+  date       date not null,
+  name       text not null,
+  importance text,
+  confirmed  boolean
+);
+alter table events enable row level security;
+drop policy if exists events_read on events;
+create policy events_read on events for select using (is_allowed());

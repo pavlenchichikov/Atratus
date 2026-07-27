@@ -36,7 +36,9 @@ except Exception:
     pass
 
 from config import FULL_ASSET_MAP
-from core import digest, news_export, news_link, timing_policy, track_record
+from core import (digest, events as core_events, news_export, news_link,
+                  timing_policy, track_record)
+from net import yf_session
 
 BAR_LIMIT = 180   # bars per asset exported for the mobile price chart
 SIG_LIMIT = 90    # prediction_log rows per asset for the mobile track record
@@ -563,6 +565,44 @@ def push_news(url, key, rows):
               timeout=120)
 
 
+def fetch_event_rows(assets, today=None):
+    """Upcoming earnings for `assets` plus the macro calendar, within horizon.
+
+    The two sources are independent on purpose: a dead proxy costs the earnings
+    half and leaves the macro half intact.
+    """
+    day = today or datetime.date.today()
+    symbols = {a: FULL_ASSET_MAP[a] for a in assets if a in FULL_ASSET_MAP}
+    earnings = {}
+    try:
+        earnings = core_events.earnings_for(symbols, session=yf_session())
+    except Exception as e:
+        print(f"note: earnings calendar unavailable: {e}")
+    macro = core_events.load_macro()
+    rows = core_events.event_rows(earnings, macro)
+    return core_events.upcoming(rows, day)
+
+
+def push_events(url, key, rows):
+    """Full-refresh upsert of the events table.
+
+    Deletes on id: macro rows carry a null asset, so an asset filter would
+    orphan them.
+    """
+    base = _rest_base(url)
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    merge = {**headers, "Prefer": "resolution=merge-duplicates"}
+    _send("DELETE", f"{base}/events?id=not.is.null", headers=headers,
+          timeout=60)
+    for chunk in _chunked(rows):
+        _send("POST", f"{base}/events?on_conflict=id", headers=merge,
+              json=chunk, timeout=120)
+
+
 def main():
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_KEY")
@@ -613,8 +653,10 @@ def main():
                 push_news(url, key, news_rows)
                 ctx = fetch_news_context(bars, news_items)
                 push_news_context(url, key, ctx)
+                ev_rows = fetch_event_rows(list(news_items))
+                push_events(url, key, ev_rows)
                 print(f"pushed news: {len(news_rows)} rows | "
-                      f"{len(ctx)} context rows")
+                      f"{len(ctx)} context rows | {len(ev_rows)} events")
         except Exception as e:
             print(f"WARNING: news export failed: {e}")
 

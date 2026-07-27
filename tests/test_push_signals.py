@@ -600,3 +600,71 @@ def test_push_news_context_deletes_on_asset(monkeypatch):
     assert [m for m, _ in calls] == ["DELETE", "POST"]
     assert "news_context?asset=not.is.null" in calls[0][1]
     assert "on_conflict=asset" in calls[1][1]
+
+
+from core import events as core_events
+
+
+def fetch_event_rows_today(module, assets):
+    """fetch_event_rows with a pinned today, so the horizon tests are stable."""
+    return module.fetch_event_rows(assets, today=datetime.date(2026, 7, 26))
+
+
+def test_fetch_event_rows_merges_earnings_and_macro(monkeypatch, tmp_path):
+    macro = tmp_path / "macro.json"
+    macro.write_text('[{"date": "2026-07-29", "name": "FOMC",'
+                     ' "importance": "high"}]', encoding="utf-8")
+    monkeypatch.setattr(push_signals, "FULL_ASSET_MAP", {"AAPL": "AAPL"},
+                        raising=False)
+    monkeypatch.setattr(core_events, "MACRO_PATH", str(macro))
+    monkeypatch.setattr(core_events, "_yf_calendar",
+                        lambda symbol, session: {
+                            "Earnings Date": ["2026-08-05", "2026-08-09"]})
+    monkeypatch.setattr(push_signals, "yf_session", lambda: None,
+                        raising=False)
+    rows = fetch_event_rows_today(push_signals, ["AAPL"])
+    kinds = sorted(r["kind"] for r in rows)
+    assert kinds == ["earnings", "macro"]
+    earn = next(r for r in rows if r["kind"] == "earnings")
+    assert earn["confirmed"] is False
+
+
+def test_fetch_event_rows_drops_events_past_the_horizon(monkeypatch, tmp_path):
+    macro = tmp_path / "macro.json"
+    # Well beyond the 14-day horizon from the pinned today below.
+    macro.write_text('[{"date": "2026-12-01", "name": "far"}]',
+                     encoding="utf-8")
+    monkeypatch.setattr(push_signals, "FULL_ASSET_MAP", {}, raising=False)
+    monkeypatch.setattr(core_events, "MACRO_PATH", str(macro))
+    monkeypatch.setattr(push_signals, "yf_session", lambda: None,
+                        raising=False)
+    assert fetch_event_rows_today(push_signals, []) == []
+
+
+def test_fetch_event_rows_survives_a_dead_session(monkeypatch, tmp_path):
+    macro = tmp_path / "macro.json"
+    macro.write_text('[{"date": "2026-07-29", "name": "FOMC"}]',
+                     encoding="utf-8")
+    monkeypatch.setattr(push_signals, "FULL_ASSET_MAP", {"AAPL": "AAPL"},
+                        raising=False)
+    monkeypatch.setattr(core_events, "MACRO_PATH", str(macro))
+
+    def boom():
+        raise RuntimeError("no route")
+
+    monkeypatch.setattr(push_signals, "yf_session", boom, raising=False)
+    # Macro still lands: the two sources are independent.
+    rows = fetch_event_rows_today(push_signals, ["AAPL"])
+    assert [r["kind"] for r in rows] == ["macro"]
+
+
+def test_push_events_deletes_on_id(monkeypatch):
+    # Macro rows carry a null asset, so an asset filter would orphan them.
+    calls = []
+    monkeypatch.setattr(push_signals, "_send",
+                        lambda method, url, **kw: calls.append((method, url)))
+    push_signals.push_events("https://p.supabase.co", "k",
+                             [{"id": "e1", "kind": "macro"}])
+    assert [m for m, _ in calls] == ["DELETE", "POST"]
+    assert "events?id=not.is.null" in calls[0][1]
+    assert "on_conflict=id" in calls[1][1]
