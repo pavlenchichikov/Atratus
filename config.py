@@ -6,6 +6,18 @@ try:
 except ImportError:
     pass  # python-dotenv not installed; rely on environment variables being set externally
 
+# The adopted genome, applied once here because every entry point imports this
+# module. .env is loaded first on purpose: a value there wins, exactly like a
+# shell value, so a one-off experiment does not need a revert.
+try:
+    from core import adopted as _adopted
+
+    _ADOPTED = _adopted.load()
+    if _ADOPTED:
+        _adopted.apply(_ADOPTED.get("genome") or {})
+except Exception:
+    _ADOPTED = None  # a broken adoption must never stop a run
+
 # --- 1. MODEL PARAMETERS ---
 SEQ_LEN = 10
 

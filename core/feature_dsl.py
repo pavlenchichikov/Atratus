@@ -113,16 +113,24 @@ def add_dsl_features(df, engine, specs):
 
 
 def load_dsl_specs():
-    """Read the agent's proposed specs from GTRADE_DSL_SPECS (a JSON file path).
-    Returns an empty list when unset or unreadable, so training is a no-op."""
+    """The DSL specs in force: the research temp file when set, else the adopted
+    ones. Returns an empty list when there is neither, so training is a no-op.
+
+    GTRADE_DSL_SPECS wins because auto_research points it at a per-candidate temp
+    file; the adopted specs are the persistent production default.
+    """
     import json
     import os
     path = os.getenv("GTRADE_DSL_SPECS")
-    if not path or not os.path.exists(path):
-        return []
+    if path and os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
+        from core import adopted
+        return adopted.specs(adopted.load())
     except Exception:
         return []
