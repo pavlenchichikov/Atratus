@@ -1,0 +1,33 @@
+{
+  "adopted": "2026-07-27",
+  "label": "A",
+  "evidence": {
+    "kind": "measured",
+    "value": 1.634,
+    "p": 0.0067,
+    "n": 14,
+    "source": "_ab_genomes_20260727-0131.json",
+    "bucket": "3_4_5",
+    "holdout": "AMZN,JPM,LLY,WMT,DOW,AEX,OIL,VIX,AUDUSD,USDCHF,EURJPY,XRP,DOGE,AVAX",
+    "caveat": "no Russian asset in the holdout; generalisation to the full asset list is an assumption, not a measurement"
+  },
+  "genome": {
+    "drops": ["corr_sp500", "macro_tnx_chg20", "trend_strength", "vol_z"],
+    "extra": [
+      {"name": "zscore_vol_z_20", "op": "zscore", "inputs": ["vol_z"],
+       "params": {"window": 20}}
+    ],
+    "label_mode": "rel_median",
+    "label_window": 30,
+    "cb_depth_delta": 0,
+    "cb_lr_mult": 1.0,
+    "cb_iter_mult": 1.0,
+    "lookback_delta": 0,
+    "net_seeds": 1,
+    "net_uniqueness": 0,
+    "net_calibrate": 0,
+    "thr_margin": 0.02,
+    "band_delta": 0.0,
+    "regime_mode": "off"
+  }
+}
