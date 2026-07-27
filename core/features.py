@@ -6,6 +6,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from core.feature_dsl import add_dsl_features, load_dsl_specs
 from core.logger import get_logger
 
 _logger = get_logger(__name__)
@@ -530,6 +531,27 @@ def add_cross_lag_features(df: pd.DataFrame, engine) -> pd.DataFrame:
             df[c] = 0.0
     df = df.reset_index()
     return df
+
+
+def build_features(df_raw, table, engine):
+    """The canonical feature chain, in the one place its order is defined.
+
+    Returns (df, skipped) where skipped names any DSL spec that could not be
+    computed. Every caller uses this, so a step added for training cannot be
+    forgotten at serve - which is exactly how the DSL step came to exist in the
+    trainer and in none of the six other callers.
+
+    With nothing adopted this is byte-identical to the old five-step chains:
+    add_chronos_features returns df unchanged while GTRADE_CHRONOS is unset, and
+    add_dsl_features with no specs does nothing.
+    """
+    df = engineer_features(df_raw)
+    df = add_weekly_features(df, table, engine)
+    df = add_crossasset_features(df, table, engine)
+    df = add_macro_features(df, engine)
+    df = add_cross_lag_features(df, engine)
+    df = add_chronos_features(df, table, engine)
+    return add_dsl_features(df, engine, load_dsl_specs())
 
 
 # Feature columns used for training (order matters for model compatibility)
