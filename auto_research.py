@@ -390,36 +390,18 @@ def _tuning_genes(g):
 
 
 def genome_to_env(g):
-    """Compose the genome into one training env-override dict (empty - no overrides)."""
+    """Compose the genome into one training env-override dict (empty - no overrides).
+
+    The composition rules live in core.adopted so the research loop and
+    production cannot disagree about what a genome means. Only the temp spec file
+    is added here, because it is per-candidate and exists for this process only.
+    """
+    from dataclasses import asdict
+
+    from core import adopted as _adopted
+
     env = dict(_feature_env(g.extra, [s["name"] for s in g.extra]))
-    if g.drops:
-        env["GTRADE_DROP_FEATURES"] = ",".join(g.drops)
-    if g.label_mode == "triple_barrier":
-        env["GTRADE_LABEL_MODE"] = "triple_barrier"
-        env["GTRADE_LABEL_HORIZON"] = str(g.label_window)
-    elif g.label_mode != "direction":
-        env["GTRADE_LABEL_MODE"] = g.label_mode
-        env["GTRADE_LABEL_WINDOW"] = str(g.label_window)
-    if g.cb_depth_delta:
-        env["GTRADE_CB_DEPTH_DELTA"] = str(g.cb_depth_delta)
-    if g.cb_lr_mult != 1.0:
-        env["GTRADE_CB_LR_MULT"] = str(g.cb_lr_mult)
-    if g.cb_iter_mult != 1.0:
-        env["GTRADE_CB_ITER_MULT"] = str(g.cb_iter_mult)
-    if g.lookback_delta:
-        env["GTRADE_LOOKBACK_DELTA"] = str(g.lookback_delta)
-    if g.net_seeds > 1:
-        env["GTRADE_NET_SEEDS"] = str(g.net_seeds)
-    if g.net_uniqueness:
-        env["GTRADE_NET_UNIQUENESS"] = "1"
-    if g.net_calibrate:
-        env["GTRADE_NET_CALIBRATE"] = "1"
-    if g.thr_margin:
-        env["GTRADE_THR_MARGIN"] = str(g.thr_margin)
-    if g.band_delta:
-        env["GTRADE_BAND_DELTA"] = str(g.band_delta)
-    if g.regime_mode != "both":
-        env["GTRADE_REGIME_MODE"] = g.regime_mode
+    env.update(_adopted.env_overrides(asdict(g)))
     return env
 
 
