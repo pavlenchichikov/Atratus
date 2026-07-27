@@ -34,7 +34,7 @@ except ImportError:
     sys.exit("config.py not found!")
 
 from core.logger import get_logger
-from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features, add_cross_lag_features
+from core.features import build_features
 from core.scoring import score_asset
 
 logger = get_logger("predict")
@@ -90,11 +90,7 @@ def _predict_asset(name, registry, thresholds):
                              index_col="Date", parse_dates=["Date"])
         df_raw.index = pd.to_datetime(df_raw.index).normalize()
         df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
-        df = engineer_features(df_raw)
-        df = add_weekly_features(df, table, engine)
-        df = add_crossasset_features(df, table, engine)
-        df = add_macro_features(df, engine)
-        df = add_cross_lag_features(df, engine)
+        df, _skipped = build_features(df_raw, table, engine)
         if len(df) < 50:
             return None
     except Exception as e:

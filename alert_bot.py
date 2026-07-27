@@ -49,7 +49,7 @@ except ImportError:
 # -- Shared ML components (core package) --
 # Model scoring is shared with predict.py through core.scoring so the two serve
 # paths cannot drift apart (see core/scoring.py).
-from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features, add_cross_lag_features
+from core.features import build_features
 from core.scoring import score_asset
 from core import reports, track_record
 from risk_manager import RISK_CONFIG
@@ -185,13 +185,9 @@ def analyze_asset(df, name, registry, thresholds):
     """Engineer features on df, score via the shared pipeline, apply the risk
     gate, and return a Telegram signal dict or None."""
     try:
-        # Feature engineering (same helpers as training / predict.py)
-        df = engineer_features(df)
+        # One shared chain, so this path cannot fall behind training again.
         table = name.lower().replace("^", "").replace(".", "").replace("-", "")
-        df = add_weekly_features(df, table, db_engine)
-        df = add_crossasset_features(df, table, db_engine)
-        df = add_macro_features(df, db_engine)
-        df = add_cross_lag_features(df, db_engine)
+        df, _skipped = build_features(df, table, db_engine)
 
         if len(df) < 50:
             return None

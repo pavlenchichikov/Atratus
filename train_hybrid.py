@@ -289,8 +289,7 @@ from core.profiles import (
     FOREX,
     get_profile,
 )
-from core.features import engineer_features, add_weekly_features, add_crossasset_features, add_macro_features, add_cross_lag_features, add_chronos_features, active_candidate_features
-from core.feature_dsl import add_dsl_features, load_dsl_specs
+from core.features import build_features, active_candidate_features
 from core.backtesting import (
     adaptive_split_params, make_walk_forward_splits,
     score_strategy,
@@ -596,13 +595,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         df_raw = pd.read_sql(f"SELECT * FROM {table}", engine, index_col="Date", parse_dates=["Date"])
         df_raw.index = pd.to_datetime(df_raw.index).normalize()
         df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
-        df = engineer_features(df_raw)
-        df = add_weekly_features(df, table, engine)
-        df = add_crossasset_features(df, table, engine)
-        df = add_macro_features(df, engine)
-        df = add_cross_lag_features(df, engine)
-        df = add_chronos_features(df, table, engine)
-        df, _ = add_dsl_features(df, engine, load_dsl_specs())
+        df, _skipped = build_features(df_raw, table, engine)
+        if _skipped:
+            _safe_print("  [DSL] %s: could not compute %s"
+                        % (asset, ", ".join(_skipped)))
         sp = adaptive_split_params(len(df))
         if sp is None:
             _safe_print(f"  [SKIP] {asset:<12} insufficient rows ({len(df)})")
