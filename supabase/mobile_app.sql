@@ -74,3 +74,23 @@ returns table (token text) language sql security definer as $$
   join access_list a on lower(a.email) = lower(u.email);
 $$;
 revoke execute on function allowed_device_tokens() from anon, authenticated;
+
+-- News layer for the mobile app. `asset` is null for the general feed and set
+-- for per-asset news, so the client fetches once and splits on it. `date` is
+-- the trade date the row was exported for, not the article timestamp, which
+-- keeps the existing client fetcher (it filters on `date`) working unchanged.
+create table if not exists news (
+  id        text primary key,
+  asset     text,
+  date      date not null,
+  published text,
+  title     text not null,
+  link      text,
+  source    text,
+  category  text,
+  sentiment double precision,
+  label     text
+);
+alter table news enable row level security;
+drop policy if exists news_read on news;
+create policy news_read on news for select using (is_allowed());

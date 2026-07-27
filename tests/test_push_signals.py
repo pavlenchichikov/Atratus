@@ -495,3 +495,69 @@ def test_save_push_state_never_raises(tmp_path, capsys):
     path.mkdir()
     push_signals._save_push_state("abc", "2026-07-24", str(path))
     assert "could not write" in capsys.readouterr().out
+
+
+def test_push_news_deletes_on_id_not_asset(monkeypatch):
+    # General-feed rows carry a null asset; an asset-based delete filter would
+    # leave them behind to accumulate run after run.
+    calls = []
+
+    def fake_send(method, url, **kw):
+        calls.append((method, url))
+        return None
+
+    monkeypatch.setattr(push_signals, "_send", fake_send)
+    rows = [{"id": "a1", "asset": None, "date": "2026-07-26", "title": "t"}]
+    push_signals.push_news("https://p.supabase.co", "k", rows)
+    methods = [m for m, _ in calls]
+    assert methods == ["DELETE", "POST"]
+    assert "news?id=not.is.null" in calls[0][1]
+    assert "on_conflict=id" in calls[1][1]
+
+
+def test_push_news_sends_nothing_but_the_delete_when_empty(monkeypatch):
+    calls = []
+    monkeypatch.setattr(push_signals, "_send",
+                        lambda method, url, **kw: calls.append(method))
+    push_signals.push_news("https://p.supabase.co", "k", [])
+    assert calls == ["DELETE"]
+
+
+def test_fetch_news_rows_survives_a_failing_general_digest(monkeypatch):
+    import news_analyzer
+
+    def boom(*a, **kw):
+        raise RuntimeError("rss down")
+
+    monkeypatch.setattr(news_analyzer, "fetch_authority_digest", boom)
+    monkeypatch.setattr(news_analyzer, "fetch_news",
+                        lambda asset, **kw: [{"title": f"{asset} news",
+                                              "link": f"http://x/{asset}",
+                                              "published": "", "source": "R",
+                                              "weighted_score": 0.2,
+                                              "sentiment_label": "POSITIVE"}])
+    hist = [{"asset": "BTC", "date": "2026-07-26", "signal": "BUY", "prob": 0.8}]
+    rows = push_signals.fetch_news_rows(hist,
+                                        today=datetime.date(2026, 7, 26))
+    # The general feed failed, the per-asset fetch still delivered.
+    assert [r["asset"] for r in rows] == ["BTC"]
+
+
+def test_fetch_news_rows_skips_one_failing_asset(monkeypatch):
+    import news_analyzer
+
+    monkeypatch.setattr(news_analyzer, "fetch_authority_digest", lambda **kw: [])
+
+    def per_asset(asset, **kw):
+        if asset == "BAD":
+            raise RuntimeError("blocked")
+        return [{"title": f"{asset} news", "link": f"http://x/{asset}",
+                 "published": "", "source": "R", "weighted_score": 0.2,
+                 "sentiment_label": "POSITIVE"}]
+
+    monkeypatch.setattr(news_analyzer, "fetch_news", per_asset)
+    hist = [{"asset": "BAD", "date": "2026-07-26", "signal": "BUY", "prob": 0.9},
+            {"asset": "OK", "date": "2026-07-26", "signal": "BUY", "prob": 0.8}]
+    rows = push_signals.fetch_news_rows(hist,
+                                        today=datetime.date(2026, 7, 26))
+    assert [r["asset"] for r in rows] == ["OK"]

@@ -36,7 +36,7 @@ except Exception:
     pass
 
 from config import FULL_ASSET_MAP
-from core import digest, timing_policy, track_record
+from core import digest, news_export, timing_policy, track_record
 
 BAR_LIMIT = 180   # bars per asset exported for the mobile price chart
 SIG_LIMIT = 90    # prediction_log rows per asset for the mobile track record
@@ -472,6 +472,53 @@ def _digest_rows(hist, today=None):
     return [row for row in hist if row["date"] >= floor]
 
 
+def fetch_news_rows(hist, today=None):
+    """General digest plus per-asset news for today's actionable calls.
+
+    Every fetch is guarded on its own: news is an extra, and one dead feed
+    must not cost the rest of the export.
+    """
+    import news_analyzer
+
+    day = (today or datetime.date.today()).isoformat()
+    rows = []
+    try:
+        items = news_analyzer.fetch_authority_digest(max_per_source=5,
+                                                     fetch_summaries=False)
+    except Exception as e:
+        print(f"note: general news unavailable: {e}")
+        items = []
+    rows.extend(news_export.general_rows(items, day))
+    for asset in news_export.pick_assets(hist, day):
+        try:
+            items = news_analyzer.fetch_news(
+                asset, max_articles=news_export.PER_ASSET,
+                fetch_summaries=False)
+        except Exception:
+            continue
+        rows.extend(news_export.asset_rows(asset, items, day))
+    return rows
+
+
+def push_news(url, key, rows):
+    """Full-refresh upsert of the news table.
+
+    Deletes on id, not asset: general-feed rows carry a null asset, and an
+    asset-based filter would leave them behind to accumulate.
+    """
+    base = _rest_base(url)
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    merge = {**headers, "Prefer": "resolution=merge-duplicates"}
+    _send("DELETE", f"{base}/news?id=not.is.null", headers=headers, timeout=60)
+    for chunk in _chunked(rows):
+        _send("POST", f"{base}/news?on_conflict=id", headers=merge, json=chunk,
+              timeout=120)
+
+
 def main():
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_KEY")
@@ -511,6 +558,17 @@ def main():
                 print(f"FCM push sent to {sent} device(s)")
     except Exception as e:
         print(f"WARNING: FCM push failed: {e}")
+
+    if os.getenv("GTRADE_NEWS_EXPORT") == "1":
+        try:
+            if not history_ok:
+                print("note: history unavailable - skipping the news export")
+            else:
+                news_rows = fetch_news_rows(hist)
+                push_news(url, key, news_rows)
+                print(f"pushed news: {len(news_rows)} rows")
+        except Exception as e:
+            print(f"WARNING: news export failed: {e}")
 
 
 if __name__ == "__main__":
