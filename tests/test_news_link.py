@@ -96,3 +96,19 @@ def test_context_row_uses_the_last_bar_date_not_today():
 
 def test_context_row_is_none_without_bars():
     assert news_link.context_row("X", [], []) is None
+
+
+def test_unfetched_news_is_not_reported_as_an_absence():
+    # None means the asset's news was never fetched; [] means it was fetched and
+    # nothing landed. Reporting the first as the second claims a check we never
+    # ran.
+    bars_ = bars([100.0] * 24 + [130.0], start_day=1)
+    assert news_link.context_row("X", bars_, None)["consistency"] == "not_checked"
+    assert news_link.context_row("X", bars_, [])["consistency"] == "no_news"
+
+
+def test_an_unfetched_asset_still_reports_its_move():
+    bars_ = bars([100.0] * 24 + [130.0], start_day=1)
+    row = news_link.context_row("X", bars_, None)
+    assert row["notable"] is True
+    assert row["move_pct"] is not None

@@ -582,12 +582,28 @@ def test_fetch_news_context_groups_bars_by_asset():
     assert by_asset["B"]["notable"] is False
     # Proves the per-asset items actually reached context_row, not just the bars.
     assert by_asset["A"]["consistency"] == "consistent"
-    assert by_asset["B"]["consistency"] == "no_news"
+    # B has bars but no entry in `items`, so it was never fetched - "not_checked",
+    # not "no_news" (which would claim a fetch that found nothing).
+    assert by_asset["B"]["consistency"] == "not_checked"
 
 
 def test_fetch_news_context_skips_an_asset_without_bars():
     rows = push_signals.fetch_news_context([], {"A": []})
     assert rows == []
+
+
+def test_fetch_news_context_separates_unfetched_from_empty():
+    # A asked and found nothing; C was never asked. The row must not claim the
+    # same thing about both.
+    bars = []
+    for asset in ("A", "C"):
+        for i in range(25):
+            bars.append({"asset": asset, "date": f"2026-07-{i + 1:02d}",
+                         "close": 100.0})
+    rows = push_signals.fetch_news_context(bars, {"A": []})
+    by_asset = {r["asset"]: r["consistency"] for r in rows}
+    assert by_asset["A"] == "no_news"
+    assert by_asset["C"] == "not_checked"
 
 
 def test_push_news_context_deletes_on_asset(monkeypatch):

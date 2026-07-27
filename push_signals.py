@@ -501,7 +501,8 @@ def fetch_news_rows(hist, today=None):
             found = news_analyzer.fetch_news(
                 asset, max_articles=news_export.PER_ASSET,
                 fetch_summaries=False)
-        except Exception:
+        except Exception as e:
+            print(f"note: news unavailable for {asset}: {e}")
             continue
         by_asset[asset] = found
         rows.extend(news_export.asset_rows(asset, found, day))
@@ -511,8 +512,10 @@ def fetch_news_rows(hist, today=None):
 def fetch_news_context(bars, items_by_asset):
     """One news_context row per asset that has bars.
 
-    Assets without news still get a row: the move and its notability are worth
-    reporting even when nothing was found to sit beside it.
+    Assets whose news was never fetched still get a row: the move and its
+    notability are worth reporting on their own, but their news verdict is
+    recorded as unchecked (news_link.context_row's "not_checked") rather than
+    as an absence, since no fetch was ever made to find out.
     """
     by_asset = {}
     for bar in bars:
@@ -520,7 +523,7 @@ def fetch_news_context(bars, items_by_asset):
     rows = []
     for asset, asset_bars in by_asset.items():
         row = news_link.context_row(asset, asset_bars,
-                                    items_by_asset.get(asset, []))
+                                    items_by_asset.get(asset))
         if row is not None:
             rows.append(row)
     return rows
@@ -645,20 +648,40 @@ def main():
         print(f"WARNING: FCM push failed: {e}")
 
     if os.getenv("GTRADE_NEWS_EXPORT") == "1":
-        try:
-            if not history_ok:
-                print("note: history unavailable - skipping the news export")
-            else:
-                news_rows, news_items = fetch_news_rows(hist)
+        if not history_ok:
+            print("note: history unavailable - skipping the news export")
+        else:
+            # Picked once, independent of the RSS fetch below: stage C (earnings)
+            # must not lose assets just because stage A's fetch for some of them
+            # failed or stage A raised outright.
+            day = datetime.date.today()
+            picked_assets = news_export.pick_assets(hist, day.isoformat())
+
+            news_items = None
+            try:
+                news_rows, news_items = fetch_news_rows(hist, today=day)
                 push_news(url, key, news_rows)
-                ctx = fetch_news_context(bars, news_items)
-                push_news_context(url, key, ctx)
-                ev_rows = fetch_event_rows(list(news_items))
+                print(f"pushed news: {len(news_rows)} rows")
+            except Exception as e:
+                print(f"WARNING: news push failed: {e}")
+
+            try:
+                if news_items is None:
+                    print("note: news items unavailable - skipping the news "
+                          "context export")
+                else:
+                    ctx = fetch_news_context(bars, news_items)
+                    push_news_context(url, key, ctx)
+                    print(f"pushed news context: {len(ctx)} rows")
+            except Exception as e:
+                print(f"WARNING: news context push failed: {e}")
+
+            try:
+                ev_rows = fetch_event_rows(picked_assets, today=day)
                 push_events(url, key, ev_rows)
-                print(f"pushed news: {len(news_rows)} rows | "
-                      f"{len(ctx)} context rows | {len(ev_rows)} events")
-        except Exception as e:
-            print(f"WARNING: news export failed: {e}")
+                print(f"pushed events: {len(ev_rows)} rows")
+            except Exception as e:
+                print(f"WARNING: events push failed: {e}")
 
 
 if __name__ == "__main__":

@@ -106,6 +106,11 @@ def consistency(move, sentiment):
 def context_row(asset, bars, items):
     """The news_context row for one asset, or None without bars.
 
+    `items` is None when this asset's news was never fetched, and an empty list
+    when it was fetched and nothing landed on the day. Those are different
+    facts: the first is a gap in what we looked at, the second is a result.
+    Collapsing them would report an absence we never checked for.
+
     The day compared against is the date of the last bar, which is the same day
     daily_move measured. It is deliberately not today: a stale asset would
     otherwise be matched against news from a day it never moved on.
@@ -117,11 +122,14 @@ def context_row(asset, bars, items):
         return None
     date = bars[-1]["date"]
     move = daily_move(bars)
-    todays = same_day(items, date)
+    if items is None:
+        verdict = "not_checked"
+    else:
+        verdict = consistency(move, mean_sentiment(same_day(items, date)))
     return {
         "asset": asset,
         "date": date,
         "move_pct": move,
         "notable": is_notable(move, move_sigma(bars)),
-        "consistency": consistency(move, mean_sentiment(todays)),
+        "consistency": verdict,
     }
