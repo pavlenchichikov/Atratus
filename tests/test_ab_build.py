@@ -233,6 +233,22 @@ def test_run_refuses_when_the_adoption_moved_under_the_config(monkeypatch,
     assert trained == [], "it must not train against the wrong reference"
 
 
+def test_run_refuses_when_market_db_is_absent(monkeypatch, capsys, tmp_path):
+    # data_fingerprint connects without mode=ro, so without this guard a missing
+    # database is created empty and the run trains on nothing.
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: None)
+    monkeypatch.setattr(ab_build, "DB_PATH", str(tmp_path / "market.db"))
+    trained = []
+    monkeypatch.setattr(ab_build, "train_reference",
+                        lambda *a: trained.append(1) or ([], []))
+    ab_build.run({"holdout": "A1,A2", "objective": "mean", "floor": 0.5,
+                  "alpha": 0.05, "reference": "base", "reference_sig": None,
+                  "candidates": []})
+    assert "market.db not found" in capsys.readouterr().out
+    assert trained == []
+    assert not os.path.exists(str(tmp_path / "market.db"))
+
+
 def test_the_result_file_is_readable_by_the_adoption_picker(tmp_path,
                                                             monkeypatch):
     # The whole loop depends on this: research produces elites, this validates

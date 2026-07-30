@@ -183,9 +183,10 @@ def _configure(args):
     picks = []
     for p in raw.split(","):
         p = p.strip()
-        if p.isdigit() and 1 <= int(p) <= len(pool) and p not in picks:
-            picks.append(p)
-    chosen = [pool[int(p) - 1] for p in picks]
+        # Keyed on the resolved index, not the typed token: "1,01" is one pick.
+        if p.isdigit() and 1 <= int(p) <= len(pool) and int(p) not in picks:
+            picks.append(int(p))
+    chosen = [pool[i - 1] for i in picks]
     if not chosen:
         print("Cancelled.")
         return
@@ -338,6 +339,11 @@ def run(cfg):
     ref = {"label": cfg["reference"], "sig": cfg["reference_sig"],
            "env": live["env"]}
     from core import ar_memory
+    if not os.path.exists(DB_PATH):
+        # data_fingerprint connects without mode=ro and would create an empty
+        # file here, so the run would train on nothing and say so late.
+        print("market.db not found at %s; run data_engine first." % DB_PATH)
+        return
     fp_start = ar_memory.data_fingerprint(subset)
     print("Reference: %s   holdout: %s   data %s"
           % (ref["label"], subset, fp_start))
