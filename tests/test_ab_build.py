@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 
 import ab_build
 
@@ -121,3 +122,81 @@ def test_nothing_is_the_reference_when_nothing_is_adopted(monkeypatch):
     ref = ab_build.reference()
     assert ab_build.is_reference({"label": "x", "genome": {}, "sig": None},
                                  ref) is False
+
+
+def test_the_reference_is_cached_by_signature_when_adopted(monkeypatch):
+    # base_key hashes the env, and the reference env holds a per-run temp path,
+    # so keying on it would retrain the reference for hours every run.
+    calls = []
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: ADOPTED)
+    monkeypatch.setattr(ab_build, "_heldout_eval",
+                        lambda subset, env, fn, **kw: (calls.append(fn.__name__)
+                                                       or ([], [])))
+    ab_build.train_reference("A1,A2", ab_build.reference())
+    assert calls == ["_candidate_train_cached_by_sig"]
+
+
+def test_the_reference_uses_the_base_cache_when_nothing_is_adopted(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: None)
+    monkeypatch.setattr(ab_build, "_heldout_eval",
+                        lambda subset, env, fn, **kw: (calls.append(fn.__name__)
+                                                       or ([], [])))
+    ab_build.train_reference("A1,A2", ab_build.reference())
+    assert calls == ["train_base_cached"]
+
+
+def test_verdict_passes_only_above_the_floor_and_below_alpha():
+    assert ab_build.verdict({"p": 0.01, "value": 1.2}, 0.5, 0.05) == "PASSED"
+    # Beats the floor but is not significant.
+    assert ab_build.verdict({"p": 0.40, "value": 1.2}, 0.5, 0.05) == "FAILED"
+    # Significant but the effect is below the floor.
+    assert ab_build.verdict({"p": 0.01, "value": 0.2}, 0.5, 0.05) == "FAILED"
+    # Significantly WORSE than the live genome, which is the case that matters.
+    assert ab_build.verdict({"p": 0.01, "value": -0.9}, 0.5, 0.05) == "FAILED"
+
+
+def test_verdict_needs_both_numbers():
+    assert ab_build.verdict({"p": None, "value": 1.2}, 0.5, 0.05) == "FAILED"
+    assert ab_build.verdict({"p": 0.01, "value": None}, 0.5, 0.05) == "FAILED"
+
+
+def test_run_refuses_when_the_adoption_moved_under_the_config(monkeypatch,
+                                                             capsys):
+    # Otherwise the env comes from the new adoption while reference_sig still
+    # names the old one: measured against one thing, recorded as another.
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: ADOPTED)
+    trained = []
+    monkeypatch.setattr(ab_build, "train_reference",
+                        lambda *a: trained.append(1) or ([], []))
+    ab_build.run({"holdout": "A1,A2", "objective": "mean", "floor": 0.5,
+                  "alpha": 0.05, "reference": "adopted:OLD",
+                  "reference_sig": "a-different-signature", "candidates": []})
+    out = capsys.readouterr().out
+    assert "adoption changed" in out
+    assert trained == [], "it must not train against the wrong reference"
+
+
+def test_the_result_file_is_readable_by_the_adoption_picker(tmp_path,
+                                                            monkeypatch):
+    # The whole loop depends on this: research produces elites, this validates
+    # one, adopt_genome offers only what passed.
+    import adopt_genome
+    import auto_research as ar
+    genome = {"drops": ["vol_z"], "extra": [], "label_mode": "rel_median",
+              "label_window": 30, "thr_margin": 0.02, "regime_mode": "off"}
+    sig = ar.genome_sig(ar.Genome(**genome))
+    io.open(str(tmp_path / "_qd_archive.json"), "w", encoding="utf-8").write(
+        json.dumps({"3_4_5": {"fitness": 5.3, "genome": genome}}))
+    written = ab_build.write_result(
+        {"holdout": "A1,A2", "objective": "mean", "floor": 0.5, "alpha": 0.05,
+         "reference": "adopted:A", "reference_sig": "refsig"},
+        {"C": {"sig": sig, "p": 0.01, "value": 1.2, "n": 14,
+               "p_neural": 0.5, "value_neural": 0.1}},
+        base=str(tmp_path))
+    assert os.path.exists(written)
+    got = adopt_genome.candidates(str(tmp_path))
+    measured = [c for c in got if c["kind"] == "measured"]
+    assert len(measured) == 1
+    assert measured[0]["validated"] is True
+    assert measured[0]["value"] == 1.2

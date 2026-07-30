@@ -212,6 +212,121 @@ def _print_config(cfg):
                  g.get("label_window", 30)))
 
 
+def _heldout_eval(subset, env, fn, **kw):
+    """Indirected so the tests can see which trainer the reference chose."""
+    import auto_research as ar
+    return ar._heldout_eval(subset, env, fn, **kw)
+
+
+def train_reference(subset, ref):
+    """Train the arm every candidate is compared against.
+
+    Cached BY SIGNATURE when a genome is adopted: base_key hashes the env dict,
+    and the reference env holds a per-run temp spec path, so it would miss every
+    run. Caching it under the plain base key would be worse - it would serve a
+    naked-base result and this run would report it as a comparison against the
+    adopted genome.
+    """
+    import auto_research as ar
+
+    if ref["sig"]:
+        def _candidate_train_cached_by_sig(sub, env, _sig=ref["sig"]):
+            return ar._candidate_train_cached(sub, env, _sig)
+        return _heldout_eval(subset, ref["env"], _candidate_train_cached_by_sig)
+    return _heldout_eval(subset, {}, ar.train_base_cached)
+
+
+def evaluate(cand, subset, ref_full, ref_contrib, objective):
+    """One candidate against the reference. Returns the statistics dict."""
+    import auto_research as ar
+
+    g = ar.Genome(**cand["genome"])
+    sig = cand.get("sig") or ar.genome_sig(g)
+
+    def _fn(sub, env, _sig=sig):
+        return ar._candidate_train_cached(sub, env, _sig)
+
+    var_full, var_contrib = _heldout_eval(subset, ar.genome_to_env(g), _fn)
+    p, value, n, _tag = ar.holdout_stats(ref_full, var_full, objective)
+    p_n, value_n, _n2, _t2 = ar.holdout_stats(ref_contrib, var_contrib,
+                                              objective)
+    return {"sig": sig, "p": p, "value": value, "n": n,
+            "p_neural": p_n, "value_neural": value_n}
+
+
+def verdict(stats, floor, alpha):
+    """PASSED only when the candidate beats the reference by the floor.
+
+    A candidate that beats production defaults but loses to the live genome must
+    read as a failure: adopting it would be a regression.
+    """
+    p, value = stats.get("p"), stats.get("value")
+    if p is None or value is None:
+        return "FAILED"
+    return "PASSED" if (p <= alpha and value >= floor) else "FAILED"
+
+
+def write_result(cfg, results, base=None):
+    """Write the run in the shape adopt_genome.candidates() already parses."""
+    import datetime
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    path = os.path.join(base or BASE, "_ab_genomes_%s.json" % stamp)
+    payload = {
+        "holdout": cfg["holdout"],
+        "objective": cfg["objective"],
+        "floor": cfg["floor"],
+        "alpha": cfg["alpha"],
+        "reference": cfg["reference"],
+        "reference_sig": cfg["reference_sig"],
+        "results": {label: {"sig": st["sig"], "value_raw": st["value"],
+                            "p_raw": st["p"], "n_raw": st["n"],
+                            "value_neural": st["value_neural"],
+                            "p_neural": st["p_neural"], "label": label}
+                    for label, st in results.items()},
+    }
+    with io.open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+    return path
+
+
+def run(cfg):
+    """Train the reference, then every candidate, then report and write.
+
+    Refuses when the adoption moved since the config was written: the env would
+    come from the new adoption while reference_sig still named the old one, so
+    the run would measure one thing and record another.
+    """
+    subset = cfg["holdout"]
+    live = reference()
+    if live["sig"] != cfg["reference_sig"]:
+        print("The adoption changed since this config was written.")
+        print("  config expects: %s" % (cfg["reference"] or "base"))
+        print("  live now      : %s" % live["label"])
+        print("Rebuild it: python ab_build.py")
+        return
+    ref = {"label": cfg["reference"], "sig": cfg["reference_sig"],
+           "env": live["env"]}
+    print("Reference: %s   holdout: %s" % (ref["label"], subset))
+    ref_full, ref_contrib = train_reference(subset, ref)
+    if not ref_full:
+        print("The reference arm produced no rows; stopping.")
+        return
+    results = {}
+    for cand in cfg["candidates"]:
+        print("\nTraining candidate %s ..." % cand["label"])
+        results[cand["label"]] = evaluate(cand, subset, ref_full, ref_contrib,
+                                          cfg["objective"])
+    print("\n%s" % ("=" * 66))
+    for label, st in results.items():
+        v = verdict(st, cfg["floor"], cfg["alpha"])
+        print("  %-8s %+.2f over %s   p=%.4f  n=%s   %s (floor %+.2f, alpha %.3f)"
+              % (label, st["value"] or 0.0, cfg["reference"], st["p"] or 1.0,
+                 st["n"], v, cfg["floor"], cfg["alpha"]))
+    path = write_result(cfg, results)
+    print("\nWrote %s" % os.path.basename(path))
+    print("Next: python adopt_genome.py")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--show", action="store_true")
@@ -231,7 +346,11 @@ def main():
             _print_config(cfg)
         return
     if args.run:
-        print("The run half is not wired yet.")
+        cfg = read_config()
+        if not cfg:
+            print("No pending config. Run python ab_build.py first.")
+            return
+        run(cfg)
         return
     _configure(args)
 
