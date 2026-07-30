@@ -64,7 +64,7 @@ def reference():
 
 
 def is_reference(cand, ref):
-    """True when this candidate IS what we would measure it against."""
+    """True when this candidate IS the thing it would be measured against."""
     return bool(ref.get("sig")) and cand.get("sig") == ref["sig"]
 
 

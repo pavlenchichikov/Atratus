@@ -171,8 +171,8 @@ def test_the_reference_trains_through_the_base_cache_when_nothing_is_adopted(
 
 
 def test_the_two_reference_arms_do_not_share_a_cache_key(monkeypatch):
-    # The key the spec cares about: an adopted reference must not be able to hit
-    # an entry written when nothing was adopted.
+    # The case that matters: an adopted reference must not be able to hit an
+    # entry written when nothing was adopted.
     import auto_research as ar
     from core import ar_memory
     monkeypatch.setattr(ar_memory, "data_fingerprint", lambda subset: "fp")
