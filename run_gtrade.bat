@@ -48,6 +48,7 @@ echo    [7] Telegram Bot  [8] Scheduler  [9] DB Audit  [F] DB Fix  [0] EXIT
 echo    [SG] Publish live signals to the site (Supabase)
 echo  GENOME
 echo    [AG] Adopt a genome   [AS] What is adopted   [AR] Revert adoption
+echo    [ABC] Configure a genome A/B     [ABR] Run the configured A/B
 echo.
 echo =======================================================
 set /p choice="Select: "
@@ -80,6 +81,8 @@ if /i "%choice%"=="5C" goto train_chunked
 if /i "%choice%"=="AG" goto adopt_genome
 if /i "%choice%"=="AS" goto adopt_show
 if /i "%choice%"=="AR" goto adopt_revert
+if /i "%choice%"=="ABC" goto ab_configure
+if /i "%choice%"=="ABR" goto ab_run
 if /i "%choice%"=="L" goto signal_log
 if /i "%choice%"=="H" goto report
 if /i "%choice%"=="F" goto db_fix
@@ -137,6 +140,21 @@ echo changes only if the new model beats it. Add --force-promote only to rebuild
 echo a baseline or repair registry metadata.
 echo.
 python train_chunked.py
+pause
+goto menu
+
+:ab_configure
+cls
+python ab_build.py
+pause
+goto menu
+
+:ab_run
+cls
+echo This trains the holdout once per arm, roughly 8 to 11 hours each.
+echo Do not start it while a retrain is running: they compete for RAM and cores.
+echo.
+python ab_build.py --run
 pause
 goto menu
 
