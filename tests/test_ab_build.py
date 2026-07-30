@@ -200,3 +200,17 @@ def test_the_result_file_is_readable_by_the_adoption_picker(tmp_path,
     assert len(measured) == 1
     assert measured[0]["validated"] is True
     assert measured[0]["value"] == 1.2
+
+
+def test_evaluate_reports_a_sample_size_not_a_list_of_deltas(monkeypatch):
+    # holdout_stats returns (p, value, deltas, tag): the third value is the
+    # per-asset delta list, not a count. Passing it straight through would put a
+    # list of floats where every consumer expects the sample size.
+    import auto_research as ar
+    monkeypatch.setattr(ab_build, "_heldout_eval",
+                        lambda subset, env, fn, **kw: ([], []))
+    monkeypatch.setattr(ar, "holdout_stats",
+                        lambda a, b, obj: (0.01, 1.2, [0.3, -0.1, 0.5], "tag"))
+    st = ab_build.evaluate({"label": "C", "genome": {"drops": []},
+                            "sig": "s"}, "A1,A2,A3", [], [], "mean")
+    assert st["n"] == 3

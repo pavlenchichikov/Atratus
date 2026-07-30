@@ -247,10 +247,10 @@ def evaluate(cand, subset, ref_full, ref_contrib, objective):
         return ar._candidate_train_cached(sub, env, _sig)
 
     var_full, var_contrib = _heldout_eval(subset, ar.genome_to_env(g), _fn)
-    p, value, n, _tag = ar.holdout_stats(ref_full, var_full, objective)
-    p_n, value_n, _n2, _t2 = ar.holdout_stats(ref_contrib, var_contrib,
+    p, value, deltas, _tag = ar.holdout_stats(ref_full, var_full, objective)
+    p_n, value_n, _d2, _t2 = ar.holdout_stats(ref_contrib, var_contrib,
                                               objective)
-    return {"sig": sig, "p": p, "value": value, "n": n,
+    return {"sig": sig, "p": p, "value": value, "n": len(deltas),
             "p_neural": p_n, "value_neural": value_n}
 
 
@@ -319,9 +319,11 @@ def run(cfg):
     print("\n%s" % ("=" * 66))
     for label, st in results.items():
         v = verdict(st, cfg["floor"], cfg["alpha"])
-        print("  %-8s %+.2f over %s   p=%.4f  n=%s   %s (floor %+.2f, alpha %.3f)"
-              % (label, st["value"] or 0.0, cfg["reference"], st["p"] or 1.0,
-                 st["n"], v, cfg["floor"], cfg["alpha"]))
+        p_txt = "%.4f" % st["p"] if st["p"] is not None else "n/a"
+        v_txt = "%+.2f" % st["value"] if st["value"] is not None else "n/a"
+        print("  %-8s %s over %s   p=%s  n=%s   %s (floor %+.2f, alpha %.3f)"
+              % (label, v_txt, cfg["reference"], p_txt, st["n"], v,
+                 cfg["floor"], cfg["alpha"]))
     path = write_result(cfg, results)
     print("\nWrote %s" % os.path.basename(path))
     print("Next: python adopt_genome.py")
