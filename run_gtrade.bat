@@ -153,6 +153,8 @@ goto menu
 cls
 echo This trains the holdout once per arm, roughly 8 to 11 hours each.
 echo Do not start it while a retrain is running: they compete for RAM and cores.
+echo Stop the scheduler and do not run data_engine while it works - new bars
+echo mid-run make the arms measure different windows.
 echo.
 python ab_build.py --run
 pause

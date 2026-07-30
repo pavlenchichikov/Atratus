@@ -12,7 +12,9 @@ milliseconds and never touches a database.
 import random
 
 MIN_BARS = 2000   # below this an asset is too thin to carry a measurement
-MIN_N = 8         # below this the existing gate reports UNDERPOWERED
+# Below MIN_N a one-sided Wilcoxon reaches significance on a handful of mildly
+# positive deltas, so a pass would mean little.
+MIN_N = 8
 DEFAULT_N = 14    # what the previous A/B used
 
 

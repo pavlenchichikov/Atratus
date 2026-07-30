@@ -42,7 +42,9 @@ def test_reference_is_the_bare_base_when_nothing_is_adopted(monkeypatch):
     assert ref["env"] == {}
 
 
-def test_previous_holdouts_are_read_from_every_result_file(tmp_path):
+def test_previous_holdouts_are_read_from_every_result_file(tmp_path,
+                                                          monkeypatch):
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: None)
     io.open(str(tmp_path / "_ab_genomes_20260101-0000.json"), "w",
             encoding="utf-8").write(json.dumps({"holdout": "AAA,BBB",
                                                 "results": {}}))
@@ -53,13 +55,22 @@ def test_previous_holdouts_are_read_from_every_result_file(tmp_path):
     assert sorted(sum((h.split(",") for h in got), [])) == ["AAA", "BBB", "CCC"]
 
 
-def test_a_corrupt_result_file_does_not_stop_the_scan(tmp_path):
+def test_a_corrupt_result_file_does_not_stop_the_scan(tmp_path, monkeypatch):
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: None)
     io.open(str(tmp_path / "_ab_genomes_bad.json"), "w",
             encoding="utf-8").write("{not json")
     io.open(str(tmp_path / "_ab_genomes_ok.json"), "w",
             encoding="utf-8").write(json.dumps({"holdout": "AAA",
                                                 "results": {}}))
     assert ab_build.previous_holdouts(str(tmp_path)) == ["AAA"]
+
+
+def test_the_adopted_records_own_holdout_is_never_drawable_again(tmp_path,
+                                                                monkeypatch):
+    # Its result file can be moved or archived; those assets stay spent.
+    monkeypatch.setattr(ab_build, "_adopted_record",
+                        lambda: dict(ADOPTED, evidence={"holdout": "DDD,EEE"}))
+    assert ab_build.previous_holdouts(str(tmp_path)) == ["DDD,EEE"]
 
 
 def test_the_config_records_what_it_will_measure_against(monkeypatch):
@@ -124,41 +135,86 @@ def test_nothing_is_the_reference_when_nothing_is_adopted(monkeypatch):
                                  ref) is False
 
 
-def test_the_reference_is_cached_by_signature_when_adopted(monkeypatch):
-    # base_key hashes the env, and the reference env holds a per-run temp path,
-    # so keying on it would retrain the reference for hours every run.
-    calls = []
+def test_the_reference_trains_through_the_signature_cache_when_adopted(
+        monkeypatch):
+    # Not by the closure's name: the body is what routes the call, and swapping
+    # it for train_base_cached would serve a naked-base result while the run
+    # reported a comparison against the adopted genome.
+    import auto_research as ar
+    fired = []
     monkeypatch.setattr(ab_build, "_adopted_record", lambda: ADOPTED)
+    monkeypatch.setattr(ar, "_candidate_train_cached",
+                        lambda sub, env, sig: fired.append(("sig", sig)) or [])
+    monkeypatch.setattr(ar, "train_base_cached",
+                        lambda sub, env: fired.append(("base", None)) or [])
     monkeypatch.setattr(ab_build, "_heldout_eval",
-                        lambda subset, env, fn, **kw: (calls.append(fn.__name__)
-                                                       or ([], [])))
-    ab_build.train_reference("A1,A2", ab_build.reference())
-    assert calls == ["_candidate_train_cached_by_sig"]
+                        lambda subset, env, fn, **kw: (fn(subset, env), []))
+    ref = ab_build.reference()
+    ab_build.train_reference("A1,A2", ref)
+    assert [k for k, _ in fired] == ["sig"]
+    assert fired[0][1] == ref["sig"]
 
 
-def test_the_reference_uses_the_base_cache_when_nothing_is_adopted(monkeypatch):
-    calls = []
+def test_the_reference_trains_through_the_base_cache_when_nothing_is_adopted(
+        monkeypatch):
+    import auto_research as ar
+    fired = []
     monkeypatch.setattr(ab_build, "_adopted_record", lambda: None)
+    monkeypatch.setattr(ar, "_candidate_train_cached",
+                        lambda sub, env, sig: fired.append(("sig", sig)) or [])
+    monkeypatch.setattr(ar, "train_base_cached",
+                        lambda sub, env: fired.append(("base", None)) or [])
     monkeypatch.setattr(ab_build, "_heldout_eval",
-                        lambda subset, env, fn, **kw: (calls.append(fn.__name__)
-                                                       or ([], [])))
+                        lambda subset, env, fn, **kw: (fn(subset, env), []))
     ab_build.train_reference("A1,A2", ab_build.reference())
-    assert calls == ["train_base_cached"]
+    assert [k for k, _ in fired] == ["base"]
+
+
+def test_the_two_reference_arms_do_not_share_a_cache_key(monkeypatch):
+    # The key the spec cares about: an adopted reference must not be able to hit
+    # an entry written when nothing was adopted.
+    import auto_research as ar
+    from core import ar_memory
+    monkeypatch.setattr(ar_memory, "data_fingerprint", lambda subset: "fp")
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: ADOPTED)
+    sig = ab_build.reference()["sig"]
+    assert ar_memory.genome_key("A1,A2", sig, "full") != ar_memory.base_key(
+        "A1,A2", {})
+    assert ar.genome_sig(ar.Genome(**ADOPTED["genome"])) == sig
 
 
 def test_verdict_passes_only_above_the_floor_and_below_alpha():
-    assert ab_build.verdict({"p": 0.01, "value": 1.2}, 0.5, 0.05) == "PASSED"
+    assert ab_build.verdict({"p": 0.01, "value": 1.2, "n": 14},
+                            0.5, 0.05) == "PASSED"
     # Beats the floor but is not significant.
-    assert ab_build.verdict({"p": 0.40, "value": 1.2}, 0.5, 0.05) == "FAILED"
+    assert ab_build.verdict({"p": 0.40, "value": 1.2, "n": 14},
+                            0.5, 0.05) == "FAILED"
     # Significant but the effect is below the floor.
-    assert ab_build.verdict({"p": 0.01, "value": 0.2}, 0.5, 0.05) == "FAILED"
+    assert ab_build.verdict({"p": 0.01, "value": 0.2, "n": 14},
+                            0.5, 0.05) == "FAILED"
     # Significantly WORSE than the live genome, which is the case that matters.
-    assert ab_build.verdict({"p": 0.01, "value": -0.9}, 0.5, 0.05) == "FAILED"
+    assert ab_build.verdict({"p": 0.01, "value": -0.9, "n": 14},
+                            0.5, 0.05) == "FAILED"
 
 
 def test_verdict_needs_both_numbers():
-    assert ab_build.verdict({"p": None, "value": 1.2}, 0.5, 0.05) == "FAILED"
-    assert ab_build.verdict({"p": 0.01, "value": None}, 0.5, 0.05) == "FAILED"
+    assert ab_build.verdict({"p": None, "value": 1.2, "n": 14},
+                            0.5, 0.05) == "FAILED"
+    assert ab_build.verdict({"p": 0.01, "value": None, "n": 14},
+                            0.5, 0.05) == "FAILED"
+
+
+def test_verdict_fails_when_the_surviving_sample_is_too_small():
+    # An arm that lost assets to a failed training leaves fewer deltas than the
+    # holdout had, and a few mildly positive ones reach significance easily.
+    assert ab_build.verdict({"p": 0.031, "value": 0.7, "n": 5},
+                            0.5, 0.05) == "FAILED"
+    assert ab_build.verdict({"p": 0.031, "value": 0.7, "n": 8},
+                            0.5, 0.05) == "PASSED"
+
+
+def test_verdict_fails_when_n_is_absent():
+    assert ab_build.verdict({"p": 0.01, "value": 1.2}, 0.5, 0.05) == "FAILED"
 
 
 def test_run_refuses_when_the_adoption_moved_under_the_config(monkeypatch,

@@ -69,21 +69,33 @@ def is_reference(cand, ref):
 
 
 def previous_holdouts(base=None):
-    """The holdout of every earlier A/B run, so none of them is reused."""
+    """The holdout of every earlier A/B run, so none of them is reused.
+
+    The adopted record's own holdout is included too: its result file can be
+    moved or archived, and those assets must not quietly become drawable again.
+    """
     out = []
     for path in sorted(glob.glob(os.path.join(base or BASE,
                                               "_ab_genomes_*.json"))):
         data = _read_json(path)
         if isinstance(data, dict) and data.get("holdout"):
             out.append(data["holdout"])
+    rec = _adopted_record()
+    held = ((rec or {}).get("evidence") or {}).get("holdout")
+    if held:
+        out.append(held)
     return out
 
 
 def bar_counts(db_path=None):
     """Rows per asset in market.db. A missing table counts as zero."""
     from config import FULL_ASSET_MAP
+    path = db_path or DB_PATH
     out = {}
-    con = sqlite3.connect("file:%s?mode=ro" % (db_path or DB_PATH), uri=True)
+    if not os.path.exists(path):
+        raise SystemExit("market.db not found at %s; run data_engine first."
+                         % path)
+    con = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
     try:
         cur = con.cursor()
         for asset in FULL_ASSET_MAP:
@@ -126,14 +138,15 @@ def read_config(path=None):
 
 
 def _candidate_pool():
-    """Archive elites that no A/B has measured yet.
+    """Every archive elite, measured ones included.
 
-    candidates() reports an elite as "measured" once a result file references its
-    signature, so filtering to "search" hides exactly the ones already paid for.
-    Offering one again would buy a number the archive already holds.
+    A previous measurement was against whatever was live THEN. Hiding an elite
+    because it once missed would make it permanently invisible after the adoption
+    changes or is reverted, which is the same reasoning error this tool exists to
+    remove: a number is only meaningful beside the reference it was taken against.
     """
     import adopt_genome
-    return [c for c in adopt_genome.candidates() if c["kind"] == "search"]
+    return adopt_genome.candidates()
 
 
 def _suggest_assets(n, seed):
@@ -159,19 +172,28 @@ def _configure(args):
         return
     print("Measuring against: %s\n" % ref["label"])
     for i, c in enumerate(pool, 1):
-        warn = "  <- this IS the reference" if is_reference(c, ref) else ""
-        print("  %d. %s%s" % (i, adopt_genome.describe(c), warn))
+        notes = []
+        if is_reference(c, ref):
+            notes.append("this IS the reference")
+        if c["kind"] == "measured":
+            notes.append("already measured against a previous reference")
+        suffix = "  <- " + "; ".join(notes) if notes else ""
+        print("  %d. %s%s" % (i, adopt_genome.describe(c), suffix))
     raw = input("\nWhich numbers (comma separated, blank to cancel)? ").strip()
-    picks = [p.strip() for p in raw.split(",") if p.strip().isdigit()]
-    chosen = [pool[int(p) - 1] for p in picks if 1 <= int(p) <= len(pool)]
+    picks = []
+    for p in raw.split(","):
+        p = p.strip()
+        if p.isdigit() and 1 <= int(p) <= len(pool) and p not in picks:
+            picks.append(p)
+    chosen = [pool[int(p) - 1] for p in picks]
     if not chosen:
         print("Cancelled.")
         return
     if len(chosen) > MAX_CANDIDATES:
         print("At most %d per run: each arm is a full training of the holdout, "
-              "roughly 8 to 11 hours, plus the reference. Run the rest against "
-              "the same reference afterwards and the cache serves it free."
-              % MAX_CANDIDATES)
+              "roughly 8 to 11 hours, plus the reference. A later run draws a "
+              "fresh holdout, so its reference arm is trained again from "
+              "scratch - picking fewer now does not save that." % MAX_CANDIDATES)
         return
 
     suggested, elig = _suggest_assets(args.n, args.seed)
@@ -255,13 +277,22 @@ def evaluate(cand, subset, ref_full, ref_contrib, objective):
 
 
 def verdict(stats, floor, alpha):
-    """PASSED only when the candidate beats the reference by the floor.
+    """PASSED only when the candidate beats the reference by the floor, on
+    enough assets to mean anything.
 
     A candidate that beats production defaults but loses to the live genome must
-    read as a failure: adopting it would be a regression.
+    read as a failure: adopting it would be a regression. The sample is checked
+    here and not only when the holdout was chosen: an arm that lost assets to a
+    failed training leaves fewer deltas than the holdout had, and a handful of
+    mildly positive ones reaches significance easily.
     """
+    from core import holdout
+
     p, value = stats.get("p"), stats.get("value")
+    n = stats.get("n") or 0
     if p is None or value is None:
+        return "FAILED"
+    if n < holdout.MIN_N:
         return "FAILED"
     return "PASSED" if (p <= alpha and value >= floor) else "FAILED"
 
@@ -306,7 +337,10 @@ def run(cfg):
         return
     ref = {"label": cfg["reference"], "sig": cfg["reference_sig"],
            "env": live["env"]}
-    print("Reference: %s   holdout: %s" % (ref["label"], subset))
+    from core import ar_memory
+    fp_start = ar_memory.data_fingerprint(subset)
+    print("Reference: %s   holdout: %s   data %s"
+          % (ref["label"], subset, fp_start))
     ref_full, ref_contrib = train_reference(subset, ref)
     if not ref_full:
         print("The reference arm produced no rows; stopping.")
@@ -324,6 +358,10 @@ def run(cfg):
         print("  %-8s %s over %s   p=%s  n=%s   %s (floor %+.2f, alpha %.3f)"
               % (label, v_txt, cfg["reference"], p_txt, st["n"], v,
                  cfg["floor"], cfg["alpha"]))
+    if ar_memory.data_fingerprint(subset) != fp_start:
+        print("\nWARNING: market.db changed while this run was in progress. The "
+              "arms were measured over different windows, so the comparison is "
+              "unreliable; rerun it on a quiet database.")
     path = write_result(cfg, results)
     print("\nWrote %s" % os.path.basename(path))
     print("Next: python adopt_genome.py")

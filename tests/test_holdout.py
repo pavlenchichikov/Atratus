@@ -80,8 +80,8 @@ def test_validate_names_an_ineligible_asset():
 
 
 def test_validate_rejects_an_underpowered_size():
-    # Below 8 the existing gate reports UNDERPOWERED. Genome B was once rejected
-    # on a six-asset sign test that could not reach significance at all.
+    # Genome B was once rejected on a six-asset sign test that could not reach
+    # significance at all, whichever way the deltas fell.
     problems = holdout.validate(ALL[:5], ALL)
     assert any("8" in p for p in problems)
 
