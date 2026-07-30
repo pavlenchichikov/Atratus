@@ -34,6 +34,7 @@ echo                             [T] Optuna Tune
 echo  DATA / TRAINING           [P] Paper Trading
 echo    [4] Data Update
 echo    [5] Train Models       REPORTS
+echo    [5C] Train Chunked
 echo    [6] Backtest             [M] Model Health
 echo                             [E] Export Signals CSV
 echo  WHAT-IF SIMULATOR          [L] Signal Log
@@ -45,6 +46,8 @@ echo    [W5] Custom assets       [I] Install/Repair
 echo  SERVICES
 echo    [7] Telegram Bot  [8] Scheduler  [9] DB Audit  [F] DB Fix  [0] EXIT
 echo    [SG] Publish live signals to the site (Supabase)
+echo  GENOME
+echo    [AG] Adopt a genome   [AS] What is adopted   [AR] Revert adoption
 echo.
 echo =======================================================
 set /p choice="Select: "
@@ -73,6 +76,10 @@ if /i "%choice%"=="P" goto paper
 if /i "%choice%"=="M" goto model_health
 if /i "%choice%"=="E" goto export
 if /i "%choice%"=="SG" goto push_signals
+if /i "%choice%"=="5C" goto train_chunked
+if /i "%choice%"=="AG" goto adopt_genome
+if /i "%choice%"=="AS" goto adopt_show
+if /i "%choice%"=="AR" goto adopt_revert
 if /i "%choice%"=="L" goto signal_log
 if /i "%choice%"=="H" goto report
 if /i "%choice%"=="F" goto db_fix
@@ -120,6 +127,34 @@ goto menu
 :train_only
 cls
 python train_hybrid.py
+pause
+goto menu
+
+:train_chunked
+cls
+echo Chunked trainer: one fresh process per chunk, resumable, and a champion
+echo changes only if the new model beats it. Add --force-promote only to rebuild
+echo a baseline or repair registry metadata.
+echo.
+python train_chunked.py
+pause
+goto menu
+
+:adopt_genome
+cls
+python adopt_genome.py
+pause
+goto menu
+
+:adopt_show
+cls
+python adopt_genome.py --show
+pause
+goto menu
+
+:adopt_revert
+cls
+python adopt_genome.py --revert
 pause
 goto menu
 
