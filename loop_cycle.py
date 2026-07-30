@@ -16,7 +16,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
 from config import FULL_ASSET_MAP  # noqa: E402
-from core import drift, loop_state  # noqa: E402
+from core import drift, loop_state, runlock  # noqa: E402
 
 STATE_PATH = os.path.join(BASE, "loop_state.json")
 LOCK_PATH = os.path.join(BASE, "_loop.lock")
@@ -95,10 +95,10 @@ def _build_rows():
 
 
 def main():
-    if os.path.exists(LOCK_PATH):
-        print("[loop] lock present (retrain running?); skipping this cycle.")
+    ok, reason = runlock.acquire(LOCK_PATH, "cycle")
+    if not ok:
+        print("[loop] %s; skipping this cycle." % reason)
         return
-    open(LOCK_PATH, "w").close()
     try:
         steps = []
         steps.append(run_step("data_engine", lambda: _run_script("data_engine.py")))
@@ -124,8 +124,7 @@ def main():
         loop_state.save_state(STATE_PATH, state)
         print("[loop] cycle done. proposed retrains: %d" % len(proposed))
     finally:
-        if os.path.exists(LOCK_PATH):
-            os.remove(LOCK_PATH)
+        runlock.release(LOCK_PATH)
 
 
 if __name__ == "__main__":

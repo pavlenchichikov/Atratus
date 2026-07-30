@@ -9,7 +9,7 @@ import sys
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
-from core import loop_state  # noqa: E402
+from core import loop_state, runlock  # noqa: E402
 
 STATE_PATH = os.path.join(BASE, "loop_state.json")
 LOCK_PATH = os.path.join(BASE, "_loop.lock")
@@ -30,14 +30,15 @@ def chunk(assets, size):
 
 
 def main():
-    if os.path.exists(LOCK_PATH):
-        print("[retrain] loop cycle running; skipping.")
+    ok, reason = runlock.acquire(LOCK_PATH, "retrain")
+    if not ok:
+        print("[retrain] %s; skipping." % reason)
         return
     approved = loop_state.load_state(STATE_PATH).get("approved", [])
     if not approved:
         print("[retrain] nothing approved.")
+        runlock.release(LOCK_PATH)
         return
-    open(LOCK_PATH, "w").close()
     try:
         for i, batch in enumerate(chunk(approved, CHUNK_SIZE), 1):
             env = dict(os.environ)
@@ -54,8 +55,7 @@ def main():
         loop_state.save_state(STATE_PATH, st)
         print("[retrain] done. Run predict.py to refresh signals.")
     finally:
-        if os.path.exists(LOCK_PATH):
-            os.remove(LOCK_PATH)
+        runlock.release(LOCK_PATH)
 
 
 if __name__ == "__main__":
