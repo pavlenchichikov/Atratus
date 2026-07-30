@@ -215,3 +215,11 @@ def test_the_written_record_carries_the_caveat(tmp_path):
     rec = json.loads(io.open(dest, encoding="utf-8").read())
     caveat = rec["evidence"]["caveat"]
     assert "assumption" in caveat and "2 held-out" in caveat
+
+
+def test_every_candidate_carries_its_signature(tmp_path):
+    # Without this, a tool downstream cannot tell a candidate from the genome it
+    # would be measured against, and pays hours to discover they are the same.
+    got = adopt_genome.candidates(_fixtures(tmp_path))
+    assert got, "fixture produced no candidates"
+    assert all(c.get("sig") for c in got)

@@ -83,7 +83,7 @@ def bar_counts(db_path=None):
     """Rows per asset in market.db. A missing table counts as zero."""
     from config import FULL_ASSET_MAP
     out = {}
-    con = sqlite3.connect(db_path or DB_PATH)
+    con = sqlite3.connect("file:%s?mode=ro" % (db_path or DB_PATH), uri=True)
     try:
         cur = con.cursor()
         for asset in FULL_ASSET_MAP:

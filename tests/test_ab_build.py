@@ -103,3 +103,21 @@ def test_a_candidate_equal_to_the_reference_is_flagged(monkeypatch):
     other = {"label": "other", "genome": {"drops": ["rsi"]}, "sig": "different"}
     assert ab_build.is_reference(same, ref) is True
     assert ab_build.is_reference(other, ref) is False
+
+
+def test_a_real_shaped_candidate_is_recognised_as_the_reference(monkeypatch):
+    # The earlier test used a hand-built dict with a sig, which passed while the
+    # real candidate dicts had no sig at all.
+    import auto_research as ar
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: ADOPTED)
+    ref = ab_build.reference()
+    same = {"label": "x", "genome": ADOPTED["genome"],
+            "sig": ar.genome_sig(ar.Genome(**ADOPTED["genome"]))}
+    assert ab_build.is_reference(same, ref) is True
+
+
+def test_nothing_is_the_reference_when_nothing_is_adopted(monkeypatch):
+    monkeypatch.setattr(ab_build, "_adopted_record", lambda: None)
+    ref = ab_build.reference()
+    assert ab_build.is_reference({"label": "x", "genome": {}, "sig": None},
+                                 ref) is False

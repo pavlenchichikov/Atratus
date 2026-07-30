@@ -93,6 +93,7 @@ def candidates(base=None):
                 "source": os.path.basename(path),
                 "neural": res.get("value_neural"),
                 "alpha": alpha, "floor": floor,
+                "sig": res.get("sig"),
             })
     for sig, hit in sorted(by_sig.items(), key=lambda kv: kv[1]["bucket"]):
         if sig in seen:
@@ -102,6 +103,7 @@ def candidates(base=None):
             "genome": hit["genome"], "bucket": hit["bucket"],
             "value": hit["fitness"], "p": None, "n": None, "holdout": None,
             "source": "_qd_archive.json", "neural": None,
+            "sig": sig,
         })
     return out
 
