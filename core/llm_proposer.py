@@ -112,7 +112,11 @@ def _llm_timeout():
 
 
 def _ollama_base_url():
-    return os.getenv("GTRADE_AR_LLM_BASE_URL") or "http://localhost:11434/v1"
+    # 127.0.0.1, not localhost: a Windows system proxy (VPN clients set one) bypasses
+    # "<local>" for urllib but NOT for the httpx client inside the openai SDK, which
+    # then routes localhost through the proxy and every call dies before reaching
+    # Ollama - silently, because the proposer swallows the error and falls back.
+    return os.getenv("GTRADE_AR_LLM_BASE_URL") or "http://127.0.0.1:11434/v1"
 
 
 def list_ollama_models():

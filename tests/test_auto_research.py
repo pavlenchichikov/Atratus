@@ -825,11 +825,29 @@ def test_llm_child_valid_invalid_and_error(monkeypatch):
            "label_window": 30}
     monkeypatch.setattr(llm_proposer, "propose_genome", lambda *a, **k: bad)
     assert ar._llm_child(elites, _ACTIVE, ["ret_1"]) is None
-    # backend blowing up - None (silent fallback)
+    # backend blowing up - None (fallback), but the failure is reported ONCE
     def boom(*a, **k):
         raise RuntimeError("ollama down")
     monkeypatch.setattr(llm_proposer, "propose_genome", boom)
+    monkeypatch.setattr(ar, "_LLM_WARNED", False)
     assert ar._llm_child(elites, _ACTIVE, ["ret_1"]) is None
+    assert ar._llm_child(elites, _ACTIVE, ["ret_1"]) is None
+
+
+def test_llm_child_reports_failure_once(monkeypatch, capsys):
+    from core import llm_proposer
+    elites = [{"genome": ar.Genome(), "fitness": 1.0, "rows": []}]
+
+    def boom(*a, **k):
+        raise RuntimeError("ollama down")
+
+    monkeypatch.setattr(llm_proposer, "propose_genome", boom)
+    monkeypatch.setattr(ar, "_LLM_WARNED", False)
+    ar._llm_child(elites, _ACTIVE, ["ret_1"])
+    ar._llm_child(elites, _ACTIVE, ["ret_1"])
+    out = capsys.readouterr().out
+    assert out.count("[llm] proposer unavailable") == 1
+    assert "ollama down" in out
 
 
 def test_next_child_llm_first_then_fallback(monkeypatch):

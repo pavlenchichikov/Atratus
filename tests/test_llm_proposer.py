@@ -118,7 +118,9 @@ def test_call_ollama_defaults(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
     assert lp._call_ollama("hi") == "[]"
-    assert captured["base_url"] == "http://localhost:11434/v1"
+    # 127.0.0.1, never "localhost": a Windows system proxy swallows localhost
+    # inside the openai SDK's httpx client (see _ollama_base_url).
+    assert captured["base_url"] == "http://127.0.0.1:11434/v1"
     assert captured["api_key"] == "ollama"
     assert captured["model"] == "gemma4:26b"
 

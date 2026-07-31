@@ -121,12 +121,16 @@ def compile_wiki():
             "\nReturn the FULL updated wiki as '## <page>' sections, no prose.")
         out = (_backend()(prompt) or "").strip()
         if not out:
+            print("[wiki] LLM returned an empty reply; wiki unchanged (raise "
+                  "GTRADE_AR_LLM_MAX_TOKENS - reasoning models spend the cap "
+                  "before answering).")
             return 0
         _apply_sections(out)
         state["cursor"] = len(journal)
         _save_state(state)
         return len(new)
-    except Exception:
+    except Exception as exc:
+        print("[wiki] compile failed, wiki unchanged: %s" % exc)
         return 0
 
 

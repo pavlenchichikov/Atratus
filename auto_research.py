@@ -717,6 +717,21 @@ def _qd_load():
         return {}
 
 
+_LLM_WARNED = False
+
+
+def _llm_warn(reason):
+    """Report the FIRST LLM failure of the run, then stay quiet. Without this a dead
+    backend is indistinguishable from a working one: the fallback is silent, so the
+    search looks healthy while the LLM arm contributes nothing."""
+    global _LLM_WARNED
+    if _LLM_WARNED:
+        return
+    _LLM_WARNED = True
+    print("[llm] proposer unavailable, falling back to the evolutionary operators "
+          "for the rest of this run: %s" % reason)
+
+
 def _llm_child(elites, active, base_features):
     """A genome proposed by the LLM, converted and validated; None on ANY
     problem (the QD loop then falls back to the evolutionary operators, so an
@@ -728,8 +743,13 @@ def _llm_child(elites, active, base_features):
     try:
         obj = llm_proposer.propose_genome(
             asdict(parent), summary, active, base_features, avoid=avoid)
-    except Exception:
+    except Exception as exc:
+        _llm_warn(exc)
         return None
+    if obj is None:
+        _llm_warn("backend returned no parseable genome (empty reply? raise "
+                  "GTRADE_AR_LLM_MAX_TOKENS - reasoning models spend the cap "
+                  "before answering)")
     if not isinstance(obj, dict):
         return None
     try:
