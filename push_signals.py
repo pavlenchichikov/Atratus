@@ -546,9 +546,9 @@ def send_push(url, key, events):
             mark_pushed(event_hash)
             _save_push_state(event_hash, max(e.date for e in events))
         except Exception as e:
-            print(f"note: delivered, but the alert log could not be marked, so "
-                  f"the fingerprint is not recorded and the next run will send "
-                  f"this again: {e}")
+            print(f"note: delivered, but recording it failed, so the "
+                  f"fingerprint is not saved and the next run will send this "
+                  f"again: {e}")
     else:
         print(f"WARNING: FCM push delivered to 0 of {len(tokens)} device(s) - "
               "not recording the fingerprint, will retry next run")

@@ -903,7 +903,7 @@ def test_a_failing_mark_pushed_does_not_dedupe_the_set_away(monkeypatch,
 
     monkeypatch.setattr(push_signals, "mark_pushed", _boom)
     assert push_signals.send_push("https://x.supabase.co", "k", events) == 1
-    assert "the fingerprint is not recorded" in capsys.readouterr().out
+    assert "the fingerprint is not saved" in capsys.readouterr().out
     assert push_signals._load_push_state() == {}, (
         "a saved fingerprint would silence every retry while the log still "
         "read undelivered")
