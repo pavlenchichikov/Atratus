@@ -458,10 +458,15 @@ def send_push(url, key, events):
         print("note: no signal changes this run - staying quiet")
         return 0
 
-    # Logged before anything can return early or raise, so the research sample
-    # accumulates even while FCM is unconfigured.
+    # Logged before anything can return early, so the research sample
+    # accumulates even while FCM is unconfigured. Guarded because the log is a
+    # research convenience and the push is the product: a locked or unwritable
+    # market.db must cost a log row, never the day's notification.
     event_hash = _event_hash(events)
-    log_alerts(events, event_hash)
+    try:
+        log_alerts(events, event_hash)
+    except Exception as e:
+        print(f"note: could not record the alert candidates: {e}")
 
     creds_path = os.getenv("GTRADE_FCM_CREDS")
     if not creds_path:
@@ -497,6 +502,7 @@ def send_push(url, key, events):
         return 0
 
     notification = None
+    android = None
     data = {"screen": "today"}
     payload = alerts.encode_events(events)[0]
     if (os.getenv("GTRADE_ALERT_FILTER") == "1"
@@ -505,6 +511,10 @@ def send_push(url, key, events):
         # while the app is backgrounded, and the device filter could not
         # suppress it.
         data["alerts"] = payload
+        # FCM defaults a data-only message to normal priority, which Doze
+        # defers - the device would wake to yesterday's alert. A notification
+        # message does not need this because the tray shows it directly.
+        android = messaging.AndroidConfig(priority="high")
     else:
         # Either the flag is off, or the candidate list does not fit. Falling
         # back to the composed notification is honest degradation; truncating
@@ -513,7 +523,7 @@ def send_push(url, key, events):
         notification = messaging.Notification(title=title, body=body)
 
     msg = messaging.MulticastMessage(notification=notification, data=data,
-                                     tokens=tokens)
+                                     tokens=tokens, android=android)
     resp = messaging.send_each_for_multicast(msg)
     for i, res in enumerate(resp.responses):
         if res.success:
@@ -525,8 +535,20 @@ def send_push(url, key, events):
     if resp.success_count:
         # Only a delivered push updates the fingerprint, so a total failure is
         # retried on the next run instead of being deduped away.
-        _save_push_state(event_hash, max(e.date for e in events))
-        mark_pushed(event_hash)
+        #
+        # mark_pushed FIRST, and both guarded: if the fingerprint were saved and
+        # mark_pushed then raised, every later run would dedupe this set away
+        # and its rows would read pushed=0 forever, recording a delivered push
+        # as undelivered. A raise here must also not turn a delivered push into
+        # a reported failure.
+        try:
+            mark_pushed(event_hash)
+        except Exception as e:
+            print(f"note: delivered, but could not mark the alert log: {e}")
+        try:
+            _save_push_state(event_hash, max(e.date for e in events))
+        except Exception as e:
+            print(f"note: delivered, but could not record the fingerprint: {e}")
     else:
         print(f"WARNING: FCM push delivered to 0 of {len(tokens)} device(s) - "
               "not recording the fingerprint, will retry next run")

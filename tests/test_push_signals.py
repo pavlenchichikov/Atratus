@@ -326,8 +326,10 @@ def _fake_firebase(monkeypatch, success_count=1):
 
     messaging = types.SimpleNamespace(
         Notification=lambda title, body: {"title": title, "body": body},
-        MulticastMessage=lambda notification, data, tokens: seen.update(
-            notification=notification, data=data, tokens=tokens) or "msg",
+        AndroidConfig=lambda priority: {"priority": priority},
+        MulticastMessage=lambda notification, data, tokens, android=None:
+            seen.update(notification=notification, data=data, tokens=tokens,
+                        android=android) or "msg",
         send_each_for_multicast=lambda msg: _Resp(),
     )
     fake = types.ModuleType("firebase_admin")
@@ -741,10 +743,16 @@ def test_mark_pushed_records_the_outcome_after_delivery(tmp_path):
     con.close()
 
 
-def test_mark_pushed_on_an_unknown_hash_is_a_no_op(tmp_path):
+def test_mark_pushed_on_an_unknown_hash_leaves_other_sets_alone(tmp_path):
+    # Against an empty table this would pass even if mark_pushed dropped its
+    # WHERE clause, so there has to be a real row for it to not touch.
     db = str(tmp_path / "market.db")
-    push_signals.log_alerts([], "hash-a", db_path=db)
+    push_signals.log_alerts([ev("SBER", digest.FLIP, "BUY", "SELL")],
+                            "hash-a", db_path=db)
     assert push_signals.mark_pushed("nothing-like-it", db_path=db) == 0
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT pushed FROM alert_log").fetchone()[0] == 0
+    con.close()
 
 
 def _delivering(monkeypatch, tmp_path, tokens=("t1",)):
@@ -840,3 +848,58 @@ def test_a_timing_only_set_logs_nothing_and_stays_quiet(monkeypatch, tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table'")]
     con.close()
     assert "alert_log" not in tables
+
+
+def test_the_data_only_message_asks_for_high_priority(monkeypatch, tmp_path):
+    # FCM defaults a data-only message to normal priority and Doze defers it,
+    # so the device would wake to yesterday's alert.
+    monkeypatch.setenv("GTRADE_ALERT_FILTER", "1")
+    seen = _delivering(monkeypatch, tmp_path)
+    push_signals.send_push("https://x.supabase.co", "k",
+                           [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)])
+    assert seen["android"] == {"priority": "high"}
+
+
+def test_the_notification_format_does_not_ask_for_high_priority(monkeypatch,
+                                                                tmp_path):
+    # The tray shows a notification message itself, so nothing needs waking.
+    monkeypatch.delenv("GTRADE_ALERT_FILTER", raising=False)
+    seen = _delivering(monkeypatch, tmp_path)
+    push_signals.send_push("https://x.supabase.co", "k",
+                           [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)])
+    assert seen["android"] is None
+
+
+def test_an_unwritable_alert_log_does_not_cost_the_days_push(monkeypatch,
+                                                             tmp_path, capsys):
+    # The log is a research convenience and the push is the product: a locked
+    # market.db must cost a row, never the notification.
+    monkeypatch.setenv("GTRADE_ALERT_FILTER", "1")
+    seen = _delivering(monkeypatch, tmp_path)
+
+    def _boom(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(push_signals, "log_alerts", _boom)
+    assert push_signals.send_push(
+        "https://x.supabase.co", "k",
+        [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]) == 1
+    assert seen["data"]["alerts"] == "v1|1|0|SBER:F:B:S:62"
+    assert "could not record the alert candidates" in capsys.readouterr().out
+
+
+def test_a_failing_mark_pushed_does_not_dedupe_the_set_away(monkeypatch,
+                                                            tmp_path, capsys):
+    # Saving the fingerprint while mark_pushed failed would leave the rows at
+    # pushed=0 forever, recording a delivered push as undelivered.
+    monkeypatch.setenv("GTRADE_ALERT_FILTER", "1")
+    _delivering(monkeypatch, tmp_path)
+
+    def _boom(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(push_signals, "mark_pushed", _boom)
+    assert push_signals.send_push(
+        "https://x.supabase.co", "k",
+        [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]) == 1
+    assert "could not mark the alert log" in capsys.readouterr().out

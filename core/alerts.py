@@ -53,7 +53,9 @@ def encode_events(events):
     An asset whose name contains a field separator is left OUT of the list but
     still counted. No live ticker contains one (all 208 are alphanumeric plus a
     single underscore), but a ticker added later must not be able to corrupt
-    the payload silently.
+    the payload silently. In the degenerate case where EVERY event is dropped
+    this way the phone receives a count with nothing to name and stays quiet,
+    which is the accepted cost of never shipping a malformed payload.
     """
     signal_events = [e for e in events if e.kind in digest.SIGNAL_KINDS]
     n_timing = len(events) - len(signal_events)
