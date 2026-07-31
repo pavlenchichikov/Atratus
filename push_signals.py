@@ -447,7 +447,22 @@ def send_push(url, key, events):
     own. Requires GTRADE_FCM_CREDS (path to the Firebase service-account JSON,
     secret, never committed) and the allowed_device_tokens() RPC. Tokens that
     FCM reports as unregistered are deleted (self-cleanup after reinstalls).
+
+    With GTRADE_ALERT_FILTER=1 the message carries the candidate set as data and
+    NO notification block, so the device decides what to display against its own
+    positions journal. The flag exists because a client without a background
+    handler shows nothing at all for a data-only message: the format may only
+    change once the rebuilt app is installed.
     """
+    if not any(e.kind in digest.SIGNAL_KINDS for e in events):
+        print("note: no signal changes this run - staying quiet")
+        return 0
+
+    # Logged before anything can return early or raise, so the research sample
+    # accumulates even while FCM is unconfigured.
+    event_hash = _event_hash(events)
+    log_alerts(events, event_hash)
+
     creds_path = os.getenv("GTRADE_FCM_CREDS")
     if not creds_path:
         return 0
@@ -459,11 +474,6 @@ def send_push(url, key, events):
               "JSON there to enable notifications)")
         return 0
 
-    if not any(e.kind in digest.SIGNAL_KINDS for e in events):
-        print("note: no signal changes this run - staying quiet")
-        return 0
-
-    event_hash = _event_hash(events)
     if _load_push_state().get("hash") == event_hash:
         print("note: same changes as the last push - staying quiet")
         return 0
@@ -486,12 +496,24 @@ def send_push(url, key, events):
         print("note: no allow-listed device tokens - staying quiet")
         return 0
 
-    title, body = build_push_text(events)
-    msg = messaging.MulticastMessage(
-        notification=messaging.Notification(title=title, body=body),
-        data={"screen": "today"},
-        tokens=tokens,
-    )
+    notification = None
+    data = {"screen": "today"}
+    payload = alerts.encode_events(events)[0]
+    if (os.getenv("GTRADE_ALERT_FILTER") == "1"
+            and len(payload) <= alerts.PAYLOAD_CAP):
+        # Data-only: a notification block would be rendered by Android's tray
+        # while the app is backgrounded, and the device filter could not
+        # suppress it.
+        data["alerts"] = payload
+    else:
+        # Either the flag is off, or the candidate list does not fit. Falling
+        # back to the composed notification is honest degradation; truncating
+        # the list could drop precisely the held asset the filter exists for.
+        title, body = build_push_text(events)
+        notification = messaging.Notification(title=title, body=body)
+
+    msg = messaging.MulticastMessage(notification=notification, data=data,
+                                     tokens=tokens)
     resp = messaging.send_each_for_multicast(msg)
     for i, res in enumerate(resp.responses):
         if res.success:
@@ -504,6 +526,7 @@ def send_push(url, key, events):
         # Only a delivered push updates the fingerprint, so a total failure is
         # retried on the next run instead of being deduped away.
         _save_push_state(event_hash, max(e.date for e in events))
+        mark_pushed(event_hash)
     else:
         print(f"WARNING: FCM push delivered to 0 of {len(tokens)} device(s) - "
               "not recording the fingerprint, will retry next run")

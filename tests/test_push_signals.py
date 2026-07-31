@@ -745,3 +745,98 @@ def test_mark_pushed_on_an_unknown_hash_is_a_no_op(tmp_path):
     db = str(tmp_path / "market.db")
     push_signals.log_alerts([], "hash-a", db_path=db)
     assert push_signals.mark_pushed("nothing-like-it", db_path=db) == 0
+
+
+def _delivering(monkeypatch, tmp_path, tokens=("t1",)):
+    """Creds, a token-returning RPC and a fake firebase: send_push runs through
+    to the send call. Returns the `seen` dict from _fake_firebase."""
+    creds = tmp_path / "creds.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GTRADE_FCM_CREDS", str(creds))
+    monkeypatch.setattr(push_signals, "PUSH_STATE",
+                        str(tmp_path / "push_state.json"))
+
+    class R:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"token": t} for t in tokens]
+
+    monkeypatch.setattr(push_signals.requests, "request",
+                        lambda method, url, **kw: R())
+    return _fake_firebase(monkeypatch)
+
+
+def test_the_flag_off_sends_the_notification_block_exactly_as_before(
+        monkeypatch, tmp_path):
+    # The installed APK has no background handler: a data-only message would
+    # show NOTHING while backgrounded, and the failure looks like "no changes".
+    monkeypatch.delenv("GTRADE_ALERT_FILTER", raising=False)
+    seen = _delivering(monkeypatch, tmp_path)
+    push_signals.send_push("https://x.supabase.co", "k",
+                           [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)])
+    assert seen["notification"]["title"] == "Atratus: 1 change"
+    assert seen["data"] == {"screen": "today"}
+
+
+def test_the_flag_on_sends_data_only_with_the_encoded_candidates(monkeypatch,
+                                                                 tmp_path):
+    monkeypatch.setenv("GTRADE_ALERT_FILTER", "1")
+    seen = _delivering(monkeypatch, tmp_path)
+    push_signals.send_push("https://x.supabase.co", "k",
+                           [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)])
+    assert seen["notification"] is None, (
+        "a notification block makes Android render it in the tray and the "
+        "device filter cannot suppress it")
+    assert seen["data"]["screen"] == "today"
+    assert seen["data"]["alerts"] == "v1|1|0|SBER:F:B:S:62"
+
+
+def test_an_oversize_payload_falls_back_to_the_old_format(monkeypatch,
+                                                          tmp_path):
+    # Truncating instead could drop precisely the held asset, which is the one
+    # event the whole feature exists to deliver.
+    monkeypatch.setenv("GTRADE_ALERT_FILTER", "1")
+    monkeypatch.setattr(push_signals.alerts, "PAYLOAD_CAP", 10)
+    seen = _delivering(monkeypatch, tmp_path)
+    push_signals.send_push("https://x.supabase.co", "k",
+                           [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)])
+    assert seen["notification"] is not None
+    assert "alerts" not in seen["data"]
+
+
+def test_a_delivered_push_marks_its_logged_candidates(monkeypatch, tmp_path):
+    monkeypatch.setenv("GTRADE_ALERT_FILTER", "1")
+    _delivering(monkeypatch, tmp_path)
+    push_signals.send_push("https://x.supabase.co", "k",
+                           [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)])
+    con = sqlite3.connect(push_signals._alert_db())
+    assert con.execute("SELECT pushed FROM alert_log").fetchone()[0] == 1
+    con.close()
+
+
+def test_candidates_are_logged_even_when_fcm_is_not_configured(monkeypatch,
+                                                               tmp_path):
+    # The sample must start accumulating now, not after the APK is rebuilt.
+    monkeypatch.delenv("GTRADE_FCM_CREDS", raising=False)
+    assert push_signals.send_push(
+        "https://x.supabase.co", "k",
+        [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]) == 0
+    con = sqlite3.connect(push_signals._alert_db())
+    assert con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 1
+    assert con.execute("SELECT pushed FROM alert_log").fetchone()[0] == 0
+    con.close()
+
+
+def test_a_timing_only_set_logs_nothing_and_stays_quiet(monkeypatch, tmp_path):
+    assert push_signals.send_push(
+        "https://x.supabase.co", "k",
+        [ev("SBER", digest.TIMING_CHANGE, "BUY", "BUY")]) == 0
+    con = sqlite3.connect(push_signals._alert_db())
+    tables = [r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")]
+    con.close()
+    assert "alert_log" not in tables
