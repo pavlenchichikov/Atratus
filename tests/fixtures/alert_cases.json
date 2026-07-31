@@ -1,0 +1,88 @@
+{
+  "_note": "Shared parity fixture for core/alerts.py and lib/alert_filter.dart. Keep byte-identical with mobile_app/test/fixtures/alert_cases.json. Python asserts the payload; Dart asserts that decoding that payload and deciding against held gives expected.",
+  "cases": [
+    {
+      "name": "held_asset_named_others_counted",
+      "events": [
+        {"asset": "SBER", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "AAPL", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "confidence": 0.62, "date": "2026-07-31"},
+        {"asset": "GAZP", "kind": "exit", "from_signal": "BUY", "to_signal": "WAIT", "confidence": null, "date": "2026-07-31"}
+      ],
+      "payload": "v1|3|0|SBER:F:B:S:;AAPL:E:W:B:62;GAZP:X:B:W:",
+      "held": {"AAPL": "long"},
+      "expected": {"named": ["AAPL BUY 62%"], "other": 2, "silent": false}
+    },
+    {
+      "name": "conflict_sorts_ahead_of_a_plain_held_event",
+      "events": [
+        {"asset": "AAPL", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "confidence": 0.62, "date": "2026-07-31"},
+        {"asset": "SBER", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"}
+      ],
+      "payload": "v1|2|0|AAPL:E:W:B:62;SBER:F:B:S:",
+      "held": {"AAPL": "long", "SBER": "long"},
+      "expected": {"named": ["SBER BUY>SELL", "AAPL BUY 62%"], "other": 0, "silent": false}
+    },
+    {
+      "name": "two_conflicts_break_the_tie_on_asset_name",
+      "events": [
+        {"asset": "ZZZZ", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "AAAA", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"}
+      ],
+      "payload": "v1|2|0|ZZZZ:F:B:S:;AAAA:F:B:S:",
+      "held": {"ZZZZ": "long", "AAAA": "long"},
+      "expected": {"named": ["AAAA BUY>SELL", "ZZZZ BUY>SELL"], "other": 0, "silent": false}
+    },
+    {
+      "name": "nothing_held_is_hit_so_the_phone_stays_silent",
+      "events": [
+        {"asset": "SBER", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "GAZP", "kind": "exit", "from_signal": "BUY", "to_signal": "WAIT", "confidence": null, "date": "2026-07-31"}
+      ],
+      "payload": "v1|2|0|SBER:F:B:S:;GAZP:X:B:W:",
+      "held": {"AAPL": "long"},
+      "expected": {"named": [], "other": 2, "silent": true}
+    },
+    {
+      "name": "an_empty_journal_falls_back_to_naming_anything",
+      "events": [
+        {"asset": "SBER", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "GAZP", "kind": "exit", "from_signal": "BUY", "to_signal": "WAIT", "confidence": null, "date": "2026-07-31"}
+      ],
+      "payload": "v1|2|0|SBER:F:B:S:;GAZP:X:B:W:",
+      "held": {},
+      "expected": {"named": ["SBER BUY>SELL", "GAZP exit"], "other": 0, "silent": false}
+    },
+    {
+      "name": "at_most_four_are_named_and_the_rest_join_the_counter",
+      "events": [
+        {"asset": "AAAA", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "BBBB", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "CCCC", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "DDDD", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "EEEE", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"}
+      ],
+      "payload": "v1|5|0|AAAA:F:B:S:;BBBB:F:B:S:;CCCC:F:B:S:;DDDD:F:B:S:;EEEE:F:B:S:",
+      "held": {"AAAA": "long", "BBBB": "long", "CCCC": "long", "DDDD": "long", "EEEE": "long"},
+      "expected": {"named": ["AAAA BUY>SELL", "BBBB BUY>SELL", "CCCC BUY>SELL", "DDDD BUY>SELL"], "other": 1, "silent": false}
+    },
+    {
+      "name": "a_short_conflicts_with_a_buy_call",
+      "events": [
+        {"asset": "AAPL", "kind": "entry_buy", "from_signal": "WAIT", "to_signal": "BUY", "confidence": 0.7, "date": "2026-07-31"}
+      ],
+      "payload": "v1|1|0|AAPL:E:W:B:70",
+      "held": {"AAPL": "short"},
+      "expected": {"named": ["AAPL BUY 70%"], "other": 0, "silent": false}
+    },
+    {
+      "name": "timing_events_are_counted_only",
+      "events": [
+        {"asset": "AAPL", "kind": "flip", "from_signal": "BUY", "to_signal": "SELL", "confidence": null, "date": "2026-07-31"},
+        {"asset": "SBER", "kind": "timing_change", "from_signal": "BUY", "to_signal": "BUY", "confidence": null, "date": "2026-07-31"}
+      ],
+      "payload": "v1|1|1|AAPL:F:B:S:",
+      "held": {"AAPL": "long"},
+      "expected": {"named": ["AAPL BUY>SELL"], "other": 1, "silent": false}
+    }
+  ]
+}
