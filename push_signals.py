@@ -536,19 +536,19 @@ def send_push(url, key, events):
         # Only a delivered push updates the fingerprint, so a total failure is
         # retried on the next run instead of being deduped away.
         #
-        # mark_pushed FIRST, and both guarded: if the fingerprint were saved and
-        # mark_pushed then raised, every later run would dedupe this set away
-        # and its rows would read pushed=0 forever, recording a delivered push
-        # as undelivered. A raise here must also not turn a delivered push into
-        # a reported failure.
+        # mark_pushed FIRST, and the fingerprint saved only if it succeeded.
+        # Saving regardless would dedupe this set away on every later run while
+        # its rows still read pushed=0, recording a delivered push as
+        # undelivered forever. Skipping the save costs one duplicate
+        # notification tomorrow, which is visible and self-correcting; a
+        # silently wrong research sample is neither.
         try:
             mark_pushed(event_hash)
-        except Exception as e:
-            print(f"note: delivered, but could not mark the alert log: {e}")
-        try:
             _save_push_state(event_hash, max(e.date for e in events))
         except Exception as e:
-            print(f"note: delivered, but could not record the fingerprint: {e}")
+            print(f"note: delivered, but the alert log could not be marked, so "
+                  f"the fingerprint is not recorded and the next run will send "
+                  f"this again: {e}")
     else:
         print(f"WARNING: FCM push delivered to 0 of {len(tokens)} device(s) - "
               "not recording the fingerprint, will retry next run")

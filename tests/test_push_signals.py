@@ -891,15 +891,31 @@ def test_an_unwritable_alert_log_does_not_cost_the_days_push(monkeypatch,
 def test_a_failing_mark_pushed_does_not_dedupe_the_set_away(monkeypatch,
                                                             tmp_path, capsys):
     # Saving the fingerprint while mark_pushed failed would leave the rows at
-    # pushed=0 forever, recording a delivered push as undelivered.
+    # pushed=0 forever, recording a delivered push as undelivered. The claim is
+    # about the NEXT run, so the next run is what this asserts.
     monkeypatch.setenv("GTRADE_ALERT_FILTER", "1")
     _delivering(monkeypatch, tmp_path)
+    events = [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]
+    _real_mark_pushed = push_signals.mark_pushed
 
     def _boom(*a, **kw):
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(push_signals, "mark_pushed", _boom)
-    assert push_signals.send_push(
-        "https://x.supabase.co", "k",
-        [ev("SBER", digest.FLIP, "BUY", "SELL", 0.62)]) == 1
-    assert "could not mark the alert log" in capsys.readouterr().out
+    assert push_signals.send_push("https://x.supabase.co", "k", events) == 1
+    assert "the fingerprint is not recorded" in capsys.readouterr().out
+    assert push_signals._load_push_state() == {}, (
+        "a saved fingerprint would silence every retry while the log still "
+        "read undelivered")
+
+    # With the database writable again the retry delivers and marks it. Restore
+    # only mark_pushed: monkeypatch.undo() would revert every patch on this
+    # test's monkeypatch, the autouse database redirect included, and the retry
+    # would write to the checkout's own market.db.
+    monkeypatch.setattr(push_signals, "mark_pushed", _real_mark_pushed)
+    assert push_signals.send_push("https://x.supabase.co", "k", events) == 1
+    con = sqlite3.connect(push_signals._alert_db())
+    assert con.execute("SELECT pushed FROM alert_log").fetchone()[0] == 1
+    assert con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 1, (
+        "the retry must not log the same candidate set a second time")
+    con.close()
