@@ -36,8 +36,8 @@ except Exception:
     pass
 
 from config import FULL_ASSET_MAP
-from core import (digest, events as core_events, news_export, news_link,
-                  timing_policy, track_record)
+from core import (alerts, digest, events as core_events, news_export,
+                  news_link, timing_policy, track_record)
 from net import yf_session
 
 BAR_LIMIT = 180   # bars per asset exported for the mobile price chart
@@ -370,6 +370,72 @@ def _save_push_state(event_hash, snapshot_date, path=None):
                            timespec="seconds")}, fh)
     except Exception as e:
         print(f"note: could not write {target}: {e}")
+
+
+ALERT_DDL = """CREATE TABLE IF NOT EXISTS alert_log (
+    sent_at     TEXT,
+    date        TEXT,
+    asset       TEXT,
+    kind        TEXT,
+    from_signal TEXT,
+    to_signal   TEXT,
+    confidence  REAL,
+    push_hash   TEXT,
+    pushed      INTEGER)"""
+
+
+def _alert_db(db_path=None):
+    return db_path or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "market.db")
+
+
+def log_alerts(events, push_hash, db_path=None):
+    """Record a candidate set once, keyed on its fingerprint. Returns the rows
+    written.
+
+    Keyed rather than per-run because send_push returns early when
+    GTRADE_FCM_CREDS is unset, BEFORE the duplicate check, so a per-run write
+    would store the same unchanged set every run and fill the sample with
+    duplicates.
+
+    Written before delivery is attempted and with pushed = 0, so a crash inside
+    the FCM path still leaves the candidates recorded; mark_pushed states the
+    outcome afterwards.
+    """
+    if not events:
+        return 0
+    import sqlite3
+    con = sqlite3.connect(_alert_db(db_path))
+    try:
+        con.execute(ALERT_DDL)
+        seen = con.execute("SELECT 1 FROM alert_log WHERE push_hash=? LIMIT 1",
+                           (push_hash,)).fetchone()
+        if seen:
+            return 0
+        sent_at = datetime.datetime.now().isoformat(timespec="seconds")
+        rows = alerts.alert_rows(events, push_hash, False, sent_at)
+        con.executemany(
+            "INSERT INTO alert_log (sent_at, date, asset, kind, from_signal,"
+            " to_signal, confidence, push_hash, pushed)"
+            " VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        con.commit()
+        return len(rows)
+    finally:
+        con.close()
+
+
+def mark_pushed(push_hash, db_path=None):
+    """Flip a logged set to delivered. Returns the rows updated."""
+    import sqlite3
+    con = sqlite3.connect(_alert_db(db_path))
+    try:
+        con.execute(ALERT_DDL)
+        cur = con.execute("UPDATE alert_log SET pushed=1 WHERE push_hash=?",
+                          (push_hash,))
+        con.commit()
+        return cur.rowcount
+    finally:
+        con.close()
 
 
 def send_push(url, key, events):

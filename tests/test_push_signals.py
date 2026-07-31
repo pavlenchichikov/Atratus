@@ -59,7 +59,22 @@ def test_empty_snapshot_uses_today():
 import datetime
 import sqlite3
 
+import pytest
+
 import push_signals
+
+
+@pytest.fixture(autouse=True)
+def _alert_log_off_the_real_db(monkeypatch, tmp_path):
+    """send_push logs alert candidates now, so every test in this module gets a
+    throwaway database. Without it the suite would write to the checkout's own
+    market.db.
+
+    An explicit db_path still wins, matching the real _alert_db: a test that
+    names its own database must get that one, not the fixture's."""
+    monkeypatch.setattr(push_signals, "_alert_db",
+                        lambda p=None: p or str(tmp_path / "alerts.db"),
+                        raising=False)
 
 
 def ev(asset, kind, from_signal="WAIT", to_signal="BUY", conf=None,
@@ -684,3 +699,49 @@ def test_push_events_deletes_on_id(monkeypatch):
     assert [m for m, _ in calls] == ["DELETE", "POST"]
     assert "events?id=not.is.null" in calls[0][1]
     assert "on_conflict=id" in calls[1][1]
+
+
+def test_log_alerts_creates_the_table_and_writes_every_event(tmp_path):
+    db = str(tmp_path / "market.db")
+    n = push_signals.log_alerts(
+        [ev("SBER", digest.FLIP, "BUY", "SELL", 0.8),
+         ev("AAPL", digest.TIMING_CHANGE, "BUY", "BUY")],
+        "hash-a", db_path=db)
+    assert n == 2
+    con = sqlite3.connect(db)
+    rows = con.execute("SELECT asset, kind, pushed FROM alert_log"
+                       " ORDER BY asset").fetchall()
+    con.close()
+    assert rows == [("AAPL", "timing_change", 0), ("SBER", "flip", 0)]
+
+
+def test_log_alerts_writes_a_set_once_however_often_the_run_repeats(tmp_path):
+    # send_push returns early when GTRADE_FCM_CREDS is unset, BEFORE the
+    # duplicate check, so a per-run write would store the same unchanged set
+    # every single run and fill the research sample with duplicates.
+    db = str(tmp_path / "market.db")
+    events = [ev("SBER", digest.FLIP, "BUY", "SELL")]
+    assert push_signals.log_alerts(events, "hash-a", db_path=db) == 1
+    assert push_signals.log_alerts(events, "hash-a", db_path=db) == 0
+    assert push_signals.log_alerts(events, "hash-b", db_path=db) == 1
+
+
+def test_log_alerts_writes_nothing_for_an_empty_event_list(tmp_path):
+    db = str(tmp_path / "market.db")
+    assert push_signals.log_alerts([], "hash-a", db_path=db) == 0
+
+
+def test_mark_pushed_records_the_outcome_after_delivery(tmp_path):
+    db = str(tmp_path / "market.db")
+    push_signals.log_alerts([ev("SBER", digest.FLIP, "BUY", "SELL")],
+                            "hash-a", db_path=db)
+    assert push_signals.mark_pushed("hash-a", db_path=db) == 1
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT pushed FROM alert_log").fetchone()[0] == 1
+    con.close()
+
+
+def test_mark_pushed_on_an_unknown_hash_is_a_no_op(tmp_path):
+    db = str(tmp_path / "market.db")
+    push_signals.log_alerts([], "hash-a", db_path=db)
+    assert push_signals.mark_pushed("nothing-like-it", db_path=db) == 0
