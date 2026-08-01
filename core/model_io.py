@@ -11,7 +11,14 @@ import types
 
 import tensorflow as tf
 from tensorflow.keras.layers import (
-    LSTM, Dense, Dropout, Flatten, Input, Multiply, Permute, RepeatVector,
+    LSTM,
+    Dense,
+    Dropout,
+    Flatten,
+    Input,
+    Multiply,
+    Permute,
+    RepeatVector,
 )
 from tensorflow.keras.models import Model
 
@@ -79,7 +86,7 @@ OPTUNA_PARAMS_PATH = os.path.join(MODEL_DIR, "optuna_params.json")
 
 def load_json(path):
     if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             return json.load(f)
     return {}
 
@@ -149,7 +156,7 @@ def detect_lookback_from_h5(h5_path):
 
     def _find_square_kernel(group):
         """Recursively search for a square kernel tensor (NxN, 5<=N<=100)."""
-        for key in group.keys():
+        for key in group:
             item = group[key]
             if hasattr(item, 'shape'):
                 if 'kernel' in key and len(item.shape) == 2 and item.shape[0] == item.shape[1] and 5 <= item.shape[0] <= 100:

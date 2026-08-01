@@ -2,7 +2,6 @@ import json
 import sys
 import types
 
-import httpx
 import pytest
 
 from core import llm_proposer as lp
@@ -351,22 +350,47 @@ def test_avoid_clause_is_budgeted_and_not_double_escaped():
 def test_a_timed_out_ollama_call_is_not_retried(monkeypatch):
     """A timeout is deterministic here, so three attempts cost three timeouts
     and learn nothing new."""
-    import openai
     calls = []
+
+    class FakeTimeout(Exception):
+        pass
 
     class FakeCompletions:
         def create(self, **kw):
             calls.append(1)
-            raise openai.APITimeoutError(request=httpx.Request("POST", "http://x"))
+            raise FakeTimeout("timed out")
 
     class FakeClient:
         def __init__(self, **kw):
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
 
+    # The openai SDK is imported inside the call function precisely so this
+    # module loads without it (see the llm_proposer docstring), and it is not a
+    # requirements.txt entry - so the test must not import it either.
     monkeypatch.setitem(sys.modules, "openai",
                         types.SimpleNamespace(OpenAI=FakeClient,
-                                              APITimeoutError=openai.APITimeoutError))
+                                              APITimeoutError=FakeTimeout))
     monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
     with pytest.raises(RuntimeError, match="timed out"):
         lp._call_ollama("hi")
     assert len(calls) == 1
+
+
+def test_auto_research_reads_the_env_file_for_the_timeout(monkeypatch):
+    """The configured timeout has to reach the process that calls the model.
+
+    It did not: .env carried GTRADE_AR_LLM_TIMEOUT=3600 but only push_signals and
+    ab_genomes loaded the file, so the agent fell back to the 600s default and a
+    26B model on CPU was killed at ten minutes every single call.
+    """
+    import auto_research
+    assert "load_dotenv" in open(auto_research.__file__, encoding="utf-8").read()
+
+
+def test_menu_settings_win_over_the_env_file(monkeypatch):
+    """load_dotenv must not override what the launcher already exported, or the
+    model picked in the menu would lose to a stale line in .env."""
+    monkeypatch.setenv("GTRADE_AR_LLM_TIMEOUT", "120")
+    from dotenv import load_dotenv
+    load_dotenv()
+    assert lp._llm_timeout() == 120.0

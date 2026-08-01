@@ -7,15 +7,16 @@ warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import create_engine
 from catboost import CatBoostClassifier
 from sklearn.preprocessing import StandardScaler
+from sqlalchemy import create_engine
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import tensorflow as tf
+
 tf.get_logger().setLevel('ERROR')
 try:
     tf.keras.config.enable_unsafe_deserialization()
@@ -24,12 +25,16 @@ except Exception:
 
 from config import FULL_ASSET_MAP
 from core.features import build_features
-from train_hybrid import ensemble_with_gating
 from core.model_io import (
     get_lookback as _get_lookback,
+)
+from core.model_io import (
     load_json as _load_json,
+)
+from core.model_io import (
     load_lstm_model as _load_lstm_model,
 )
+from train_hybrid import ensemble_with_gating
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 MODEL_DIR = os.path.join(BASE_DIR, "models")
@@ -64,9 +69,9 @@ def _calc_trend(df):
     last_sma50 = sma50.iloc[-1]
     if pd.isna(last_sma20) or pd.isna(last_sma50):
         return "SIDEWAYS"
-    if last_close > last_sma20 and last_sma20 > last_sma50:
+    if last_close > last_sma20 > last_sma50:
         return "UPTREND"
-    if last_close < last_sma20 and last_sma20 < last_sma50:
+    if last_close < last_sma20 < last_sma50:
         return "DOWNTREND"
     return "SIDEWAYS"
 
@@ -81,13 +86,18 @@ def _kelly_size(win_rate, avg_win=0.020, avg_loss=0.012):
 def _load_transformer(path, lookback, n_features):
     """Try loading a transformer model - returns (model, lookback) or (None, lookback)."""
     try:
-        from train_hybrid import build_transformer_encoder
         import shutil
-        import zipfile
         import tempfile
+        import zipfile
+
         from core.model_io import (
-            _detect_format, _load_weights_keras3, detect_lookback_from_h5 as _detect_lookback_from_h5,
+            _detect_format,
+            _load_weights_keras3,
         )
+        from core.model_io import (
+            detect_lookback_from_h5 as _detect_lookback_from_h5,
+        )
+        from train_hybrid import build_transformer_encoder
 
         fmt = _detect_format(path)
         if fmt == 'zip':
@@ -313,8 +323,7 @@ def get_all_signals(progress=True):
 
     df_out = pd.DataFrame(rows)
     df_out['_dist'] = (df_out['Probability'] - 0.5).abs()
-    df_out = df_out.sort_values('_dist', ascending=False).drop(columns=['_dist']).reset_index(drop=True)
-    return df_out
+    return df_out.sort_values('_dist', ascending=False).drop(columns=['_dist']).reset_index(drop=True)
 
 
 def get_signal_summary(df=None):

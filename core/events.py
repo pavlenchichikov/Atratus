@@ -42,7 +42,7 @@ def days_until(date, today):
 
 def event_id(kind, asset, date, name):
     """Deterministic row id, so a re-run upserts instead of duplicating."""
-    key = "%s|%s|%s|%s" % (kind, asset or "", date, name)
+    key = "{}|{}|{}|{}".format(kind, asset or "", date, name)
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 

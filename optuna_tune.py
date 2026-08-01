@@ -33,12 +33,13 @@ import warnings
 warnings.filterwarnings('ignore')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
-from datetime import datetime
-from sqlalchemy import create_engine
 from catboost import CatBoostClassifier
 from sklearn.preprocessing import StandardScaler
+from sqlalchemy import create_engine
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -53,10 +54,19 @@ except ImportError:
 from config import FULL_ASSET_MAP
 from core.features import build_features
 from train_hybrid import (
-    make_walk_forward_splits, adaptive_split_params,
-    pnl_from_signals, max_drawdown_from_returns, score_strategy,
-    make_signals, apply_regime_filter, get_profile,
-    COMMISSION, SLIPPAGE, FOREX_COMMISSION, FOREX_SLIPPAGE, FOREX,
+    COMMISSION,
+    FOREX,
+    FOREX_COMMISSION,
+    FOREX_SLIPPAGE,
+    SLIPPAGE,
+    adaptive_split_params,
+    apply_regime_filter,
+    get_profile,
+    make_signals,
+    make_walk_forward_splits,
+    max_drawdown_from_returns,
+    pnl_from_signals,
+    score_strategy,
 )
 
 DB_PATH    = os.path.join(BASE_DIR, "market.db")
@@ -69,7 +79,7 @@ W = 62  # output width
 
 def _load_params():
     if os.path.exists(PARAMS_PATH):
-        with open(PARAMS_PATH, 'r', encoding='utf-8') as f:
+        with open(PARAMS_PATH, encoding='utf-8') as f:
             return json.load(f)
     return {}
 
@@ -122,7 +132,6 @@ def _catboost_objective(trial, df, selected_features, profile, asset):
             X_va = scaler.transform(df.loc[va, selected_features].values)
             y_va = df.loc[va, 'target'].values
             X_te = scaler.transform(df.loc[te, selected_features].values)
-            df.loc[te, 'target'].values
 
             cb = CatBoostClassifier(
                 iterations=iterations, depth=depth, learning_rate=lr,
@@ -156,8 +165,7 @@ def _catboost_objective(trial, df, selected_features, profile, asset):
                     ]
                     mdd = max_drawdown_from_returns(ret_stream)
                     sc = score_strategy(p, mdd, w, t)
-                    if sc > best_score:
-                        best_score = sc
+                    best_score = max(best_score, sc)
             scores.append(best_score)
         except Exception:
             scores.append(-999.0)

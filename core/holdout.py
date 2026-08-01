@@ -87,13 +87,12 @@ def validate(chosen, eligible_assets, min_n=MIN_N):
     chosen = list(chosen or [])
     if len(chosen) != len(set(chosen)):
         dupes = sorted({a for a in chosen if chosen.count(a) > 1})
-        problems.append("duplicate assets: %s" % ", ".join(dupes))
+        problems.append("duplicate assets: {}".format(", ".join(dupes)))
     allowed = set(eligible_assets or [])
     bad = sorted(set(chosen) - allowed)
     if bad:
         problems.append(
-            "not eligible (already seen, or too little history): %s"
-            % ", ".join(bad))
+            "not eligible (already seen, or too little history): {}".format(", ".join(bad)))
     if len(set(chosen)) < min_n:
         problems.append(
             "only %d assets; below %d the test cannot reach significance"

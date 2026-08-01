@@ -18,10 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from config import FULL_ASSET_MAP, RADAR_GROUPS, radar_category
-from core import track_record
-from core import dashboard
+from core import dashboard, timing_policy, track_record
 from core import positions as positions_mod
-from core import timing_policy
 from risk_manager import RISK_CONFIG, RiskManager, save_risk_config_override
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

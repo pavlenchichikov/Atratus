@@ -11,7 +11,14 @@ All builders return compiled Keras Models ready for .fit().
 
 import tensorflow as tf
 from tensorflow.keras.layers import (
-    LSTM, Dense, Dropout, Flatten, Input, Multiply, Permute, RepeatVector,
+    LSTM,
+    Dense,
+    Dropout,
+    Flatten,
+    Input,
+    Multiply,
+    Permute,
+    RepeatVector,
 )
 from tensorflow.keras.models import Model
 

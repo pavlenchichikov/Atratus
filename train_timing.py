@@ -21,8 +21,12 @@ import numpy as np
 from core import timing_policy as tp
 from core.ar_rl import CmaEmitter
 from core.backtesting import (
-    COMMISSION, FOREX_COMMISSION, FOREX_SLIPPAGE, SLIPPAGE,
-    evaluate_signals_v2, score_strategy,
+    COMMISSION,
+    FOREX_COMMISSION,
+    FOREX_SLIPPAGE,
+    SLIPPAGE,
+    evaluate_signals_v2,
+    score_strategy,
 )
 
 BASE = os.path.dirname(os.path.abspath(__file__))

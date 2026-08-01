@@ -99,8 +99,9 @@ def test_live_global_shrinks_anti_calibrated_tails(tmp_path):
 
 
 def test_live_global_cache_sees_new_save(tmp_path):
-    from core import calibration
     import time
+
+    from core import calibration
     rng = np.random.default_rng(1)
     p1 = rng.uniform(0.05, 0.95, 300)
     u1 = (rng.uniform(0, 1, 300) < p1).astype(int)

@@ -201,6 +201,7 @@ def test_stale_assets_missing_table_reported(db):
 
 def test_latest_signals_prefers_gated_display(tmp_path):
     import sqlite3
+
     from core import track_record
     db = str(tmp_path / "m.db")
     con = sqlite3.connect(db)
@@ -222,6 +223,7 @@ def test_latest_signals_prefers_gated_display(tmp_path):
 
 def test_latest_signals_pre_migration_schema(tmp_path):
     import sqlite3
+
     from core import track_record
     db = str(tmp_path / "m.db")
     con = sqlite3.connect(db)

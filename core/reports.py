@@ -41,10 +41,7 @@ def build_signal_message(asset: str, track: list, acc: dict) -> str:
         "History:",
     ]
     for t in track[:10]:
-        if t["correct"] is None:
-            outcome = "-"
-        else:
-            outcome = "+" if t["correct"] else "x"
+        outcome = "-" if t["correct"] is None else "+" if t["correct"] else "x"
         ret = f" {t['actual_next_ret']:+.2%}" if t["actual_next_ret"] is not None else ""
         lines.append(f"{t['date']}  {t['signal']:<4} p={t['probability']:.2f}  {outcome}{ret}")
     return "\n".join(lines)

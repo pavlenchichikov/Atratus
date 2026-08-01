@@ -7,7 +7,7 @@ from core import scoring
 
 def frame(cols):
     idx = pd.date_range("2026-01-01", periods=60, freq="D")
-    data = {c: 1.0 for c in cols}
+    data = dict.fromkeys(cols, 1.0)
     data["close"] = 1.0
     return pd.DataFrame(data, index=idx)
 

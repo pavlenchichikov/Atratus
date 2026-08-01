@@ -5,8 +5,9 @@ Analyzes which sectors are growing/declining over recent weeks.
 
 import os
 import warnings
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 from sqlalchemy import create_engine, inspect
 
 from config import SECTOR_MAP as SECTORS  # canonical asset-to-sector map (single source)

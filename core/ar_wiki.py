@@ -22,7 +22,7 @@ def wiki_on():
 
 
 def _page_path(page):
-    return os.path.join(WIKI_DIR, "%s.md" % page)
+    return os.path.join(WIKI_DIR, f"{page}.md")
 
 
 def _state_path():
@@ -50,7 +50,7 @@ def wiki_summary(max_chars=6000):
     for page in PAGES:
         t = _read(_page_path(page)).strip()
         if t:
-            parts.append("## %s\n%s" % (page, t))
+            parts.append(f"## {page}\n{t}")
     return "\n\n".join(parts)[:max_chars]
 
 
@@ -58,7 +58,7 @@ def note_replicated(sig, detail):
     """Append a high-confidence entry to general.md when a finding clears the replication
     gate (compounding of CONFIRMED knowledge). Never raises."""
     try:
-        line = "- (high) REPLICATED %s: %s\n" % (str(sig)[:80], str(detail)[:200])
+        line = f"- (high) REPLICATED {str(sig)[:80]}: {str(detail)[:200]}\n"
         _write(_page_path("general"), _read(_page_path("general")) + line)
     except Exception:
         pass
@@ -130,7 +130,7 @@ def compile_wiki():
         _save_state(state)
         return len(new)
     except Exception as exc:
-        print("[wiki] compile failed, wiki unchanged: %s" % exc)
+        print(f"[wiki] compile failed, wiki unchanged: {exc}")
         return 0
 
 

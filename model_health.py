@@ -28,7 +28,7 @@ THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
 
 def _load_json(path):
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     return {}
 

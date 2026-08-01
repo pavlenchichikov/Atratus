@@ -90,12 +90,12 @@ def save_meta(asset, model):
     """Persist the per-asset meta-model to MODEL_DIR/meta/<asset>.joblib."""
     import joblib
     os.makedirs(META_DIR, exist_ok=True)
-    joblib.dump(model, os.path.join(META_DIR, "%s.joblib" % asset.lower()))
+    joblib.dump(model, os.path.join(META_DIR, f"{asset.lower()}.joblib"))
 
 
 def load_meta(asset):
     """Load the per-asset meta-model, or None if absent/unreadable."""
-    path = os.path.join(META_DIR, "%s.joblib" % asset.lower())
+    path = os.path.join(META_DIR, f"{asset.lower()}.joblib")
     if not os.path.exists(path):
         return None
     try:

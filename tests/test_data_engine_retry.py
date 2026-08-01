@@ -27,7 +27,7 @@ def test_transient_errors_cleared_on_first_sweep():
     fetch = _counting_fetch(lambda n, k: ("NEW", 1))
     de._retry_failed(fetch, {"B": "B", "C": "C"}, results,
                      sweeps=2, workers=4, label="t")
-    statuses = dict((n, st) for n, st, _ in results)
+    statuses = {n: st for n, st, _ in results}
     assert statuses == {"A": "NEW", "B": "NEW", "C": "NEW"}
     # one sweep was enough: each failed asset fetched exactly once
     assert fetch.calls == {"B": 1, "C": 1}
@@ -38,7 +38,7 @@ def test_persistent_error_retried_each_sweep_then_kept():
     fetch = _counting_fetch(lambda n, k: ("ERR", 0))
     de._retry_failed(fetch, {"B": "B"}, results,
                      sweeps=3, workers=2, label="t")
-    assert dict((n, st) for n, st, _ in results)["B"] == "ERR"
+    assert {n: st for n, st, _ in results}["B"] == "ERR"
     assert fetch.calls["B"] == 3  # retried on every sweep
 
 
@@ -47,7 +47,7 @@ def test_no_errors_means_no_fetch():
     fetch = _counting_fetch(lambda n, k: ("NEW", 1))
     de._retry_failed(fetch, {}, results, sweeps=2, workers=2, label="t")
     assert fetch.calls == {}
-    assert dict((n, st) for n, st, _ in results) == {"A": "NEW", "B": "UP_TO_DATE"}
+    assert {n: st for n, st, _ in results} == {"A": "NEW", "B": "UP_TO_DATE"}
 
 
 def test_partial_recovery_stops_when_clean():
@@ -56,7 +56,7 @@ def test_partial_recovery_stops_when_clean():
     fetch = _counting_fetch(lambda n, k: ("NEW", 2) if n == "B" else ("ERR", 0))
     de._retry_failed(fetch, {"B": "B", "C": "C"}, results,
                      sweeps=3, workers=2, label="t")
-    statuses = dict((n, st) for n, st, _ in results)
+    statuses = {n: st for n, st, _ in results}
     assert statuses["B"] == "NEW"
     assert statuses["C"] == "ERR"
     assert fetch.calls["B"] == 1      # B fetched only until it cleared
@@ -77,7 +77,7 @@ def _patch_reach(monkeypatch, ok):
     def fake(url, *a, **k):
         if ok:
             return type("R", (), {"status_code": 200})()
-        raise Exception("unreachable")
+        raise ConnectionError("unreachable")
     monkeypatch.setattr(net, "http_get", fake)
 
 
@@ -123,7 +123,7 @@ def test_moex_fetches_when_stale(monkeypatch):
     called = []
     def fake(*a, **k):
         called.append(1)
-        raise Exception("net hit")
+        raise ConnectionError("net hit")
     monkeypatch.setattr(net, "http_get", fake)
     de.fetch_moex_smart("SBER", _dt.datetime.now() - _dt.timedelta(days=7))
     assert called  # stale data: network attempted

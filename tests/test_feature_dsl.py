@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.feature_dsl import ALLOWED_OPS, validate_spec, materialize, add_dsl_features
+from core.feature_dsl import ALLOWED_OPS, add_dsl_features, materialize, validate_spec
 
 COLS = {"ret_1", "ret_5", "vol_z", "rsi"}
 
@@ -67,6 +67,7 @@ def test_add_dsl_features_none_is_noop():
 
 def test_load_dsl_specs_env(tmp_path, monkeypatch):
     import json
+
     from core.feature_dsl import load_dsl_specs
     monkeypatch.delenv("GTRADE_DSL_SPECS", raising=False)
     assert load_dsl_specs() == []          # unset means no specs

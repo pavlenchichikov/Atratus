@@ -74,6 +74,7 @@ def test_save_load_meta_roundtrip(tmp_path, monkeypatch):
 def test_build_meta_label_and_train(tmp_path):
     import numpy as np
     import pandas as pd
+
     import core.meta_sizer as ms
     rng = np.random.RandomState(0)
     n = 500
@@ -91,6 +92,7 @@ def test_build_meta_label_and_train(tmp_path):
 
 def test_train_meta_model_guards():
     import numpy as np
+
     import core.meta_sizer as ms
     assert ms.train_meta_model(None, None) is None
     X = np.zeros((10, 2), dtype="float32")
@@ -101,6 +103,7 @@ def test_train_meta_model_guards():
 def test_train_and_save_persists(tmp_path, monkeypatch):
     import numpy as np
     import pandas as pd
+
     import core.meta_sizer as ms
     monkeypatch.setattr(ms, "META_DIR", str(tmp_path / "meta"))
     rng = np.random.RandomState(1)
@@ -116,6 +119,7 @@ def test_train_and_save_persists(tmp_path, monkeypatch):
 
 def test_train_and_save_never_raises_on_bad_frame(tmp_path, monkeypatch):
     import pandas as pd
+
     import core.meta_sizer as ms
     monkeypatch.setattr(ms, "META_DIR", str(tmp_path / "meta"))
     assert ms.train_and_save("X", pd.DataFrame({"nope": [1, 2, 3]})) is False   # no cols

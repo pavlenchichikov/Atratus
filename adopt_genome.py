@@ -19,7 +19,6 @@ Usage:
 import argparse
 import datetime
 import glob
-import io
 import json
 import os
 import sys
@@ -32,7 +31,7 @@ PROGRESS_FILES = ("_chunk_progress.txt", "_chunk_quality.json")
 
 def _read_json(path):
     try:
-        with io.open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return None
@@ -113,16 +112,16 @@ def describe(cand):
     g = cand["genome"]
     bits = ["%d drops" % len(g.get("drops") or []),
             "%d extra" % len(g.get("extra") or []),
-            "label %s/%s" % (g.get("label_mode", "direction"),
+            "label {}/{}".format(g.get("label_mode", "direction"),
                              g.get("label_window", 30))]
-    value = "%+.2f" % cand["value"] if cand["value"] is not None else "n/a"
+    value = "{:+.2f}".format(cand["value"]) if cand["value"] is not None else "n/a"
     if cand["kind"] == "measured":
-        p = "%.4f" % cand["p"] if cand["p"] is not None else "n/a"
+        p = "{:.4f}".format(cand["p"]) if cand["p"] is not None else "n/a"
         n = cand["n"] if cand["n"] is not None else "?"
         verdict = "PASSED" if cand["validated"] else "FAILED its own A/B"
-        head = "%s  value %s  p=%s  n=%s" % (verdict, value, p, n)
+        head = f"{verdict}  value {value}  p={p}  n={n}"
     else:
-        head = "search fitness %s  (NOT validated on a fresh holdout)" % value
+        head = f"search fitness {value}  (NOT validated on a fresh holdout)"
     return "%-6s %s | %s" % (cand["label"], head, ", ".join(bits))
 
 
@@ -137,8 +136,8 @@ def _caveat(cand):
                 "seen. Search values shrink: genome A scored 5.30 in the search "
                 "and 1.63 on a fresh holdout.")
     if not cand["validated"]:
-        return ("this candidate FAILED its own A/B (p=%s against alpha %s, value "
-                "%s against floor %s)" % (cand["p"], cand.get("alpha"),
+        return ("this candidate FAILED its own A/B (p={} against alpha {}, value "
+                "{} against floor {})".format(cand["p"], cand.get("alpha"),
                                           cand["value"], cand.get("floor")))
     holdout = cand.get("holdout") or ""
     return ("measured on %d held-out assets it had not seen (%s). "
@@ -153,9 +152,9 @@ def write_adoption(cand, path=None):
     dest = path or _adopted.PATH
     prev = dest.replace(".json", ".prev.json")
     if os.path.exists(dest):
-        with io.open(dest, encoding="utf-8") as fh:
+        with open(dest, encoding="utf-8") as fh:
             body = fh.read()
-        with io.open(prev, "w", encoding="utf-8") as fh:
+        with open(prev, "w", encoding="utf-8") as fh:
             fh.write(body)
     record = {
         "adopted": datetime.date.today().isoformat(),
@@ -175,7 +174,7 @@ def write_adoption(cand, path=None):
         },
         "genome": cand["genome"],
     }
-    with io.open(dest, "w", encoding="utf-8") as fh:
+    with open(dest, "w", encoding="utf-8") as fh:
         json.dump(record, fh, ensure_ascii=False, indent=2)
 
 
@@ -186,9 +185,9 @@ def revert(path=None):
     dest = path or _adopted.PATH
     prev = dest.replace(".json", ".prev.json")
     if os.path.exists(prev):
-        with io.open(prev, encoding="utf-8") as fh:
+        with open(prev, encoding="utf-8") as fh:
             body = fh.read()
-        with io.open(dest, "w", encoding="utf-8") as fh:
+        with open(dest, "w", encoding="utf-8") as fh:
             fh.write(body)
         os.remove(prev)
         return True
@@ -222,14 +221,14 @@ def _show():
     if not rec:
         print("Nothing adopted: production defaults are in force.")
         return
-    print("Adopted %s on %s" % (rec.get("label"), rec.get("adopted")))
+    print("Adopted {} on {}".format(rec.get("label"), rec.get("adopted")))
     ev = rec.get("evidence") or {}
     for key in ("kind", "value", "p", "n", "holdout", "caveat", "source"):
         if ev.get(key) is not None:
             print("  %-9s %s" % (key, ev[key]))
     print("  env:")
     for k, v in sorted(_adopted.env_overrides(rec.get("genome") or {}).items()):
-        print("    %s=%s" % (k, v))
+        print(f"    {k}={v}")
 
 
 def main():
@@ -265,7 +264,7 @@ def main():
         return
     pick = cands[int(raw) - 1]
     write_adoption(pick)
-    print("\nAdopted %s." % pick["label"])
+    print("\nAdopted {}.".format(pick["label"]))
     print("Removed chunk progress: %s"
           % (", ".join(reset_chunk_progress()) or "none"))
     if not pick["validated"]:

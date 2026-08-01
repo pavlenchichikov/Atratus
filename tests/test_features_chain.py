@@ -1,6 +1,5 @@
 """Unit tests for the shared feature chain (pure; a fake engine, no database)."""
 
-import io
 import os
 
 import pandas as pd
@@ -30,9 +29,9 @@ def test_build_features_calls_every_step_in_order(monkeypatch):
     monkeypatch.setattr(features, "add_cross_lag_features", step("cross_lag"))
     monkeypatch.setattr(features, "add_chronos_features", step("chronos"))
     monkeypatch.setattr(features, "add_dsl_features", step("dsl", ret_tuple=True))
-    monkeypatch.setattr(features, "load_dsl_specs", lambda: [])
+    monkeypatch.setattr(features, "load_dsl_specs", list)
 
-    df, skipped = features.build_features(frame(), "btc", object())
+    _df, skipped = features.build_features(frame(), "btc", object())
     assert calls == ["engineer", "weekly", "crossasset", "macro", "cross_lag",
                      "chronos", "dsl"]
     assert skipped == []
@@ -99,11 +98,11 @@ def test_the_chain_is_defined_in_exactly_one_place():
         for fn in names:
             if not fn.endswith(".py") or fn in CHAIN_EXEMPT:
                 continue
-            src = io.open(os.path.join(dirpath, fn), encoding="utf-8",
+            src = open(os.path.join(dirpath, fn), encoding="utf-8",
                           errors="ignore").read()
             for step in ("engineer_features(", "add_dsl_features(",
                          "add_chronos_features("):
                 if step in src:
-                    offenders.append("%s calls %s" % (fn, step))
+                    offenders.append(f"{fn} calls {step}")
     assert offenders == [], (
-        "these callers bypass build_features and will drift: %s" % offenders)
+        f"these callers bypass build_features and will drift: {offenders}")

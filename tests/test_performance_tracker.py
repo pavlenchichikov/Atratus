@@ -295,6 +295,7 @@ def test_meta_shadow_report_empty_when_no_shadow_data(tmp_path, monkeypatch):
 
 def test_log_prediction_records_meta_prob(tmp_path, monkeypatch):
     import sqlite3
+
     import performance_tracker as pt
     db = str(tmp_path / "mp.db")
     today = datetime.utcnow().strftime("%Y-%m-%d")

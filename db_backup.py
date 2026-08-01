@@ -10,7 +10,7 @@ import os
 import shutil
 from datetime import datetime
 
-from core.db_backup import BACKUP_DIR, DB_PATH, MAX_BACKUPS, backup_db, _prune_old_backups
+from core.db_backup import BACKUP_DIR, DB_PATH, MAX_BACKUPS, _prune_old_backups, backup_db
 
 
 def _now_str():
@@ -25,12 +25,11 @@ def _format_size(size_bytes):
     """Format file size in human-readable form."""
     if size_bytes < 1024:
         return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
+    if size_bytes < 1024 * 1024:
         return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
+    if size_bytes < 1024 * 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
 def _ensure_backup_dir():

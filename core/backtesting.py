@@ -266,9 +266,9 @@ def simulate_positions(signals, next_ret, commission: float = COMMISSION,
         s = int(sig[i])
         legs = abs(s - pos)
         if legs:
-            if pos != 0:  # closing (or flipping out of) the old segment
-                if seg_factor - 1.0 - seg_costs - leg_cost > 0:
-                    wins += 1
+            # closing (or flipping out of) the old segment at a profit
+            if pos != 0 and seg_factor - 1.0 - seg_costs - leg_cost > 0:
+                wins += 1
             if s != 0:    # opening a new segment (its entry leg)
                 trades += 1
                 seg_factor, seg_costs = 1.0, leg_cost

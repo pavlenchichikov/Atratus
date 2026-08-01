@@ -53,13 +53,13 @@ class TestPooled:
         assert (onehot == onehot[0]).all()
 
     def test_short_table_skipped(self, engine):
-        X, y, skipped = pf.build_pooled_sequences(
+        _X, _y, skipped = pf.build_pooled_sequences(
             engine, ["aaa"], "2022-02-01", lookback=30)  # almost no pre-cutoff rows
         assert skipped == ["aaa"]
 
     def test_per_asset_scaling(self, engine):
         cutoff = "2024-06-01"
-        X, y, _ = pf.build_pooled_sequences(engine, ["aaa"], cutoff, lookback=30)
+        X, _y, _ = pf.build_pooled_sequences(engine, ["aaa"], cutoff, lookback=30)
         feats = X[:, :, :len(pf.FOUNDATION_FEATURES)]
         # z-scored features have near-zero mean over the pooled window
         assert abs(float(feats.mean())) < 0.5

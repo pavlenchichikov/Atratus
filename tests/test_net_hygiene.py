@@ -69,5 +69,5 @@ def test_calibrate_and_abstain_one_class_is_identity():
     val_prob = np.array([0.3, 0.4, 0.6, 0.7])
     val_target = np.array([1, 1, 1, 1])
     test_prob = np.array([0.2, 0.8])
-    cv, ct = nh.calibrate_and_abstain(val_prob, val_target, test_prob, 0.0)
+    _cv, ct = nh.calibrate_and_abstain(val_prob, val_target, test_prob, 0.0)
     assert np.allclose(ct, [0.2, 0.8])                    # identity, no abstention (eps 0)

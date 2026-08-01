@@ -1,6 +1,5 @@
 """The adoption reaches the processes that need it."""
 
-import io
 import json
 import os
 import subprocess
@@ -33,7 +32,7 @@ def _env_without_genome_vars(adopted_path):
 
 def _last_line(code, env):
     out = subprocess.run([sys.executable, "-c", code], cwd=BASE, env=env,
-                         capture_output=True, text=True, timeout=300)
+                         capture_output=True, text=True, timeout=300, check=False)
     assert out.returncode == 0, out.stderr[-800:]
     return out.stdout.strip().splitlines()[-1]
 
@@ -44,7 +43,7 @@ def _run(code, adopted_path):
 
 def _write(tmp_path, payload=None):
     p = tmp_path / "a.json"
-    io.open(str(p), "w", encoding="utf-8").write(json.dumps(payload or GENOME))
+    open(str(p), "w", encoding="utf-8").write(json.dumps(payload or GENOME))
     return str(p)
 
 
@@ -73,8 +72,8 @@ def test_no_adoption_changes_nothing(tmp_path):
                 "print(len(active_candidate_features()), feature_version())",
                 str(tmp_path / "absent.json"))
     n, ver = line.split()
-    assert int(n) == 34, "unadopted feature count changed from 34 to %s" % n
-    assert ver == "c48ee7bf", "unadopted feature_version changed to %s" % ver
+    assert int(n) == 34, f"unadopted feature count changed from 34 to {n}"
+    assert ver == "c48ee7bf", f"unadopted feature_version changed to {ver}"
 
 
 def test_an_adoption_changes_the_feature_version(tmp_path):
@@ -96,7 +95,7 @@ def test_load_dsl_specs_falls_back_to_the_adopted_specs(tmp_path):
 
 def test_the_research_temp_file_still_wins_over_the_adopted_specs(tmp_path):
     spec_file = tmp_path / "specs.json"
-    io.open(str(spec_file), "w", encoding="utf-8").write(json.dumps(
+    open(str(spec_file), "w", encoding="utf-8").write(json.dumps(
         [{"name": "research_only", "op": "lag", "inputs": ["ret_5"],
           "params": {"k": 2}}]))
     env = _env_without_genome_vars(_write(tmp_path))
@@ -110,7 +109,7 @@ def test_the_research_temp_file_still_wins_over_the_adopted_specs(tmp_path):
 def test_a_corrupt_adoption_does_not_stop_a_run(tmp_path):
     # A bad hand-edit must not take down predict.py.
     bad = tmp_path / "bad.json"
-    io.open(str(bad), "w", encoding="utf-8").write("{not json")
+    open(str(bad), "w", encoding="utf-8").write("{not json")
     line = _run("import config, os;"
                 "print('survived', os.getenv('GTRADE_LABEL_MODE'))", str(bad))
     assert line == "survived None"

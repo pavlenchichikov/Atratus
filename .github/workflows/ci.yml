@@ -20,11 +20,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install ruff
-        # Pin to the version the codebase is linted against locally. Unpinned,
-        # CI silently upgrades (e.g. 0.16 broadened its default ruleset to ~920
-        # findings of rules this project never opted into), breaking the build
-        # on untouched code. Bump deliberately, not by surprise.
-        run: pip install ruff==0.12.0
+        # Pinned to the version the codebase is linted against locally. The pin
+        # is what makes an upgrade deliberate: unpinned, a new default rule set
+        # lands as a red build on code nobody touched. Bump it on purpose, fix
+        # what the new rules find, and move the pin in the same commit.
+        run: pip install ruff==0.16.1
 
       - name: Lint (ruff)
         run: ruff check .

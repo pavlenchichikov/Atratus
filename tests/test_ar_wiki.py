@@ -18,8 +18,9 @@ def test_wiki_summary_and_note_replicated(tmp_path, monkeypatch):
 
 
 def _findings(monkeypatch, tmp_path, records):
-    import core.ar_memory as am
     import json as _j
+
+    import core.ar_memory as am
     p = str(tmp_path / "_ar_findings.json")
     monkeypatch.setattr(am, "FINDINGS_PATH", p)
     with open(p, "w", encoding="utf-8") as f:

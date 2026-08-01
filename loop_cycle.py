@@ -15,8 +15,8 @@ import sys
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
-from config import FULL_ASSET_MAP  # noqa: E402
-from core import drift, loop_state, runlock  # noqa: E402
+from config import FULL_ASSET_MAP
+from core import drift, loop_state, runlock
 
 STATE_PATH = os.path.join(BASE, "loop_state.json")
 LOCK_PATH = os.path.join(BASE, "_loop.lock")
@@ -29,7 +29,7 @@ def run_step(name, fn):
     try:
         fn()
         return {"step": name, "status": "ok", "msg": ""}
-    except Exception as exc:  # noqa: BLE001 - we intentionally catch everything
+    except Exception as exc:
         return {"step": name, "status": "failed", "msg": str(exc)[:200]}
 
 
@@ -51,6 +51,7 @@ def _run_script(script):
 def _build_rows():
     """Fetch the inputs drift needs for every asset from the live data."""
     import json
+
     from core import track_record
 
     reg = {}
@@ -97,7 +98,7 @@ def _build_rows():
 def main():
     ok, reason = runlock.acquire(LOCK_PATH, "cycle")
     if not ok:
-        print("[loop] %s; skipping this cycle." % reason)
+        print(f"[loop] {reason}; skipping this cycle.")
         return
     try:
         steps = []

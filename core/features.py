@@ -60,7 +60,7 @@ def make_target(close: pd.Series, mode: str = "direction", window: int = 30,
         return target
     if mode == "triple_barrier":
         return _triple_barrier(close, high, low, horizon, barrier_k, vol_window)
-    raise ValueError("unknown GTRADE_LABEL_MODE: %r" % mode)
+    raise ValueError(f"unknown GTRADE_LABEL_MODE: {mode!r}")
 
 
 def _triple_barrier(close, high, low, horizon, barrier_k, vol_window):
@@ -255,11 +255,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df['target'] = df['target'].astype(int)
 
     # Preserve Date as column for downstream joins
-    if isinstance(df.index, pd.DatetimeIndex):
-        df = df.reset_index()
-    else:
-        df = df.reset_index(drop=True)
-    return df
+    return df.reset_index() if isinstance(df.index, pd.DatetimeIndex) else df.reset_index(drop=True)
 
 
 def add_weekly_features(df: pd.DataFrame, table: str, engine) -> pd.DataFrame:
@@ -345,8 +341,7 @@ def add_crossasset_features(df: pd.DataFrame, table: str, engine) -> pd.DataFram
             df[feat_name] = corr.reindex(df.index).ffill().fillna(0)
         except Exception:
             df[feat_name] = 0.0
-    df = df.reset_index()
-    return df
+    return df.reset_index()
 
 
 # Macro regime features sourced from the tnx/vix/dxy price tables (already
@@ -411,8 +406,7 @@ def add_macro_features(df: pd.DataFrame, engine) -> pd.DataFrame:
             df[c] = feats[c].reindex(df.index, method='ffill').fillna(0.0).values
         else:
             df[c] = 0.0
-    df = df.reset_index()
-    return df
+    return df.reset_index()
 
 
 CHRONOS_CACHE_TABLE = "chronos_cache"
@@ -434,8 +428,8 @@ def _chronos_model(engine, table):
         return resolve_model(override)
     try:
         cnt = pd.read_sql(
-            "SELECT model, COUNT(*) c FROM %s WHERE asset = ? GROUP BY model "
-            "ORDER BY c DESC" % CHRONOS_CACHE_TABLE, engine, params=(table,))
+            f"SELECT model, COUNT(*) c FROM {CHRONOS_CACHE_TABLE} WHERE asset = ? GROUP BY model "
+            "ORDER BY c DESC", engine, params=(table,))
         models = [m for m in cnt["model"].tolist() if m]
         return models[0] if models else None
     except Exception:
@@ -453,12 +447,12 @@ def add_chronos_features(df, table, engine):
     model = _chronos_model(engine, table)
     try:
         if model is not None:
-            q = "SELECT date, %s FROM %s WHERE asset = ? AND model = ?" % (
+            q = "SELECT date, {} FROM {} WHERE asset = ? AND model = ?".format(
                 ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
             cache = pd.read_sql(q, engine, params=(table, model))
         else:
             # legacy cache without a model column (pre-migration) - un-filtered read
-            q = "SELECT date, %s FROM %s WHERE asset = ?" % (
+            q = "SELECT date, {} FROM {} WHERE asset = ?".format(
                 ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
             cache = pd.read_sql(q, engine, params=(table,))
     except Exception:
@@ -529,8 +523,7 @@ def add_cross_lag_features(df: pd.DataFrame, engine) -> pd.DataFrame:
             df[c] = feats[c].reindex(df.index, method='ffill').fillna(0.0).values
         else:
             df[c] = 0.0
-    df = df.reset_index()
-    return df
+    return df.reset_index()
 
 
 def build_features(df_raw, table, engine):

@@ -9,7 +9,7 @@ import sys
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
-from core import loop_state, runlock  # noqa: E402
+from core import loop_state, runlock
 
 STATE_PATH = os.path.join(BASE, "loop_state.json")
 LOCK_PATH = os.path.join(BASE, "_loop.lock")
@@ -32,7 +32,7 @@ def chunk(assets, size):
 def main():
     ok, reason = runlock.acquire(LOCK_PATH, "retrain")
     if not ok:
-        print("[retrain] %s; skipping." % reason)
+        print(f"[retrain] {reason}; skipping.")
         return
     approved = loop_state.load_state(STATE_PATH).get("approved", [])
     if not approved:
@@ -46,7 +46,7 @@ def main():
             env["GTRADE_ASSETS"] = ",".join(batch)
             print("[retrain] batch %d: %s" % (i, ", ".join(batch)))
             rc = subprocess.run([sys.executable, "train_hybrid.py"],
-                                cwd=BASE, env=env).returncode
+                                cwd=BASE, env=env, check=False).returncode
             if rc != 0:
                 print("[retrain] batch %d failed (rc=%d); stopping." % (i, rc))
                 return

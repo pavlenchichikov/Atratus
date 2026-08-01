@@ -60,8 +60,9 @@ def test_market_breadth_counts(monkeypatch):
 
 def test_top_leaderboard_graceful_empty(monkeypatch):
     dash.cache_clear()
-    import performance_tracker as pt
     import pandas as pd
+
+    import performance_tracker as pt
     monkeypatch.setattr(pt, "get_leaderboard",
                         lambda days=30, model_version=None: pd.DataFrame())
     assert dash.top_leaderboard() == []
@@ -69,8 +70,9 @@ def test_top_leaderboard_graceful_empty(monkeypatch):
 
 def test_top_leaderboard_records(monkeypatch):
     dash.cache_clear()
-    import performance_tracker as pt
     import pandas as pd
+
+    import performance_tracker as pt
     df = pd.DataFrame([
         {"Asset": "BTC", "Accuracy": 0.6, "Predictions": 10, "Correct": 6},
         {"Asset": "ETH", "Accuracy": 0.5, "Predictions": 8, "Correct": 4},
@@ -154,8 +156,9 @@ def test_guru_for_asset_missing_returns_none(tmp_path):
 
 def test_sector_momentum_records(monkeypatch):
     dash.cache_clear()
-    import sector_rotation as sr
     import pandas as pd
+
+    import sector_rotation as sr
     df = pd.DataFrame([{"Sector": "Crypto", "Momentum_Score": -3.8,
                         "Trend": "RISING", "Best_Asset": "UNI", "Worst_Asset": "ADA"}])
     monkeypatch.setattr(sr, "get_sector_momentum", lambda weeks=4: df)
@@ -165,8 +168,9 @@ def test_sector_momentum_records(monkeypatch):
 
 def test_sector_heatmap_shape(monkeypatch):
     dash.cache_clear()
-    import sector_rotation as sr
     import pandas as pd
+
+    import sector_rotation as sr
     df = pd.DataFrame([{"Sector": "Crypto", "W1": 2.0, "W2": -16.0},
                        {"Sector": "US Tech", "W1": 1.0, "W2": 0.5}])
     monkeypatch.setattr(sr, "get_sector_returns", lambda weeks=8: df)
@@ -192,8 +196,9 @@ def test_correlation_stress_zone(monkeypatch):
 
 def test_correlation_heatmap_square(monkeypatch):
     dash.cache_clear()
-    import correlation_alert as ca
     import pandas as pd
+
+    import correlation_alert as ca
     df = pd.DataFrame([[1.0, 0.5], [0.5, 1.0]],
                       index=["BTC", "ETH"], columns=["BTC", "ETH"])
     monkeypatch.setattr(ca, "get_key_pairs_matrix", lambda: df)
@@ -203,8 +208,9 @@ def test_correlation_heatmap_square(monkeypatch):
 
 def test_accuracy_timeseries_current_and_all(monkeypatch):
     dash.cache_clear()
-    import performance_tracker as pt
     import pandas as pd
+
+    import performance_tracker as pt
     df = pd.DataFrame([{"date": "2026-06-18", "rolling_acc": 0.6, "predictions_count": 10}])
     monkeypatch.setattr(pt, "get_accuracy_history",
                         lambda window=7, model_version=None: df)

@@ -18,7 +18,7 @@ def news_id(asset, link, title):
     Scoped by asset: the same article can legitimately appear in the general
     feed and against an asset, and those are two rows.
     """
-    key = "%s|%s" % (asset or "", link or title or "")
+    key = "{}|{}".format(asset or "", link or title or "")
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 

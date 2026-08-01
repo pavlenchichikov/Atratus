@@ -68,7 +68,7 @@ def materialize(df, spec):
     elif op == "interaction":
         out = df[inputs[0]] * df[inputs[1]]
     else:
-        raise ValueError("materialize does not handle op %r" % op)
+        raise ValueError(f"materialize does not handle op {op!r}")
     return out.replace([float("inf"), float("-inf")], 0.0).fillna(0.0)
 
 

@@ -289,7 +289,6 @@ class TestNoveltyEmitter:
 
         def mutate_toward(parent, tbin, tgroup):
             calls.append(1)
-            return None
 
         e = ar_rl.NoveltyEmitter(count_bins=3, groups=2, rng=random.Random(2))
         child = e.emit(keys, elites,

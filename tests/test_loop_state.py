@@ -1,5 +1,5 @@
 # tests/test_loop_state.py
-from core.loop_state import load_state, save_state, approve, dismiss
+from core.loop_state import approve, dismiss, load_state, save_state
 
 
 def test_load_missing_returns_skeleton(tmp_path):

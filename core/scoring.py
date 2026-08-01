@@ -94,8 +94,7 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
     # one, and this must be loud rather than silently dropped downstream.
     missing = missing_champion_features(df, reg_entry)
     if missing:
-        print("  [SKIP] %s: feature(s) the champion needs are unavailable: %s"
-              % (name, ", ".join(missing)))
+        print("  [SKIP] {}: feature(s) the champion needs are unavailable: {}".format(name, ", ".join(missing)))
         return None
 
     features = select_features(df, reg_entry)
@@ -249,8 +248,8 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
             pol = timing_policy.load_policy()
             if pol is not None:
                 try:
-                    from performance_tracker import timing_state
                     import config as _cfg
+                    from performance_tracker import timing_state
                     risky = any(name in _cfg.ASSET_TYPES.get(g, ())
                                 for g in ("CRYPTO", "FOREX MAJORS",
                                           "FOREX CROSSES", "FOREX EXOTIC"))

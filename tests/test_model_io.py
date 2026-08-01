@@ -12,10 +12,12 @@ import pytest
 
 tf = pytest.importorskip("tensorflow")
 
-from core.architectures import (  # noqa: E402
-    build_lstm_multitask, build_tcn, build_transformer_encoder,
+from core.architectures import (
+    build_lstm_multitask,
+    build_tcn,
+    build_transformer_encoder,
 )
-from core.model_io import load_keras_native, load_lstm_model  # noqa: E402
+from core.model_io import load_keras_native, load_lstm_model
 
 
 def _first_output(pred):
@@ -54,7 +56,7 @@ def test_load_lstm_model_prefers_native_for_adaptive_sizes(tmp_path):
     model = build_lstm_multitask(shape, units1=48, units2=24, head_dim=24)
     path = str(tmp_path / "asset_lstm.keras")
     model.save(path)
-    loaded, mode, lookback = load_lstm_model(path, lookback=10, n_features=8)
+    loaded, _mode, lookback = load_lstm_model(path, lookback=10, n_features=8)
     assert loaded is not None
     assert lookback == 10
     x = np.random.rand(1, *shape).astype("float32")

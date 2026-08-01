@@ -7,7 +7,6 @@ and signal ranking that accounts for portfolio concentration.
 
 import logging
 import os
-from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -21,7 +20,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Maximum fraction of portfolio per sector (keys must match config.SECTOR_MAP).
 # Sectors without an entry default to 0.50 in check_sector_limit.
-SECTOR_LIMITS: Dict[str, float] = {
+SECTOR_LIMITS: dict[str, float] = {
     "Crypto":      0.35,
     "US Tech":     0.40,
     "Commodities": 0.25,
@@ -53,8 +52,8 @@ class PortfolioManager:
         self.asset_map = asset_map
         self.lookback_days = lookback_days
         self._engine = create_engine(f"sqlite:///{os.path.join(BASE_DIR, 'market.db')}")
-        self._returns_cache: Optional[pd.DataFrame] = None
-        self._corr_cache:    Optional[pd.DataFrame] = None
+        self._returns_cache: pd.DataFrame | None = None
+        self._corr_cache:    pd.DataFrame | None = None
 
     # -- Internal helpers ------------------------------------------------------
 
@@ -109,8 +108,8 @@ class PortfolioManager:
         self,
         asset: str,
         threshold: float = CORRELATION_HIGH,
-        open_only: Optional[List[str]] = None,
-    ) -> List[str]:
+        open_only: list[str] | None = None,
+    ) -> list[str]:
         """
         Return assets correlated with *asset* above *threshold*.
         If *open_only* is provided, restrict to that subset.
@@ -134,14 +133,14 @@ class PortfolioManager:
 
     # -- Portfolio heat --------------------------------------------------------
 
-    def get_portfolio_heat(self, positions: Dict[str, float]) -> Dict[str, float]:
+    def get_portfolio_heat(self, positions: dict[str, float]) -> dict[str, float]:
         """
         Aggregate position sizes by sector.
 
         positions: {asset: fraction_of_capital}  e.g. {"BTC": 0.10, "ETH": 0.08}
         Returns: {sector: total_fraction}
         """
-        heat: Dict[str, float] = {s: 0.0 for s in list(SECTOR_MAP) + ["OTHER"]}
+        heat: dict[str, float] = dict.fromkeys(list(SECTOR_MAP) + ["OTHER"], 0.0)
         for asset, frac in positions.items():
             sector = self.get_sector(asset)
             heat[sector] = heat.get(sector, 0.0) + frac
@@ -151,7 +150,7 @@ class PortfolioManager:
         self,
         asset: str,
         proposed_size: float,
-        current_positions: Dict[str, float],
+        current_positions: dict[str, float],
     ) -> tuple:
         """
         Check whether adding *proposed_size* would exceed the sector limit.
@@ -165,7 +164,7 @@ class PortfolioManager:
 
     # -- Diversification -------------------------------------------------------
 
-    def get_diversification_score(self, positions: Dict[str, float]) -> float:
+    def get_diversification_score(self, positions: dict[str, float]) -> float:
         """
         Score 0-100 measuring portfolio diversification.
         Uses the Herfindahl-Hirschman Index (HHI) over sector exposures.
@@ -232,10 +231,10 @@ class PortfolioManager:
 
     def rank_signals(
         self,
-        signals: Dict[str, dict],
-        current_positions: Dict[str, float] | None = None,
+        signals: dict[str, dict],
+        current_positions: dict[str, float] | None = None,
         top_n: int = 5,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Rank BUY/SELL signals by a composite score:
             score = confidence - correlation_penalty - sector_crowding_penalty
@@ -287,7 +286,7 @@ class PortfolioManager:
         self,
         asset: str,
         signal: str,
-        current_positions: Dict[str, float] | None = None,
+        current_positions: dict[str, float] | None = None,
     ) -> dict:
         """Return a full portfolio context dict for a signal."""
         if current_positions is None:

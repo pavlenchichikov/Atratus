@@ -56,7 +56,7 @@ def _load_risk_config_override() -> None:
     if not os.path.exists(RISK_CONFIG_OVERRIDE_PATH):
         return
     try:
-        with open(RISK_CONFIG_OVERRIDE_PATH, "r", encoding="utf-8") as fh:
+        with open(RISK_CONFIG_OVERRIDE_PATH, encoding="utf-8") as fh:
             override = json.load(fh)
         RISK_CONFIG.update(override)
     except Exception as exc:
@@ -83,7 +83,7 @@ def save_risk_config_override(updates: dict) -> None:
     existing = {}
     if os.path.exists(RISK_CONFIG_OVERRIDE_PATH):
         try:
-            with open(RISK_CONFIG_OVERRIDE_PATH, "r", encoding="utf-8") as fh:
+            with open(RISK_CONFIG_OVERRIDE_PATH, encoding="utf-8") as fh:
                 existing = json.load(fh)
         except Exception:
             existing = {}
@@ -132,7 +132,7 @@ class RiskManager:
         if not os.path.exists(RISK_STATE_PATH):
             return
         try:
-            with open(RISK_STATE_PATH, "r", encoding="utf-8") as fh:
+            with open(RISK_STATE_PATH, encoding="utf-8") as fh:
                 state = json.load(fh)
             if self._equity_changed(state):
                 return

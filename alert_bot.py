@@ -29,6 +29,7 @@ except Exception:
 
 from core.logger import get_logger
 from net import ssl_verify
+
 logger = get_logger("alert_bot")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,12 +50,12 @@ except ImportError:
 # -- Shared ML components (core package) --
 # Model scoring is shared with predict.py through core.scoring so the two serve
 # paths cannot drift apart (see core/scoring.py).
+from sqlalchemy import create_engine
+
+from core import reports, track_record
 from core.features import build_features
 from core.scoring import score_asset
-from core import reports, track_record
 from risk_manager import RISK_CONFIG
-
-from sqlalchemy import create_engine
 
 CHECK_INTERVAL = 3600
 MODEL_DIR = os.path.join(BASE_DIR, "models")
@@ -90,7 +91,7 @@ except Exception as exc:
 
 def _load_json(path):
     if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             return json.load(f)
     return {}
 
@@ -145,11 +146,10 @@ def fetch_moex(symbol, name):
         cols = r.json()["candles"]["columns"]
         if not data:
             return None
-        df = pd.DataFrame(data, columns=cols).rename(columns={
+        return pd.DataFrame(data, columns=cols).rename(columns={
             "close": "Close", "high": "High", "low": "Low",
             "volume": "Volume", "open": "Open",
         })
-        return df
     except Exception as exc:
         logger.warning("MOEX fetch error %s: %s", name, exc)
         return None
@@ -559,7 +559,7 @@ if __name__ == "__main__":
             logger.info("Bot stopped by user")
             break
         except Exception as exc:
-            logger.error("Unexpected cycle error: %s", exc, exc_info=True)
+            logger.exception("Unexpected cycle error")
             print(f"[ERR] Unexpected error: {exc}")
 
         print(f"\nNext scan in {CHECK_INTERVAL // 60} minutes. Press Ctrl+C to stop.")

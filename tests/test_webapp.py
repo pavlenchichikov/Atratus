@@ -5,8 +5,8 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from core import track_record
 import webapp
+from core import track_record
 
 
 @pytest.fixture
@@ -374,7 +374,7 @@ def test_api_guru_recalculate_no_fundamentals_na(client, monkeypatch):
     """No real fundamentals: honest N/A, and nothing enters the track record."""
     import guru_report
     import guru_tracker
-    monkeypatch.setattr(guru_report, "fetch_smartlab_data", lambda: {})
+    monkeypatch.setattr(guru_report, "fetch_smartlab_data", dict)
     monkeypatch.setattr(guru_report, "fetch_yf_deep", lambda symbol: None)
     monkeypatch.setattr(guru_report, "get_technical", lambda name: None)
     calls = {}
@@ -394,7 +394,7 @@ def test_api_guru_recalculate_with_fundamentals_logs(client, monkeypatch):
     import core.guru as cg
     import guru_report
     import guru_tracker
-    monkeypatch.setattr(guru_report, "fetch_smartlab_data", lambda: {})
+    monkeypatch.setattr(guru_report, "fetch_smartlab_data", dict)
     monkeypatch.setattr(guru_report, "resolve_fundamentals",
                         lambda *a: {"_source": "yfinance_live", "price": 100.0})
     monkeypatch.setattr(guru_report, "get_technical", lambda name: None)
@@ -555,6 +555,7 @@ def test_api_whatif_no_valid_assets(client):
 
 def test_loop_page_and_api(client, monkeypatch, tmp_path):
     import json
+
     import webapp
     p = tmp_path / "loop_state.json"
     p.write_text(json.dumps({

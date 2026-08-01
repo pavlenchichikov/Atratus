@@ -4,22 +4,45 @@
 # the Dockerfile and CI install. See README.md for setup.
 
 [tool.ruff]
-# E402 is intentionally ignored: several modules (train_hybrid.py, predict.py,
-# app.py) must run PATH / env-var setup BEFORE importing tensorflow/keras, so
-# their module-level imports legitimately sit below that bootstrap block.
 line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-# Keep the high-value pyflakes (F) rules active - they catch unused imports and
-# undefined names (real bugs). Silence the pure-style E rules the codebase uses
-# on purpose, so `ruff check` stays green and CI-enforceable.
+# The tree is linted against the CURRENT ruff default rule set, not a frozen
+# subset: `ruff check` in CI is pinned to an exact version (see ci.yml), and the
+# pin is what makes an upgrade deliberate instead of a surprise. An explicit
+# `select` was tried and rejected - it would have frozen the project out of every
+# rule a later ruff adds, which is the opposite of the point.
+#
+# Each entry below is a rule the codebase declines on purpose, with the reason.
+# Anything not listed here is expected to stay at zero findings.
 ignore = [
-    "E402",  # module-level import not at top - intentional (TF GPU bootstrap)
-    "E701",  # multiple statements on one line (colon) - author's compact style
-    "E702",  # multiple statements on one line (semicolon) - author's compact style
-    "E741",  # ambiguous var name (l/I/O) - a couple of math vars, harmless
+    "E402",   # module-level import not at top - intentional (TF GPU bootstrap)
+    "E701",   # multiple statements on one line (colon) - author's compact style
+    "E702",   # multiple statements on one line (semicolon) - author's compact style
+    "E741",   # ambiguous var name (l/I/O) - a couple of math vars, harmless
+    "BLE001", # blind except - the codebase leans on documented fail-safe paths
+              # ("a failure here must never cost the day's push"); catching
+              # broadly there is the design, not an oversight
+    "S110",   # try-except-pass - the same fail-safe pattern
+    "S112",   # try-except-continue - ditto, in per-asset loops
+    # Every date in this system is a naive trading date: market.db stores date
+    # strings, the models label on next-bar close, and the exchange calendar is
+    # the only clock that matters. Making these tz-aware would be a semantic
+    # change wearing a lint fix as a disguise.
+    "DTZ001", "DTZ003", "DTZ005", "DTZ006", "DTZ007", "DTZ011",
+    "UP031",  # printf formatting - %-style is the author's style, and it stays
+              # lazy in logging calls, which f-strings do not
+    "B023",   # loop variable not bound in a closure. Real rule, moot here: every
+              # flagged closure is defined and consumed inside one iteration
+              # (train_hybrid starts its CatBoost thread at 829 and joins it at
+              # 1076, still inside the same fold), so late binding cannot bite.
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures open files to build a scratch tree and let the process clean up
+# after itself; a leaked handle in a test is not the leak this rule is for.
+"tests/*" = ["SIM115"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

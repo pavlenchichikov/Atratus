@@ -10,15 +10,15 @@ Usage:
     python guru_report.py --sector US  # By group (US, RUS, CRYPTO, COMMODITY)
 """
 
+import math
 import os
 import sys
 import time
 import warnings
-import math
 
 import pandas as pd
-import yfinance as yf
 import requests
+import yfinance as yf
 
 warnings.filterwarnings("ignore")
 
@@ -26,11 +26,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
+from sqlalchemy import create_engine
+
 from config import FULL_ASSET_MAP
 from core.features import compute_rsi
 from core.guru import calc_graham_number, get_guru_analysis, technical_context
 from net import ssl_verify, yf_session
-from sqlalchemy import create_engine
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 _engine = create_engine(f"sqlite:///{DB_PATH}")

@@ -1,15 +1,15 @@
+import io
 import os
 import sys
-import io
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
+
 import pandas as pd
 import requests
-import logging
-from datetime import datetime, timedelta
-from sqlalchemy import create_engine, text
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
+from sqlalchemy import create_engine, text
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -17,14 +17,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path: sys.path.append(BASE_DIR)
 
-from core.logger import get_logger
 import net
+from core.logger import get_logger
+
 logger = get_logger("data_engine")
 
 try:
     from config import FULL_ASSET_MAP
 except ImportError:
-    exit(f"[ERR] config.py not found in {BASE_DIR}")
+    sys.exit(f"[ERR] config.py not found in {BASE_DIR}")
 
 engine = create_engine(f'sqlite:///{os.path.join(BASE_DIR, "market.db")}')
 _db_lock = threading.Lock()  # serialize SQLite writes
@@ -183,13 +184,13 @@ def fetch_yahoo_smart(symbol, last_date):
     try:
         r = net.http_get(url, route="auto", validate=_yahoo_chart_ok)
     except requests.exceptions.RequestException as exc:
-        logging.error(f"{y_sym} yahoo fail: {exc}")
+        logger.error(f"{y_sym} yahoo fail: {exc}")
         print(f"[ERR] (RequestException: {exc})")
         return None
 
     parsed, err = _parse_response(r, "auto")
     if err is not None:
-        logging.error(f"{y_sym} yahoo fail: {err}")
+        logger.error(f"{y_sym} yahoo fail: {err}")
         print(f"[ERR] ({err})")
         return None
     if isinstance(parsed, str) and parsed == "UP_TO_DATE":
@@ -236,7 +237,7 @@ def fetch_moex_smart(symbol, last_date):
             # exit gets connection-reset. Report it instead of masking.
             if offset == 0:
                 net_failed = True
-                logging.warning("MOEX fetch failed for %s: %s", clean, exc)
+                logger.warning("MOEX fetch failed for %s: %s", clean, exc)
             break
 
     if not all_data:
@@ -341,7 +342,7 @@ def fetch_yahoo_weekly(symbol, last_date):
     try:
         r = net.http_get(url, route="auto", validate=_yahoo_chart_ok)
     except requests.exceptions.RequestException as exc:
-        logging.warning("Weekly fetch error for %s: %s", y_sym, exc)
+        logger.warning("Weekly fetch error for %s: %s", y_sym, exc)
         print("[ERR] (failed all routes)")
         return None
 
@@ -370,9 +371,8 @@ def fetch_yahoo_weekly(symbol, last_date):
 def _save_df(df, table_name):
     """Normalize and append DataFrame to SQLite."""
     df.columns = [c.lower() for c in df.columns]
-    if not isinstance(df.index, pd.DatetimeIndex):
-        if 'date' in df.columns:
-            df = df.set_index('date')
+    if not isinstance(df.index, pd.DatetimeIndex) and 'date' in df.columns:
+        df = df.set_index('date')
     df.index = pd.to_datetime(df.index).normalize()
     df.index = df.index.strftime('%Y-%m-%d')
     df = df[~df.index.duplicated(keep='last')]
@@ -455,13 +455,10 @@ def _fetch_and_save_daily(n, s):
     last_dt = None if BACKFILL else get_last_date(table_name)
     _tls.buf = io.StringIO()
     try:
-        if n in MOEX_TARGETS:
-            df = fetch_moex_smart(s, last_dt)
-        else:
-            df = fetch_yahoo_smart(n, last_dt)
+        df = fetch_moex_smart(s, last_dt) if n in MOEX_TARGETS else fetch_yahoo_smart(n, last_dt)
         raw_out = _tls.buf.getvalue()
     except Exception as e:
-        logging.error(f"Fetch error {n}: {e}")
+        logger.error(f"Fetch error {n}: {e}")
         return n, 'ERR', 0
     finally:
         _tls.buf = None
@@ -483,13 +480,10 @@ def _fetch_and_save_weekly(n, s):
     last_dt = None if BACKFILL else get_last_date(table_name)
     _tls.buf = io.StringIO()
     try:
-        if n in MOEX_TARGETS:
-            df = fetch_moex_weekly(s, last_dt)
-        else:
-            df = fetch_yahoo_weekly(n, last_dt)
+        df = fetch_moex_weekly(s, last_dt) if n in MOEX_TARGETS else fetch_yahoo_weekly(n, last_dt)
         raw_out = _tls.buf.getvalue()
     except Exception as e:
-        logging.error(f"Weekly fetch error {n}: {e}")
+        logger.error(f"Weekly fetch error {n}: {e}")
         return n, 'ERR', 0
     finally:
         _tls.buf = None

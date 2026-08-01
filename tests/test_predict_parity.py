@@ -7,9 +7,9 @@ are asserted there; predict.py must delegate to it rather than re-implement it.
 import os
 
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 
 from core.scaling import load_or_fit_scaler, save_scaler
-from sklearn.preprocessing import StandardScaler
 
 _HERE = os.path.dirname(__file__)
 PREDICT_SRC = os.path.join(_HERE, "..", "predict.py")

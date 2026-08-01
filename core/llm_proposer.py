@@ -10,7 +10,6 @@ imports cleanly without them."""
 import json
 import os
 
-
 DSL_MENU = (
     "ops: zscore(window 2-200), ratio(a,b), lag(k 1-20), diff(k 1-20), "
     "rolling(window,agg in mean|std|sum), interaction(a,b), lead_lag(leader in "
@@ -93,7 +92,7 @@ def _call_anthropic(prompt):
             return msg.content[0].text.strip()
         except Exception as exc:
             last_err = exc
-    raise RuntimeError("anthropic proposer failed after 3 attempts: %s" % last_err)
+    raise RuntimeError(f"anthropic proposer failed after 3 attempts: {last_err}")
 
 
 def _call_openai(prompt):
@@ -113,7 +112,7 @@ def _call_openai(prompt):
             return resp.choices[0].message.content.strip()
         except Exception as exc:
             last_err = exc
-    raise RuntimeError("openai proposer failed after 3 attempts: %s" % last_err)
+    raise RuntimeError(f"openai proposer failed after 3 attempts: {last_err}")
 
 
 def _llm_timeout():
@@ -145,14 +144,14 @@ def list_ollama_models():
     listing). Raises RuntimeError if Ollama is unreachable."""
     import urllib.request
     base = _ollama_base_url()
-    host = base[:-3] if base.endswith("/v1") else base
+    host = base.removesuffix("/v1")
     url = host.rstrip("/") + "/api/tags"
     try:
         with urllib.request.urlopen(url, timeout=5) as r:
             data = json.loads(r.read().decode())
     except Exception as exc:
         raise RuntimeError(
-            "cannot reach Ollama at %s (is Ollama running?): %s" % (url, exc))
+            f"cannot reach Ollama at {url} (is Ollama running?): {exc}")
     return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
 
 
@@ -172,7 +171,7 @@ def _print_ollama_models():
     try:
         names = list_ollama_models()
     except RuntimeError as exc:
-        print("  (could not list local models: %s)" % exc)
+        print(f"  (could not list local models: {exc})")
         return
     if not names:
         print("  (no Ollama models installed; run: ollama pull gemma3)")
@@ -228,14 +227,12 @@ def _call_ollama(prompt):
             # Three attempts at the 600s default cost half an hour to learn what
             # the first one already said.
             raise RuntimeError(
-                "ollama call timed out after %ss (model too slow for this prompt; "
-                "try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)"
-                % _llm_timeout()) from exc
+                f"ollama call timed out after {_llm_timeout()}s (model too slow for this prompt; "
+                "try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)") from exc
         except Exception as exc:
             last_err = exc
     raise RuntimeError(
-        "ollama proposer failed after 3 attempts (is Ollama running at %s?): %s"
-        % (base, last_err))
+        f"ollama proposer failed after 3 attempts (is Ollama running at {base}?): {last_err}")
 
 
 def _traced(fn, what, provider):
@@ -251,7 +248,7 @@ def _traced(fn, what, provider):
         try:
             out = fn(prompt)
         except Exception as exc:
-            print("[llm] %s: FAILED after %.0fs: %s" % (what, time.time() - t0, exc),
+            print(f"[llm] {what}: FAILED after {time.time() - t0:.0f}s: {exc}",
                   flush=True)
             raise
         print("[llm] %s: %d char reply in %.0fs" % (what, len(out or ""),
@@ -269,7 +266,7 @@ def _backend(what="llm"):
     fn = backends.get(provider)
     if fn is None:
         raise RuntimeError(
-            "unknown GTRADE_AR_LLM %r (use anthropic, openai or ollama)" % provider)
+            f"unknown GTRADE_AR_LLM {provider!r} (use anthropic, openai or ollama)")
     return _traced(fn, what, provider)
 
 
@@ -360,7 +357,7 @@ def propose_genome(parent, elites, active, base_features, avoid=None):
     for _attempt in range(2):
         obj = _parse_obj(backend(prompt))
         if obj is not None:
-            print("[llm] genome: %s" % json.dumps(obj, ensure_ascii=True)[:300],
+            print(f"[llm] genome: {json.dumps(obj, ensure_ascii=True)[:300]}",
                   flush=True)
             return obj
         print("[llm] genome: no JSON object in the reply, retrying", flush=True)

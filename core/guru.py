@@ -118,30 +118,27 @@ def lynch_analysis(fund: dict | None, tech: dict | None) -> tuple[str, str, int]
         if peg is not None and peg > 0:
             if peg < 1.0:
                 return "[OK] BUY", f"PEG: {peg:.2f} (growth underpriced) | P/E: {pe:.1f} | Growth: {growth:.0%}{rev_bonus}{earnings_flag}", 2
-            elif peg < 2.0:
+            if peg < 2.0:
                 return "[--] FAIR", f"PEG: {peg:.2f} (fair) | P/E: {pe:.1f} | Growth: {growth:.0%}{rev_bonus}{earnings_flag}", 1
-            else:
-                return "[OFF] EXP", f"PEG: {peg:.2f} (overpriced) | P/E: {pe:.1f} | Growth: {growth:.0%}{rev_bonus}", 0
-        elif pe > 0:
+            return "[OFF] EXP", f"PEG: {peg:.2f} (overpriced) | P/E: {pe:.1f} | Growth: {growth:.0%}{rev_bonus}", 0
+        if pe > 0:
             adj = ""
             if rev_qoq > 0.15:
                 adj = " (but revenue is growing!)"
             if pe < 12:
                 return "[OK] CHEAP", f"P/E: {pe:.1f} (no growth data){adj}{rev_bonus}", 2
-            elif pe < 25:
+            if pe < 25:
                 return "[--] FAIR", f"P/E: {pe:.1f} (no growth data){rev_bonus}", 1
-            else:
-                return "[OFF] EXP", f"P/E: {pe:.1f} (expensive){rev_bonus}", 0
+            return "[OFF] EXP", f"P/E: {pe:.1f} (expensive){rev_bonus}", 0
 
     if tech:
         score = int(tech['above_50']) + int(tech['above_200'])
         sma_txt = f"SMA50: {'^' if tech['above_50'] else 'v'}  SMA200: {'^' if tech['above_200'] else 'v'}"
         if score == 2:
             return "[OK] MOMENTUM", sma_txt, 2
-        elif score == 1:
+        if score == 1:
             return "[--] SIDEWAYS", sma_txt, 1
-        else:
-            return "[OFF] DOWNTREND", sma_txt, 0
+        return "[OFF] DOWNTREND", sma_txt, 0
 
     return "[--] N/A", "No data", 0
 
@@ -211,10 +208,9 @@ def buffett_analysis(fund: dict | None, tech: dict | None,
         desc = " | ".join(details[:4])
         if score >= 6:
             return "[TOP] GEM", desc, 2
-        elif score >= 3:
+        if score >= 3:
             return "[OK] QUALITY", desc, 1
-        else:
-            return "[!] WEAK", desc, 0
+        return "[!] WEAK", desc, 0
 
     if tech:
         rsi_ok = 40 < tech['rsi'] < 70
@@ -223,10 +219,9 @@ def buffett_analysis(fund: dict | None, tech: dict | None,
         desc = f"SMA200: {'+' if trend_ok else '-'} | RSI: {tech['rsi']:.0f} ({'normal' if rsi_ok else 'extreme'})"
         if s == 2:
             return "[OK] STABLE", desc, 1
-        elif s == 1:
+        if s == 1:
             return "[--] MIXED", desc, 0
-        else:
-            return "[!] WEAK", desc, 0
+        return "[!] WEAK", desc, 0
 
     return "[--] N/A", "No data", 0
 
@@ -298,19 +293,17 @@ def graham_analysis(fund: dict | None, tech: dict | None,
         desc = " | ".join(details[:4]) if details else "No fundamental data"
         if score >= 5:
             return "[OK] BUY", desc, 2
-        elif score >= 2:
+        if score >= 2:
             return "[--] FAIR", desc, 1
-        else:
-            return "[OFF] EXP", desc, 0
+        return "[OFF] EXP", desc, 0
 
     if tech:
         pct = tech['pct_52w']
         if pct < 25:
             return "[OK] CHEAP", f"52W: {pct:.0f}% (near lows - margin of safety)", 2
-        elif pct < 60:
+        if pct < 60:
             return "[--] FAIR", f"52W: {pct:.0f}% (mid-range)", 1
-        else:
-            return "[OFF] EXP", f"52W: {pct:.0f}% (near highs)", 0
+        return "[OFF] EXP", f"52W: {pct:.0f}% (near highs)", 0
 
     return "[--] N/A", "No data", 0
 
@@ -405,10 +398,9 @@ def munger_analysis(fund: dict | None, tech: dict | None,
     desc = " | ".join(risks[:4])
     if score >= 5:
         return "[!!] DANGER", desc, 0
-    elif score >= 2:
+    if score >= 2:
         return "[!] WARNING", desc, 1
-    else:
-        return "[OK] MINOR", desc, 2
+    return "[OK] MINOR", desc, 2
 
 
 _EQUAL_WEIGHTS = {"lynch": 1.0, "buffett": 1.0, "graham": 1.0, "munger": 1.0}

@@ -26,6 +26,7 @@ except Exception:
     pass
 
 from core.logger import get_logger
+
 logger = get_logger("backtest")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,17 +39,22 @@ except ImportError:
     sys.exit(f"config.py not found in {BASE_DIR}")
 
 # Import shared components from core modules
+import joblib
+
+from core.backtesting import FOREX_COMMISSION, FOREX_SLIPPAGE
+from core.calibration import apply_calibrator, load_calibrator
+from core.ensemble import build_stacking_features, ensemble_with_gating
 from core.features import build_features
-from core.ensemble import ensemble_with_gating, build_stacking_features
 from core.model_io import (
     get_lookback as _get_lookback,
+)
+from core.model_io import (
     load_json as _load_json,
+)
+from core.model_io import (
     load_lstm_model as _load_lstm_model,
 )
 from core.profiles import FOREX
-from core.backtesting import FOREX_COMMISSION, FOREX_SLIPPAGE
-from core.calibration import load_calibrator, apply_calibrator
-import joblib
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 engine = create_engine(f"sqlite:///{DB_PATH}")
@@ -115,7 +121,7 @@ def run_forensic_test():
 
     portfolio_results = []
 
-    for name in FULL_ASSET_MAP.keys():
+    for name in FULL_ASSET_MAP:
         table = name.lower().replace("^", "").replace(".", "").replace("-", "")
 
         # --- Load & engineer features (same as train) ---
@@ -194,18 +200,17 @@ def run_forensic_test():
         lstm_probs, tf_probs, tcn_probs = None, None, None
         X_seq_all = None
 
-        if os.path.exists(lstm_path):
-            if split_idx >= lookback and len(X_test) > 0:
-                lstm_model, mode_label, lookback = _load_lstm_model(lstm_path, lookback, len(features))
-                if lstm_model is not None:
-                    try:
-                        X_seq_all = np.array([X_all[i - lookback:i]
-                                              for i in range(split_idx, split_idx + len(X_test))])
-                        lstm_probs = lstm_model.predict(X_seq_all, batch_size=512, verbose=0).flatten()
-                    except Exception as e:
-                        logger.warning("LSTM predict failed %s: %s", name, e)
-                        lstm_probs = None
-                        mode_label = "CB ONLY (Pred)"
+        if os.path.exists(lstm_path) and split_idx >= lookback and len(X_test) > 0:
+            lstm_model, mode_label, lookback = _load_lstm_model(lstm_path, lookback, len(features))
+            if lstm_model is not None:
+                try:
+                    X_seq_all = np.array([X_all[i - lookback:i]
+                                          for i in range(split_idx, split_idx + len(X_test))])
+                    lstm_probs = lstm_model.predict(X_seq_all, batch_size=512, verbose=0).flatten()
+                except Exception as e:
+                    logger.warning("LSTM predict failed %s: %s", name, e)
+                    lstm_probs = None
+                    mode_label = "CB ONLY (Pred)"
 
         # --- Transformer ---
         tf_path = os.path.join(MODEL_DIR, f"{table}_transformer.keras")

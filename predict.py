@@ -9,10 +9,10 @@ import os
 import sys
 import time
 import warnings
+from datetime import datetime
 
 import pandas as pd
 import tensorflow as tf
-from datetime import datetime
 from sqlalchemy import create_engine
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -33,8 +33,8 @@ try:
 except ImportError:
     sys.exit("config.py not found!")
 
-from core.logger import get_logger
 from core.features import build_features
+from core.logger import get_logger
 from core.scoring import score_asset
 
 logger = get_logger("predict")
@@ -66,7 +66,7 @@ def _fmt_price(p):
 
 def _load_json(path):
     if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             return json.load(f)
     return {}
 
@@ -100,8 +100,7 @@ def _predict_asset(name, registry, thresholds):
     reg_entry = registry.get(name)
     # Model scoring is shared with alert_bot.py through core.scoring so the two
     # serve paths cannot drift apart (see core/scoring.py).
-    res = score_asset(df, name, table, reg_entry, thresholds, MODEL_DIR)
-    return res  # full dict (or None); run_radar unpacks what it needs
+    return score_asset(df, name, table, reg_entry, thresholds, MODEL_DIR)
 
 
 def run_radar():
@@ -111,7 +110,7 @@ def run_radar():
 
     # -- Update actuals for previous predictions ------------------
     try:
-        from performance_tracker import update_actuals, log_prediction
+        from performance_tracker import log_prediction, update_actuals
         update_actuals()
         _do_log = True
     except Exception as e:

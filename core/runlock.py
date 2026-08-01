@@ -84,15 +84,14 @@ def acquire(path, holder="run"):
     if os.path.exists(path):
         if not is_stale(path):
             pid, held_by = owner(path)
-            return False, ("held by %s (pid %s)" % (held_by or "an earlier run",
+            return False, ("held by {} (pid {})".format(held_by or "an earlier run",
                                                     pid or "unknown"))
         pid, held_by = owner(path)
         try:
             os.remove(path)
         except OSError as exc:
-            return False, "stale lock could not be removed: %s" % exc
-        print("[lock] took over a stale lock from %s (pid %s)"
-              % (held_by or "an unknown holder", pid or "unrecorded"))
+            return False, f"stale lock could not be removed: {exc}"
+        print("[lock] took over a stale lock from {} (pid {})".format(held_by or "an unknown holder", pid or "unrecorded"))
     import datetime
     payload = {"pid": os.getpid(), "holder": holder,
                "since": datetime.datetime.now().isoformat(timespec="seconds")}
@@ -100,7 +99,7 @@ def acquire(path, holder="run"):
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
     except OSError as exc:
-        return False, "could not write the lock: %s" % exc
+        return False, f"could not write the lock: {exc}"
     return True, None
 
 

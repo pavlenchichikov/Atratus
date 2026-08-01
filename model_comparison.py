@@ -3,9 +3,9 @@ model_comparison.py - Model quality tracking over time for Atratus.
 Saves daily snapshots of quality_report.json and provides comparison utilities.
 """
 
-import os
 import json
-from datetime import datetime, date
+import os
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -20,7 +20,7 @@ def _load_json(path, default):
     if not os.path.exists(path):
         return default
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return default
@@ -116,8 +116,7 @@ def get_history(asset=None, metric="score", last_n=20) -> pd.DataFrame:
                 row[a] = metrics.get(metric)
         rows.append(row)
 
-    df = pd.DataFrame(rows).set_index("Date")
-    return df
+    return pd.DataFrame(rows).set_index("Date")
 
 
 # ---------------------------------------------------------------------------

@@ -42,11 +42,11 @@ def classify_asset(asset, acc, n, baseline_acc, age_days, is_stale,
     enough = n >= cfg["min_reconciled"]
 
     if enough and acc is not None and acc < cfg["acc_floor"]:
-        reasons.append("acc %.2f below floor %.2f" % (acc, cfg["acc_floor"]))
+        reasons.append("acc {:.2f} below floor {:.2f}".format(acc, cfg["acc_floor"]))
         retrain = True
     if (enough and acc is not None and baseline_acc is not None
             and acc < baseline_acc - cfg["baseline_drop"]):
-        reasons.append("acc %.2f dropped from baseline %.2f" % (acc, baseline_acc))
+        reasons.append(f"acc {acc:.2f} dropped from baseline {baseline_acc:.2f}")
         retrain = True
     if age_days is not None and age_days > cfg["max_age_days"]:
         reasons.append("model age %dd over %dd" % (age_days, cfg["max_age_days"]))

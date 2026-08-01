@@ -1,15 +1,16 @@
-import streamlit as st
+import json
+import os
+import sys
+import warnings
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import os
-import sys
-import json
 import requests
-from sqlalchemy import create_engine
+import streamlit as st
 import yfinance as yf
-import warnings
+from plotly.subplots import make_subplots
+from sqlalchemy import create_engine
 
 warnings.filterwarnings('ignore')
 
@@ -23,12 +24,12 @@ from core.features import compute_rsi
 from net import ssl_verify
 
 try:
-    from config import FULL_ASSET_MAP, ASSET_TYPES
+    from config import ASSET_TYPES, FULL_ASSET_MAP
 except ImportError:
     st.error("[!] CRITICAL ERROR: config.py file not found!"); st.stop()
 
 try:
-    from risk_manager import RiskManager, RISK_CONFIG
+    from risk_manager import RISK_CONFIG, RiskManager
     _rm = RiskManager()
     RISK_AVAILABLE = True
 except Exception:
@@ -36,7 +37,7 @@ except Exception:
     _rm = None
 
 try:
-    from portfolio import PortfolioManager, SECTOR_LIMITS
+    from portfolio import SECTOR_LIMITS, PortfolioManager
     _pm = PortfolioManager(FULL_ASSET_MAP)
     PORTFOLIO_AVAILABLE = True
 except Exception:
@@ -528,9 +529,13 @@ def _get_fundamentals(symbol, cl, smart_data):
 
 
 from core.guru import (
-    technical_context as _technical_context,
-    get_guru_analysis as _guru_analysis,
     council_weights_from_log as _council_weights_from_log,
+)
+from core.guru import (
+    get_guru_analysis as _guru_analysis,
+)
+from core.guru import (
+    technical_context as _technical_context,
 )
 
 
@@ -571,10 +576,7 @@ symbol = FULL_ASSET_MAP[selected_asset]
 timeframe = st.sidebar.radio("TIMEFRAME", ["Daily", "Weekly"], horizontal=True)
 
 # Load the specific asset
-if timeframe == "Weekly":
-    df = get_technical_data(selected_asset, weekly=True)
-else:
-    df = get_technical_data(selected_asset)
+df = get_technical_data(selected_asset, weekly=True) if timeframe == "Weekly" else get_technical_data(selected_asset)
 rep = load_ai_report()
 stats = rep[rep['Asset']==selected_asset].iloc[0] if rep is not None and not rep[rep['Asset']==selected_asset].empty else None
 
@@ -662,30 +664,30 @@ with tab1:
             x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'],
             name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
         ), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_20'],  line=dict(color='#ffd700', width=1, dash='dot'), name='SMA 20'),  row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'],  line=dict(color='orange',  width=1), name='SMA 50'),  row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], line=dict(color='#9c27b0', width=1), name='SMA 200'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_20'],  line={'color': '#ffd700', 'width': 1, 'dash': 'dot'}, name='SMA 20'),  row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'],  line={'color': 'orange',  'width': 1}, name='SMA 50'),  row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], line={'color': '#9c27b0', 'width': 1}, name='SMA 200'), row=1, col=1)
         # Bollinger Bands
-        fig.add_trace(go.Scatter(x=df.index, y=df['BB_upper'], line=dict(color='rgba(100,150,255,0.4)', width=1), name='BB Upper', showlegend=False), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['BB_lower'], line=dict(color='rgba(100,150,255,0.4)', width=1), name='BB Lower', fill='tonexty', fillcolor='rgba(100,150,255,0.05)', showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_upper'], line={'color': 'rgba(100,150,255,0.4)', 'width': 1}, name='BB Upper', showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_lower'], line={'color': 'rgba(100,150,255,0.4)', 'width': 1}, name='BB Lower', fill='tonexty', fillcolor='rgba(100,150,255,0.05)', showlegend=False), row=1, col=1)
         # Weekly SMA overlay
         if df_w is not None and 'SMA_20w' in df_w.columns:
-            fig.add_trace(go.Scatter(x=df_w.index, y=df_w['SMA_20w'], line=dict(color='#ff6b6b', width=2, dash='longdash'), name='SMA 20W'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_w.index, y=df_w['SMA_20w'], line={'color': '#ff6b6b', 'width': 2, 'dash': 'longdash'}, name='SMA 20W'), row=1, col=1)
 
         # Row 2 - MACD histogram + lines
         colors_macd = ['#26a69a' if v >= 0 else '#ef5350' for v in df['MACD_hist'].fillna(0)]
         fig.add_trace(go.Bar(x=df.index, y=df['MACD_hist'], marker_color=colors_macd, name='MACD Hist', showlegend=False), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'],        line=dict(color='#00F0FF', width=1), name='MACD'),        row=2, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['MACD_signal'], line=dict(color='#FF9800', width=1), name='Signal'),      row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'],        line={'color': '#00F0FF', 'width': 1}, name='MACD'),        row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD_signal'], line={'color': '#FF9800', 'width': 1}, name='Signal'),      row=2, col=1)
 
         # Row 3 - RSI
-        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#00F0FF', width=2), name='RSI'), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line={'color': '#00F0FF', 'width': 2}, name='RSI'), row=3, col=1)
         fig.add_hline(y=70, line_dash="dot", line_color="red",   row=3, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="green", row=3, col=1)
         fig.add_hline(y=50, line_dash="dot", line_color="gray",  row=3, col=1)
 
         # Row 4 - Taleb risk
-        fig.add_trace(go.Scatter(x=df.index, y=df['taleb_index'], fill='tozeroy', line=dict(color='#FF2E00', width=1), name='Tail Risk'), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['taleb_index'], fill='tozeroy', line={'color': '#FF2E00', 'width': 1}, name='Tail Risk'), row=4, col=1)
         fig.add_hline(y=5, line_dash="dash", line_color="red", row=4, col=1)
 
         fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False)
@@ -720,10 +722,9 @@ with tab2:
         def _guru_color(status):
             if any(k in status for k in ("BUY", "GEM", "QUAL", "CLEAN", "CHEAP", "MOMENTUM", "STRONG", "QUALITY")):
                 return "green"
-            elif any(k in status for k in ("FAIR", "OK", "SIDEWAYS", "HOLD", "STABLE", "MINOR", "MIXED")):
+            if any(k in status for k in ("FAIR", "OK", "SIDEWAYS", "HOLD", "STABLE", "MINOR", "MIXED")):
                 return "orange"
-            else:
-                return "red"
+            return "red"
 
         # Left column
         with col1:
@@ -868,7 +869,7 @@ with tab3:
                     hovertemplate="%{y} / %{x}: %{z:.2f}<extra></extra>",
                 ))
                 fig_corr.update_layout(height=420, template="plotly_dark",
-                                       margin=dict(l=10, r=10, t=30, b=10))
+                                       margin={'l': 10, 'r': 10, 't': 30, 'b': 10})
                 st.plotly_chart(fig_corr, use_container_width=True)
             else:
                 st.info("No correlation data yet - run data_engine.py first.")
@@ -1062,7 +1063,7 @@ with tab5:
                                 height=250, template="plotly_dark",
                                 title="Macro Sentiment Heatmap",
                                 yaxis_title="Weighted Score",
-                                margin=dict(l=10, r=10, t=40, b=10))
+                                margin={'l': 10, 'r': 10, 't': 40, 'b': 10})
                             st.plotly_chart(fig_mood, use_container_width=True)
             except Exception as e:
                 st.error(f"Mood analysis error: {e}")
@@ -1103,28 +1104,27 @@ with tab5:
                 st.error(f"News error: {e}")
 
         # Top-tier digest
-        with st.expander("Full Digest (All Sources)", expanded=False):
-            with st.spinner("Loading digest..."):
-                try:
-                    digest = _news.fetch_authority_digest(
-                        max_per_source=3, lang_filter="all",
-                        fetch_summaries=False)
-                    tier1 = [d for d in digest if d.get("credibility", 1.0) >= 1.3][:20]
-                    if tier1:
-                        digest_data = []
-                        for item in tier1:
-                            digest_data.append({
-                                "Source": item["source"],
-                                "Score": f"{item['weighted_score']:+.2f}",
-                                "Headline": item["title"][:80],
-                                "Summary": (item.get("description", ""))[:120],
-                            })
-                        st.dataframe(pd.DataFrame(digest_data),
-                                     use_container_width=True, hide_index=True)
-                    else:
-                        st.info("No digest data available.")
-                except Exception as e:
-                    st.error(f"Digest error: {e}")
+        with st.expander("Full Digest (All Sources)", expanded=False), st.spinner("Loading digest..."):
+            try:
+                digest = _news.fetch_authority_digest(
+                    max_per_source=3, lang_filter="all",
+                    fetch_summaries=False)
+                tier1 = [d for d in digest if d.get("credibility", 1.0) >= 1.3][:20]
+                if tier1:
+                    digest_data = []
+                    for item in tier1:
+                        digest_data.append({
+                            "Source": item["source"],
+                            "Score": f"{item['weighted_score']:+.2f}",
+                            "Headline": item["title"][:80],
+                            "Summary": (item.get("description", ""))[:120],
+                        })
+                    st.dataframe(pd.DataFrame(digest_data),
+                                 use_container_width=True, hide_index=True)
+                else:
+                    st.info("No digest data available.")
+            except Exception as e:
+                st.error(f"Digest error: {e}")
 
 
 # ==============================================================================
@@ -1196,29 +1196,28 @@ with tab6:
             st.error(f"Asset regime error: {e}")
 
         # All regimes overview
-        with st.expander("All Assets Regime Overview", expanded=False):
-            with st.spinner("Scanning all assets..."):
-                try:
-                    all_r = _regime.get_all_regimes()
-                    assets_r = all_r.get("assets", {}) if all_r else {}
-                    if assets_r:
-                        reg_rows = []
-                        for asset_name, info in assets_r.items():
-                            if isinstance(info, dict):
-                                reg_rows.append({
-                                    "Asset": asset_name,
-                                    "Trend": info.get("trend", "?"),
-                                    "Volatility": info.get("volatility", "?"),
-                                    "Momentum": info.get("momentum", "?"),
-                                    "RSI": f"{info['rsi']:.1f}" if info.get("rsi") else "?",
-                                })
-                        if reg_rows:
-                            st.dataframe(pd.DataFrame(reg_rows),
-                                         use_container_width=True, hide_index=True)
-                    else:
-                        st.info("No regime data available.")
-                except Exception as e:
-                    st.error(f"All regimes error: {e}")
+        with st.expander("All Assets Regime Overview", expanded=False), st.spinner("Scanning all assets..."):
+            try:
+                all_r = _regime.get_all_regimes()
+                assets_r = all_r.get("assets", {}) if all_r else {}
+                if assets_r:
+                    reg_rows = []
+                    for asset_name, info in assets_r.items():
+                        if isinstance(info, dict):
+                            reg_rows.append({
+                                "Asset": asset_name,
+                                "Trend": info.get("trend", "?"),
+                                "Volatility": info.get("volatility", "?"),
+                                "Momentum": info.get("momentum", "?"),
+                                "RSI": f"{info['rsi']:.1f}" if info.get("rsi") else "?",
+                            })
+                    if reg_rows:
+                        st.dataframe(pd.DataFrame(reg_rows),
+                                     use_container_width=True, hide_index=True)
+                else:
+                    st.info("No regime data available.")
+            except Exception as e:
+                st.error(f"All regimes error: {e}")
 
 
 # ==============================================================================
@@ -1283,8 +1282,8 @@ with tab7:
 
             if st.button("Execute Trade", key="paper_execute"):
                 try:
-                    import io
                     import contextlib
+                    import io
                     buf = io.StringIO()
                     with contextlib.redirect_stdout(buf):
                         if trade_action == "BUY":
@@ -1298,7 +1297,7 @@ with tab7:
                     elif "[ERROR]" in output:
                         st.error(output.strip())
                     else:
-                        st.info(output.strip() if output.strip() else "Done")
+                        st.info(output.strip() or "Done")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Trade error: {e}")
@@ -1426,10 +1425,10 @@ with tab9:
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(x=hist["date"], y=hist["rolling_acc"],
                                              mode="lines+markers", name="Accuracy",
-                                             line=dict(color="#38bdf8", width=2)))
+                                             line={'color': "#38bdf8", 'width': 2}))
                     fig.add_hline(y=0.5, line_dash="dot", line_color="red")
                     fig.update_layout(height=300, template="plotly_dark",
-                                      yaxis_tickformat=".0%", margin=dict(l=10, r=10, t=30, b=10))
+                                      yaxis_tickformat=".0%", margin={'l': 10, 'r': 10, 't': 30, 'b': 10})
                     st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("Not enough prediction data yet.")
@@ -1452,10 +1451,10 @@ with tab9:
                                        name="Predictions", marker_color="#334155"))
                 fig2.add_trace(go.Scatter(x=daily["Date"], y=daily["Accuracy"],
                                            name="Accuracy", yaxis="y2",
-                                           line=dict(color="#22c55e", width=2)))
+                                           line={'color': "#22c55e", 'width': 2}))
                 fig2.update_layout(height=250, template="plotly_dark",
-                                    yaxis2=dict(overlaying="y", side="right", tickformat=".0%"),
-                                    margin=dict(l=10, r=10, t=30, b=10))
+                                    yaxis2={'overlaying': "y", 'side': "right", 'tickformat': ".0%"},
+                                    margin={'l': 10, 'r': 10, 't': 30, 'b': 10})
                 st.plotly_chart(fig2, use_container_width=True)
             else:
                 st.info("No daily prediction data yet.")
@@ -1500,7 +1499,7 @@ with tab10:
                     hovertemplate="%{y} / %{x}: %{z:.2f}%<extra></extra>",
                 ))
                 fig.update_layout(height=350, template="plotly_dark",
-                                   margin=dict(l=10, r=10, t=30, b=10))
+                                   margin={'l': 10, 'r': 10, 't': 30, 'b': 10})
                 st.plotly_chart(fig, use_container_width=True)
 
             # Drill-down into sector
@@ -1557,9 +1556,9 @@ with tab11:
                     if eq:
                         eq_df = pd.DataFrame(eq, columns=["Date", "Equity"])
                         fig = go.Figure(go.Scatter(x=eq_df["Date"], y=eq_df["Equity"],
-                                                    fill="tozeroy", line=dict(color="#38bdf8", width=2)))
+                                                    fill="tozeroy", line={'color': "#38bdf8", 'width': 2}))
                         fig.update_layout(height=350, template="plotly_dark",
-                                           margin=dict(l=10, r=10, t=30, b=10))
+                                           margin={'l': 10, 'r': 10, 't': 30, 'b': 10})
                         st.plotly_chart(fig, use_container_width=True)
 
                     # Per-asset results
@@ -1624,7 +1623,7 @@ with tab12:
                         fig.add_trace(go.Scatter(x=hist.index if "Date" not in hist.columns else hist["Date"],
                                                   y=hist[asset], name=asset, mode="lines+markers"))
                 fig.update_layout(height=350, template="plotly_dark",
-                                   margin=dict(l=10, r=10, t=30, b=10))
+                                   margin={'l': 10, 'r': 10, 't': 30, 'b': 10})
                 st.plotly_chart(fig, use_container_width=True)
 
             # Best/Worst

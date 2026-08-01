@@ -1,4 +1,5 @@
 import json
+import math
 import os
 
 import auto_research as ar
@@ -7,7 +8,7 @@ import auto_research as ar
 def test_train_merges_env_overrides(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_run(cmd, cwd, env):
+    def fake_run(cmd, cwd, env, check=False):
         captured["env"] = env
         # the trainer writes quality_report.json into the model dir (last cmd context):
         os.makedirs(env["GTRADE_MODEL_DIR"], exist_ok=True)
@@ -24,7 +25,8 @@ def test_train_merges_env_overrides(tmp_path, monkeypatch):
 
 
 def test_train_missing_report_returns_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(ar.subprocess, "run", lambda cmd, cwd, env: None)
+    monkeypatch.setattr(ar.subprocess, "run",
+                        lambda cmd, cwd, env, check=False: None)
     assert ar._train("SP500", {}, str(tmp_path / "m")) == []
 
 
@@ -287,7 +289,7 @@ def test_main_trains_base_once_and_runs_selected_axis(monkeypatch):
     monkeypatch.setattr(ar, "BUDGET", 5, raising=False)
     # fresh state
     monkeypatch.setattr(ar, "save_state", lambda s: None)
-    monkeypatch.setattr(ar, "load_state", lambda: {})
+    monkeypatch.setattr(ar, "load_state", dict)
     ar.main()
     # exactly one base train on the selection set (reused across axes)
     assert calls["selection_base"] == 1
@@ -322,7 +324,7 @@ def test_passes_screen_rejects_below_min():
 
 def test_passes_screen_failure_does_not_reject():
     # an empty screen result (infra failure) must NOT drop the candidate
-    ok, delta = ar._passes_screen(
+    ok, _delta = ar._passes_screen(
         ar.Axis(name="x", propose=lambda log: [], to_env=lambda c: {}, kind="select_best"),
         {"name": "c"}, lambda subset, env: [], [{"Asset": "SP500", "Score": 1.0}], 0.0)
     assert ok is True
@@ -358,7 +360,7 @@ def _rows2(scores):
 def test_objective_delta_mean_and_min():
     base = {"A": 1.0, "B": 1.0, "C": 1.0}
     var = _rows2({"A": 2.0, "B": 1.5, "C": 0.5})   # deltas +1.0, +0.5, -0.5
-    mean_v, deltas = ar._objective_delta(var, base, "mean")
+    mean_v, _deltas = ar._objective_delta(var, base, "mean")
     assert abs(mean_v - (1.0 + 0.5 - 0.5) / 3) < 1e-9
     min_v, _ = ar._objective_delta(var, base, "min")
     assert min_v == -0.5
@@ -429,19 +431,19 @@ def test_objective_env(monkeypatch):
 def test_holdout_stats_mean_vs_min():
     base = _rows2({"A": 1.0, "B": 1.0, "C": 1.0})
     var = _rows2({"A": 2.0, "B": 2.0, "C": 0.5})   # deltas +1,+1,-0.5
-    p_m, v_m, deltas, _ = ar.holdout_stats(base, var, "mean")
+    p_m, v_m, _deltas, _ = ar.holdout_stats(base, var, "mean")
     p_n, v_n, _, _ = ar.holdout_stats(base, var, "min")
     assert v_m > v_n and v_n == -0.5
     assert p_m == p_n                              # objective does not change the sign-test p
-    p0, v0, d0, tag0 = ar.holdout_stats(base, _rows2({}), "mean")
+    _p0, v0, d0, _tag0 = ar.holdout_stats(base, _rows2({}), "mean")
     assert d0 == [] and v0 == 0.0
 
 
 def test_is_adoptable_mean_backward_compat():
     # all held-out improve a lot - adoptable under the default mean path (ab_labeling parity)
-    base = _rows2({a: 1.0 for a in ("A", "B", "C", "D", "E")})
-    var = _rows2({a: 3.0 for a in ("A", "B", "C", "D", "E")})
-    ok, why = ar.is_adoptable(base, var, 1, 1)
+    base = _rows2(dict.fromkeys(("A", "B", "C", "D", "E"), 1.0))
+    var = _rows2(dict.fromkeys(("A", "B", "C", "D", "E"), 3.0))
+    ok, _why = ar.is_adoptable(base, var, 1, 1)
     assert ok is True
     # min objective: one asset regresses - worst delta negative - not practically over the bar
     var2 = _rows2({"A": 3.0, "B": 3.0, "C": 3.0, "D": 3.0, "E": 0.0})
@@ -467,7 +469,7 @@ def test_run_axis_uses_min_objective(monkeypatch):
 def test_main_applies_bh_across_axes(monkeypatch):
     # two axis winners - main collects their held-out p-values and runs ONE BH
     monkeypatch.setattr(ar, "_try_sample_frame", lambda: None)
-    monkeypatch.setattr(ar, "load_state", lambda: {})
+    monkeypatch.setattr(ar, "load_state", dict)
     monkeypatch.setattr(ar, "save_state", lambda s: None)
     monkeypatch.setenv("GTRADE_AR_SCREEN", "0")   # screen off - simpler full-eval path
     monkeypatch.delenv("GTRADE_AR_OBJECTIVE", raising=False)
@@ -491,7 +493,7 @@ def test_main_applies_bh_across_axes(monkeypatch):
     assert captured["bh_input"] is not None and len(captured["bh_input"]) == 2
 
 
-import os as _os  # noqa: F401  (already imported at module top in most suites; harmless)
+import os as _os
 
 _ACTIVE = ["ret_1", "ret_5", "ret_10", "ret_20", "rsi", "atr",
            "vol_z", "sma_20", "macd_hist", "bb_pos"]   # 10 features
@@ -645,13 +647,13 @@ def test_qd_save_load_roundtrip(tmp_path, monkeypatch):
                    _rows2({"A": 2.0}), base, _QD_ACTIVE)
     ar._qd_save(arch)
     loaded = ar._qd_load()
-    (k, v), = loaded.items()
+    (_k, v), = loaded.items()
     assert v["genome"].drops == ["rsi"] and v["genome"].label_mode == "rel_median"
     assert v["genome"].label_window == 20
 
 
 def test_run_qd_illuminates_and_gates(monkeypatch):
-    monkeypatch.setattr(ar, "_qd_load", lambda: {})
+    monkeypatch.setattr(ar, "_qd_load", dict)
     monkeypatch.setattr(ar, "_qd_save", lambda a: None)
     monkeypatch.setattr(ar, "BUDGET", 6, raising=False)
     monkeypatch.setenv("GTRADE_AR_QD_INIT", "4")
@@ -713,6 +715,7 @@ def test_run_axis_marks_tried_candidates():
 
 def test_propose_evolutionary_respects_registry(monkeypatch):
     import json as _json
+
     from core import ar_memory
     monkeypatch.setenv("GTRADE_AR_SEED", "7")
     first = ar.propose_evolutionary([], ["ret_1", "ret_5"])
@@ -726,6 +729,7 @@ def test_propose_evolutionary_respects_registry(monkeypatch):
 
 def test_labeling_axis_respects_registry():
     import json as _json
+
     from core import ar_memory
     ar_memory.tried_add(
         "label", _json.dumps({"mode": "rel_median", "window": 20}, sort_keys=True))
@@ -738,7 +742,7 @@ def test_pruning_axis_respects_registry(monkeypatch):
     monkeypatch.delenv("GTRADE_DROP_FEATURES", raising=False)
     from core import ar_memory
     from core.features import active_candidate_features
-    first = list(active_candidate_features())[0]
+    first = next(iter(active_candidate_features()))
     ar_memory.tried_add("drop", first)
     proposed = ar.make_pruning_axis(["ret_1"]).propose([])
     assert proposed and proposed[0]["drop"] != first
@@ -759,7 +763,7 @@ def test_next_child_skips_seen_genomes(monkeypatch):
 
 def test_run_qd_registers_genomes(monkeypatch):
     from core import ar_memory
-    monkeypatch.setattr(ar, "_qd_load", lambda: {})
+    monkeypatch.setattr(ar, "_qd_load", dict)
     monkeypatch.setattr(ar, "_qd_save", lambda a: None)
     monkeypatch.setattr(ar, "BUDGET", 3, raising=False)
     monkeypatch.setenv("GTRADE_AR_QD_INIT", "3")
@@ -879,7 +883,7 @@ def test_run_qd_llm_failure_completes(monkeypatch):
         raise RuntimeError("ollama down")
 
     monkeypatch.setattr(llm_proposer, "propose_genome", boom)
-    monkeypatch.setattr(ar, "_qd_load", lambda: {})
+    monkeypatch.setattr(ar, "_qd_load", dict)
     monkeypatch.setattr(ar, "_qd_save", lambda a: None)
     monkeypatch.setattr(ar, "BUDGET", 4, raising=False)
     monkeypatch.setenv("GTRADE_AR_QD_INIT", "3")
@@ -898,9 +902,10 @@ def test_run_qd_llm_failure_completes(monkeypatch):
 
 def test_main_writes_findings(monkeypatch):
     import json as _json
+
     from core import ar_memory
     monkeypatch.setattr(ar, "_try_sample_frame", lambda: None)
-    monkeypatch.setattr(ar, "load_state", lambda: {})
+    monkeypatch.setattr(ar, "load_state", dict)
     monkeypatch.setattr(ar, "save_state", lambda s: None)
     monkeypatch.setattr(ar_memory, "data_fingerprint", lambda subset: "fp")
     monkeypatch.setenv("GTRADE_AR_SCREEN", "0")
@@ -929,7 +934,7 @@ def test_main_llm_proposer_failure_is_graceful(monkeypatch):
     called = {"findings": False}
 
     monkeypatch.setattr(ar, "_try_sample_frame", lambda: None)
-    monkeypatch.setattr(ar, "load_state", lambda: {})
+    monkeypatch.setattr(ar, "load_state", dict)
     monkeypatch.setattr(ar, "save_state", lambda s: None)
     monkeypatch.setattr(ar, "BUDGET", 2, raising=False)
     monkeypatch.setenv("GTRADE_AR_SCREEN", "0")
@@ -966,7 +971,7 @@ def test_run_qd_no_elites_still_journals(monkeypatch):
 
     called = {"findings": None}
 
-    monkeypatch.setattr(ar, "_qd_load", lambda: {})
+    monkeypatch.setattr(ar, "_qd_load", dict)
     monkeypatch.setattr(ar, "_qd_save", lambda a: None)
     monkeypatch.setattr(ar, "BUDGET", 2, raising=False)
     monkeypatch.setenv("GTRADE_AR_QD_INIT", "0")
@@ -996,10 +1001,7 @@ def test_run_qd_no_elites_still_journals(monkeypatch):
 
 def _basis_train(subset, env):
     # full Score 5.0 for a candidate (NAMES set) else 1.0; CB-only Score 0.5
-    if env.get("GTRADE_SCREEN_ONLY") == "1":
-        s = 0.5
-    else:
-        s = 5.0 if env.get("NAMES") else 1.0
+    s = 0.5 if env.get("GTRADE_SCREEN_ONLY") == "1" else 5.0 if env.get("NAMES") else 1.0
     return [{"Asset": a, "Score": s} for a in subset.split(",")]
 
 
@@ -1061,7 +1063,7 @@ def test_run_axis_neural_basis_scores_contribution(monkeypatch):
 
 def _fake_axes_for_main(monkeypatch):
     monkeypatch.setattr(ar, "_try_sample_frame", lambda: None)
-    monkeypatch.setattr(ar, "load_state", lambda: {})
+    monkeypatch.setattr(ar, "load_state", dict)
     monkeypatch.setattr(ar, "save_state", lambda s: None)
     monkeypatch.setenv("GTRADE_AR_SCREEN", "0")
     monkeypatch.setenv("GTRADE_AR_AXES", "features")
@@ -1141,7 +1143,7 @@ def test_holdout_stats_reports_wilcoxon_in_tag():
     base = [{"Asset": a, "Score": 0.0} for a in ("A", "B", "C", "D", "E", "F")]
     ext = [{"Asset": a, "Score": v} for a, v in
            [("A", 0.6), ("B", 0.7), ("C", 0.5), ("D", 0.4), ("E", 0.55), ("F", 0.45)]]
-    p, value, deltas, tag = ar.holdout_stats(base, ext, "mean")
+    p, value, _deltas, tag = ar.holdout_stats(base, ext, "mean")
     assert "wilcoxon" in tag and "sign-test" not in tag
     assert p < 0.05 and value > 0
 
@@ -1160,7 +1162,7 @@ def test_held_out_set_is_fourteen_disjoint_from_selection():
 
 
 def test_run_qd_records_neural_lift_and_replication(monkeypatch):
-    monkeypatch.setattr(ar, "_qd_load", lambda: {})
+    monkeypatch.setattr(ar, "_qd_load", dict)
     monkeypatch.setattr(ar, "_qd_save", lambda a: None)
     monkeypatch.setattr(ar, "BUDGET", 3, raising=False)
     monkeypatch.setenv("GTRADE_AR_QD_INIT", "3")
@@ -1168,6 +1170,7 @@ def test_run_qd_records_neural_lift_and_replication(monkeypatch):
     monkeypatch.delenv("GTRADE_AR_OBJECTIVE", raising=False)
     monkeypatch.delenv("GTRADE_AR_SCORE_BASIS", raising=False)
     import random as _r
+
     from core import ar_memory
 
     def fake_train(subset, env):
@@ -1261,7 +1264,6 @@ def test_llm_child_passes_avoid_to_proposer(monkeypatch):
 
     def fake_propose(parent, elites, active, base_features, avoid=None):
         captured["avoid"] = avoid
-        return None
     monkeypatch.setattr(ar.llm_proposer, "propose_genome", fake_propose)
     monkeypatch.setattr(ar.ar_memory, "tried_recent",
                         lambda kind, n: ["SIG"] if kind == "genome" else [])
@@ -1292,7 +1294,7 @@ def test_a_failed_llm_arm_is_not_called_again_this_run(monkeypatch):
 
 
 def test_run_qd_early_stops_on_exhaustion(monkeypatch):
-    monkeypatch.setattr(ar, "_qd_load", lambda: {})
+    monkeypatch.setattr(ar, "_qd_load", dict)
     monkeypatch.setattr(ar, "_qd_save", lambda a: None)
     monkeypatch.setattr(ar, "BUDGET", 20, raising=False)
     monkeypatch.setenv("GTRADE_AR_QD_INIT", "4")
@@ -1304,7 +1306,6 @@ def test_run_qd_early_stops_on_exhaustion(monkeypatch):
 
     def none_child(*a, **k):
         n_next["n"] += 1
-        return None
     monkeypatch.setattr(ar, "next_child", none_child)
     monkeypatch.setattr(ar, "benjamini_hochberg", lambda p, alpha=0.05: [1.0] * len(p))
 
@@ -1349,12 +1350,13 @@ def _isolate_regate_files(tmp_path, monkeypatch):
 
 def test_regate_end_to_end_with_injected_trainer(tmp_path, monkeypatch):
     import json
+
     import auto_research as ar
     import core.ar_memory as am
     _isolate_regate_files(tmp_path, monkeypatch)
     # one stored candidate genome; isolate archive + findings from the real files
     g = {"drops": [], "extra": [], "label_mode": "direction", "label_window": 30}
-    monkeypatch.setattr(ar, "_regate_load_archive_raw", lambda: {})
+    monkeypatch.setattr(ar, "_regate_load_archive_raw", dict)
     monkeypatch.setattr(am, "findings_all",
                         lambda: [{"winners": [{"genome": g, "value": 0.6, "neural_lift": 0.3}]}])
     # a fake trainer (constant Score) so no real train_hybrid is shelled; the point of
@@ -1375,11 +1377,12 @@ def test_regate_resumes_from_checkpoint(tmp_path, monkeypatch):
     """A candidate already in _regate_progress.json is NOT retrained on resume:
     the checkpointed result is reused and the journal still covers everyone."""
     import json
+
     import auto_research as ar
     import core.ar_memory as am
     _isolate_regate_files(tmp_path, monkeypatch)
     g = {"drops": ["rsi"], "extra": [], "label_mode": "direction", "label_window": 30}
-    monkeypatch.setattr(ar, "_regate_load_archive_raw", lambda: {})
+    monkeypatch.setattr(ar, "_regate_load_archive_raw", dict)
     monkeypatch.setattr(am, "findings_all",
                         lambda: [{"winners": [{"genome": g, "value": 0.6, "neural_lift": 0.1}]}])
     calls = {"candidate": 0}
@@ -1442,7 +1445,7 @@ def test_reduce_deltas_objectives():
 def test_reduce_deltas_sharpe_zero_variance_is_finite():
     import auto_research as ar
     v = ar._reduce_deltas([2.0, 2.0, 2.0], "sharpe")
-    assert v == v and v > 0            # finite (no ZeroDivisionError), positive
+    assert math.isfinite(v) and v > 0   # no ZeroDivisionError, no NaN, positive
 
 
 def test_adopt_floor_sharpe_uses_own_threshold(monkeypatch):
@@ -1828,8 +1831,9 @@ class TestRlIntegration:
         assert child is None or child != ()
 
     def test_mutate_ops_restriction(self):
-        import auto_research as ar
         import random as _r
+
+        import auto_research as ar
         _r.seed(3)
         g = ar.Genome()
         active = ["ret_1", "ret_5", "ret_10", "ret_20", "vol_z", "rsi",

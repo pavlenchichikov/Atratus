@@ -46,7 +46,7 @@ def test_class_gate_fires_below_threshold(tmp_path, monkeypatch):
 def test_class_gate_needs_min_n(tmp_path, monkeypatch):
     monkeypatch.setenv("GTRADE_LIVE_GATE_MIN_N", "100")
     monkeypatch.setenv("GTRADE_LIVE_GATE_ASSET_N", "100")
-    group, assets = _forex_majors_assets()
+    _group, assets = _forex_majors_assets()
     rows = [(assets[0], "BUY", 0) for _ in range(10)]  # awful but tiny n
     db = _make_db(tmp_path, rows)
     sig, reason = live_gate.gate(assets[0], 0.6, "BUY", db_path=db)
@@ -55,7 +55,7 @@ def test_class_gate_needs_min_n(tmp_path, monkeypatch):
 
 def test_asset_gate_fires(tmp_path, monkeypatch):
     monkeypatch.setenv("GTRADE_LIVE_GATE_MIN_N", "1000")  # class rule off
-    group, assets = _forex_majors_assets()
+    _group, assets = _forex_majors_assets()
     rows = [(assets[0], "SELL", 1 if i < 7 else 0) for i in range(20)]  # 35%
     db = _make_db(tmp_path, rows)
     sig, reason = live_gate.gate(assets[0], 0.4, "SELL", db_path=db)

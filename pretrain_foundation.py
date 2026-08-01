@@ -13,6 +13,7 @@ pooled dataset only uses rows strictly before the (global, minimum-across-
 assets) cutoff.
 """
 import os
+from datetime import UTC
 
 import numpy as np
 
@@ -256,14 +257,16 @@ def train_foundation(X, y, epochs=40, batch=512, val_frac=0.1, out_dir=None):
     from tensorflow.keras.callbacks import EarlyStopping
 
     from core.architectures import (
-        build_lstm_multitask, build_tcn, build_transformer_encoder,
+        build_lstm_multitask,
+        build_tcn,
+        build_transformer_encoder,
     )
 
     out_dir = out_dir or FOUNDATION_DIR
     os.makedirs(out_dir, exist_ok=True)
 
     n = len(X)
-    n_val = max(1, int(round(n * val_frac)))
+    n_val = max(1, round(n * val_frac))
     split = max(1, n - n_val)
     X_tr, y_tr = X[:split], y[:split]
     X_val, y_val = X[split:], y[split:]
@@ -364,7 +367,7 @@ def write_manifest(out_dir, cutoff, tables_used, val_metrics, lookback=FOUNDATIO
     protected against (see train_hybrid._load_foundation).
     """
     import json
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     u1 = FOUNDATION_UNITS
     net_kwargs = {
@@ -385,7 +388,7 @@ def write_manifest(out_dir, cutoff, tables_used, val_metrics, lookback=FOUNDATIO
         "embargo": embargo,
         "n_assets": len(tables_used),
         "val": val_metrics,
-        "created": datetime.now(timezone.utc).isoformat(),
+        "created": datetime.now(UTC).isoformat(),
     }
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "manifest.json"), "w") as f:

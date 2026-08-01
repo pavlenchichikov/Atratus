@@ -217,7 +217,7 @@ class CmaEmitter:
         for i, (name, lo, hi, is_int) in enumerate(self.dims):
             v = self.rng.gauss(self.mean[i], self.sigma[i])
             v = min(hi, max(lo, v))
-            v = int(round(v)) if is_int else round(v, 4)
+            v = round(v) if is_int else round(v, 4)
             setattr(child, name, v)
         return child
 

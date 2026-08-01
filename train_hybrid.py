@@ -13,23 +13,25 @@ import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-import pandas as pd
+
 import numpy as np
-from sqlalchemy import create_engine
-from catboost import CatBoostClassifier
+import pandas as pd
 import tensorflow as tf
+from catboost import CatBoostClassifier
+from sqlalchemy import create_engine
+
+from core import meta_sizer, net_hygiene
 from core.logger import get_logger
-from core import net_hygiene
-from core import meta_sizer
 
 logger = get_logger("train_hybrid")
-from tensorflow.keras.models import Model
-from tensorflow.keras.callbacks import EarlyStopping, Callback
-from sklearn.preprocessing import StandardScaler
+import time
+
+import joblib
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
-import joblib
-import time
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.callbacks import Callback, EarlyStopping
+from tensorflow.keras.models import Model
 
 # --- GPU CONFIG ---
 # Detect VRAM and size the TF memory pool to it. No GPU - run on CPU.
@@ -42,7 +44,7 @@ if gpus:
             import subprocess as _sp_vram
             _smi_r = _sp_vram.run(
                 ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=5, check=False,
             )
             if _smi_r.returncode == 0:
                 _vram_mb = int(_smi_r.stdout.strip().split("\n")[0].strip())
@@ -281,26 +283,40 @@ if _HAS_GPU:
 
 # -- Imports from core/ modules ------------------------------------------------
 from core.architectures import (
-    build_transformer_encoder,
-    build_lstm_multitask, build_tcn, adaptive_units,
     _Adam as _lstm_optimizer_cls,
 )
+from core.architectures import (
+    adaptive_units,
+    build_lstm_multitask,
+    build_tcn,
+    build_transformer_encoder,
+)
+from core.backtesting import (
+    COMMISSION,
+    FOREX_COMMISSION,
+    FOREX_SLIPPAGE,
+    SLIPPAGE,
+    adaptive_split_params,
+    apply_regime_filter,
+    evaluate_signals,
+    evaluate_signals_v2,
+    make_signals,
+    make_walk_forward_splits,
+    objective_v2_on,
+    score_strategy,
+)
+from core.calibration import fit_calibrator, save_calibrator
+from core.ensemble import (  # noqa: F401 (re-exported for signal_engine.py)
+    build_stacking_features,
+    ensemble_with_gating,
+    tune_ensemble_weights,
+)
+from core.features import active_candidate_features, build_features
 from core.profiles import (
     FOREX,
     get_profile,
 )
-from core.features import build_features, active_candidate_features
-from core.backtesting import (
-    adaptive_split_params, make_walk_forward_splits,
-    score_strategy,
-    make_signals, apply_regime_filter,
-    COMMISSION, SLIPPAGE, FOREX_COMMISSION, FOREX_SLIPPAGE,
-    evaluate_signals, evaluate_signals_v2, objective_v2_on,
-)
-from core.ensemble import build_stacking_features
-from core.ensemble import ensemble_with_gating, tune_ensemble_weights  # noqa: F401 (re-exported for signal_engine.py)
 from core.scaling import save_scaler, scaler_path
-from core.calibration import fit_calibrator, save_calibrator
 
 
 def _env_flag(name: str) -> bool:
@@ -355,7 +371,7 @@ if BASE_DIR not in sys.path:
 try:
     from config import FULL_ASSET_MAP
 except ImportError:
-    exit(f"ERROR: config.py not found in {BASE_DIR}!")
+    sys.exit(f"ERROR: config.py not found in {BASE_DIR}!")
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 engine = create_engine(f'sqlite:///{DB_PATH}')
@@ -452,7 +468,7 @@ def ensure_dirs():
 
 def load_registry():
     if os.path.exists(REGISTRY_PATH):
-        with open(REGISTRY_PATH, 'r', encoding='utf-8') as f:
+        with open(REGISTRY_PATH, encoding='utf-8') as f:
             return json.load(f)
     return {}
 
@@ -481,7 +497,7 @@ def _safe_print(*args, flush=True):
 
 def _load_optuna_params():
     if os.path.exists(OPTUNA_PARAMS_PATH):
-        with open(OPTUNA_PARAMS_PATH, 'r', encoding='utf-8') as f:
+        with open(OPTUNA_PARAMS_PATH, encoding='utf-8') as f:
             return json.load(f)
     return {}
 
@@ -529,7 +545,7 @@ def cb_params_for(opt):
     iters = int(opt.get('cb_iterations', 700))
     depth = int(opt.get('cb_depth', 8))
     lr = float(opt.get('cb_lr', 0.03))
-    iters = _clamp(int(round(iters * _env_float("GTRADE_CB_ITER_MULT", 1.0))), 100, 3000)
+    iters = _clamp(round(iters * _env_float("GTRADE_CB_ITER_MULT", 1.0)), 100, 3000)
     depth = _clamp(depth + _env_signed_int("GTRADE_CB_DEPTH_DELTA", 0), 3, 10)
     lr = _clamp(lr * _env_float("GTRADE_CB_LR_MULT", 1.0), 0.005, 0.3)
     return iters, depth, lr
@@ -590,15 +606,14 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
     # -- Load Optuna-tuned hyperparams if available ----------------------
     opt = _get_optuna_params(asset)
 
-    pass  # progress shown by live ticker
+    # progress shown by live ticker
     try:
         df_raw = pd.read_sql(f"SELECT * FROM {table}", engine, index_col="Date", parse_dates=["Date"])
         df_raw.index = pd.to_datetime(df_raw.index).normalize()
         df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
         df, _skipped = build_features(df_raw, table, engine)
         if _skipped:
-            _safe_print("  [DSL] %s: could not compute %s"
-                        % (asset, ", ".join(_skipped)))
+            _safe_print("  [DSL] {}: could not compute {}".format(asset, ", ".join(_skipped)))
         sp = adaptive_split_params(len(df))
         if sp is None:
             _safe_print(f"  [SKIP] {asset:<12} insufficient rows ({len(df)})")
@@ -752,13 +767,13 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             # No recurrent_dropout: it forces Keras off the fused LSTM kernel and
             # is ~1.4x slower on CPU. L2 + the data-adaptive (smaller) size carry
             # the regularization instead.
-            _lstm_kw = dict(units1=_u1, units2=max(16, _u1 // 2),
-                            head_dim=max(16, _u1 // 2), l2_reg=1e-5)
-            _tf_kw = dict(num_heads=2,
-                          ff_dim=adaptive_units(_max_seq, lo=32, hi=96, divisor=24),
-                          dropout=0.15)
-            _tcn_kw = dict(n_filters=adaptive_units(_max_seq, lo=24, hi=64, divisor=24),
-                           dropout=0.20)
+            _lstm_kw = {"units1": _u1, "units2": max(16, _u1 // 2),
+                            "head_dim": max(16, _u1 // 2), "l2_reg": 1e-5}
+            _tf_kw = {"num_heads": 2,
+                          "ff_dim": adaptive_units(_max_seq, lo=32, hi=96, divisor=24),
+                          "dropout": 0.15}
+            _tcn_kw = {"n_filters": adaptive_units(_max_seq, lo=24, hi=64, divisor=24),
+                           "dropout": 0.20}
         else:
             _lstm_kw, _tf_kw, _tcn_kw = {}, {}, {}
         _warm = {}  # per-asset weight carry across folds (warm-start)
@@ -787,15 +802,15 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                                 _X_test=X_test, _y_test=y_test,
                                 _opt=opt):
                 _cb_iters, _cb_depth, _cb_lr = cb_params_for(_opt)
-                _cb_kwargs = dict(
-                    iterations=_cb_iters,
-                    depth=_cb_depth,
-                    learning_rate=_cb_lr,
-                    verbose=0,
-                    task_type=_CB_TASK_TYPE,
-                    thread_count=_CB_THREADS,
-                    early_stopping_rounds=50,
-                )
+                _cb_kwargs = {
+                    "iterations": _cb_iters,
+                    "depth": _cb_depth,
+                    "learning_rate": _cb_lr,
+                    "verbose": 0,
+                    "task_type": _CB_TASK_TYPE,
+                    "thread_count": _CB_THREADS,
+                    "early_stopping_rounds": 50,
+                }
                 if _CB_TASK_TYPE == 'GPU':
                     _cb_kwargs['devices'] = '0'
                 cb = CatBoostClassifier(**_cb_kwargs)
@@ -1244,7 +1259,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         if pos_ratio < 0.45:
             _safe_print(f"  [WARN] {asset:<12} unstable folds (pos_ratio={pos_ratio:.2f})")
 
-        best_fold = sorted(valid_folds, key=lambda x: x['score'])[-1]
+        best_fold = max(valid_folds, key=lambda x: x['score'])
         best_fold['score'] = median_score
         best_fold['test_profit'] = median_profit
 
@@ -1287,9 +1302,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 # Meta-sizing: optionally train + persist a per-asset model
                 # (P(CB correct)). Env-gated (GTRADE_META_SIZING); default off = skipped.
                 # Never allowed to break champion training.
-                if meta_sizer.meta_enabled() != "off":
-                    if meta_sizer.train_and_save(asset, df):
-                        logger.info("[meta] saved sizing model for %s", asset)
+                if meta_sizer.meta_enabled() != "off" and meta_sizer.train_and_save(asset, df):
+                    logger.info("[meta] saved sizing model for %s", asset)
                 registry_update = {
                     'score': best_fold['score'],
                     'updated_at': datetime.now().isoformat(),
@@ -1372,7 +1386,6 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
 
 
 def train_system():
-    global _stop_requested
     signal.signal(signal.SIGINT, _signal_handler)
 
     ensure_dirs()
@@ -1459,10 +1472,11 @@ def train_system():
         try:
             import subprocess as _sp
             _smi = _sp.run(
-                ["nvidia-smi", "--query-gpu=name,driver_version,temperature.gpu,"
-                 "utilization.gpu,utilization.memory,memory.used,memory.free",
+                ["nvidia-smi",
+                 ("--query-gpu=name,driver_version,temperature.gpu,"
+                  "utilization.gpu,utilization.memory,memory.used,memory.free"),
                  "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=5, check=False,
             )
             if _smi.returncode == 0:
                 _fields = [v.strip() for v in _smi.stdout.strip().split(",")]
@@ -1523,13 +1537,13 @@ def train_system():
         try:
             _r = _sp.run(
                 ["nvidia-smi",
-                 "--query-gpu="
-                 "utilization.gpu,utilization.memory,"
-                 "memory.used,memory.free,memory.total,"
-                 "temperature.gpu,power.draw,power.limit,"
-                 "fan.speed,clocks.gr,clocks.mem",
+                 ("--query-gpu="
+                  "utilization.gpu,utilization.memory,"
+                  "memory.used,memory.free,memory.total,"
+                  "temperature.gpu,power.draw,power.limit,"
+                  "fan.speed,clocks.gr,clocks.mem"),
                  "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=4
+                capture_output=True, text=True, timeout=4, check=False,
             )
             if _r.returncode == 0:
                 p = [v.strip() for v in _r.stdout.strip().split(",")]
@@ -1560,10 +1574,7 @@ def train_system():
                 s = dict(_progress_state)
 
             # -- Training state -----------------------------------------------
-            if s['total_ep'] > 0:
-                model_line = f"{s['label']}  ep {s['epoch']}  loss={s['loss']:.4f}"
-            else:
-                model_line = "preparing..."
+            model_line = f"{s['label']}  ep {s['epoch']}  loss={s['loss']:.4f}" if s['total_ep'] > 0 else "preparing..."
 
             # -- GPU stats (nvidia-smi, refreshed every 3 sec) ----------------
             if _HAS_GPU:
@@ -1672,7 +1683,7 @@ def train_system():
             print(header)
             print("  " + "-" * (len(header) - 2))
             for _, row in rep_sorted.iterrows():
-                line = "  " + "  ".join(f"{str(row.get(c,'')):<12}" for c in cols_present)
+                line = "  " + "  ".join(f"{row.get(c,'')!s:<12}" for c in cols_present)
                 print(line)
         else:
             print(rep_sorted.to_string(index=False))

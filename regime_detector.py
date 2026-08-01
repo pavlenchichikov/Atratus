@@ -2,9 +2,9 @@
 # Market Regime Detector -- classifies global and per-asset market regimes
 # using data from SQLite market.db.
 
-import os
-import json
 import argparse
+import json
+import os
 import warnings
 
 import numpy as np
@@ -44,8 +44,7 @@ def _read_table(table: str, engine=None, min_rows: int = 1) -> pd.DataFrame | No
         df.columns = [c.lower() for c in df.columns]
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").set_index("date")
-        df = df[~df.index.duplicated(keep="last")]
-        return df
+        return df[~df.index.duplicated(keep="last")]
     except Exception:
         return None
 
@@ -84,12 +83,11 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 def _classify_vix(value: float) -> str:
     if value < 15:
         return "CALM"
-    elif value < 25:
+    if value < 25:
         return "NORMAL"
-    elif value < 35:
+    if value < 35:
         return "FEAR"
-    else:
-        return "PANIC"
+    return "PANIC"
 
 
 def _classify_sp500_trend(df: pd.DataFrame) -> str:
@@ -103,12 +101,11 @@ def _classify_sp500_trend(df: pd.DataFrame) -> str:
         if sma50 > sma200:
             return "BULLISH"
         return "ABOVE BOTH SMAs"
-    elif price < sma50 and price < sma200:
+    if price < sma50 and price < sma200:
         if sma50 < sma200:
             return "BEARISH"
         return "BELOW BOTH SMAs"
-    else:
-        return "MIXED"
+    return "MIXED"
 
 
 def _sp500_detail(df: pd.DataFrame) -> str:
@@ -132,14 +129,13 @@ def _classify_dxy_trend(df: pd.DataFrame) -> str:
     price = close.iloc[-1]
     if price > sma20:
         return "RISING"
-    else:
-        return "FALLING"
+    return "FALLING"
 
 
 def _dxy_label(trend: str) -> str:
     if trend == "RISING":
         return "STRONG DOLLAR"
-    elif trend == "FALLING":
+    if trend == "FALLING":
         return "WEAK DOLLAR"
     return "UNKNOWN"
 
@@ -220,7 +216,7 @@ def _classify_trend(close: pd.Series) -> str:
     sma50 = _sma(close, 50).iloc[-1]
     if price > sma20 and price > sma50:
         return "UPTREND"
-    elif price < sma20 and price < sma50:
+    if price < sma20 and price < sma50:
         return "DOWNTREND"
     return "SIDEWAYS"
 
@@ -231,12 +227,11 @@ def _classify_volatility(atr_current: float, atr_avg_90: float) -> str:
     ratio = atr_current / atr_avg_90
     if ratio < 0.7:
         return "LOW_VOL"
-    elif ratio < 1.3:
+    if ratio < 1.3:
         return "NORMAL"
-    elif ratio < 2.0:
+    if ratio < 2.0:
         return "HIGH_VOL"
-    else:
-        return "EXTREME"
+    return "EXTREME"
 
 
 def _classify_momentum(rsi_value: float) -> str:
@@ -244,7 +239,7 @@ def _classify_momentum(rsi_value: float) -> str:
         return "UNKNOWN"
     if rsi_value < 30:
         return "OVERSOLD"
-    elif rsi_value > 70:
+    if rsi_value > 70:
         return "OVERBOUGHT"
     return "NEUTRAL"
 

@@ -20,8 +20,7 @@ import sys
 import pandas as pd
 from sqlalchemy import create_engine
 
-from core.chronos_features import (CHRONOS_MODELS, DEFAULT_CHRONOS_MODEL,
-                                   forecast_features, resolve_model)
+from core.chronos_features import CHRONOS_MODELS, DEFAULT_CHRONOS_MODEL, forecast_features, resolve_model
 from core.features import CHRONOS_CACHE_TABLE
 from core.track_record import _table_name
 
@@ -49,10 +48,10 @@ def migrate(db_path=DB_PATH):
     con = sqlite3.connect(db_path)
     try:
         cols = [r[1] for r in con.execute(
-            "PRAGMA table_info(%s)" % CHRONOS_CACHE_TABLE).fetchall()]
+            f"PRAGMA table_info({CHRONOS_CACHE_TABLE})").fetchall()]
         if cols and "model" not in cols:
-            con.execute("ALTER TABLE %s ADD COLUMN model TEXT" % CHRONOS_CACHE_TABLE)
-            con.execute("UPDATE %s SET model = ? WHERE model IS NULL" % CHRONOS_CACHE_TABLE,
+            con.execute(f"ALTER TABLE {CHRONOS_CACHE_TABLE} ADD COLUMN model TEXT")
+            con.execute(f"UPDATE {CHRONOS_CACHE_TABLE} SET model = ? WHERE model IS NULL",
                         (DEFAULT_CHRONOS_MODEL,))
             con.commit()
     except Exception:
@@ -66,7 +65,7 @@ def clear_cache(db_path=DB_PATH):
     import sqlite3
     con = sqlite3.connect(db_path)
     try:
-        con.execute("DROP TABLE IF EXISTS %s" % CHRONOS_CACHE_TABLE)
+        con.execute(f"DROP TABLE IF EXISTS {CHRONOS_CACHE_TABLE}")
         con.commit()
     finally:
         con.close()
@@ -77,7 +76,7 @@ def _cached_dates(engine, table, model):
     the bars are (re)computed)."""
     try:
         df = pd.read_sql(
-            "SELECT date FROM %s WHERE asset = ? AND model = ?" % CHRONOS_CACHE_TABLE,
+            f"SELECT date FROM {CHRONOS_CACHE_TABLE} WHERE asset = ? AND model = ?",
             engine, params=(table, model))
         return set(df["date"].astype(str))
     except Exception as exc:
@@ -94,7 +93,7 @@ def precompute_asset(asset, engine, forecaster=None, context=64, horizon=5,
     table = _table_name(asset)
     # OHLCV column case varies (real market.db is lower-case; some tables use "Close"),
     # so read all columns and normalize to lower-case before selecting close.
-    prices = pd.read_sql('SELECT * FROM "%s" ORDER BY Date' % table,
+    prices = pd.read_sql(f'SELECT * FROM "{table}" ORDER BY Date',
                          engine, index_col="Date")
     prices.columns = [c.lower() for c in prices.columns]
     prices.index = pd.to_datetime(prices.index)
@@ -123,8 +122,8 @@ def main(argv=None):
                     help="comma-separated asset names, or 'all' for the full 208-asset "
                          "universe (default: a 10-asset selection)")
     ap.add_argument("--model", default="tiny",
-                    help="Chronos base model: %s, or a full Hugging Face id "
-                         "(default: tiny)" % "/".join(CHRONOS_MODELS))
+                    help="Chronos base model: {}, or a full Hugging Face id "
+                         "(default: tiny)".format("/".join(CHRONOS_MODELS)))
     ap.add_argument("--fresh", action="store_true",
                     help="wipe the cache first and recompute from scratch")
     args = ap.parse_args(argv)

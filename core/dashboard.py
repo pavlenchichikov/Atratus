@@ -121,7 +121,7 @@ def sentiment_score(regime, breadth):
     buy = breadth.get("BUY", 0)
     sell = breadth.get("SELL", 0)
     breadth_score = (buy / (buy + sell) * 100.0) if (buy + sell) else 50.0
-    return int(round(0.40 * vix + 0.35 * trend + 0.25 * breadth_score))
+    return round(0.40 * vix + 0.35 * trend + 0.25 * breadth_score)
 
 
 def sentiment_label(score):
@@ -186,6 +186,8 @@ def sector_heatmap(weeks=8):
     """
     empty = {"xLabels": [], "yLabels": [], "data": [], "min": -1, "max": 1}
     try:
+        import pandas as pd
+
         import sector_rotation as sr
         df = sr.get_sector_returns(weeks=weeks)
         if df is None or df.empty:
@@ -197,7 +199,7 @@ def sector_heatmap(weeks=8):
         for si in range(len(df)):
             for xi, col in enumerate(week_cols):
                 v = df.iloc[si][col]
-                if v == v:  # not NaN
+                if not pd.isna(v):
                     fv = round(float(v), 2)
                     data.append([xi, si, fv])
                     vmax = max(vmax, abs(fv))
@@ -219,7 +221,7 @@ def correlation_stress():
         import correlation_alert as ca
         s = ca.get_stress_indicator()
         avg = s.get("avg_corr") or 0.0
-        score = int(round(max(0.0, min(1.0, avg)) * 100))
+        score = round(max(0.0, min(1.0, avg)) * 100)
         zone = "g-bad" if score >= 60 else "g-warn" if score >= 35 else ""
         return {**s, "score": score, "zone": zone}
     except Exception:
@@ -231,6 +233,8 @@ def correlation_heatmap():
     """Key-pairs correlation matrix shaped for an ECharts heatmap (range -1..1)."""
     empty = {"xLabels": [], "yLabels": [], "data": [], "min": -1, "max": 1}
     try:
+        import pandas as pd
+
         import correlation_alert as ca
         df = ca.get_key_pairs_matrix()
         if df is None or df.empty:
@@ -240,7 +244,7 @@ def correlation_heatmap():
         for yi in range(len(labels)):
             for xi in range(len(labels)):
                 v = df.iloc[yi, xi]
-                if v == v:
+                if not pd.isna(v):
                     data.append([xi, yi, round(float(v), 2)])
         return {"xLabels": labels, "yLabels": labels, "data": data, "min": -1, "max": 1}
     except Exception:

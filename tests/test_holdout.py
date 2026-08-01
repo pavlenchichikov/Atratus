@@ -9,7 +9,7 @@ GROUPS = {
     "TOP SIGNALS": ["BTC", "NVDA"],          # deliberate overlap
 }
 ALL = sorted({a for v in GROUPS.values() for a in v})
-BARS = {a: 3000 for a in ALL}
+BARS = dict.fromkeys(ALL, 3000)
 
 
 def test_excluded_is_the_union_of_every_source():

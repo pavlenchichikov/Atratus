@@ -4,13 +4,13 @@ Runs project tasks on configurable intervals using subprocess.
 Uses only stdlib: threading, time, subprocess, json, sys, os, argparse.
 """
 
-import os
-import sys
-import json
-import time
-import subprocess
 import argparse
+import json
+import os
 import signal
+import subprocess
+import sys
+import time
 from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,9 +43,9 @@ def _now_iso():
 def _load_json(path, default=None):
     if os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             pass
     return default if default is not None else {}
 
@@ -123,12 +123,11 @@ def run_task(task_name, task_cfg):
         if proc.returncode == 0:
             print(f"  [OK]   {task_name}  ({format_duration(elapsed)})")
             return True, elapsed
-        else:
-            print(f"  [ERR]  {task_name}  exit={proc.returncode}  ({format_duration(elapsed)})")
-            if stdout and stdout.strip():
-                for line in stdout.strip().split("\n")[-5:]:
-                    print(f"           {line}")
-            return False, elapsed
+        print(f"  [ERR]  {task_name}  exit={proc.returncode}  ({format_duration(elapsed)})")
+        if stdout and stdout.strip():
+            for line in stdout.strip().split("\n")[-5:]:
+                print(f"           {line}")
+        return False, elapsed
 
     except subprocess.TimeoutExpired:
         proc.kill()
@@ -222,7 +221,6 @@ def cmd_once(task_names):
 
 def cmd_run():
     """Main scheduler loop."""
-    global _stop_flag
 
     def _handle_signal(signum, frame):
         global _stop_flag
@@ -266,7 +264,7 @@ def cmd_run():
                 print(f"[{_now_str()}] [WAIT] {name} -- next run in {format_remaining(remaining)}")
                 continue
 
-            success, _ = run_task(name, cfg)
+            _success, _ = run_task(name, cfg)
             if "last_run" not in state:
                 state["last_run"] = {}
             state["last_run"][name] = _now_iso()

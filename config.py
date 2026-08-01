@@ -1,5 +1,6 @@
 # config.py
 import os
+
 try:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -20,7 +21,7 @@ except Exception as _exc:
     # either: a hand-edited value of the wrong type would otherwise leave a
     # tens-of-hours retrain running on production defaults with no adoption in
     # force and nothing on screen to say so.
-    print("[adopt] adopted genome ignored: %s" % _exc)
+    print(f"[adopt] adopted genome ignored: {_exc}")
     _ADOPTED = None
 
 # --- 1. MODEL PARAMETERS ---

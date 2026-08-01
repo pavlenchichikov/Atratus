@@ -98,7 +98,7 @@ class TestSparseHeads:
 
     def test_quarterly_head_flagged_and_fixed(self):
         cur = _cur()
-        head = [(f"20{y:02d}-01-01", 50.0) for y in range(0, 10)]  # yearly rows
+        head = [(f"20{y:02d}-01-01", 50.0) for y in range(10)]  # yearly rows
         body = self._daily("2024-01-01", 400)
         self._mk(cur, "spx", head + body)
         report = dbc.check_sparse_heads(cur, ["spx"])

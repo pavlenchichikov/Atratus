@@ -2,7 +2,7 @@
 
 import os
 
-from core.db_backup import backup_db, _prune_old_backups
+from core.db_backup import _prune_old_backups, backup_db
 
 
 class TestBackupDb:

@@ -3,10 +3,10 @@ auto_trader.py - Auto-executes ML signals in the paper trading system.
 Connects predict.py signals (via signal_engine) with paper_trading.py execution.
 """
 
-import os
+import argparse
 import json
 import logging
-import argparse
+import os
 from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -70,7 +70,7 @@ def load_config() -> dict:
     config = DEFAULT_CONFIG.copy()
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
                 saved = json.load(f)
             config.update(saved)
         except Exception as e:
@@ -325,7 +325,7 @@ def get_trade_log(days: int = 7) -> list:
 
     cutoff = datetime.now() - timedelta(days=days)
     try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
+        with open(LOG_FILE, encoding="utf-8") as f:
             for line in f:
                 line = line.rstrip()
                 if not line:
@@ -368,7 +368,7 @@ def _cast(value: str):
     if low == "false":
         return False
     # JSON list/dict
-    if value.startswith("[") or value.startswith("{"):
+    if value.startswith(("[", "{")):
         try:
             return json.loads(value)
         except Exception:

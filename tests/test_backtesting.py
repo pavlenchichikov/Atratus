@@ -110,14 +110,14 @@ class TestPnLFromSignals:
     def test_sell_signals_in_downtrend(self):
         signals = -np.ones(50)
         returns = -np.ones(50) * 0.02  # 2% down every day
-        profit, trades, winrate = pnl_from_signals(signals, returns)
+        profit, trades, _winrate = pnl_from_signals(signals, returns)
         assert trades == 50
         assert profit > 0  # Short in downtrend = profit
 
     def test_nan_returns_skipped(self):
         signals = np.array([1, 1, 1, 0, 1])
         returns = np.array([0.01, np.nan, 0.01, 0.01, 0.01])
-        profit, trades, _ = pnl_from_signals(signals, returns)
+        _profit, trades, _ = pnl_from_signals(signals, returns)
         assert trades == 3  # NaN and 0-signal skipped
 
     def test_commission_reduces_profit(self):
@@ -280,6 +280,7 @@ class TestRegimeFilter:
 
 def test_vol_cap_floor_and_scaling():
     import numpy as np
+
     from core.backtesting import MAX_TRADE_RET, vol_cap
     quiet = np.full(60, 0.001)
     cap = vol_cap(quiet)
@@ -296,12 +297,13 @@ def test_vol_cap_floor_and_scaling():
 
 def test_simulate_positions_single_long_segment():
     import numpy as np
+
     from core.backtesting import COMMISSION, SLIPPAGE, simulate_positions
     # long held 3 bars then WAIT: 1 entry leg + 1 exit leg, not 3 round-trips
     sig = np.array([1, 1, 1, 0, 0])
     ret = np.array([0.01, 0.02, -0.005, 0.03, 0.01])
     leg = COMMISSION + SLIPPAGE
-    profit, trades, win, daily = simulate_positions(sig, ret)
+    _profit, trades, win, daily = simulate_positions(sig, ret)
     assert trades == 1
     assert win == 100.0  # chained (1.01*1.02*0.995 - 1) ~ +2.47% > 2 legs
     # daily: entry bar charged 1 leg, exit bar charged 1 leg, flat bars are 0
@@ -314,11 +316,12 @@ def test_simulate_positions_single_long_segment():
 
 def test_simulate_positions_flip_charges_two_legs():
     import numpy as np
+
     from core.backtesting import COMMISSION, SLIPPAGE, simulate_positions
     sig = np.array([1, -1, -1, 0])
     ret = np.array([0.01, -0.02, 0.005, 0.0])
     leg = COMMISSION + SLIPPAGE
-    profit, trades, win, daily = simulate_positions(sig, ret)
+    _profit, trades, _win, daily = simulate_positions(sig, ret)
     assert trades == 2  # long, then short
     assert daily[0] == pytest.approx(0.01 - leg)          # enter long: 1 leg
     assert daily[1] == pytest.approx(-1 * -0.02 - 2 * leg)  # flip: 2 legs
@@ -328,13 +331,14 @@ def test_simulate_positions_flip_charges_two_legs():
 
 def test_simulate_positions_flat_and_nan():
     import numpy as np
+
     from core.backtesting import simulate_positions
     profit, trades, win, daily = simulate_positions(
         np.zeros(5), np.array([0.01, np.nan, 0.02, -0.01, 0.0]))
     assert trades == 0 and win == 0.0 and profit == 0.0
     assert (daily == 0).all()
     # NaN bar while holding: position stays, earns 0 that bar
-    p2, t2, w2, d2 = simulate_positions(
+    _p2, t2, _w2, d2 = simulate_positions(
         np.array([1, 1, 1]), np.array([0.01, np.nan, 0.02]))
     assert t2 == 1
     assert d2[1] == 0.0
@@ -342,14 +346,16 @@ def test_simulate_positions_flat_and_nan():
 
 def test_simulate_positions_open_final_segment_counts():
     import numpy as np
+
     from core.backtesting import simulate_positions
-    profit, trades, win, daily = simulate_positions(
+    _profit, trades, win, _daily = simulate_positions(
         np.array([0, 1, 1]), np.array([0.0, 0.05, 0.05]))
     assert trades == 1 and win == 100.0  # judged on its to-date return
 
 
 def test_simulate_positions_respects_cap():
     import numpy as np
+
     from core.backtesting import simulate_positions
     sig = np.array([1, 0])
     ret = np.array([0.50, 0.0])
@@ -366,6 +372,7 @@ def test_score_strategy_min_trades_kw():
 
 def test_evaluate_signals_off_matches_legacy_inline(monkeypatch):
     import numpy as np
+
     from core import backtesting as bt
     monkeypatch.delenv("GTRADE_OBJECTIVE_V2", raising=False)
     rng = np.random.default_rng(3)
@@ -385,6 +392,7 @@ def test_evaluate_signals_off_matches_legacy_inline(monkeypatch):
 
 def test_evaluate_signals_v2_branch(monkeypatch):
     import numpy as np
+
     from core import backtesting as bt
     monkeypatch.setenv("GTRADE_OBJECTIVE_V2", "1")
     sig = np.array([1, 1, 0, -1, 0])

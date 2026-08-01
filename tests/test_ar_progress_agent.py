@@ -96,7 +96,7 @@ def _run_qd_smoke(monkeypatch, tier_env):
     subprocess produces. A fake clock (ar_progress._now patched) advances by a
     fixed per-asset amount between start and done so the simulated durations are
     deterministic and the test does not actually sleep for hours."""
-    monkeypatch.setattr(auto_research, "_qd_load", lambda: {})
+    monkeypatch.setattr(auto_research, "_qd_load", dict)
     monkeypatch.setattr(auto_research, "_qd_save", lambda a: None)
     monkeypatch.setattr(auto_research, "BUDGET", 2, raising=False)
     monkeypatch.setenv("GTRADE_AR_QD_INIT", "2")
@@ -156,7 +156,7 @@ def test_seam_gate_unit_never_reads_the_trailing_cb_trains_asset_times(monkeypat
     for asset, times in holdout_assets.items():
         assert all(t >= 1000 for t in times), (
             "holdout_14 per-asset history contaminated with a screen-scale (CB-only) "
-            "time: %s=%s (expected only full-ensemble, hour-scale samples)" % (asset, times))
+            f"time: {asset}={times} (expected only full-ensemble, hour-scale samples)")
 
 
 def test_tier_check_folds_a_tier_4_measurement_when_tier_is_on(monkeypatch, tmp_path):

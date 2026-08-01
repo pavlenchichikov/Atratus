@@ -94,10 +94,10 @@ def test_multiple_different_cost_assets_on_single_lane():
 def test_unit_remaining_defends_against_non_numeric_workers():
     # workers parameter may come from JSON and be corrupted; should not raise.
     hist = {"A": [100]}
-    est, basis = ar_progress.unit_remaining(["A"], hist, workers="four")
+    est, _basis = ar_progress.unit_remaining(["A"], hist, workers="four")
     assert est == 100.0
 
-    est, basis = ar_progress.unit_remaining(["A"], hist, workers=None)
+    est, _basis = ar_progress.unit_remaining(["A"], hist, workers=None)
     assert est == 100.0
 
 
@@ -249,7 +249,7 @@ def test_snapshot_uses_fresh_unit_over_a_stale_leftover_agent(monkeypatch, tmp_p
     age used to be age_seconds(agent or unit, ...), which always picked the
     (stale) agent whenever one existed at all, so a live run rendered as "may
     have stopped"."""
-    agent, unit = _isolate(monkeypatch, tmp_path)
+    agent, _unit = _isolate(monkeypatch, tmp_path)
     now = datetime.datetime(2026, 7, 25, 12, 0, 0)
     ar_progress.write_agent({
         "phase": "gate",
@@ -276,7 +276,7 @@ def test_snapshot_ignores_a_stale_leftover_unit_for_the_estimate(monkeypatch, tm
     (e.g. from a run that stopped between units). Its pending/order must not be
     trusted for an estimate - "unknown" beats a confident number built on data
     nobody is updating."""
-    agent, unit = _isolate(monkeypatch, tmp_path)
+    _agent, unit = _isolate(monkeypatch, tmp_path)
     now = datetime.datetime(2026, 7, 25, 12, 0, 0)
     ar_progress.write_unit({"workers": 4, "assets_total": 1, "order": ["SLOW"], "done": []})
     stale_stamp = (now - datetime.timedelta(seconds=ar_progress.STALE_AFTER_S + 60)).isoformat(timespec="seconds")

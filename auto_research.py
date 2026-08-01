@@ -27,11 +27,20 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
-from core import ar_memory
-from core import ar_rl
-from core import ar_wiki
-from core import llm_proposer
-from core import qd_surrogate
+# .env holds this run's LLM settings (GTRADE_AR_LLM_TIMEOUT above all: a local
+# 26B model needs far longer than the 600s SDK default, and without this the
+# file was read by push_signals and ab_genomes but never by the agent that
+# actually calls the model - the configured timeout was silently ignored and
+# every call died at ten minutes). load_dotenv does not override variables that
+# are already set, so the launcher menu still wins over the file.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
+
+from core import ar_memory, ar_rl, ar_wiki, llm_proposer, qd_surrogate
 from core.feature_dsl import validate_spec
 from core.logger import get_logger
 
@@ -86,7 +95,7 @@ def _reduce_deltas(deltas, objective):
         return sum(core) / len(core)
     if objective == "sharpe":
         sd = statistics.pstdev(deltas) if n > 1 else 0.0
-        return statistics.mean(deltas) / (sd if sd > 1e-9 else 1e-9)
+        return statistics.mean(deltas) / (max(1e-09, sd))
     return sum(deltas) / n
 
 
@@ -214,7 +223,8 @@ def _train(subset, env_overrides, model_dir):
     # compare it against a base cached before the adoption.
     env["GTRADE_ADOPTED_PATH"] = os.path.join(BASE, "_no_adoption.json")
     env.update(env_overrides)
-    subprocess.run([sys.executable, "train_hybrid.py"], cwd=BASE, env=env)
+    subprocess.run([sys.executable, "train_hybrid.py"], cwd=BASE, env=env,
+                   check=False)
     path = os.path.join(model_dir, "quality_report.json")
     if not os.path.exists(path):
         return []
@@ -242,7 +252,7 @@ def train_base_cached(subset, env):
     key = ar_memory.base_key(subset, env)
     rows = ar_memory.cache_get(key)
     if rows is not None:
-        print("[auto-research] base cache hit: %s %s" % (subset, env or "{}"))
+        print("[auto-research] base cache hit: {} {}".format(subset, env or "{}"))
         return rows
     rows = train_env(subset, env)
     if rows:
@@ -491,9 +501,7 @@ def valid(g, active, prune_min, continuous=False):
         return False
     if g.regime_mode not in REGIME_MODES:
         return False
-    if len(aset) - len(set(g.drops)) < prune_min:
-        return False
-    return True
+    return not len(aset) - len(set(g.drops)) < prune_min
 
 
 def random_genome(active, base_features):
@@ -729,7 +737,7 @@ def _llm_warn(reason):
         return
     _LLM_WARNED = True
     print("[llm] proposer unavailable, falling back to the evolutionary operators "
-          "for the rest of this run: %s" % reason)
+          f"for the rest of this run: {reason}")
 
 
 def _llm_child(elites, active, base_features):
@@ -1002,13 +1010,13 @@ class _RlController:
         return 0.5 * self.sched.posterior_mean(arm, phase)
 
     def report(self, tag):
-        lines = ["[rl] %s scheduler snapshot:" % tag]
+        lines = [f"[rl] {tag} scheduler snapshot:"]
         for p in ar_rl.PHASES:
-            means = ", ".join("%s=%.2f" % (a, self.sched.posterior_mean(a, p))
+            means = ", ".join(f"{a}={self.sched.posterior_mean(a, p):.2f}"
                               for a in ar_rl.ARMS)
-            lines.append("[rl]   %s: %s" % (p, means))
-        lines.append("[rl]   curiosity top: %s" % self.cur.top(5))
-        lines.append("[rl]   disabled=%s" % self.disabled)
+            lines.append(f"[rl]   {p}: {means}")
+        lines.append(f"[rl]   curiosity top: {self.cur.top(5)}")
+        lines.append(f"[rl]   disabled={self.disabled}")
         for ln in lines:
             _say(ln)
 
@@ -1197,7 +1205,7 @@ def run_qd(train_fn=None):
                                     "value": value, "tag": tag, "adoptable": ok,
                                     "neural_lift": nl, "replicated": bool(replicated),
                                     "clears": clears or 0})
-            nl_str = "" if nl is None else " | neural_lift %+.2f" % nl
+            nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
             print("[qd] elite drops=%s label=%s/%d extra=%d: %s | %s%s" % (
                 g.drops, g.label_mode, g.label_window, len(g.extra),
                 _gate_verdict(ok, bool(replicated), clears), tag, nl_str))
@@ -1220,7 +1228,7 @@ def run_qd(train_fn=None):
                 ar_wiki.note_replicated(
                     "rl-scheduler",
                     "posteriors: " + ", ".join(
-                        "%s/%s=%.2f" % (p, a, ctl.sched.posterior_mean(a, p))
+                        f"{p}/{a}={ctl.sched.posterior_mean(a, p):.2f}"
                         for p in ar_rl.PHASES for a in ar_rl.ARMS))
             except Exception:
                 pass
@@ -1325,7 +1333,7 @@ def _candidate_train_cached(subset, env, gsig):
     key = ar_memory.genome_key(subset, gsig, kind)
     rows = ar_memory.cache_get(key)
     if rows is not None:
-        _say("[regate] candidate cache hit (%s): %s" % (kind, gsig[:12]))
+        _say(f"[regate] candidate cache hit ({kind}): {gsig[:12]}")
         return rows
     rows = train_env(subset, env)
     if rows:
@@ -1400,9 +1408,8 @@ def regate(k=8, screen=False):
                                 "value": value, "tag": tag, "adoptable": ok,
                                 "neural_lift": nl, "replicated": bool(replicated),
                                 "clears": clears or 0})
-        nl_str = "" if nl is None else " | neural_lift %+.2f" % nl
-        _say("[regate] old %.2f - %s | %s%s" % (
-            old_score, _gate_verdict(ok, bool(replicated), clears), tag, nl_str))
+        nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
+        _say(f"[regate] old {old_score:.2f} - {_gate_verdict(ok, bool(replicated), clears)} | {tag}{nl_str}")
     ar_memory.findings_append({"ts": ts, "mode": "regate", "k": k,
                                "screen": bool(screen), "winners": finding_winners})
     _regate_progress_clear()
@@ -1435,7 +1442,7 @@ _LEAD_LEADERS = ["sp500", "vix", "btc", "gold", "dxy", "tnx"]
 def _random_spec(base_features, name, prefer):
     """One spec sampled from the DSL space. prefer biases the input choice toward
     columns that have shown positive deltas; it falls back to base_features."""
-    pool = prefer if prefer else base_features
+    pool = prefer or base_features
     if len(base_features) >= 2 and random.random() < 0.35:
         op = random.choice(_PAIR_OPS)
         a = random.choice(pool)
@@ -1529,9 +1536,10 @@ def _prescreen_ok(spec, df, target_col="target", threshold=None):
         return True
     try:
         import pandas as pd
+
         from core.feature_dsl import materialize
         c = pd.Series(materialize(df, spec)).corr(df[target_col])
-        if c != c:  # NaN correlation (constant feature)
+        if pd.isna(c):  # NaN correlation (constant feature)
             return True
         return abs(c) >= threshold
     except Exception:
@@ -1584,10 +1592,9 @@ def _progress_publish(phase, step=None, pending_units=None):
             "history": history,
         })
         if step:
-            print("[progress] %s: step %s/%s (%s)"
-                  % (phase, step.get("i"), step.get("n"), step.get("kind") or ""))
+            print("[progress] {}: step {}/{} ({})".format(phase, step.get("i"), step.get("n"), step.get("kind") or ""))
         else:
-            print("[progress] %s" % phase)
+            print(f"[progress] {phase}")
     except Exception:
         pass
 
@@ -1659,10 +1666,7 @@ def _progress_fold_unit(unit_kind, seconds, since=_NO_MARK, done_pairs=_NO_MARK)
         if unit_kind and seconds:
             history[unit_kind] = (history.get(unit_kind) or [])[-(PROGRESS_KEEP - 1):] + [max(1, int(seconds))]
         if unit_kind:
-            if done_pairs is _NO_MARK:
-                pairs = ar_progress.read_unit().get("done") or []
-            else:
-                pairs = done_pairs or []
+            pairs = ar_progress.read_unit().get("done") or [] if done_pairs is _NO_MARK else done_pairs or []
             bucket = history["assets"].setdefault(unit_kind, {})
             for pair in pairs:
                 if not isinstance(pair, (list, tuple)) or len(pair) != 2:
@@ -2158,20 +2162,25 @@ def _try_sample_frame():
     try:
         import pandas as pd
         from sqlalchemy import create_engine
-        from core.features import (engineer_features, add_weekly_features,
-                                   add_crossasset_features, add_macro_features,
-                                   add_cross_lag_features, add_chronos_features)
+
+        from core.features import (
+            add_chronos_features,
+            add_cross_lag_features,
+            add_crossasset_features,
+            add_macro_features,
+            add_weekly_features,
+            engineer_features,
+        )
         from core.track_record import _table_name
         engine = create_engine("sqlite:///" + os.path.join(BASE, "market.db"))
         table = _table_name(SELECTION_ASSETS.split(",")[0])
-        df = pd.read_sql("SELECT * FROM %s" % table, engine)
+        df = pd.read_sql(f"SELECT * FROM {table}", engine)
         df = engineer_features(df)
         df = add_weekly_features(df, table, engine)
         df = add_crossasset_features(df, table, engine)
         df = add_macro_features(df, engine)
         df = add_cross_lag_features(df, engine)
-        df = add_chronos_features(df, table, engine)
-        return df
+        return add_chronos_features(df, table, engine)
     except Exception:
         return None
 
@@ -2277,7 +2286,7 @@ def main():
                            screen_base=screen_base, screen_min=SCREEN_MIN, tier_base=tier_base)
             winner = res.get("kept") or res.get("best")
             if not winner:
-                print("[auto-research] axis %s: nothing beat the base." % axis.name)
+                print(f"[auto-research] axis {axis.name}: nothing beat the base.")
                 continue
             winner_env = axis.to_env(winner)
             if ho_base_full is None:
@@ -2293,8 +2302,7 @@ def main():
                 p, value, _d, tag = holdout_stats(ho_base_full, var_full, obj)
             winners.append((axis.name, winner, p, value, tag, nl))
         except RuntimeError as exc:
-            print("[auto-research] axis %s: LLM proposer unavailable, skipping (%s)"
-                  % (axis.name, exc))
+            print(f"[auto-research] axis {axis.name}: LLM proposer unavailable, skipping ({exc})")
             continue
 
     flags = benjamini_hochberg([w[2] for w in winners])
@@ -2313,8 +2321,8 @@ def main():
                                 "adoptable": ok, "neural_lift": nl,
                                 "replicated": bool(replicated), "clears": clears or 0})
         verdict = _gate_verdict(ok, bool(replicated), clears)
-        nl_str = "" if nl is None else " | neural_lift %+.2f" % nl
-        print("[auto-research] axis %s: %s | %s%s" % (name, verdict, tag, nl_str))
+        nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
+        print(f"[auto-research] axis {name}: {verdict} | {tag}{nl_str}")
     ar_memory.findings_append({
         "ts": ts, "mode": "axes",
         "axes": [a.name for a in axes], "budget": BUDGET,

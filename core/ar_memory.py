@@ -45,12 +45,12 @@ def _save(path, obj):
 
 def blob_get(name, default=None):
     """Generic named JSON blob (used by core.ar_rl for scheduler state)."""
-    return _load(os.path.join(_RL_BLOB_DIR, "%s.json" % name), default)
+    return _load(os.path.join(_RL_BLOB_DIR, f"{name}.json"), default)
 
 
 def blob_put(name, obj):
     """Store a named JSON blob."""
-    _save(os.path.join(_RL_BLOB_DIR, "%s.json" % name), obj)
+    _save(os.path.join(_RL_BLOB_DIR, f"{name}.json"), obj)
 
 
 def tried_seen(kind, sig):
@@ -139,10 +139,10 @@ def data_fingerprint(subset):
             for a in subset.split(","):
                 t = _table_name(a.strip())
                 try:
-                    row = con.execute('SELECT MAX(Date) FROM "%s"' % t).fetchone()
-                    parts.append("%s=%s" % (t, row[0]))
+                    row = con.execute(f'SELECT MAX(Date) FROM "{t}"').fetchone()
+                    parts.append(f"{t}={row[0]}")
                 except sqlite3.Error:
-                    parts.append("%s=?" % t)
+                    parts.append(f"{t}=?")
             return "|".join(parts)
         finally:
             con.close()

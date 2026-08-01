@@ -33,7 +33,7 @@ def test_consecutive_buys_are_one_long_position():
 
 def test_short_return_is_inverted():
     r = build_positions([_b("d1", "SELL", 0.02), _b("d2", "WAIT")])
-    short = [s for s in r["segments"] if s["side"] == -1][0]
+    short = next(s for s in r["segments"] if s["side"] == -1)
     # short profits when price falls; ret 0.02 up -> position -0.02
     assert abs(short["ret"] - (-0.02)) < 1e-9
 

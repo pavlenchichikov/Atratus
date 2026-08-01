@@ -1,7 +1,8 @@
 """Unit tests for the A/B builder's configuration half (no training)."""
 
-import io
+import functools
 import json
+import operator
 import os
 
 import ab_build
@@ -45,21 +46,21 @@ def test_reference_is_the_bare_base_when_nothing_is_adopted(monkeypatch):
 def test_previous_holdouts_are_read_from_every_result_file(tmp_path,
                                                           monkeypatch):
     monkeypatch.setattr(ab_build, "_adopted_record", lambda: None)
-    io.open(str(tmp_path / "_ab_genomes_20260101-0000.json"), "w",
+    open(str(tmp_path / "_ab_genomes_20260101-0000.json"), "w",
             encoding="utf-8").write(json.dumps({"holdout": "AAA,BBB",
                                                 "results": {}}))
-    io.open(str(tmp_path / "_ab_genomes_20260202-0000.json"), "w",
+    open(str(tmp_path / "_ab_genomes_20260202-0000.json"), "w",
             encoding="utf-8").write(json.dumps({"holdout": "CCC",
                                                 "results": {}}))
     got = ab_build.previous_holdouts(str(tmp_path))
-    assert sorted(sum((h.split(",") for h in got), [])) == ["AAA", "BBB", "CCC"]
+    assert sorted(functools.reduce(operator.iadd, (h.split(",") for h in got), [])) == ["AAA", "BBB", "CCC"]
 
 
 def test_a_corrupt_result_file_does_not_stop_the_scan(tmp_path, monkeypatch):
     monkeypatch.setattr(ab_build, "_adopted_record", lambda: None)
-    io.open(str(tmp_path / "_ab_genomes_bad.json"), "w",
+    open(str(tmp_path / "_ab_genomes_bad.json"), "w",
             encoding="utf-8").write("{not json")
-    io.open(str(tmp_path / "_ab_genomes_ok.json"), "w",
+    open(str(tmp_path / "_ab_genomes_ok.json"), "w",
             encoding="utf-8").write(json.dumps({"holdout": "AAA",
                                                 "results": {}}))
     assert ab_build.previous_holdouts(str(tmp_path)) == ["AAA"]
@@ -258,7 +259,7 @@ def test_the_result_file_is_readable_by_the_adoption_picker(tmp_path,
     genome = {"drops": ["vol_z"], "extra": [], "label_mode": "rel_median",
               "label_window": 30, "thr_margin": 0.02, "regime_mode": "off"}
     sig = ar.genome_sig(ar.Genome(**genome))
-    io.open(str(tmp_path / "_qd_archive.json"), "w", encoding="utf-8").write(
+    open(str(tmp_path / "_qd_archive.json"), "w", encoding="utf-8").write(
         json.dumps({"3_4_5": {"fitness": 5.3, "genome": genome}}))
     written = ab_build.write_result(
         {"holdout": "A1,A2", "objective": "mean", "floor": 0.5, "alpha": 0.05,

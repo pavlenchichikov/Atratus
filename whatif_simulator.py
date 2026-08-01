@@ -42,14 +42,14 @@ COST = COMMISSION + SLIPPAGE  # per trade side
 def _load_registry() -> dict:
     if not os.path.exists(REGISTRY_PATH):
         return {}
-    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+    with open(REGISTRY_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
 def _load_quality_report() -> dict:
     if not os.path.exists(QUALITY_PATH):
         return {}
-    with open(QUALITY_PATH, "r", encoding="utf-8") as f:
+    with open(QUALITY_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -82,8 +82,7 @@ def _load_prices(asset: str, days_back: int, engine) -> pd.DataFrame | None:
         print(f"  [SKIP] {asset}: no data in DB")
         return None
 
-    df = df[~df.index.duplicated(keep="last")].sort_index()
-    return df
+    return df[~df.index.duplicated(keep="last")].sort_index()
 
 
 def _predict_cb(asset: str, df_full: pd.DataFrame, days_back: int, engine) -> pd.DataFrame | None:
@@ -93,6 +92,7 @@ def _predict_cb(asset: str, df_full: pd.DataFrame, days_back: int, engine) -> pd
     """
     from catboost import CatBoostClassifier
     from sklearn.preprocessing import StandardScaler
+
     from core.features import build_features
 
     table = _asset_to_table(asset)
@@ -378,7 +378,7 @@ def _get_allocation(assets: list[str], capital: float, strategy: str) -> dict[st
         # Fallback to equal if no scores
     # Equal split
     share = capital / max(len(assets), 1)
-    return {a: share for a in assets}
+    return dict.fromkeys(assets, share)
 
 
 # ---------------------------------------------------------------------------

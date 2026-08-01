@@ -36,8 +36,8 @@ except Exception:
     pass
 
 from config import FULL_ASSET_MAP
-from core import (alerts, digest, events as core_events, news_export,
-                  news_link, timing_policy, track_record)
+from core import alerts, digest, news_export, news_link, timing_policy, track_record
+from core import events as core_events
 from net import yf_session
 
 BAR_LIMIT = 180   # bars per asset exported for the mobile price chart
@@ -119,8 +119,7 @@ def _rest_base(url: str) -> str:
     """Normalize a Supabase URL to its REST base, tolerating a pasted
     '/rest/v1' suffix so we never end up with '.../rest/v1/rest/v1'."""
     root = url.strip().rstrip("/")
-    if root.endswith("/rest/v1"):
-        root = root[: -len("/rest/v1")]
+    root = root.removesuffix("/rest/v1")
     return root + "/rest/v1"
 
 

@@ -5,12 +5,13 @@ Performance Report - generates an HTML report on system status.
   python performance_report.py --output f.html
 """
 
+import argparse
+import json
 import os
 import sys
-import json
-import argparse
 import webbrowser
 from datetime import datetime
+
 import pandas as pd
 from sqlalchemy import create_engine
 
@@ -24,7 +25,7 @@ REPORT_DIR = os.path.join(BASE_DIR, "reports")
 
 sys.path.insert(0, BASE_DIR)
 try:
-    from config import FULL_ASSET_MAP, ASSET_TYPES
+    from config import ASSET_TYPES, FULL_ASSET_MAP
 except ImportError:
     FULL_ASSET_MAP = {}
     ASSET_TYPES = {}
@@ -38,7 +39,7 @@ def _table_name(asset):
 
 def _load_registry():
     if os.path.exists(REGISTRY_PATH):
-        with open(REGISTRY_PATH, "r") as f:
+        with open(REGISTRY_PATH) as f:
             return json.load(f)
     return {}
 
@@ -56,8 +57,8 @@ def _get_asset_stats(asset, rows=60):
         df.columns = [c.lower() for c in df.columns]
         price = float(df["close"].iloc[-1])
         chg_1d = float(df["close"].pct_change().iloc[-1]) if len(df) > 1 else 0
-        chg_5d = float((df["close"].iloc[-1] / df["close"].iloc[-6] - 1)) if len(df) > 5 else 0
-        chg_20d = float((df["close"].iloc[-1] / df["close"].iloc[-21] - 1)) if len(df) > 20 else 0
+        chg_5d = float(df["close"].iloc[-1] / df["close"].iloc[-6] - 1) if len(df) > 5 else 0
+        chg_20d = float(df["close"].iloc[-1] / df["close"].iloc[-21] - 1) if len(df) > 20 else 0
 
         rsi = float(compute_rsi(df["close"]).iloc[-1])
 
@@ -101,7 +102,7 @@ def _regime_info():
 def _chg_color(val):
     if val > 0:
         return "#22c55e"
-    elif val < 0:
+    if val < 0:
         return "#ef4444"
     return "#64748b"
 
@@ -207,7 +208,7 @@ def generate_html():
         for r in asset_rows
     )
 
-    html = f"""<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Atratus Report {now_str}</title>
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
@@ -288,7 +289,6 @@ function sortTable(col) {{
 }}
 </script>
 </body></html>"""
-    return html
 
 
 def export_report(output=None, open_browser=True):

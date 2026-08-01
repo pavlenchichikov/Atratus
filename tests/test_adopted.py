@@ -1,6 +1,5 @@
 """Unit tests for core.adopted (pure; no network, no training)."""
 
-import io
 import json
 
 from core import adopted
@@ -22,7 +21,7 @@ GENOME_A = {
 
 def write(tmp_path, payload):
     p = tmp_path / "adopted_genome.json"
-    io.open(str(p), "w", encoding="utf-8").write(json.dumps(payload))
+    open(str(p), "w", encoding="utf-8").write(json.dumps(payload))
     return str(p)
 
 
@@ -32,7 +31,7 @@ def test_a_missing_file_is_no_adoption(tmp_path):
 
 def test_corrupt_payloads_are_no_adoption(tmp_path):
     bad = tmp_path / "bad.json"
-    io.open(str(bad), "w", encoding="utf-8").write("{not json")
+    open(str(bad), "w", encoding="utf-8").write("{not json")
     assert adopted.load(str(bad)) is None
     assert adopted.load(write(tmp_path, [1, 2, 3])) is None
     assert adopted.load(write(tmp_path, {"label": "A"})) is None

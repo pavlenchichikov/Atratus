@@ -33,8 +33,8 @@ def resolve_model(name):
 def chronos_available():
     """True iff the optional Chronos deps import."""
     try:
-        import torch  # noqa: F401
         import chronos  # noqa: F401
+        import torch  # noqa: F401
         return True
     except Exception:
         return False

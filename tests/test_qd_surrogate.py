@@ -1,5 +1,5 @@
-from core import qd_surrogate as qs
 from auto_research import Genome
+from core import qd_surrogate as qs
 
 _ACTIVE = ["ret_1", "ret_5", "ret_10", "rsi", "atr", "vol_z", "sma_20", "bb_pos"]
 _BASE = ["ret_1", "ret_5", "rsi"]

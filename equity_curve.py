@@ -5,10 +5,11 @@ Opens a matplotlib window with an interactive chart.
   python equity_curve.py --backtest    - from backtest results
 """
 
-import os
-import sys
 import argparse
+import os
 import sqlite3
+import sys
+
 import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,7 +72,7 @@ def _get_backtest_equity():
 
     if os.path.exists(results_file):
         import json
-        with open(results_file, "r") as f:
+        with open(results_file) as f:
             data = json.load(f)
         if "equity_curve" in data:
             return pd.DataFrame(data["equity_curve"])
@@ -83,10 +84,11 @@ def _get_backtest_equity():
         return None
 
     import json
+
     from sqlalchemy import create_engine
     engine = create_engine(f"sqlite:///{MARKET_DB}")
 
-    with open(registry_path, "r") as f:
+    with open(registry_path) as f:
         registry = json.load(f)
 
     # Take the top 5 assets by score
@@ -123,11 +125,10 @@ def _get_backtest_equity():
 
     combined = pd.concat(all_returns, axis=1).sum(axis=1)
     equity_series = (1 + combined).cumprod() * initial
-    result = pd.DataFrame({
+    return pd.DataFrame({
         "date": equity_series.index.astype(str),
         "equity": equity_series.values,
     })
-    return result
 
 
 def show_equity_curve(source="paper"):
@@ -147,8 +148,8 @@ def show_equity_curve(source="paper"):
     try:
         import matplotlib
         matplotlib.use("TkAgg")
-        import matplotlib.pyplot as plt
         import matplotlib.dates as mdates  # noqa: F401
+        import matplotlib.pyplot as plt
     except ImportError:
         # Fallback: text output
         print(f"\n  {title}")
@@ -188,7 +189,7 @@ def show_equity_curve(source="paper"):
     stats_text = f"Return: {ret_pct:+.1f}%  |  Peak: ${max_eq:,.0f}  |  Max DD: {max_dd:.1f}%"
     ax.text(0.5, 0.02, stats_text, transform=ax.transAxes,
             ha="center", color="#94a3b8", fontsize=10,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="#1e293b", edgecolor="#334155"))
+            bbox={"boxstyle": "round,pad=0.3", "facecolor": "#1e293b", "edgecolor": "#334155"})
 
     plt.tight_layout()
     plt.show()

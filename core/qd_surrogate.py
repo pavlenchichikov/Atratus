@@ -35,7 +35,7 @@ def genome_vector(genome, active, base_features):
     vec = [float(len(genome.drops))]
     vec += [1.0 if f in drop_set else 0.0 for f in active]
     vec.append(float(len(genome.extra)))
-    counts = {op: 0 for op in _DSL_OPS}
+    counts = dict.fromkeys(_DSL_OPS, 0)
     for s in genome.extra:
         op = s.get("op")
         if op in counts:

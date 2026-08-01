@@ -4,10 +4,10 @@ Manages virtual positions using SQLite (paper.db).
 Reads live prices from market.db.
 """
 
-import os
-import sys
-import sqlite3
 import argparse
+import os
+import sqlite3
+import sys
 from datetime import datetime
 
 import sqlalchemy as sa
@@ -371,7 +371,7 @@ def reset_portfolio():
     if os.path.exists(PAPER_DB):
         os.remove(PAPER_DB)
     _init_db()
-    print("[OK] Portfolio reset. Balance: ${:,.2f}".format(DEFAULT_BALANCE))
+    print(f"[OK] Portfolio reset. Balance: ${DEFAULT_BALANCE:,.2f}")
 
 
 # ---------------------------------------------------------------------------

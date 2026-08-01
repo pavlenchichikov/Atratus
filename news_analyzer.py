@@ -4,21 +4,21 @@
 # Sources: Bloomberg, Reuters, CNBC, MarketWatch, WSJ, FT, RBC, etc.
 # No external NLP libraries required.
 
+import argparse
 import os
+import re
 import sys
 import time
-import re
-import argparse
 import xml.etree.ElementTree as ET
-from urllib.parse import quote_plus
 from html import unescape
+from urllib.parse import quote_plus
 
 import requests
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-from config import FULL_ASSET_MAP, SOCKS5_PROXY, ASSET_TYPES
+from config import ASSET_TYPES, FULL_ASSET_MAP, SOCKS5_PROXY
 
 # ---------------------------------------------------------------------------
 # Search-friendly names for each asset key
@@ -288,8 +288,7 @@ def _clean_html(text: str) -> str:
     """Remove HTML tags and decode entities."""
     text = re.sub(r'<[^>]+>', ' ', text)
     text = unescape(text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    return re.sub(r'\s+', ' ', text).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -414,10 +413,7 @@ def _parse_rss_items(xml_text: "str | bytes", source_name: str = "",
 
         # --- link ---
         link_el = entry.find("link")
-        if link_el is not None:
-            link = link_el.text.strip() if link_el.text else link_el.get("href", "")
-        else:
-            link = ""
+        link = (link_el.text.strip() if link_el.text else link_el.get("href", "")) if link_el is not None else ""
 
         # --- published ---
         pub_el = entry.find("pubDate")
@@ -442,10 +438,7 @@ def _parse_rss_items(xml_text: "str | bytes", source_name: str = "",
         if len(desc) > 300:
             # Cut at sentence boundary
             cut = desc[:300].rfind(". ")
-            if cut > 100:
-                desc = desc[:cut + 1]
-            else:
-                desc = desc[:297] + "..."
+            desc = desc[:cut + 1] if cut > 100 else desc[:297] + "..."
 
         # --- source ---
         if source_name:
@@ -565,14 +558,13 @@ def _score_title(title: str) -> float:
 def _sentiment_label(score: float) -> str:
     if score > 0.3:
         return "VERY_BULLISH"
-    elif score > 0.1:
+    if score > 0.1:
         return "BULLISH"
-    elif score > -0.1:
+    if score > -0.1:
         return "NEUTRAL"
-    elif score > -0.3:
+    if score > -0.3:
         return "BEARISH"
-    else:
-        return "VERY_BEARISH"
+    return "VERY_BEARISH"
 
 
 def _short_label(label: str) -> str:
@@ -886,10 +878,7 @@ def _print_digest(digest: list[dict], lang: str, cat: str):
             if desc and len(desc) > 15:
                 if len(desc) > 120:
                     cut = desc[:120].rfind(". ")
-                    if cut > 50:
-                        desc = desc[:cut + 1]
-                    else:
-                        desc = desc[:117] + "..."
+                    desc = desc[:cut + 1] if cut > 50 else desc[:117] + "..."
                 print(f"          > {desc}")
 
     # Summary

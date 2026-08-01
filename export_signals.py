@@ -34,7 +34,7 @@ DEFAULT_EXPORT_DIR = os.path.join(BASE_DIR, "exports")
 
 def _load_json(path):
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
@@ -69,7 +69,7 @@ def _compute_trend(series, short=20, long=50):
     sma_long = series.rolling(long).mean().iloc[-1]
     if sma_short > sma_long:
         return "UP"
-    elif sma_short < sma_long:
+    if sma_short < sma_long:
         return "DOWN"
     return "FLAT"
 

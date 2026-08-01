@@ -1,4 +1,4 @@
-from core.drift import DRIFT_CONFIG, miss_streak, acc_trend, classify_asset
+from core.drift import DRIFT_CONFIG, acc_trend, classify_asset, miss_streak
 
 
 def test_miss_streak_counts_trailing_misses():

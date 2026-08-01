@@ -10,6 +10,7 @@ found.
 Pure and offline. Everything operates on bars and news items already fetched.
 """
 
+import itertools
 import statistics
 from email.utils import parsedate_to_datetime
 
@@ -39,7 +40,7 @@ def move_sigma(bars, window=SIGMA_WINDOW):
     """
     closes = _closes(bars)[-(window + 1):]
     rets = [cur / prev - 1.0
-            for prev, cur in zip(closes, closes[1:]) if prev > 0]
+            for prev, cur in itertools.pairwise(closes) if prev > 0]
     if len(rets) < MIN_RETURNS:
         return None
     return statistics.pstdev(rets)
@@ -122,10 +123,7 @@ def context_row(asset, bars, items):
         return None
     date = bars[-1]["date"]
     move = daily_move(bars)
-    if items is None:
-        verdict = "not_checked"
-    else:
-        verdict = consistency(move, mean_sentiment(same_day(items, date)))
+    verdict = "not_checked" if items is None else consistency(move, mean_sentiment(same_day(items, date)))
     return {
         "asset": asset,
         "date": date,

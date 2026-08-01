@@ -123,7 +123,7 @@ def test_fetch_history_rows_skips_missing_table(tmp_path, monkeypatch):
     monkeypatch.setattr(push_signals, "FULL_ASSET_MAP",
                         {"BTC": "BTC-USD", "NEWCO": "NEW"}, raising=False)
     db = _seed_history_db(tmp_path)
-    bars, hist = push_signals.fetch_history_rows(db_path=db)
+    bars, _hist = push_signals.fetch_history_rows(db_path=db)
     assert {b["asset"] for b in bars} == {"BTC"}  # NEWCO has no table - skipped
 
 
@@ -521,7 +521,6 @@ def test_push_news_deletes_on_id_not_asset(monkeypatch):
 
     def fake_send(method, url, **kw):
         calls.append((method, url))
-        return None
 
     monkeypatch.setattr(push_signals, "_send", fake_send)
     rows = [{"id": "a1", "asset": None, "date": "2026-07-26", "title": "t"}]

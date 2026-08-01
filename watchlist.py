@@ -9,10 +9,11 @@ Watchlist - manage lists of favorite assets with current prices.
   python watchlist.py --status         - compact output (for GUI)
 """
 
+import argparse
+import json
 import os
 import sys
-import json
-import argparse
+
 import pandas as pd
 from sqlalchemy import create_engine
 
@@ -41,7 +42,7 @@ DEFAULT_LISTS = {
 
 def _load():
     if os.path.exists(WL_PATH):
-        with open(WL_PATH, "r", encoding="utf-8") as f:
+        with open(WL_PATH, encoding="utf-8") as f:
             return json.load(f)
     return dict(DEFAULT_LISTS)
 

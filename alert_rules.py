@@ -2,9 +2,9 @@
 # Custom alert rules for Atratus.
 # Users define conditions; module checks them against market.db and notifies on trigger.
 
-import os
-import json
 import argparse
+import json
+import os
 from datetime import date
 
 import pandas as pd
@@ -35,7 +35,7 @@ def load_rules() -> list:
     """Load alert rules from alerts.json. Returns list of rule dicts."""
     if not os.path.exists(ALERTS_PATH):
         return []
-    with open(ALERTS_PATH, "r", encoding="utf-8") as f:
+    with open(ALERTS_PATH, encoding="utf-8") as f:
         data = json.load(f)
     return data.get("rules", [])
 
@@ -120,8 +120,7 @@ def _load_asset_data(asset: str) -> pd.DataFrame | None:
         return None
 
     df = df.set_index("Date").sort_index()
-    df = df[~df.index.duplicated(keep="last")]
-    return df
+    return df[~df.index.duplicated(keep="last")]
 
 
 def _detect_trend(closes: pd.Series) -> str:

@@ -17,7 +17,6 @@ Usage:
 """
 import argparse
 import glob
-import io
 import json
 import os
 import sqlite3
@@ -33,7 +32,7 @@ MAX_CANDIDATES = 3
 
 def _read_json(path):
     try:
-        with io.open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return None
@@ -59,7 +58,7 @@ def reference():
         return {"label": "base", "sig": None, "env": {}}
     import auto_research as ar
     g = ar.Genome(**rec["genome"])
-    return {"label": "adopted:%s" % rec.get("label", "?"),
+    return {"label": "adopted:{}".format(rec.get("label", "?")),
             "sig": ar.genome_sig(g), "env": ar.genome_to_env(g)}
 
 
@@ -93,15 +92,14 @@ def bar_counts(db_path=None):
     path = db_path or DB_PATH
     out = {}
     if not os.path.exists(path):
-        raise SystemExit("market.db not found at %s; run data_engine first."
-                         % path)
-    con = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+        raise SystemExit(f"market.db not found at {path}; run data_engine first.")
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         cur = con.cursor()
         for asset in FULL_ASSET_MAP:
             try:
                 out[asset] = cur.execute(
-                    'SELECT COUNT(*) FROM "%s"' % asset.lower()).fetchone()[0]
+                    f'SELECT COUNT(*) FROM "{asset.lower()}"').fetchone()[0]
             except sqlite3.Error:
                 out[asset] = 0
     finally:
@@ -129,7 +127,7 @@ def build_config(candidates, assets, ref, floor, alpha, seed, objective):
 
 
 def write_config(cfg, path=None):
-    with io.open(path or CONFIG_PATH, "w", encoding="utf-8") as fh:
+    with open(path or CONFIG_PATH, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, ensure_ascii=False, indent=2)
 
 
@@ -160,17 +158,16 @@ def _suggest_assets(n, seed):
 
 
 def _configure(args):
+    import adopt_genome
     import auto_research as ar
     from core import holdout
-
-    import adopt_genome
 
     ref = reference()
     pool = _candidate_pool()
     if not pool:
         print("No unvalidated elites in the archive to test.")
         return
-    print("Measuring against: %s\n" % ref["label"])
+    print("Measuring against: {}\n".format(ref["label"]))
     for i, c in enumerate(pool, 1):
         notes = []
         if is_reference(c, ref):
@@ -210,23 +207,22 @@ def _configure(args):
     if problems:
         print("\nThis holdout cannot be used:")
         for p in problems:
-            print("  - %s" % p)
+            print(f"  - {p}")
         return
 
     cfg = build_config(chosen, assets, ref, ar._adopt_floor(args.objective),
                        args.alpha, args.seed, args.objective)
     write_config(cfg)
-    print("\nWrote %s" % os.path.basename(CONFIG_PATH))
+    print(f"\nWrote {os.path.basename(CONFIG_PATH)}")
     _print_config(cfg)
     print("\nNext: python ab_build.py --run   (do not start it while a retrain "
           "is running)")
 
 
 def _print_config(cfg):
-    print("  reference : %s" % cfg["reference"])
-    print("  holdout   : %s" % cfg["holdout"])
-    print("  objective : %s   floor %+.2f   alpha %.3f"
-          % (cfg["objective"], cfg["floor"], cfg["alpha"]))
+    print("  reference : {}".format(cfg["reference"]))
+    print("  holdout   : {}".format(cfg["holdout"]))
+    print("  objective : {}   floor {:+.2f}   alpha {:.3f}".format(cfg["objective"], cfg["floor"], cfg["alpha"]))
     for c in cfg["candidates"]:
         g = c["genome"]
         print("  candidate : %-8s %d drops, %d extra, label %s/%s"
@@ -302,7 +298,7 @@ def write_result(cfg, results, base=None):
     """Write the run in the shape adopt_genome.candidates() already parses."""
     import datetime
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
-    path = os.path.join(base or BASE, "_ab_genomes_%s.json" % stamp)
+    path = os.path.join(base or BASE, f"_ab_genomes_{stamp}.json")
     payload = {
         "holdout": cfg["holdout"],
         "objective": cfg["objective"],
@@ -316,7 +312,7 @@ def write_result(cfg, results, base=None):
                             "p_neural": st["p_neural"], "label": label}
                     for label, st in results.items()},
     }
-    with io.open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
     return path
 
@@ -333,7 +329,7 @@ def run(cfg):
     if live["sig"] != cfg["reference_sig"]:
         print("The adoption changed since this config was written.")
         print("  config expects: %s" % (cfg["reference"] or "base"))
-        print("  live now      : %s" % live["label"])
+        print("  live now      : {}".format(live["label"]))
         print("Rebuild it: python ab_build.py")
         return
     ref = {"label": cfg["reference"], "sig": cfg["reference_sig"],
@@ -342,25 +338,24 @@ def run(cfg):
     if not os.path.exists(DB_PATH):
         # data_fingerprint connects without mode=ro and would create an empty
         # file here, so the run would train on nothing and say so late.
-        print("market.db not found at %s; run data_engine first." % DB_PATH)
+        print(f"market.db not found at {DB_PATH}; run data_engine first.")
         return
     fp_start = ar_memory.data_fingerprint(subset)
-    print("Reference: %s   holdout: %s   data %s"
-          % (ref["label"], subset, fp_start))
+    print("Reference: {}   holdout: {}   data {}".format(ref["label"], subset, fp_start))
     ref_full, ref_contrib = train_reference(subset, ref)
     if not ref_full:
         print("The reference arm produced no rows; stopping.")
         return
     results = {}
     for cand in cfg["candidates"]:
-        print("\nTraining candidate %s ..." % cand["label"])
+        print("\nTraining candidate {} ...".format(cand["label"]))
         results[cand["label"]] = evaluate(cand, subset, ref_full, ref_contrib,
                                           cfg["objective"])
     print("\n%s" % ("=" * 66))
     for label, st in results.items():
         v = verdict(st, cfg["floor"], cfg["alpha"])
-        p_txt = "%.4f" % st["p"] if st["p"] is not None else "n/a"
-        v_txt = "%+.2f" % st["value"] if st["value"] is not None else "n/a"
+        p_txt = "{:.4f}".format(st["p"]) if st["p"] is not None else "n/a"
+        v_txt = "{:+.2f}".format(st["value"]) if st["value"] is not None else "n/a"
         print("  %-8s %s over %s   p=%s  n=%s   %s (floor %+.2f, alpha %.3f)"
               % (label, v_txt, cfg["reference"], p_txt, st["n"], v,
                  cfg["floor"], cfg["alpha"]))
@@ -369,7 +364,7 @@ def run(cfg):
               "arms were measured over different windows, so the comparison is "
               "unreliable; rerun it on a quiet database.")
     path = write_result(cfg, results)
-    print("\nWrote %s" % os.path.basename(path))
+    print(f"\nWrote {os.path.basename(path)}")
     print("Next: python adopt_genome.py")
 
 

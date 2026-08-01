@@ -23,7 +23,7 @@ class TestBaselineIdentity:
     def test_default_params_equal_raw_signals(self):
         pol = tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
         probs = [0.60, 0.60, 0.50, 0.40, 0.40, 0.50, 0.70]
-        sides, actions, reasons = _apply(pol, probs)
+        sides, _actions, _reasons = _apply(pol, probs)
         raw = [1, 1, 0, -1, -1, 0, 1]
         assert list(sides) == raw
 
@@ -31,7 +31,7 @@ class TestBaselineIdentity:
 class TestEntryRules:
     def test_entry_margin_blocks_weak_signal(self):
         pol = tp.RulesPolicy({**tp.DEFAULT_PARAMS, "entry_margin": 0.03})
-        sides, actions, reasons = _apply(pol, [0.56, 0.56])
+        sides, _actions, reasons = _apply(pol, [0.56, 0.56])
         assert list(sides) == [0, 0]
         assert reasons[0] == "entry_margin"
 
@@ -72,7 +72,7 @@ class TestExitRules:
 
     def test_flip_exits(self):
         pol = tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
-        sides, actions, reasons = _apply(pol, [0.60, 0.40])
+        _sides, actions, reasons = _apply(pol, [0.60, 0.40])
         assert actions[1] == "EXIT" and reasons[1] == "flip"
 
     def test_max_hold_exits(self):
@@ -84,7 +84,7 @@ class TestExitRules:
     def test_cooldown_blocks_reentry(self):
         pol = tp.RulesPolicy({**tp.DEFAULT_PARAMS, "max_hold_days": 2,
                               "cooldown_days": 2})
-        sides, actions, reasons = _apply(pol, [0.60] * 5)
+        _sides, actions, reasons = _apply(pol, [0.60] * 5)
         # enter@0, hold@1, max_hold exit@2, cooldown@3, cooldown expired -> enter@4
         assert actions[2] == "EXIT"
         assert actions[3] == "STAY_OUT" and reasons[3] == "cooldown"
@@ -94,7 +94,7 @@ class TestExitRules:
         pol = tp.RulesPolicy({**tp.DEFAULT_PARAMS, "trail_atr": 2.0})
         probs = [0.60, 0.60, 0.60, 0.60]
         next_ret = _arr(0.05, -0.03, -0.03, 0.0)  # peak .05, dd .06 > 2*.02
-        sides, actions, reasons = pol.apply(
+        _sides, actions, reasons = pol.apply(
             _arr(*probs), buy_thr=0.55, sell_thr=0.45,
             atr=np.full(4, 0.02), taleb_hi=np.zeros(4, dtype=bool),
             risky=False, next_ret=next_ret)
@@ -108,10 +108,10 @@ class TestStepAndLoad:
         pol = tp.RulesPolicy({**tp.DEFAULT_PARAMS, "confirm_days": 1,
                               "exit_hysteresis": 0.05})
         probs = [0.60, 0.60, 0.52, 0.40]
-        sides, actions, reasons = _apply(pol, probs)
+        _sides, actions, _reasons = _apply(pol, probs)
         state = tp.FRESH_STATE.copy()
         for i, p in enumerate(probs):
-            action, reason, state = tp.policy_step(
+            action, _reason, state = tp.policy_step(
                 pol, p, 0.55, 0.45, 0.02, False, False, state)
             assert action == actions[i], f"bar {i}"
 

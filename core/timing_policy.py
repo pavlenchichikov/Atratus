@@ -132,9 +132,7 @@ def policy_step(policy, prob, buy_thr, sell_thr, atr_now, taleb_hi_now,
     st["days_held"] += 1
     if raw == -st["pos"]:
         exit_reason = "flip"
-    elif st["pos"] == 1 and prob < buy_thr - p["exit_hysteresis"]:
-        exit_reason = "hysteresis"
-    elif st["pos"] == -1 and prob > sell_thr + p["exit_hysteresis"]:
+    elif st["pos"] == 1 and prob < buy_thr - p["exit_hysteresis"] or st["pos"] == -1 and prob > sell_thr + p["exit_hysteresis"]:
         exit_reason = "hysteresis"
     elif st["days_held"] >= int(p["max_hold_days"]):
         exit_reason = "max_hold"

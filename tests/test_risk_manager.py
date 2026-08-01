@@ -10,7 +10,7 @@ import pytest
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from risk_manager import RiskManager, RISK_CONFIG
+from risk_manager import RISK_CONFIG, RiskManager
 
 
 @pytest.fixture

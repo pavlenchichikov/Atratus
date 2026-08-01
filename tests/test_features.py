@@ -5,12 +5,12 @@ import pandas as pd
 import pytest
 
 from core.features import (
+    _MACRO_FEATURES,
     add_macro_features,
     compute_taleb_risk,
     engineer_features,
     latest_taleb_risk,
     make_target,
-    _MACRO_FEATURES,
 )
 
 
@@ -234,6 +234,7 @@ def test_engineer_features_has_vn_and_calendar(sample_ohlcv):
 def test_add_cross_lag_features_asof_and_missing(tmp_path):
     import pandas as pd
     from sqlalchemy import create_engine
+
     from core.features import add_cross_lag_features
     eng = create_engine(f"sqlite:///{tmp_path / 'lead.db'}")
     pd.DataFrame({"Date": ["2024-01-01", "2024-01-10"], "Close": [100.0, 110.0]}).to_sql("sp500", eng, index=False)
@@ -414,6 +415,7 @@ def test_active_candidate_features_drop_unknown_is_harmless(monkeypatch):
 def test_add_chronos_features_off_by_default(monkeypatch, tmp_path):
     import pandas as pd
     from sqlalchemy import create_engine
+
     from core import features as F
     monkeypatch.delenv("GTRADE_CHRONOS", raising=False)
     df = pd.DataFrame({"close": [1.0, 2.0]},
@@ -426,6 +428,7 @@ def test_add_chronos_features_off_by_default(monkeypatch, tmp_path):
 def test_add_chronos_features_joins_when_enabled(monkeypatch, tmp_path):
     import pandas as pd
     from sqlalchemy import create_engine
+
     from core import features as F
     dbp = str(tmp_path / "m.db")
     eng = create_engine("sqlite:///" + dbp)
@@ -458,6 +461,7 @@ def test_add_chronos_features_pipeline_date_column(monkeypatch, tmp_path):
     Chronos columns are silently all-NaN."""
     import pandas as pd
     from sqlalchemy import create_engine
+
     from core import features as F
     eng = create_engine("sqlite:///" + str(tmp_path / "m.db"))
     cache = pd.DataFrame({
@@ -479,6 +483,7 @@ def test_add_chronos_features_enabled_but_no_cache(monkeypatch, tmp_path):
     """GTRADE_CHRONOS set but no cache table - no-op (df unchanged), not a crash."""
     import pandas as pd
     from sqlalchemy import create_engine
+
     from core import features as F
     eng = create_engine("sqlite:///" + str(tmp_path / "empty.db"))
     monkeypatch.setenv("GTRADE_CHRONOS", "1")
@@ -492,6 +497,7 @@ def test_add_chronos_features_dedup_no_row_multiplication(monkeypatch, tmp_path)
     """Cache with a duplicate date must not multiply left rows (row count preserved)."""
     import pandas as pd
     from sqlalchemy import create_engine
+
     from core import features as F
     eng = create_engine("sqlite:///" + str(tmp_path / "dedup.db"))
     # Two rows with identical (asset, date) - the duplicate that triggers row multiplication
@@ -520,6 +526,7 @@ def test_add_chronos_features_auto_detects_cached_model(monkeypatch, tmp_path):
     that is actually cached (no tiny/base to configure)."""
     import pandas as pd
     from sqlalchemy import create_engine
+
     from core import features as F
     eng = create_engine("sqlite:///" + str(tmp_path / "am.db"))
     pd.DataFrame({

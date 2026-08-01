@@ -22,7 +22,7 @@ def test_precompute_caches_and_is_incremental(tmp_path):
     n1 = pc.precompute_asset("SP500", eng, forecaster=_fake_forecaster, context=64)
     assert n1 > 0
     cached = pd.read_sql("SELECT * FROM chronos_cache WHERE asset='sp500'", eng)
-    assert set(["asset", "date", "chronos_ret", "chronos_spread", "chronos_dir"]).issubset(cached.columns)
+    assert {"asset", "date", "chronos_ret", "chronos_spread", "chronos_dir"}.issubset(cached.columns)
     # re-run: nothing new (incremental skip)
     n2 = pc.precompute_asset("SP500", eng, forecaster=_fake_forecaster, context=64)
     assert n2 == 0

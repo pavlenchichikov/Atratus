@@ -3,10 +3,10 @@ Signal History Logger -- records all generated signals to SQLite
 for tracking accuracy over time.
 Database: signal_history.db
 """
-import os
-import sys
-import sqlite3
 import argparse
+import os
+import sqlite3
+import sys
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -137,11 +137,11 @@ def log_signal(
     asset: str,
     signal: str,
     confidence: float,
-    cb_prob: float = None,
-    lstm_prob: float = None,
-    price: float = None,
-    rsi: float = None,
-    regime: str = None,
+    cb_prob: float | None = None,
+    lstm_prob: float | None = None,
+    price: float | None = None,
+    rsi: float | None = None,
+    regime: str | None = None,
 ):
     """Record a new signal into signal_history.db."""
     _init_db()
@@ -266,21 +266,13 @@ def accuracy_report():
             # Re-evaluate 1d accuracy
             correct_1d = 0
             for _, row in has_1d.iterrows():
-                if row["signal"] == "BUY" and row["return_1d"] > 0:
-                    correct_1d += 1
-                elif row["signal"] == "SELL" and row["return_1d"] < 0:
-                    correct_1d += 1
-                elif row["signal"] == "HOLD" and abs(row["return_1d"]) < 0.01:
+                if row["signal"] == "BUY" and row["return_1d"] > 0 or row["signal"] == "SELL" and row["return_1d"] < 0 or row["signal"] == "HOLD" and abs(row["return_1d"]) < 0.01:
                     correct_1d += 1
             acc_1d = correct_1d / len(has_1d) * 100
         if len(has_5d) > 0:
             correct_5d = 0
             for _, row in has_5d.iterrows():
-                if row["signal"] == "BUY" and row["return_5d"] > 0:
-                    correct_5d += 1
-                elif row["signal"] == "SELL" and row["return_5d"] < 0:
-                    correct_5d += 1
-                elif row["signal"] == "HOLD" and abs(row["return_5d"]) < 0.01:
+                if row["signal"] == "BUY" and row["return_5d"] > 0 or row["signal"] == "SELL" and row["return_5d"] < 0 or row["signal"] == "HOLD" and abs(row["return_5d"]) < 0.01:
                     correct_5d += 1
             acc_5d = correct_5d / len(has_5d) * 100
 
@@ -358,11 +350,11 @@ def accuracy_report():
                     )
                     a5 = c5 / len(h5) * 100
                 s5 = f"{a5:.1f}%" if a5 is not None else "N/A"
-                print(f"  {str(regime_name):<15}{len(grp):<10}{len(v):<10}{s5:<10}")
+                print(f"  {regime_name!s:<15}{len(grp):<10}{len(v):<10}{s5:<10}")
             print()
 
 
-def show_recent(n: int = 20, asset_filter: str = None):
+def show_recent(n: int = 20, asset_filter: str | None = None):
     """Display the last N signals."""
     _init_db()
     conn = _get_signal_conn()

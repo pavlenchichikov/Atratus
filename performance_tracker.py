@@ -314,8 +314,7 @@ def update_actuals():
 
 
 def _date_filter(days):
-    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
-    return cutoff
+    return (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
 
 
 def get_accuracy(asset=None, days=30, model_version=None):
@@ -488,9 +487,9 @@ def meta_shadow_report(days=30, model_version=None):
         "sweep": sweep,
         "discrimination": {
             "high_meta_acc": float(hi.mean()) if len(hi) else None,
-            "high_meta_n": int(len(hi)),
+            "high_meta_n": len(hi),
             "low_meta_acc": float(lo.mean()) if len(lo) else None,
-            "low_meta_n": int(len(lo)),
+            "low_meta_n": len(lo),
         },
     }
 

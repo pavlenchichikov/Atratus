@@ -5,12 +5,13 @@ Correlation Alert - detector of correlation shifts between assets.
   python correlation_alert.py --json     - JSON output
 """
 
+import argparse
+import json
 import os
 import sys
-import json
-import argparse
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 from sqlalchemy import create_engine
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +19,7 @@ DB_PATH = os.path.join(BASE_DIR, "market.db")
 
 sys.path.insert(0, BASE_DIR)
 try:
-    from config import FULL_ASSET_MAP, ASSET_TYPES
+    from config import ASSET_TYPES, FULL_ASSET_MAP
 except ImportError:
     FULL_ASSET_MAP = {}
     ASSET_TYPES = {}
@@ -81,7 +82,7 @@ def _load_returns(assets, days=120):
 
 def get_correlation_alerts(threshold=ALERT_THRESHOLD):
     """Finds pairs with a large change in correlation (short vs long window)."""
-    all_assets = list(set(a for p in KEY_PAIRS for a in p))
+    all_assets = list({a for p in KEY_PAIRS for a in p})
     ret_df = _load_returns(all_assets)
     if ret_df.empty:
         return []
@@ -101,13 +102,7 @@ def get_correlation_alerts(threshold=ALERT_THRESHOLD):
         change = corr_short - corr_long
         abs_change = abs(change)
 
-        if abs_change >= threshold:
-            if change > 0:
-                signal = "CONVERGING"
-            else:
-                signal = "DIVERGING"
-        else:
-            signal = "STABLE"
+        signal = ("CONVERGING" if change > 0 else "DIVERGING") if abs_change >= threshold else "STABLE"
 
         alerts.append({
             "pair": f"{a1}-{a2}",
