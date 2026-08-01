@@ -7,6 +7,8 @@
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-lightgrey.svg)](LICENSE)
 
+**English** | [**Русский**](#русский)
+
 <details open>
 <summary><b>English</b></summary>
 
@@ -33,6 +35,7 @@
 - [Tech stack](#tech-stack)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Daily use](#daily-use)
 - [Training](#training)
 - [Network](#network)
 - [Configuration](#configuration)
@@ -46,6 +49,7 @@
 - **~208 assets, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
 - **Risk-managed by design.** Kelly-based position sizing, drawdown stops, sector-exposure and correlation checks, and a Taleb tail-risk index that shrinks size above a soft cap and blocks new buys above a hard cap.
+- **Prices, not just calls.** A daily trade-level sheet turns each signal into numbers you can act on: an ATR entry zone around the last close, an emergency stop that trails the position, and a size derived from the distance to that stop and clipped by the risk limits. Execution stays manual.
 - **Rich feature set.** Returns and volatility-normalized returns, tail risk (kurtosis / skew / VaR), RSI / MACD / SMA / ATR, weekly and cross-asset correlations, cross-asset lead-lag, calendar position, and a macro regime read (10y yield, VIX, dollar).
 - **Autonomous research agent.** A quality-diversity (MAP-Elites) search over features, labels and transforms, with a rigorous held-out adoption gate (Wilcoxon signed-rank + Benjamini-Hochberg + cross-run replication) so nothing is adopted on noise. Never touches production automatically.
 - **Instant FastAPI dashboard.** Reads ready-made predictions from the database (no TensorFlow at serve time), so it starts immediately - signal radar, per-asset detail, portfolio analytics, an interactive risk manager, and a what-if backtester.
@@ -73,6 +77,7 @@ Lightweight web interface - no TensorFlow needed, reads predictions from the dat
 
 - `/` - signal radar: BUY / SELL / WAIT per asset with confidence, live accuracy, a Taleb tail-risk column, a live market-breadth panel and regime / fear-greed gauges
 - `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, and the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate
+- `/levels` - the trade-level sheet: entry zone, stop and position size per active signal, with a reason on every row that has none
 - `/portfolio` - portfolio analytics over open positions: diversification score, sector-exposure heat, held-asset correlation, per-position warnings
 - `/whatif` - what-if simulator: "what if I had invested $X, N days ago, following the signals", with an equity curve and per-asset breakdown
 - `/risk` - interactive risk manager: open / close positions, edit and persist risk limits, halt / resume trading, plus a Taleb tail-risk watchlist
@@ -131,6 +136,49 @@ Permanent cross-run memory: `_ar_tried.json` (no candidate is re-tested), `_ar_e
 **RL search scheduler (optional, `GTRADE_AR_RL=1`).** A learned budget allocator over the QD child sources: a discounted Thompson-sampling bandit (with a two-phase context and a guaranteed exploration floor) learns which of nine emitters - feature / hyperparameter / net-hygiene / tuning mutations, crossover, LLM proposals, surrogate picks, a CMA evolution strategy over the continuous genes, and a novelty emitter that targets empty archive niches - actually produce archive improvements, and spends the experiment budget accordingly. Curiosity-based parent selection favors elites whose children keep succeeding. The statistical adoption gate is untouched: the scheduler decides only what to TRY, never what passes. It self-disables within a run if it underperforms the uniform baseline (estimated live from its own exploration draws), and its arm posteriors are printed at run start/end - no black box. Off by default (byte-identical uniform search); toggle in the `auto_research.bat` menu, state in `rl_scheduler_v1.json`.
 
 **Chronos forecast features (optional, experimental).** Zero-shot forecasts from a pretrained time-series model as extra CatBoost features. Install `requirements-chronos.txt`, precompute the cache (`python precompute_chronos.py --assets all`), then A/B via `GTRADE_CHRONOS=1 GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread`. They enter only through `GTRADE_EXTRA_FEATURES`, so the production model is unchanged until adopted.
+
+### Running it
+
+`auto_research.bat` (or `python auto_research.py`) opens a menu. Every answer has
+a working default, so pressing Enter through it is a valid run.
+
+| Prompt | What it decides |
+| --- | --- |
+| Action | `1` searches for new candidates; `2` re-gates candidates already stored, reusing their cached trainings |
+| Mode | `qd` is the flagship (MAP-Elites over the whole genome). The named axes search one lever at a time |
+| Proposer | `1` evolutionary needs nothing. `2` local Ollama, `3` Anthropic, `4` OpenAI |
+| Budget | How many NEW candidates this run. Past candidates are never re-tested |
+| Objective | How per-asset lifts become one number. `mean` by default; `cvar` and `min` optimize the worst assets instead of the average |
+| Wiki, RL scheduler | Optional, off by default, described above |
+
+Budget is not wall-clock. The search phase is cheap (a CatBoost-only screen,
+one to three minutes per candidate); the cost is the final gate, which trains
+the elites in full on the held-out assets. A 15-candidate run is hours, not
+minutes, and `Ctrl+C` is safe at any point - finished work is cached and a
+re-run resumes.
+
+Reading the output: `SCREEN_SKIPPED` is the cheap pre-screen doing its job, not
+an error. What matters is the per-axis verdict line at the end, and only a
+winner that clears the held-out test, the effect floor, the multiplicity
+correction and the replication gate is worth acting on. Nothing is adopted
+automatically - adopting stays `python adopt_genome.py` followed by a full
+retrain.
+
+**Using a local model.** Settings live in `.env` and the agent reads that file:
+
+```
+GTRADE_AR_LLM=ollama
+GTRADE_AR_LLM_MODEL=gemma4:12b
+GTRADE_AR_LLM_TIMEOUT=3600        # seconds per call; the 600s default is short
+                                  # for a large local model on CPU
+```
+
+Menu answers override the file, so the model picked at the prompt wins. Every
+call is traced to the console (`[llm] genome: asking ollama/... , N char prompt`
+then the reply size and elapsed seconds), so a slow or empty local model is
+visible rather than silent. A model that does not fit in RAM will be slow enough
+to hit the timeout; if it does, the run says so once and finishes on the
+evolutionary operators.
 
 ## Self-maintaining loop
 
@@ -195,8 +243,10 @@ snapshot: no models and no market data ship in the app, it only reads the gated
 feed `push_signals.py` publishes. Magic-link sign-in plus the same per-user
 allow-list (row-level security) gate every screen. It offers a signal radar,
 per-asset detail with charts, the Guru value overlay, a market-sector
-breakdown, an accuracy leaderboard, a recent-verified-calls feed and a
-client-side what-if simulator, refreshing on resume and pull-to-refresh.
+breakdown, an accuracy leaderboard, a recent-verified-calls feed, a
+client-side what-if simulator and the trade-level sheet, refreshing on
+resume and pull-to-refresh. The levels screen is the one to trade from when
+the orders themselves are placed by hand in a bank app.
 Optional Firebase Cloud Messaging (`GTRADE_FCM_CREDS`) delivers a push
 notification when signals change, opening the Today screen. The Supabase schema for these tables lives in
 [`supabase/mobile_app.sql`](supabase/mobile_app.sql).
@@ -233,6 +283,63 @@ streamlit run app.py          # dashboard
 ```
 
 `run_gtrade.bat` opens a text menu over all of the above (full cycle, dashboard, web UI, predict, DB audit, and more). `python db_check.py` runs a read-only audit of `market.db` (`--fix` repairs duplicates and date formats). `python scheduler.py` runs as a daemon: data every 6h, predictions every 4h, a daily DB check.
+
+## Daily use
+
+Two commands, in this order, every trading day:
+
+```bash
+python data_engine.py     # pull today's bars
+python predict.py         # score every asset, write prediction_log
+```
+
+Order matters. `predict.py` only logs an asset that has a bar dated today, so
+running it first leaves the newest assets missing from the radar. US stocks get
+a same-day bar only once the US session opens, so a pre-market run is expected
+to be short.
+
+Then open the dashboard and read it in this order:
+
+```bash
+uvicorn webapp:app --port 8000     # http://127.0.0.1:8000
+```
+
+| Page | The question it answers |
+| --- | --- |
+| `/` Radar | What is the model saying today, across every asset, with live accuracy per row |
+| `/levels` | **At what price do I act** - entry zone, stop and size per setup |
+| `/asset/NAME` | Why this asset: probability history, positions, Guru verdict, news, events |
+| `/risk` | How much am I allowed to risk, and is trading halted |
+| `/portfolio` | What is open now, and how correlated is it |
+| `/performance` | Is the model actually right lately (verified outcomes only) |
+| `/loop` | Which models have drifted and want a retrain |
+| `/research` | What the research agent has learned so far |
+
+Signals alone do not tell you where to enter or where to get out. `/levels`
+does, and it is the page to trade from:
+
+- **Entry zone** - `close +- 0.5 ATR` around yesterday's close. Inside the zone,
+  take the setup; outside it, skip that row. Atratus sees daily bars only, so it
+  cannot check this for you - the zone is a morning plan, verified at the broker.
+- **Stop** - `2 ATR` against the position, trailing to the best bar once a
+  position is more than a day old. It is insurance against a gap, not the normal
+  exit: the normal exit is the signal turning WAIT or SELL.
+- **Size** - risk per trade divided by the distance to the stop, then clipped by
+  the `/risk` limits. The row names whichever limit bound it.
+- **`past its stop`** - the price has already gone through the trailing stop, so
+  the position should already be closed. These rows are not new setups.
+
+Sizes appear in money only after the real account is declared: set **Account
+equity**, **Risk per trade** and **Fee per side** on `/risk`. Until then the
+sheet shows percentages, on purpose - the persisted risk book still holds
+whatever the paper experiments left in it, and sizing a real trade off that
+number is the mistake this guards against.
+
+Nothing here places an order. Execution is by hand, in your broker or bank app.
+
+Two optional daily extras: `python alert_bot.py` (Telegram digest and alerts)
+and `python push_signals.py` (pushes signals, levels, history and news to the
+mobile app).
 
 ## Training
 
@@ -314,14 +421,18 @@ Atratus is provided for **research and educational purposes only**. It is not in
 
 </details>
 
+<a id="русский"></a>
+
+[**English**](#atratus) | **Русский**
+
 <details>
 <summary><b>Русский</b></summary>
 
 <br>
 
-**Мультиактивный движок торговых сигналов на машинном обучении.** Пер-активный ансамбль (CatBoost + LSTM + Transformer + TCN) по ~208 рынкам — крипта, акции США / Европы / России, индексы, форекс и товары — с walk-forward-отбором чемпионов, калиброванными вероятностями, размером позиции по Келли, контролем хвостового риска, дашбордом на FastAPI и автономным, статистически-гейтованным исследовательским агентом. Только сигналы, человек в контуре — без автоисполнения.
+**Мультиактивный движок торговых сигналов на машинном обучении.** Пер-активный ансамбль (CatBoost + LSTM + Transformer + TCN) по ~208 рынкам - крипта, акции США / Европы / России, индексы, форекс и товары - с walk-forward-отбором чемпионов, калиброванными вероятностями, размером позиции по Келли, контролем хвостового риска, дашбордом на FastAPI и автономным, статистически-гейтованным исследовательским агентом. Только сигналы, человек в контуре - без автоисполнения.
 
-> **Дисклеймер.** Atratus — исследовательский и учебный проект. Его вывод — набор модельных предсказаний, **а не финансовый совет и не рекомендация покупать или продавать какую-либо ценную бумагу**. Рынки несут риск, вы можете потерять деньги. ПО предоставляется «как есть», без каких-либо гарантий. Используйте на свой риск; проводите собственный анализ и консультируйтесь с лицензированным специалистом перед любым финансовым решением. Полный текст — в разделе [Дисклеймер](#дисклеймер). Юридически приоритетна английская версия и файл [`LICENSE`](LICENSE).
+> **Дисклеймер.** Atratus - исследовательский и учебный проект. Его вывод - набор модельных предсказаний, **а не финансовый совет и не рекомендация покупать или продавать какую-либо ценную бумагу**. Рынки несут риск, вы можете потерять деньги. ПО предоставляется «как есть», без каких-либо гарантий. Используйте на свой риск; проводите собственный анализ и консультируйтесь с лицензированным специалистом перед любым финансовым решением. Полный текст - в разделе [Дисклеймер](#дисклеймер). Юридически приоритетна английская версия и файл [`LICENSE`](LICENSE).
 
 [![Скачать приложение для Android](https://img.shields.io/badge/%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C-Android%20APK-brightgreen?logo=android&logoColor=white&style=for-the-badge)](https://github.com/pavlenchichikov/Atratus/releases/latest/download/Atratus.apk)
 
@@ -340,6 +451,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 - [Технологии](#технологии)
 - [Требования](#требования)
 - [Быстрый старт](#быстрый-старт)
+- [Ежедневная работа](#ежедневная-работа)
 - [Обучение](#обучение)
 - [Сеть](#сеть)
 - [Конфигурация](#конфигурация)
@@ -353,9 +465,10 @@ Atratus is provided for **research and educational purposes only**. It is not in
 - **~208 активов, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
 - **Честные, калиброванные сигналы.** BUY / SELL / WAIT с калиброванной вероятностью, пер-активными настроенными порогами и живым трек-рекордом точности, который сверяет каждое предсказание с реализованным движением следующего бара.
 - **Управление риском по замыслу.** Размер позиции по Келли, стопы по просадке, проверки секторной экспозиции и корреляций, а также индекс хвостового риска Талеба, который уменьшает размер выше мягкого порога и блокирует новые покупки выше жёсткого.
+- **Цены, а не только сигналы.** Ежедневный лист уровней превращает каждый сигнал в числа, по которым можно действовать: зона входа по ATR вокруг последнего закрытия, аварийный стоп, подтягивающийся за позицией, и размер, выведенный из расстояния до этого стопа и обрезанный лимитами риска. Исполнение остаётся ручным.
 - **Богатый набор признаков.** Доходности и волатильностно-нормированные доходности, хвостовой риск (эксцесс / асимметрия / VaR), RSI / MACD / SMA / ATR, недельные и межактивные корреляции, межактивный lead-lag, календарная позиция и макро-режим (доходность 10-леток, VIX, доллар).
 - **Автономный исследовательский агент.** Поиск quality-diversity (MAP-Elites) по признакам, лейблам и трансформациям со строгим гейтом адопции на отложенной выборке (Wilcoxon signed-rank + Benjamini-Hochberg + межзапусковая репликация), чтобы ничего не адоптилось на шуме. Никогда не трогает прод автоматически.
-- **Мгновенный дашборд на FastAPI.** Читает готовые предсказания из БД (без TensorFlow во время обслуживания), поэтому стартует сразу — радар сигналов, детализация по активу, аналитика портфеля, интерактивный риск-менеджер и what-if-бэктестер.
+- **Мгновенный дашборд на FastAPI.** Читает готовые предсказания из БД (без TensorFlow во время обслуживания), поэтому стартует сразу - радар сигналов, детализация по активу, аналитика портфеля, интерактивный риск-менеджер и what-if-бэктестер.
 - **Value-оверлей.** «Совет гуру» (Линч, Баффет, Грэм, Мангер) как долгосрочный фундаментальный оверлей для реальных акций, с горизонтом точности 60 дней; ML-сигнал остаётся основным.
 
 ## Как это работает
@@ -366,9 +479,9 @@ Atratus is provided for **research and educational purposes only**. It is not in
 4. `backtest.py` проверяет чемпионов на отложенных данных: PnL, win rate, Sharpe, направленная точность, Brier, альфа против buy & hold.
 5. `risk_manager.py` и `portfolio.py` делают размер позиции, лимиты убытка и проверки корреляций. Хвостовой риск гейтится индексом Талеба: размер сжимается выше мягкого порога, новые покупки блокируются выше жёсткого.
 
-Вспомогательные слои: value-оверлей **«Совет гуру»** (`guru_report.py`, показывается только для активов с реальной фундаменталкой), сентимент новостей (`news_analyzer.py`), чтение рыночного режима / fear-greed и `db_check.py` — read-only аудит `market.db` (свежесть, корректность OHLC, пропуски, покрытие).
+Вспомогательные слои: value-оверлей **«Совет гуру»** (`guru_report.py`, показывается только для активов с реальной фундаменталкой), сентимент новостей (`news_analyzer.py`), чтение рыночного режима / fear-greed и `db_check.py` - read-only аудит `market.db` (свежесть, корректность OHLC, пропуски, покрытие).
 
-`app.py` — дашборд на Streamlit; Telegram-бот шлёт сигналы каждый час.
+`app.py` - дашборд на Streamlit; Telegram-бот шлёт сигналы каждый час.
 
 ## Веб-интерфейс
 
@@ -376,34 +489,35 @@ Atratus is provided for **research and educational purposes only**. It is not in
 uvicorn webapp:app --host 0.0.0.0 --port 8000
 ```
 
-Лёгкий веб-интерфейс — без TensorFlow, читает предсказания из БД, стартует мгновенно. Страницы:
+Лёгкий веб-интерфейс - без TensorFlow, читает предсказания из БД, стартует мгновенно. Страницы:
 
-- `/` — радар сигналов: BUY / SELL / WAIT по каждому активу с уверенностью, живой точностью, колонкой хвостового риска Талеба, панелью рыночной ширины в реальном времени и датчиками режима / fear-greed
-- `/asset/BTC` — детализация по активу: графики цены и свечей, история сигналов, консенсус моделей, хвостовой риск Талеба и value-вердикт Совета гуру (N/A для не-акций) с пересчётом по требованию
-- `/portfolio` — аналитика портфеля по открытым позициям: диверсификация, тепловая карта секторной экспозиции, корреляции удерживаемых активов, пер-позиционные предупреждения
-- `/whatif` — what-if-симулятор: «что если бы я вложил $X N дней назад, следуя сигналам», с кривой доходности и разбивкой по активам
-- `/risk` — интерактивный риск-менеджер: открыть / закрыть позиции, править и сохранять лимиты риска, останавливать / возобновлять торговлю, плюс watchlist хвостового риска Талеба
-- `/loop` — самоподдерживающийся цикл: статус дневного цикла и предложения по дрейфу, с одним кликом на подтверждение переобучения «чемпион-претендент»
-- `/guru` — value-оверлей: вердикт совета рядом с ML-сигналом, трек-рекорд точности за 60 дней и кнопка **«Пересчитать всё»** в один клик, которая фоново переоценивает все акции
-- `/market`, `/sectors`, `/correlations`, `/performance`, `/news`, `/models` — аналитические страницы
+- `/` - радар сигналов: BUY / SELL / WAIT по каждому активу с уверенностью, живой точностью, колонкой хвостового риска Талеба, панелью рыночной ширины в реальном времени и датчиками режима / fear-greed
+- `/asset/BTC` - детализация по активу: графики цены и свечей, история сигналов, консенсус моделей, хвостовой риск Талеба и value-вердикт Совета гуру (N/A для не-акций) с пересчётом по требованию
+- `/levels` - лист уровней сделки: зона входа, стоп и размер позиции по каждому активному сигналу, с причиной в каждой строке, где уровней нет
+- `/portfolio` - аналитика портфеля по открытым позициям: диверсификация, тепловая карта секторной экспозиции, корреляции удерживаемых активов, пер-позиционные предупреждения
+- `/whatif` - what-if-симулятор: «что если бы я вложил $X N дней назад, следуя сигналам», с кривой доходности и разбивкой по активам
+- `/risk` - интерактивный риск-менеджер: открыть / закрыть позиции, править и сохранять лимиты риска, останавливать / возобновлять торговлю, плюс watchlist хвостового риска Талеба
+- `/loop` - самоподдерживающийся цикл: статус дневного цикла и предложения по дрейфу, с одним кликом на подтверждение переобучения «чемпион-претендент»
+- `/guru` - value-оверлей: вердикт совета рядом с ML-сигналом, трек-рекорд точности за 60 дней и кнопка **«Пересчитать всё»** в один клик, которая фоново переоценивает все акции
+- `/market`, `/sectors`, `/correlations`, `/performance`, `/news`, `/models` - аналитические страницы
 
 Те же данные в JSON под `/api/...`. Страницы обновляются сами; палитра Cmd-K переходит к любому активу или странице; внизу бежит лента топ-движений. Работает с телефона в той же сети.
 
 ## Скриншоты
 
-**Радар сигналов** — домашний дашборд: датчики режима и сентимента, ширина рынка, лидеры точности и самые сильные живые сигналы с их трек-рекордом.
+**Радар сигналов** - домашний дашборд: датчики режима и сентимента, ширина рынка, лидеры точности и самые сильные живые сигналы с их трек-рекордом.
 
 ![Радар сигналов](assets/screenshot-radar.png)
 
-**Детализация по активу** — свечной график с рекомендацией модели (вероятности по каждой модели, настроенные пороги BUY / SELL) и карточкой чемпиона (режим ансамбля, тренировочный score, статус доверия).
+**Детализация по активу** - свечной график с рекомендацией модели (вероятности по каждой модели, настроенные пороги BUY / SELL) и карточкой чемпиона (режим ансамбля, тренировочный score, статус доверия).
 
 ![Детализация по активу](assets/screenshot-asset.png)
 
-**Сигналы на цене** — исторические вызовы BUY / SELL, нанесённые на линию цены, с выбираемым диапазоном времени.
+**Сигналы на цене** - исторические вызовы BUY / SELL, нанесённые на линию цены, с выбираемым диапазоном времени.
 
 ![Сигналы на цене](assets/screenshot-signals.png)
 
-**Консольный вывод** — `predict.py` печатает BUY / SELL / WAIT по каждому активу с калиброванной вероятностью, режимом ансамбля и чтением хвостового риска Талеба.
+**Консольный вывод** - `predict.py` печатает BUY / SELL / WAIT по каждому активу с калиброванной вероятностью, режимом ансамбля и чтением хвостового риска Талеба.
 
 ```text
 $ python predict.py
@@ -419,37 +533,81 @@ $ python predict.py
 
 ## Исследовательский агент
 
-Набор признаков можно расширять на обучении через ограниченный DSL трансформаций в `core/feature_dsl.py` (z-score, ratio, lag, diff, rolling, interaction, межактивный lead-lag поверх существующих колонок — без `eval`). Укажите `GTRADE_DSL_SPECS` на JSON со спеками и перечислите их имена в `GTRADE_EXTRA_FEATURES`; если обе переменные пусты, обучение не меняется.
+Набор признаков можно расширять на обучении через ограниченный DSL трансформаций в `core/feature_dsl.py` (z-score, ratio, lag, diff, rolling, interaction, межактивный lead-lag поверх существующих колонок - без `eval`). Укажите `GTRADE_DSL_SPECS` на JSON со спеками и перечислите их имена в `GTRADE_EXTRA_FEATURES`; если обе переменные пусты, обучение не меняется.
 
-`auto_research.py` (локальный инструмент, запускается через `auto_research.bat`) автоматизирует поиск — иллюминацию quality-diversity (MAP-Elites) по геномам признаков, лейблов и трансформаций, либо более простой forward-отбор. Предлагатель подаёт кандидата, дешёвый пре-скрин только по CatBoost отсекает явных аутсайдеров, а закешированный бейслайн сравнивается с кандидатом. Предлагатель по умолчанию — эволюционный поиск без LLM и без API-ключа; `GTRADE_AR_PROPOSER=llm` использует модель (Anthropic по умолчанию, OpenAI или любой OpenAI-совместимый эндпоинт вроде Mistral или **локального Ollama** через `GTRADE_AR_LLM=ollama`).
+`auto_research.py` (локальный инструмент, запускается через `auto_research.bat`) автоматизирует поиск - иллюминацию quality-diversity (MAP-Elites) по геномам признаков, лейблов и трансформаций, либо более простой forward-отбор. Предлагатель подаёт кандидата, дешёвый пре-скрин только по CatBoost отсекает явных аутсайдеров, а закешированный бейслайн сравнивается с кандидатом. Предлагатель по умолчанию - эволюционный поиск без LLM и без API-ключа; `GTRADE_AR_PROPOSER=llm` использует модель (Anthropic по умолчанию, OpenAI или любой OpenAI-совместимый эндпоинт вроде Mistral или **локального Ollama** через `GTRADE_AR_LLM=ollama`).
 
-Геном также несёт **относительные гены гиперпараметров модели** (дельта глубины, множители learning rate и итераций, дельта lookback — применяются поверх настроенного бейслайна каждого актива, а не одним абсолютным числом для всех), **гены нейро-гигиены** (усреднение по сидам, пер-сетевая калибровка, взвешивание уникальности) и **лейбл triple-barrier** (его окно служит горизонтом). Те же рычаги ищутся по одному через оси `hyper`, `nets`, `thresholds`, `regime` и расширенную `labeling` в меню запуска.
+Геном также несёт **относительные гены гиперпараметров модели** (дельта глубины, множители learning rate и итераций, дельта lookback - применяются поверх настроенного бейслайна каждого актива, а не одним абсолютным числом для всех), **гены нейро-гигиены** (усреднение по сидам, пер-сетевая калибровка, взвешивание уникальности) и **лейбл triple-barrier** (его окно служит горизонтом). Те же рычаги ищутся по одному через оси `hyper`, `nets`, `thresholds`, `regime` и расширенную `labeling` в меню запуска.
 
 Настройки времени отбора тоже ищутся: маржа порогов и дельта нейтральной полосы поверх собственных настроенных порогов каждого актива, и режим режим-фильтра (both / off / только-SMA / только-Талеб). Ниши QD-архива теперь ключуются ещё и по тому, КАКУЮ группу рычагов трогает геном, чтобы один класс рычагов не монополизировал карту, а дешёвый средний тир (4 актива на половине эпох, `GTRADE_AR_TIER=0` отключает) отсеивает явно отрицательных кандидатов до полного трейна.
 
 Ре-гейтинг сохранённых кандидатов (`--regate`) **устойчив к сбоям**: каждый готовый кандидат чекпойнтится в `_regate_progress.json`, а его тренировки кешируются по сигнатуре генома, поэтому прерванный многодневный прогон продолжается с места остановки (пока рыночные данные не обновились), а не начинается заново.
 
-**Он никогда не трогает прод.** Кандидаты обучаются в изолированные временные каталоги, а победитель помечается только после прохождения отдельной отложенной выборки под односторонним тестом **Wilcoxon signed-rank** (с практическим порогом размера эффекта, поправкой **Benjamini-Hochberg** по кандидатам, бюджетом итераций и гейтом **межзапусковой репликации**) — чтобы отсекать улучшения, которые лишь шум. Адопция помеченного победителя остаётся ручным полным ретрейном.
+**Он никогда не трогает прод.** Кандидаты обучаются в изолированные временные каталоги, а победитель помечается только после прохождения отдельной отложенной выборки под односторонним тестом **Wilcoxon signed-rank** (с практическим порогом размера эффекта, поправкой **Benjamini-Hochberg** по кандидатам, бюджетом итераций и гейтом **межзапусковой репликации**) - чтобы отсекать улучшения, которые лишь шум. Адопция помеченного победителя остаётся ручным полным ретрейном.
 
 Постоянная межзапусковая память: `_ar_tried.json` (кандидат не тестируется повторно), `_ar_eval_cache.json` (базовые тренировки переиспользуются до прихода новых данных) и `_ar_findings.json` (накопительный журнал находок), так что бюджет покупает **новые** эксперименты каждый запуск.
 
 **Research wiki (опционально, `GTRADE_AR_WIKI=1`).** Дистиллирует append-only журнал находок в накопительную самоподдерживающуюся базу знаний (паттерн «LLM Wiki» Карпаты): после каждого прогона LLM сворачивает новые находки в несколько связанных markdown-страниц под `_ar_wiki/`, помечая утверждения по уверенности и разрешая противоречия, и предлагатель читает эту дистилляцию вместо только последних находок. Страницы также рендерятся read-only на `/research`. По умолчанию выключено (байт-в-байт).
 
-**RL-планировщик поиска (опционально, `GTRADE_AR_RL=1`).** Обучаемый распределитель бюджета по источникам детей QD-поиска: дисконтированный Thompson-sampling бандит (с двухфазным контекстом и гарантированным полом исследования) учится, какие из девяти эмиттеров — мутации признаков / гиперпараметров / нейро-гигиены / тюнинга, кроссовер, LLM-предложения, surrogate-подсказки, CMA-эволюционная стратегия по непрерывным генам и novelty-эмиттер, целящийся в пустые ниши архива — реально приносят улучшения архива, и тратит бюджет экспериментов соответственно. Curiosity-выбор родителей отдаёт предпочтение элитам, чьи дети продолжают побеждать. Статистический гейт адопции нетронут: планировщик решает только, что ПРОБОВАТЬ, но не что проходит. Он сам отключается внутри запуска, если проигрывает равномерному бейзлайну (оцениваемому вживую по его же исследовательским выборам), а постериоры рук печатаются на старте/финише запуска — никакого чёрного ящика. По умолчанию выключен (байт-идентичный равномерный поиск); включается в меню `auto_research.bat`, состояние в `rl_scheduler_v1.json`.
+**RL-планировщик поиска (опционально, `GTRADE_AR_RL=1`).** Обучаемый распределитель бюджета по источникам детей QD-поиска: дисконтированный Thompson-sampling бандит (с двухфазным контекстом и гарантированным полом исследования) учится, какие из девяти эмиттеров - мутации признаков / гиперпараметров / нейро-гигиены / тюнинга, кроссовер, LLM-предложения, surrogate-подсказки, CMA-эволюционная стратегия по непрерывным генам и novelty-эмиттер, целящийся в пустые ниши архива - реально приносят улучшения архива, и тратит бюджет экспериментов соответственно. Curiosity-выбор родителей отдаёт предпочтение элитам, чьи дети продолжают побеждать. Статистический гейт адопции нетронут: планировщик решает только, что ПРОБОВАТЬ, но не что проходит. Он сам отключается внутри запуска, если проигрывает равномерному бейзлайну (оцениваемому вживую по его же исследовательским выборам), а постериоры рук печатаются на старте/финише запуска - никакого чёрного ящика. По умолчанию выключен (байт-идентичный равномерный поиск); включается в меню `auto_research.bat`, состояние в `rl_scheduler_v1.json`.
 
 **Признаки-прогнозы Chronos (опционально, экспериментально).** Zero-shot прогнозы предобученной time-series модели как дополнительные признаки CatBoost. Установите `requirements-chronos.txt`, предпосчитайте кеш (`python precompute_chronos.py --assets all`), затем A/B через `GTRADE_CHRONOS=1 GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread`. Они входят только через `GTRADE_EXTRA_FEATURES`, поэтому продовая модель не меняется до адопции.
 
+### Как запускать
+
+`auto_research.bat` (или `python auto_research.py`) открывает меню. У каждого
+вопроса есть рабочий вариант по умолчанию, поэтому пройти его одними Enter -
+валидный запуск.
+
+| Вопрос | Что определяет |
+| --- | --- |
+| Action | `1` ищет новых кандидатов; `2` перегейчивает уже сохранённых, переиспользуя их закешированные обучения |
+| Mode | `qd` - флагман (MAP-Elites по всему геному). Именованные оси ищут по одному рычагу за раз |
+| Proposer | `1` эволюционный, ничего не требует. `2` локальная Ollama, `3` Anthropic, `4` OpenAI |
+| Budget | Сколько НОВЫХ кандидатов за этот прогон. Прошлые никогда не перепроверяются |
+| Objective | Как пер-активные приросты сводятся в одно число. По умолчанию `mean`; `cvar` и `min` оптимизируют худшие активы вместо среднего |
+| Wiki, RL scheduler | Опциональные, по умолчанию выключены, описаны выше |
+
+Бюджет - это не время. Фаза поиска дешёвая (скрин только на CatBoost, одна-три
+минуты на кандидата); платите вы за финальный гейт, который обучает элиты
+целиком на отложенных активах. Прогон на 15 кандидатов - это часы, а не минуты,
+и `Ctrl+C` безопасен в любой момент: сделанное закешировано, повторный запуск
+продолжит с места остановки.
+
+Как читать вывод: `SCREEN_SKIPPED` - это дешёвый предварительный отсев за
+работой, а не ошибка. Значение имеет строка вердикта по каждой оси в конце, и
+действовать стоит только по победителю, прошедшему отложенный тест, порог
+эффекта, поправку на множественность и гейт репликации. Автоматически ничего не
+адоптируется: адопция - это `python adopt_genome.py` и следом полный ретрейн.
+
+**Локальная модель.** Настройки лежат в `.env`, и агент этот файл читает:
+
+```
+GTRADE_AR_LLM=ollama
+GTRADE_AR_LLM_MODEL=gemma4:12b
+GTRADE_AR_LLM_TIMEOUT=3600        # секунд на вызов; дефолтных 600 мало
+                                  # для крупной локальной модели на CPU
+```
+
+Ответы в меню перекрывают файл, поэтому выбранная в приглашении модель
+главнее. Каждый вызов трассируется в консоль (`[llm] genome: asking ollama/... ,
+N char prompt`, затем размер ответа и потраченные секунды), так что медленная
+или пустая локальная модель видна, а не молчит. Модель, не помещающаяся в
+оперативную память, будет достаточно медленной, чтобы упереться в таймаут; если
+это произошло, прогон скажет об этом один раз и доработает на эволюционных
+операторах.
+
 ## Самоподдерживающийся цикл
 
-`loop_cycle.py` гоняет безопасный дневной пайплайн (данные, предсказание, сверка) и сканирует каждый актив на дрейф — скользящая точность ниже порога, падение от тренировочного бейслайна, возраст модели или устаревшие данные. Предложения появляются на `/loop`. Подтверждение запускает `loop_retrain.py` — RAM-безопасный ретрейн «чемпион-претендент», который заменяет чемпиона только если свежая модель его превзошла. **Цикл никогда не переобучает сам; переобучение всегда ждёт вашего подтверждения.** Зарегистрируйте `run_loop.bat` в планировщике задач для ежедневного запуска. Пороги дрейфа — в `core/drift.py` (`DRIFT_CONFIG`).
+`loop_cycle.py` гоняет безопасный дневной пайплайн (данные, предсказание, сверка) и сканирует каждый актив на дрейф - скользящая точность ниже порога, падение от тренировочного бейслайна, возраст модели или устаревшие данные. Предложения появляются на `/loop`. Подтверждение запускает `loop_retrain.py` - RAM-безопасный ретрейн «чемпион-претендент», который заменяет чемпиона только если свежая модель его превзошла. **Цикл никогда не переобучает сам; переобучение всегда ждёт вашего подтверждения.** Зарегистрируйте `run_loop.bat` в планировщике задач для ежедневного запуска. Пороги дрейфа - в `core/drift.py` (`DRIFT_CONFIG`).
 
 ## Гейт по живой точности и рекалибровка
 
-Сигналы, чей СЕГМЕНТ доказуемо плох в живом трек-рекорде, подавляются в WAIT до показа (`core/live_gate.py`): класс актива ниже 45% проверенной точности (n >= 100), актив ниже 40% (n >= 20) или анти-калиброванная экстремальная вероятность (>= 0.85 / <= 0.15). Трекер продолжает логировать СЫРОЙ сигнал, поэтому гейтнутый сегмент реабилитируется при улучшении свежей статистики; радар и веб-интерфейс показывают бейдж «gated» с причиной. `GTRADE_LIVE_GATE=0` отключает гейт; пороги — в env-ключах `GTRADE_LIVE_GATE_*`.
+Сигналы, чей СЕГМЕНТ доказуемо плох в живом трек-рекорде, подавляются в WAIT до показа (`core/live_gate.py`): класс актива ниже 45% проверенной точности (n >= 100), актив ниже 40% (n >= 20) или анти-калиброванная экстремальная вероятность (>= 0.85 / <= 0.15). Трекер продолжает логировать СЫРОЙ сигнал, поэтому гейтнутый сегмент реабилитируется при улучшении свежей статистики; радар и веб-интерфейс показывают бейдж «gated» с причиной. `GTRADE_LIVE_GATE=0` отключает гейт; пороги - в env-ключах `GTRADE_LIVE_GATE_*`.
 
 `python recalibrate_live.py` (еженедельно) обучает глобальный изотонический слой, отображающий сырые серв-вероятности в живой P(up) по проверенным исходам (`models/live_calib_global.pkl`; удалите файл для отката).
 
-Точность, показываемая по активу, скоупится к текущему поколению модели, но откатывается на накопленную запись по всем поколениям, когда у активной модели ещё слишком мало проверенных сигналов, — поэтому ретрейн никогда не обнуляет панель для актива с реальной историей.
+Точность, показываемая по активу, скоупится к текущему поколению модели, но откатывается на накопленную запись по всем поколениям, когда у активной модели ещё слишком мало проверенных сигналов, - поэтому ретрейн никогда не обнуляет панель для актива с реальной историей.
 
 ## Telegram-бот
 
@@ -471,7 +629,7 @@ python push_signals.py          # или пункт [SG] в run_gtrade.bat
 
 ## Мобильное приложение
 
-Компаньон — приложение на **Flutter** (Android) — это тонкий клиент того же снимка Supabase: в приложении нет ни моделей, ни рыночных данных, оно лишь читает гейтнутый фид, который публикует `push_signals.py`. Вход по magic-link и тот же пер-пользовательский allow-list (row-level security) гейтят каждый экран. Есть радар сигналов, детализация по активу с графиками, value-оверлей гуру, разбивка по секторам рынка, топ по точности, лента недавних проверенных сигналов и клиентский what-if-симулятор; данные обновляются при возврате в приложение и по «потянуть вниз». Опциональный Firebase Cloud Messaging (`GTRADE_FCM_CREDS`) присылает push-уведомление, когда сигналы меняются, и по тапу открывает экран Today. Схема Supabase для этих таблиц — в [`supabase/mobile_app.sql`](supabase/mobile_app.sql).
+Компаньон - приложение на **Flutter** (Android) - это тонкий клиент того же снимка Supabase: в приложении нет ни моделей, ни рыночных данных, оно лишь читает гейтнутый фид, который публикует `push_signals.py`. Вход по magic-link и тот же пер-пользовательский allow-list (row-level security) гейтят каждый экран. Есть радар сигналов, детализация по активу с графиками, value-оверлей гуру, разбивка по секторам рынка, топ по точности, лента недавних проверенных сигналов, клиентский what-if-симулятор и лист уровней сделки; данные обновляются при возврате в приложение и по «потянуть вниз». Опциональный Firebase Cloud Messaging (`GTRADE_FCM_CREDS`) присылает push-уведомление, когда сигналы меняются, и по тапу открывает экран Today. Именно с экрана уровней и стоит торговать, когда сами заявки выставляются руками в приложении банка. Схема Supabase для этих таблиц - в [`supabase/mobile_app.sql`](supabase/mobile_app.sql).
 
 ## Технологии
 
@@ -486,8 +644,8 @@ python push_signals.py          # или пункт [SG] в run_gtrade.bat
 ## Требования
 
 - **Python 3.12** (3.11+ вероятно подойдёт; CI гоняет на 3.12).
-- **ОС:** Linux, macOS или Windows. На Windows TensorFlow только-CPU с версии 2.11 — нормально для обучения на дневных барах; для GPU используйте WSL2.
-- **Диск:** ~5 ГБ свободно — обученные модели (~4 ГБ на все 208 активов) плюс `market.db` (~70 МБ). Только для обслуживания нужно куда меньше.
+- **ОС:** Linux, macOS или Windows. На Windows TensorFlow только-CPU с версии 2.11 - нормально для обучения на дневных барах; для GPU используйте WSL2.
+- **Диск:** ~5 ГБ свободно - обученные модели (~4 ГБ на все 208 активов) плюс `market.db` (~70 МБ). Только для обслуживания нужно куда меньше.
 - **RAM:** 8 ГБ хватает для дашборда и `predict.py` (без TensorFlow во время обслуживания). Обучение всей вселенной хочет ~16 ГБ, либо обучайте чанками по ~15 активов (`GTRADE_ASSETS`) на слабой машине.
 - **GPU:** опционально. Нейросети по умолчанию учатся на CPU; CatBoost может использовать GPU (`GTRADE_CB_DEVICE=GPU`), но часто медленнее на маленьких пер-активных датасетах.
 - **Сеть:** исходящий доступ к Yahoo Finance и MOEX для данных (`SOCKS5_PROXY` поддерживается).
@@ -506,23 +664,80 @@ streamlit run app.py          # дашборд
 
 `run_gtrade.bat` открывает текстовое меню над всем вышеперечисленным (полный цикл, дашборд, веб-интерфейс, predict, аудит БД и не только). `python db_check.py` гоняет read-only аудит `market.db` (`--fix` чинит дубликаты и форматы дат). `python scheduler.py` работает демоном: данные каждые 6ч, предсказания каждые 4ч, ежедневная проверка БД.
 
+## Ежедневная работа
+
+Две команды, именно в этом порядке, каждый торговый день:
+
+```bash
+python data_engine.py     # забрать сегодняшние бары
+python predict.py         # оценить все активы, записать prediction_log
+```
+
+Порядок важен. `predict.py` записывает только те активы, у которых есть бар за
+сегодня, поэтому запуск наоборот оставит свежие активы вне радара. У акций США
+дневной бар появляется только после открытия сессии, так что до неё список
+закономерно короче.
+
+Дальше открывается дашборд, и читать его стоит в таком порядке:
+
+```bash
+uvicorn webapp:app --port 8000     # http://127.0.0.1:8000
+```
+
+| Страница | На какой вопрос отвечает |
+| --- | --- |
+| `/` Радар | Что модель говорит сегодня по всем активам, с живой точностью в строке |
+| `/levels` | **По какой цене действовать** - зона входа, стоп и размер по каждому сетапу |
+| `/asset/ИМЯ` | Почему этот актив: история вероятностей, позиции, вердикт Гуру, новости, события |
+| `/risk` | Сколько разрешено рисковать и не остановлена ли торговля |
+| `/portfolio` | Что открыто сейчас и насколько оно скоррелировано |
+| `/performance` | Прав ли модель в последнее время (только подтверждённые исходы) |
+| `/loop` | Какие модели поехали и просятся на переобучение |
+| `/research` | Что исследовательский агент выяснил к этому моменту |
+
+Сам по себе сигнал не говорит, где входить и где выходить. Это говорит
+`/levels`, и торговать надо с неё:
+
+- **Зона входа** - `close +- 0.5 ATR` вокруг вчерашнего закрытия. Цена внутри
+  зоны - сетап берётся, вне - пропускается. Atratus видит только дневные бары и
+  проверить это за вас не может: зона это план на утро, сверяемый у брокера.
+- **Стоп** - `2 ATR` против позиции, с подтягиванием по лучшему бару, когда
+  позиция старше дня. Это страховка от гэпа, а не штатный выход: штатный выход -
+  смена сигнала на WAIT или SELL.
+- **Размер** - риск на сделку, делённый на расстояние до стопа, затем обрезанный
+  лимитами с `/risk`. В строке указано, какой именно лимит его ограничил.
+- **`past its stop`** - цена уже прошла подтянутый стоп, позицию следовало
+  закрыть. Такие строки не являются новыми сетапами.
+
+Размеры показываются в деньгах только после объявления реального счёта: задайте
+**Account equity**, **Risk per trade** и **Fee per side** на `/risk`. До этого
+лист намеренно показывает проценты - в сохранённой книге риска лежит остаток от
+бумажных экспериментов, и считать от него реальную сделку как раз и не надо.
+
+Ничего из этого не выставляет заявок. Исполнение ручное, у брокера или в
+приложении банка.
+
+Два необязательных ежедневных дополнения: `python alert_bot.py` (дайджест и
+алерты в Telegram) и `python push_signals.py` (отправляет сигналы, уровни,
+историю и новости в мобильное приложение).
+
 ## Обучение
 
-TensorFlow на Windows только-CPU с версии 2.11, поэтому нейро-обучение идёт на CPU — нормально для дневных данных. Для GPU используйте WSL2 и `pip install tensorflow[and-cuda]`.
+TensorFlow на Windows только-CPU с версии 2.11, поэтому нейро-обучение идёт на CPU - нормально для дневных данных. Для GPU используйте WSL2 и `pip install tensorflow[and-cuda]`.
 
-TensorFlow накапливает память по многим активам в одном процессе, поэтому полный ретрейн на 208 активов на машине с ограниченной памятью лучше гонять чанками (~15 активов через `GTRADE_ASSETS`), перезапуская свежий процесс на каждый чанк; реестр чемпионов накапливается по активам, так что чанки складываются в полный прогон. Готовый оркестратор для этого — `train_chunked.py`.
+TensorFlow накапливает память по многим активам в одном процессе, поэтому полный ретрейн на 208 активов на машине с ограниченной памятью лучше гонять чанками (~15 активов через `GTRADE_ASSETS`), перезапуская свежий процесс на каждый чанк; реестр чемпионов накапливается по активам, так что чанки складываются в полный прогон. Готовый оркестратор для этого - `train_chunked.py`.
 
 Опциональные env-флаги для `train_hybrid.py`:
 
-- `GTRADE_ADAPTIVE_NETS=1` — размерить каждую сеть под данные актива (меньше параметров, быстрее, меньше переобучения); по умолчанию выключено, остаются исходные «плоские» сети
-- `GTRADE_NET_CAP` — потолок для адаптивных LSTM-юнитов (по умолчанию 128); главный рычаг скорости / RAM
-- `GTRADE_EPOCHS_LSTM`, `GTRADE_EPOCHS_TF`, `GTRADE_EPOCHS_TCN` — потолки эпох по сетям (по умолчанию 160, 100, 80)
-- `GTRADE_FEATURE_SET=base|ext` — на каком наборе признаков учиться (`ext` — адоптированный дефолт)
-- `GTRADE_FORCE_PROMOTE=1` — принимать новых чемпионов независимо от score (используйте после смены набора признаков)
-- `GTRADE_ASSETS=BTC,ETH,NVDA` — обучать только перечисленные активы (подмножество или чанк)
-- `GTRADE_HISTORY_DAYS`, `GTRADE_BACKFILL=1` — глубина выборки и до-скачивание старых баров
-- `GTRADE_WORKERS`, `GTRADE_MAX_FOLDS` — параллельные воркеры и потолок walk-forward фолдов
-- `GTRADE_CB_DEVICE=GPU` — гонять CatBoost на GPU (сначала замерьте; часто медленнее на маленьких пер-активных датасетах)
+- `GTRADE_ADAPTIVE_NETS=1` - размерить каждую сеть под данные актива (меньше параметров, быстрее, меньше переобучения); по умолчанию выключено, остаются исходные «плоские» сети
+- `GTRADE_NET_CAP` - потолок для адаптивных LSTM-юнитов (по умолчанию 128); главный рычаг скорости / RAM
+- `GTRADE_EPOCHS_LSTM`, `GTRADE_EPOCHS_TF`, `GTRADE_EPOCHS_TCN` - потолки эпох по сетям (по умолчанию 160, 100, 80)
+- `GTRADE_FEATURE_SET=base|ext` - на каком наборе признаков учиться (`ext` - адоптированный дефолт)
+- `GTRADE_FORCE_PROMOTE=1` - принимать новых чемпионов независимо от score (используйте после смены набора признаков)
+- `GTRADE_ASSETS=BTC,ETH,NVDA` - обучать только перечисленные активы (подмножество или чанк)
+- `GTRADE_HISTORY_DAYS`, `GTRADE_BACKFILL=1` - глубина выборки и до-скачивание старых баров
+- `GTRADE_WORKERS`, `GTRADE_MAX_FOLDS` - параллельные воркеры и потолок walk-forward фолдов
+- `GTRADE_CB_DEVICE=GPU` - гонять CatBoost на GPU (сначала замерьте; часто медленнее на маленьких пер-активных датасетах)
 
 У walk-forward-объектива отбора есть env-гейтованный v2 (`GTRADE_OBJECTIVE_V2=1`): издержки берутся на СМЕНАХ позиции, а не на каждом сигнальном баре (как позиции показываются на страницах активов), Sharpe и просадка считаются по дневной кривой доходности, а фиксированный клип ±4% на бар становится пер-активным вол-масштабируемым капом. `python ab_objective.py` обучает подмножество под обоими объективами в изолированные каталоги и сравнивает чемпионов по общему аршину `Score_v2`; дефолт остаётся v1, пока этот A/B и полный ретрейн не скажут иначе.
 
@@ -535,10 +750,10 @@ TensorFlow накапливает память по многим активам 
 
 ## Конфигурация
 
-- `.env` — учётные данные telegram, прокси (никогда не коммитится; см. `.env.example`)
-- `config.py` — список активов и пороги buy/sell
-- `auto_trader_config.json` — настройки бумажной торговли
-- `pyproject.toml` — конфигурация Ruff и pytest
+- `.env` - учётные данные telegram, прокси (никогда не коммитится; см. `.env.example`)
+- `config.py` - список активов и пороги buy/sell
+- `auto_trader_config.json` - настройки бумажной торговли
+- `pyproject.toml` - конфигурация Ruff и pytest
 
 ## Структура проекта
 
@@ -575,6 +790,6 @@ PolyForm Noncommercial License 1.0.0. Свободно использовать,
 
 ## Дисклеймер
 
-Atratus предоставляется **только в исследовательских и учебных целях**. Это не инвестиционный совет, не финансовый совет и не рекомендация, приглашение или предложение покупать или продавать какую-либо ценную бумагу или финансовый инструмент. Торговля и инвестирование сопряжены со значительным риском потерь и подходят не каждому инвестору; прошлые или смоделированные результаты не гарантируют будущих. Авторы и контрибьюторы не несут ответственности за любые убытки или ущерб от использования этого ПО, предоставляемого «КАК ЕСТЬ», без каких-либо гарантий. Вы единолично отвечаете за свои решения — проводите собственный анализ и консультируйтесь с лицензированным финансовым специалистом, прежде чем действовать на основе чего-либо, произведённого этим проектом. Юридически приоритетна английская версия.
+Atratus предоставляется **только в исследовательских и учебных целях**. Это не инвестиционный совет, не финансовый совет и не рекомендация, приглашение или предложение покупать или продавать какую-либо ценную бумагу или финансовый инструмент. Торговля и инвестирование сопряжены со значительным риском потерь и подходят не каждому инвестору; прошлые или смоделированные результаты не гарантируют будущих. Авторы и контрибьюторы не несут ответственности за любые убытки или ущерб от использования этого ПО, предоставляемого «КАК ЕСТЬ», без каких-либо гарантий. Вы единолично отвечаете за свои решения - проводите собственный анализ и консультируйтесь с лицензированным финансовым специалистом, прежде чем действовать на основе чего-либо, произведённого этим проектом. Юридически приоритетна английская версия.
 
 </details>
