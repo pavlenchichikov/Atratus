@@ -185,8 +185,16 @@ def _call_ollama(prompt):
     # max_retries=0: this function already loops 3x below, and the SDK's own
     # retries each wait a full timeout -> without this a slow local model turns
     # one stuck call into a multi-hour retry storm (the 10-min-apart retries).
+    # trust_env=False: httpx picks up the Windows registry proxy (a VPN client sets
+    # one) and ignores its bypass list, so every local call is routed through the
+    # proxy - it works while the VPN is up and dies with a bare "Connection error."
+    # the moment it is not, silently demoting the run to the evolutionary proposer.
+    # Ollama is on loopback; it never needs a proxy.
+    import httpx
     client = openai.OpenAI(base_url=base, api_key="ollama",
-                           timeout=_llm_timeout(), max_retries=0)
+                           timeout=_llm_timeout(), max_retries=0,
+                           http_client=httpx.Client(trust_env=False,
+                                                    timeout=_llm_timeout()))
     last_err = None
     for _attempt in range(3):
         try:

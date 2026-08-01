@@ -123,6 +123,10 @@ def test_call_ollama_defaults(monkeypatch):
     assert captured["base_url"] == "http://127.0.0.1:11434/v1"
     assert captured["api_key"] == "ollama"
     assert captured["model"] == "gemma4:26b"
+    # ...and the SDK must not inherit the system proxy: httpx honours the Windows
+    # registry proxy but not its loopback bypass list, which kills every call the
+    # moment the VPN proxy is down.
+    assert captured["http_client"].trust_env is False
 
 
 def test_call_ollama_model_env_override(monkeypatch):
