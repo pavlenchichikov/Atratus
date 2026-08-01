@@ -20,7 +20,6 @@ from fastapi.templating import Jinja2Templates
 from config import FULL_ASSET_MAP, RADAR_GROUPS, radar_category
 from core import track_record
 from core import dashboard
-from core import levels as levels_mod
 from core import positions as positions_mod
 from core import timing_policy
 from risk_manager import RISK_CONFIG, RiskManager, save_risk_config_override
@@ -83,45 +82,6 @@ def _risk_snapshot():
         "halt_reason": halt_reason,
         "manual_halt": rm.manual_halt,
     }
-
-
-def _tradeable(asset):
-    """The whitelist/blacklist the paper trader already uses, so the sheet never
-    lists an asset that is not actually traded."""
-    cfg = _load_json(os.path.join(BASE_DIR, "auto_trader_config.json"), {})
-    white, black = cfg.get("whitelist") or [], cfg.get("blacklist") or []
-    if asset in black:
-        return False
-    return not white or asset in white
-
-
-def _levels_rows():
-    """One row per asset carrying an active signal, each with its own status."""
-    rows = []
-    for s in track_record.latest_signals():
-        asset = s["asset"]
-        if not _tradeable(asset) or s["signal"] not in ("BUY", "SELL"):
-            continue
-        bars = track_record.ohlc_series(asset, days=60)
-        segment = None
-        held = 0
-        # asset_track is newest first and build_positions wants oldest first.
-        # The open position is the LAST segment: `current` is the state card and
-        # carries no start_date, so it cannot drive the trailing stop.
-        track = track_record.asset_track(asset, limit=60)
-        if track:
-            segs = positions_mod.build_positions(list(reversed(track)))["segments"]
-            if segs and segs[-1]["open"]:
-                segment = segs[-1]
-                held = segment["bars"]
-        lv = levels_mod.levels(bars, s["signal"], segment=segment)
-        sz = levels_mod.size_for(lv["close"], lv["stop"], RISK_CONFIG["equity"],
-                                 RISK_CONFIG["risk_per_trade"],
-                                 RISK_CONFIG["max_single_position"])
-        rows.append({"asset": asset, "signal": s["signal"], "date": s["date"],
-                     "held_days": held, **lv, **sz})
-    rows.sort(key=lambda r: (r["status"] != "ok", r["asset"]))
-    return rows
 
 
 def _latest_price(asset):
@@ -469,8 +429,12 @@ def risk_page(request: Request):
 @app.get("/levels", response_class=HTMLResponse)
 def levels_page(request: Request):
     risk = _risk_snapshot()
+    # Money only once the real account has been declared on /risk: without it
+    # the book still holds whatever the paper experiments left behind, and
+    # sizing a real trade off that number is exactly the mistake to avoid.
+    equity = risk["state"]["current_capital"] if RISK_CONFIG["equity"] else 0.0
     return templates.TemplateResponse(request, "levels.html", {
-        "rows": _levels_rows(),
+        "rows": dashboard.levels_sheet(equity),
         "config": RISK_CONFIG,
         "halted": risk["halted"],
         "halt_reason": risk["halt_reason"],

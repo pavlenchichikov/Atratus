@@ -781,6 +781,15 @@ def test_asset_page_no_timing_when_flag_off(tmp_path, monkeypatch):
     assert "policy:" not in r.text
 
 
+def test_risk_page_can_declare_the_real_account(client):
+    # Without these three editable rows the level sheet can never be told what
+    # the real account is, and it would keep sizing off a paper balance.
+    r = client.get("/risk")
+    assert r.status_code == 200
+    for key in ("equity", "risk_per_trade", "fee_rate"):
+        assert f'data-key="{key}"' in r.text
+
+
 def test_levels_page_renders_with_a_reason_when_there_are_no_bars(client):
     # The fixture DB has a prediction_log row for BTC but no price table, so the
     # sheet must still render and must say why the row has no levels.

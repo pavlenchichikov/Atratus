@@ -29,6 +29,7 @@ RISK_CONFIG = {
     # percentages instead of money.
     "equity":                 0.0,
     "risk_per_trade":         0.01,   # 1 % of equity risked to the stop
+    "fee_rate":               0.0,    # commission + spread per side, fraction
     # Risk adjustments
     "taleb_risk_cap":         5.0,    # Block BUY if Taleb risk > 5.0
     "taleb_soft_cap":         2.5,    # Reduce size above 2.5
@@ -47,7 +48,7 @@ _FRACTION_KEYS = {
     "max_portfolio_exposure", "max_single_position", "max_daily_loss",
     "max_drawdown_halt", "kelly_fraction", "min_kelly_threshold",
     "correlation_penalty", "default_avg_win", "default_avg_loss",
-    "risk_per_trade",
+    "risk_per_trade", "fee_rate",
 }
 
 
@@ -107,7 +108,13 @@ class RiskManager:
             print(f"Trade size: ${result['position_size_usd']:.2f}")
     """
 
-    def __init__(self, initial_capital: float = 10_000.0):
+    def __init__(self, initial_capital: float | None = None):
+        # RISK_CONFIG["equity"] is the real account this book represents. It is
+        # the single capital number: core/levels.py sizes from current_capital,
+        # which starts here, so a trade cannot be sized off one figure while the
+        # drawdown halt watches another.
+        if initial_capital is None:
+            initial_capital = RISK_CONFIG.get("equity") or 10_000.0
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
         self.peak_capital = initial_capital
@@ -127,11 +134,14 @@ class RiskManager:
         try:
             with open(RISK_STATE_PATH, "r", encoding="utf-8") as fh:
                 state = json.load(fh)
+            if self._equity_changed(state):
+                return
             self.current_capital = float(state.get("current_capital", self.initial_capital))
             self.peak_capital = float(state.get("peak_capital", self.initial_capital))
             self.daily_start_capital = float(state.get("daily_start_capital", self.initial_capital))
             self.daily_start_date = state.get("daily_start_date", date.today().isoformat())
             self.open_positions = state.get("open_positions", {})
+            self.trade_history = state.get("trade_history", [])
             self.manual_halt = bool(state.get("manual_halt", False))
             # Reset daily stats if it's a new day
             if self.daily_start_date != date.today().isoformat():
@@ -142,14 +152,44 @@ class RiskManager:
         except Exception as exc:
             logger.warning("Could not load risk state: %s", exc)
 
+    def _equity_changed(self, state) -> bool:
+        """True when the configured equity no longer matches the book on disk,
+        in which case the book restarts from the configured number.
+
+        The stored balance is whatever the paper experiments left behind. Sizing
+        a real trade off that number is the failure this prevents. The old file
+        is copied aside first, because a balance is not something to overwrite
+        on a guess.
+        """
+        if not RISK_CONFIG.get("equity"):
+            return False
+        stored = state.get("initial_capital")
+        if stored is not None and abs(float(stored) - self.initial_capital) < 1e-9:
+            return False
+        backup = os.path.splitext(RISK_STATE_PATH)[0] + ".pre_equity.json"
+        try:
+            with open(backup, "w", encoding="utf-8") as fh:
+                json.dump(state, fh, indent=2)
+        except Exception as exc:
+            logger.warning("Could not back up the previous risk state: %s", exc)
+        logger.info("Equity set to %.2f: risk book restarted, previous state in %s",
+                    self.initial_capital, backup)
+        return True
+
     def save_state(self) -> None:
         os.makedirs(os.path.dirname(RISK_STATE_PATH), exist_ok=True)
         state = {
+            "initial_capital":     self.initial_capital,
             "current_capital":     self.current_capital,
             "peak_capital":        self.peak_capital,
             "daily_start_capital": self.daily_start_capital,
             "daily_start_date":    self.daily_start_date,
             "open_positions":      self.open_positions,
+            # Closed trades belong on disk: a webapp request builds a fresh
+            # RiskManager, so an unsaved history means every real fill is gone
+            # the moment the response is sent, and the drawdown behind a halt
+            # can never be audited.
+            "trade_history":       self.trade_history,
             "manual_halt":         self.manual_halt,
             "last_updated":        datetime.now().isoformat(),
         }
@@ -391,7 +431,11 @@ class RiskManager:
         direction = pos.get("direction", "BUY")
 
         ret = (exit_price - entry) / entry if direction == "BUY" else (entry - exit_price) / entry
-        pnl = size * ret
+        # Charged on both sides, because a round trip pays to get in and to get
+        # out. On daily holding periods this is the difference between a live
+        # edge and a backtest one; the default of 0 keeps old numbers unchanged.
+        fee = size * RISK_CONFIG["fee_rate"] * 2
+        pnl = size * ret - fee
 
         self.current_capital += pnl
         self.peak_capital = max(self.peak_capital, self.current_capital)
@@ -402,6 +446,7 @@ class RiskManager:
             "entry_price": entry,
             "exit_price":  exit_price,
             "size_usd":    size,
+            "fee":         fee,
             "pnl":         pnl,
             "closed_ts":   datetime.now().isoformat(),
         })

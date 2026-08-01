@@ -504,3 +504,64 @@ def health():
     except Exception:
         pass
     return info
+
+
+def _tradeable(asset):
+    """The whitelist/blacklist the paper trader already uses, so the sheet never
+    lists an asset that is not actually traded."""
+    import json
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        with open(os.path.join(root, "auto_trader_config.json"),
+                  encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except Exception:
+        cfg = {}
+    white, black = cfg.get("whitelist") or [], cfg.get("blacklist") or []
+    if asset in black:
+        return False
+    return not white or asset in white
+
+
+def levels_sheet(equity=0.0):
+    """The trade-level sheet: one row per asset carrying an active signal.
+
+    Lives here rather than in webapp.py because push_signals.py ships the same
+    sheet to the phone, and two copies of this assembly would drift into two
+    different sets of prices.
+
+    `equity` is the live book balance, not the configured starting number, so a
+    size shrinks as the account draws down instead of being sized off the
+    deposit forever. Zero means the account was never declared, and the caller
+    shows percentages instead of money.
+    """
+    from core import levels as levels_mod
+    from core import positions as positions_mod
+    from core import track_record
+    from risk_manager import RISK_CONFIG
+
+    rows = []
+    for s in track_record.latest_signals():
+        asset = s["asset"]
+        if not _tradeable(asset) or s["signal"] not in ("BUY", "SELL"):
+            continue
+        bars = track_record.ohlc_series(asset, days=60)
+        segment = None
+        held = 0
+        # asset_track is newest first and build_positions wants oldest first.
+        # The open position is the LAST segment: `current` is the state card and
+        # carries no start_date, so it cannot drive the trailing stop.
+        track = track_record.asset_track(asset, limit=60)
+        if track:
+            segs = positions_mod.build_positions(list(reversed(track)))["segments"]
+            if segs and segs[-1]["open"]:
+                segment = segs[-1]
+                held = segment["bars"]
+        lv = levels_mod.levels(bars, s["signal"], segment=segment)
+        sz = levels_mod.size_for(lv["close"], lv["stop"], equity,
+                                 RISK_CONFIG["risk_per_trade"],
+                                 RISK_CONFIG["max_single_position"])
+        rows.append({"asset": asset, "signal": s["signal"], "date": s["date"],
+                     "held_days": held, **lv, **sz})
+    rows.sort(key=lambda r: (r["status"] != "ok", r["asset"]))
+    return rows

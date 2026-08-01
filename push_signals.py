@@ -717,6 +717,59 @@ def push_events(url, key, rows):
               json=chunk, timeout=120)
 
 
+def fetch_levels_rows():
+    """The trade-level sheet as Supabase rows.
+
+    Built by core.dashboard.levels_sheet, the same function the web page uses,
+    so the phone and the browser can never quote different prices for the same
+    setup. Money is only exported once the real account is declared in
+    RISK_CONFIG["equity"]; until then `amount` is null and the client shows the
+    percentage, exactly as the web sheet does.
+    """
+    from core import dashboard
+    from risk_manager import RISK_CONFIG, RiskManager
+
+    equity = RiskManager().current_capital if RISK_CONFIG["equity"] else 0.0
+    rows = []
+    for r in dashboard.levels_sheet(equity):
+        rows.append({
+            "asset": r["asset"],
+            "date": r["date"],
+            "side": "LONG" if r["side"] == 1 else "SHORT",
+            "entry_low": r["entry_low"],
+            "entry_high": r["entry_high"],
+            "stop": r["stop"],
+            "trailing_stop": r["trailing"],
+            "amount": r["amount"],
+            "pct": r["pct"],
+            "bound_by": r["bound_by"],
+            "held_days": r["held_days"],
+            "status": r["status"],
+        })
+    return rows
+
+
+def push_levels(url, key, rows):
+    """Full-refresh upsert of the levels table.
+
+    Deletes on asset, this table's primary key: yesterday's setups must not
+    linger next to today's, because a stale entry zone is a wrong price rather
+    than merely an old one.
+    """
+    base = _rest_base(url)
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    merge = {**headers, "Prefer": "resolution=merge-duplicates"}
+    _send("DELETE", f"{base}/levels?asset=not.is.null", headers=headers,
+          timeout=30)
+    for chunk in _chunked(rows):
+        _send("POST", f"{base}/levels?on_conflict=asset", headers=merge,
+              json=chunk, timeout=120)
+
+
 def main():
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_KEY")
@@ -732,6 +785,14 @@ def main():
 
     # Optional extras for the mobile app - each fail-safe: a failure here must
     # never undo or block the signals upsert above.
+    try:
+        level_rows = fetch_levels_rows()
+        push_levels(url, key, level_rows)
+        breached = sum(1 for r in level_rows if r["status"] == "stop_breached")
+        print(f"pushed levels: {len(level_rows)} setups | {breached} past stop")
+    except Exception as e:
+        print(f"WARNING: levels push failed: {e}")
+
     bars = None
     hist = None
     history_ok = False

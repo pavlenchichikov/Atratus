@@ -919,3 +919,37 @@ def test_a_failing_mark_pushed_does_not_dedupe_the_set_away(monkeypatch,
     assert con.execute("SELECT COUNT(*) FROM alert_log").fetchone()[0] == 1, (
         "the retry must not log the same candidate set a second time")
     con.close()
+
+
+def test_levels_rows_carry_the_sheet_the_web_page_shows(monkeypatch):
+    """The phone and the browser must quote the same prices, so the export goes
+    through the one sheet builder rather than reassembling its own."""
+    from core import dashboard
+    monkeypatch.setattr(dashboard, "levels_sheet", lambda equity=0.0: [
+        {"asset": "BTC", "date": "2026-08-01", "side": 1, "close": 100.0,
+         "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0, "stop": 96.0,
+         "trailing": False, "status": "ok", "amount": None, "pct": 0.1,
+         "bound_by": "risk", "held_days": 0},
+    ])
+    rows = push_signals.fetch_levels_rows()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["asset"] == "BTC" and r["side"] == "LONG"
+    assert r["entry_low"] == 99.0 and r["stop"] == 96.0
+    assert r["amount"] is None and r["pct"] == 0.1
+    # trailing_stop, not trailing: "trailing" is a reserved word in Postgres, so
+    # the column had to be renamed and this key has to follow it or the upsert
+    # silently drops the flag.
+    assert r["trailing_stop"] is False and "trailing" not in r
+
+
+def test_levels_push_clears_yesterdays_setups_first(monkeypatch):
+    """A stale entry zone is a wrong price, not merely an old one, so the table
+    is emptied before the fresh rows land."""
+    calls = []
+    monkeypatch.setattr(push_signals, "_send",
+                        lambda method, url, **kw: calls.append((method, url)))
+    push_signals.push_levels("https://x.supabase.co", "k",
+                             [{"asset": "BTC"}])
+    assert calls[0][0] == "DELETE" and "/levels?asset=not.is.null" in calls[0][1]
+    assert calls[1][0] == "POST" and "/levels" in calls[1][1]

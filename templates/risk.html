@@ -101,6 +101,9 @@
       <tr data-key="taleb_risk_cap"><td>Taleb risk hard cap</td><td class="mono limit-val">{{ config.taleb_risk_cap }}</td></tr>
       <tr data-key="taleb_soft_cap"><td>Taleb risk soft cap</td><td class="mono limit-val">{{ config.taleb_soft_cap }}</td></tr>
       <tr data-key="correlation_penalty" data-pct="true"><td>Correlation penalty</td><td class="mono limit-val">{{ "%.0f"|format(config.correlation_penalty * 100) }}%</td></tr>
+      <tr data-key="equity"><td>Account equity<br><span class="dim">real account the sheet sizes from; changing it restarts the book</span></td><td class="mono limit-val">{{ config.equity }}</td></tr>
+      <tr data-key="risk_per_trade" data-pct="true"><td>Risk per trade</td><td class="mono limit-val">{{ "%.2f"|format(config.risk_per_trade * 100) }}%</td></tr>
+      <tr data-key="fee_rate" data-pct="true"><td>Fee per side<br><span class="dim">commission plus spread, charged on entry and on exit</span></td><td class="mono limit-val">{{ "%.3f"|format(config.fee_rate * 100) }}%</td></tr>
     </table>
     <button class="fbtn" id="risk-limits-save-btn" hidden>Save</button>
   </section>

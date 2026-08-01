@@ -226,3 +226,64 @@ class TestPersistence:
         assert rm2.current_capital == 9500
         assert rm2.peak_capital == 10000
         assert "BTC" in rm2.open_positions
+
+
+class TestGoingLive:
+    """The three gaps that stood between the paper book and a real account."""
+
+    def _fresh(self, tmp_path, monkeypatch, **cfg):
+        import risk_manager as rm_mod
+        monkeypatch.setattr(rm_mod, "RISK_STATE_PATH",
+                            str(tmp_path / "risk_state.json"))
+        for k, v in cfg.items():
+            monkeypatch.setitem(rm_mod.RISK_CONFIG, k, v)
+        return rm_mod
+
+    def test_closed_trades_survive_a_restart(self, tmp_path, monkeypatch):
+        rm_mod = self._fresh(tmp_path, monkeypatch)
+        rm = rm_mod.RiskManager(initial_capital=10_000)
+        rm.record_trade("BTC", "BUY", 1_000.0, 100.0)
+        rm.close_trade("BTC", 110.0)
+        # A fresh process must still see the trade: without this the record of
+        # every real fill is lost the moment the web request ends.
+        again = rm_mod.RiskManager(initial_capital=10_000)
+        assert len(again.trade_history) == 1
+        assert again.trade_history[0]["asset"] == "BTC"
+
+    def test_fees_are_charged_on_both_sides(self, tmp_path, monkeypatch):
+        rm_mod = self._fresh(tmp_path, monkeypatch, fee_rate=0.001)
+        rm = rm_mod.RiskManager(initial_capital=10_000)
+        rm.record_trade("BTC", "BUY", 1_000.0, 100.0)
+        pnl = rm.close_trade("BTC", 110.0)
+        # gross 100.0, minus 0.1 percent of 1000 on entry and on exit
+        assert abs(pnl - (100.0 - 2.0)) < 1e-9
+        assert abs(rm.trade_history[0]["fee"] - 2.0) < 1e-9
+
+    def test_zero_fee_rate_keeps_the_old_arithmetic(self, tmp_path, monkeypatch):
+        rm_mod = self._fresh(tmp_path, monkeypatch, fee_rate=0.0)
+        rm = rm_mod.RiskManager(initial_capital=10_000)
+        rm.record_trade("BTC", "BUY", 1_000.0, 100.0)
+        assert abs(rm.close_trade("BTC", 110.0) - 100.0) < 1e-9
+
+    def test_configured_equity_restarts_a_stale_book(self, tmp_path, monkeypatch):
+        rm_mod = self._fresh(tmp_path, monkeypatch, equity=0.0)
+        stale = rm_mod.RiskManager(initial_capital=10_000)
+        stale.current_capital = 1_483_142.0      # the leftover paper balance
+        stale.peak_capital = 1_483_142.0
+        stale.save_state()
+
+        monkeypatch.setitem(rm_mod.RISK_CONFIG, "equity", 200_000.0)
+        live = rm_mod.RiskManager()
+        # Sizing a real trade off a stale paper balance is the failure this
+        # guards: the book restarts from the real, configured account size.
+        assert live.current_capital == 200_000.0
+        assert live.peak_capital == 200_000.0
+        assert os.path.exists(str(tmp_path / "risk_state.pre_equity.json"))
+
+    def test_unchanged_equity_keeps_the_running_book(self, tmp_path, monkeypatch):
+        rm_mod = self._fresh(tmp_path, monkeypatch, equity=200_000.0)
+        first = rm_mod.RiskManager()
+        first.current_capital = 205_000.0
+        first.save_state()
+        again = rm_mod.RiskManager()
+        assert again.current_capital == 205_000.0   # profit is not wiped

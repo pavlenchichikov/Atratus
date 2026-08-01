@@ -124,3 +124,30 @@ create table if not exists events (
 alter table events enable row level security;
 drop policy if exists events_read on events;
 create policy events_read on events for select using (is_allowed());
+
+-- Trade levels: the prices to act on for today's setups, one row per asset.
+-- `amount` is null until the real account is declared in RISK_CONFIG["equity"];
+-- the client then shows `pct` instead, so a null here is a state, not a gap.
+-- `status` is 'ok', 'stop_breached' for a position the price has already passed,
+-- or the reason a row has no levels ('no_bars', 'short_history', 'flat_atr').
+-- push_signals.py DELETEs the whole table before each insert: a stale entry
+-- zone is a wrong price rather than merely an old one.
+create table if not exists levels (
+  asset      text primary key,
+  date       date not null,
+  side       text,
+  entry_low  double precision,
+  entry_high double precision,
+  stop       double precision,
+  -- not "trailing": that is a reserved word in Postgres (trim(trailing ...)),
+  -- and a quoted identifier would need the quotes at every later reference.
+  trailing_stop boolean,
+  amount     double precision,
+  pct        double precision,
+  bound_by   text,
+  held_days  integer,
+  status     text
+);
+alter table levels enable row level security;
+drop policy if exists levels_read on levels;
+create policy levels_read on levels for select using (is_allowed());
