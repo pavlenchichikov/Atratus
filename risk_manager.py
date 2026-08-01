@@ -24,6 +24,11 @@ RISK_CONFIG = {
     # Kelly tuning
     "kelly_fraction":         0.25,   # Fractional Kelly (quarter-Kelly)
     "min_kelly_threshold":    0.005,  # Ignore signals with Kelly < 0.5 %
+    # Manual-execution sizing (core/levels.py). equity is the real account the
+    # level sheet sizes against; 0 means unset, and the sheet then shows
+    # percentages instead of money.
+    "equity":                 0.0,
+    "risk_per_trade":         0.01,   # 1 % of equity risked to the stop
     # Risk adjustments
     "taleb_risk_cap":         5.0,    # Block BUY if Taleb risk > 5.0
     "taleb_soft_cap":         2.5,    # Reduce size above 2.5
@@ -42,6 +47,7 @@ _FRACTION_KEYS = {
     "max_portfolio_exposure", "max_single_position", "max_daily_loss",
     "max_drawdown_halt", "kelly_fraction", "min_kelly_threshold",
     "correlation_penalty", "default_avg_win", "default_avg_loss",
+    "risk_per_trade",
 }
 
 

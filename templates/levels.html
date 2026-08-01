@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Levels - Atratus{% endblock %}
+{% block content %}
+
+<h1 class="fade">Trade levels <span class="dim">{{ now }}</span></h1>
+
+{% if halted %}
+<p class="dim"><span class="chip chip-SELL">HALTED</span> {{ halt_reason }} Sizes are not shown.</p>
+{% endif %}
+
+<p class="dim">
+  The system does not see intraday price. Check at the broker whether the market
+  is inside the entry zone; outside it, skip the setup. Exit is on signal change,
+  the stop is insurance only.
+  {% if not config.equity %}Equity is unset on <a href="/risk">/risk</a>, so sizes are percentages.{% endif %}
+</p>
+
+<section class="panel fade">
+  <div class="panel-head">
+    <h2>Today</h2>
+    <span class="count mono">{{ rows | length }} setups</span>
+  </div>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Asset</th>
+        <th>Side</th>
+        <th class="num">Entry zone</th>
+        <th class="num">Stop</th>
+        <th class="num">Size</th>
+        <th>Bound by</th>
+        <th class="num">Held</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a class="asset-link" href="/asset/{{ r.asset }}">{{ r.asset }}</a></td>
+        <td><span class="chip chip-{{ 'BUY' if r.side == 1 else 'SELL' }}">{{ 'LONG' if r.side == 1 else 'SHORT' }}</span></td>
+        <td class="num mono">
+          {%- if r.entry_low is not none -%}
+            {{ "%.4f"|format(r.entry_low) }} to {{ "%.4f"|format(r.entry_high) }}
+          {%- else -%}-{%- endif -%}
+        </td>
+        <td class="num mono">
+          {%- if r.stop is not none -%}
+            {{ "%.4f"|format(r.stop) }}{% if r.trailing %} <span class="dim">trailing</span>{% endif %}
+          {%- else -%}-{%- endif -%}
+        </td>
+        <td class="num mono">
+          {%- if halted -%}-
+          {%- elif r.amount is not none -%}{{ "%.2f"|format(r.amount) }}
+          {%- else -%}{{ "%.2f"|format(r.pct * 100) }}%
+          {%- endif -%}
+        </td>
+        <td class="dim">{{ r.bound_by }}</td>
+        <td class="num mono">{{ r.held_days or "new" }}</td>
+        <td>
+          {%- if r.status == 'stop_breached' -%}
+            <span class="chip chip-SELL">past its stop</span>
+          {%- elif r.status != 'ok' -%}
+            <span class="dim">{{ r.status }}</span>
+          {%- endif -%}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -779,3 +779,12 @@ def test_asset_page_no_timing_when_flag_off(tmp_path, monkeypatch):
     monkeypatch.setattr(timing_policy, "timing_on", lambda: False)
     r = client.get("/asset/BTC")
     assert "policy:" not in r.text
+
+
+def test_levels_page_renders_with_a_reason_when_there_are_no_bars(client):
+    # The fixture DB has a prediction_log row for BTC but no price table, so the
+    # sheet must still render and must say why the row has no levels.
+    r = client.get("/levels")
+    assert r.status_code == 200
+    assert "BTC" in r.text
+    assert "no_bars" in r.text
