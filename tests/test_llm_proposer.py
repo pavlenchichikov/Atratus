@@ -2,6 +2,7 @@ import json
 import sys
 import types
 
+import httpx
 import pytest
 
 from core import llm_proposer as lp
@@ -329,3 +330,43 @@ def test_wiki_off_prompt_unchanged(monkeypatch):
     monkeypatch.setattr(lp, "_call_openai", lambda p: seen.setdefault("prompt", p) or "[]")
     lp.propose_specs([], ["ret_1"])
     assert "research wiki" not in seen["prompt"].lower()          # off - unchanged
+
+
+def test_avoid_clause_is_budgeted_and_not_double_escaped():
+    """This clause was 17.8k of a 25.9k prompt: 30 genome dumps re-escaped by
+    json.dumps. On a local CPU model that alone was minutes per call."""
+    # Entries are the size the journal actually stores (about 470 chars each),
+    # so 30 of them is the 14k that became 17.8k once json.dumps re-escaped it.
+    entries = ['{"drops": ["f%d"], "extra": [%s]}' % (i, '"x" ' * 100)
+               for i in range(30)]
+    assert sum(len(e) for e in entries) > 12000        # the unbudgeted size
+    out = lp._avoid_clause(entries)
+    assert len(out) < 1800
+    assert '\\"' not in out              # not JSON-encoded a second time
+    assert '"drops": ["f29"]' in out     # newest kept
+    assert '"drops": ["f0"]' not in out  # oldest dropped
+    assert lp._avoid_clause([]) == ""
+
+
+def test_a_timed_out_ollama_call_is_not_retried(monkeypatch):
+    """A timeout is deterministic here, so three attempts cost three timeouts
+    and learn nothing new."""
+    import openai
+    calls = []
+
+    class FakeCompletions:
+        def create(self, **kw):
+            calls.append(1)
+            raise openai.APITimeoutError(request=httpx.Request("POST", "http://x"))
+
+    class FakeClient:
+        def __init__(self, **kw):
+            self.chat = types.SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai",
+                        types.SimpleNamespace(OpenAI=FakeClient,
+                                              APITimeoutError=openai.APITimeoutError))
+    monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
+    with pytest.raises(RuntimeError, match="timed out"):
+        lp._call_ollama("hi")
+    assert len(calls) == 1

@@ -36,13 +36,33 @@ def _proposer_prompt(log, base_features):
     )
 
 
+AVOID_BUDGET = 1500   # characters of history the prompt may spend
+
+
 def _avoid_clause(avoid):
     """A prompt line listing already-tried candidates so the model proposes something
-    novel. Empty string when there is nothing to avoid, so the prompt is unchanged."""
+    novel. Empty string when there is nothing to avoid, so the prompt is unchanged.
+
+    Budgeted, and joined instead of json.dumps'd: the entries are already JSON
+    strings, so dumping the list re-escapes every quote. Unbudgeted this one
+    clause reached 17.8k of a 25.9k prompt - two thirds of it spent restating
+    history in double-escaped form. On a local CPU model that is minutes of
+    prompt processing per call, and it was the difference between an answer and
+    a timeout. Newest first: recent history is what the proposer must avoid.
+    """
     if not avoid:
         return ""
+    kept, used = [], 0
+    for item in reversed(list(avoid)):
+        s = str(item)
+        if used + len(s) > AVOID_BUDGET:
+            break
+        kept.append(s)
+        used += len(s)
+    if not kept:
+        return ""
     return ("\nAlready tried (do NOT repeat these - propose something genuinely "
-            "different): " + json.dumps(list(avoid)[-40:], ensure_ascii=True))
+            "different):\n" + "\n".join(kept))
 
 
 def _parse_specs(text):
@@ -202,6 +222,15 @@ def _call_ollama(prompt):
                 model=model, max_tokens=max_toks,
                 messages=[{"role": "user", "content": prompt}])
             return (resp.choices[0].message.content or "").strip()
+        except openai.APITimeoutError as exc:
+            # A timeout is not transient: the same prompt, model and machine will
+            # be just as slow next time, so a retry only multiplies the wait.
+            # Three attempts at the 600s default cost half an hour to learn what
+            # the first one already said.
+            raise RuntimeError(
+                "ollama call timed out after %ss (model too slow for this prompt; "
+                "try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)"
+                % _llm_timeout()) from exc
         except Exception as exc:
             last_err = exc
     raise RuntimeError(

@@ -1265,9 +1265,30 @@ def test_llm_child_passes_avoid_to_proposer(monkeypatch):
     monkeypatch.setattr(ar.llm_proposer, "propose_genome", fake_propose)
     monkeypatch.setattr(ar.ar_memory, "tried_recent",
                         lambda kind, n: ["SIG"] if kind == "genome" else [])
+    # A failure earlier in the run (or in an earlier test) latches the arm off.
+    monkeypatch.setattr(ar, "_LLM_WARNED", False)
     g = ar.Genome(drops=[], extra=[], label_mode="direction", label_window=30)
     ar._llm_child([{"genome": g, "fitness": 1.0}], _ACTIVE, ["ret_1"])
     assert captured["avoid"] == ["SIG"]
+
+
+def test_a_failed_llm_arm_is_not_called_again_this_run(monkeypatch):
+    """Each failed call costs the full timeout, so retrying every step of a
+    15-step budget is hours of a search doing nothing but waiting."""
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise RuntimeError("ollama call timed out after 600.0s")
+
+    monkeypatch.setattr(ar.llm_proposer, "propose_genome", boom)
+    monkeypatch.setattr(ar.ar_memory, "tried_recent", lambda kind, n: [])
+    monkeypatch.setattr(ar, "_LLM_WARNED", False)
+    g = ar.Genome(drops=[], extra=[], label_mode="direction", label_window=30)
+    elites = [{"genome": g, "fitness": 1.0}]
+    for _ in range(5):
+        assert ar._llm_child(elites, _ACTIVE, ["ret_1"]) is None
+    assert len(calls) == 1
 
 
 def test_run_qd_early_stops_on_exhaustion(monkeypatch):

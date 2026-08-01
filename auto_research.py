@@ -729,14 +729,22 @@ def _llm_warn(reason):
         return
     _LLM_WARNED = True
     print("[llm] proposer unavailable, falling back to the evolutionary operators "
-          "for this child; the arm is retried every step but stays quiet from "
-          "here on: %s" % reason)
+          "for the rest of this run: %s" % reason)
 
 
 def _llm_child(elites, active, base_features):
     """A genome proposed by the LLM, converted and validated; None on ANY
     problem (the QD loop then falls back to the evolutionary operators, so an
-    unreachable Ollama can never kill the search)."""
+    unreachable Ollama can never kill the search).
+
+    Once the backend has failed, this stops calling it for the rest of the run.
+    The failures that happen here are structural (a model too slow for the
+    machine, a stopped Ollama), not transient, so retrying every step buys
+    nothing and costs the timeout each time - fifteen steps at the 600s default
+    is two and a half hours of a search doing nothing but waiting.
+    """
+    if _LLM_WARNED:
+        return None
     top = sorted(elites, key=lambda e: e["fitness"], reverse=True)[:5]
     parent = random.choice(top)["genome"]
     summary = [{"genome": asdict(e["genome"]), "fitness": e["fitness"]} for e in top]
