@@ -729,7 +729,8 @@ def _llm_warn(reason):
         return
     _LLM_WARNED = True
     print("[llm] proposer unavailable, falling back to the evolutionary operators "
-          "for the rest of this run: %s" % reason)
+          "for this child; the arm is retried every step but stays quiet from "
+          "here on: %s" % reason)
 
 
 def _llm_child(elites, active, base_features):

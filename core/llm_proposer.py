@@ -209,9 +209,31 @@ def _call_ollama(prompt):
         % (base, last_err))
 
 
-def _backend():
+def _traced(fn, what, provider):
+    """fn with one console line before the call and one after. A local model can
+    sit on a single call for tens of minutes and an empty reply is indistinguishable
+    from a refusal, so a silent LLM arm is unreadable from the run output."""
+    def call(prompt):
+        import time
+        model = os.getenv("GTRADE_AR_LLM_MODEL") or "auto"
+        print("[llm] %s: asking %s/%s, %d char prompt" % (what, provider, model,
+                                                          len(prompt)), flush=True)
+        t0 = time.time()
+        try:
+            out = fn(prompt)
+        except Exception as exc:
+            print("[llm] %s: FAILED after %.0fs: %s" % (what, time.time() - t0, exc),
+                  flush=True)
+            raise
+        print("[llm] %s: %d char reply in %.0fs" % (what, len(out or ""),
+                                                    time.time() - t0), flush=True)
+        return out
+    return call
+
+
+def _backend(what="llm"):
     """The provider call function for GTRADE_AR_LLM, resolved at call time so
-    tests can monkeypatch the _call_* functions."""
+    tests can monkeypatch the _call_* functions. `what` labels the console trace."""
     provider = (os.getenv("GTRADE_AR_LLM") or "anthropic").strip().lower()
     backends = {"anthropic": _call_anthropic, "openai": _call_openai,
                 "ollama": _call_ollama}
@@ -219,7 +241,7 @@ def _backend():
     if fn is None:
         raise RuntimeError(
             "unknown GTRADE_AR_LLM %r (use anthropic, openai or ollama)" % provider)
-    return fn
+    return _traced(fn, what, provider)
 
 
 def reflect_on():
@@ -257,7 +279,7 @@ def _reflect_hypothesis():
             "Here are recent auto-research experiments and whether they cleared the "
             "held-out gate:\n" + json.dumps(recent, ensure_ascii=True)[:4000] +
             "\nIn ONE sentence, hypothesize why they did not improve the model. No prose.")
-        return (_backend()(prompt) or "").strip()
+        return (_backend("reflect")(prompt) or "").strip()
     except Exception:
         return ""
 
@@ -305,11 +327,14 @@ def propose_genome(parent, elites, active, base_features, avoid=None):
     hyp = _reflect_hypothesis()
     if hyp:
         prompt = "Reflection: " + hyp + "\n" + prompt
-    backend = _backend()
+    backend = _backend("genome")
     for _attempt in range(2):
         obj = _parse_obj(backend(prompt))
         if obj is not None:
+            print("[llm] genome: %s" % json.dumps(obj, ensure_ascii=True)[:300],
+                  flush=True)
             return obj
+        print("[llm] genome: no JSON object in the reply, retrying", flush=True)
     return None
 
 
@@ -323,7 +348,7 @@ def propose_specs(log, base_features, avoid=None):
     hyp = _reflect_hypothesis()
     if hyp:
         prompt = "Reflection: " + hyp + "\n" + prompt
-    return _parse_specs(_backend()(prompt))
+    return _parse_specs(_backend("specs")(prompt))
 
 
 if __name__ == "__main__":

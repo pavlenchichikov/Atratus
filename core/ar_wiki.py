@@ -67,7 +67,7 @@ def note_replicated(sig, detail):
 def _backend():
     """The LLM proposer backend (lazy import so there is no import cycle)."""
     from core.llm_proposer import _backend as b
-    return b()
+    return b("wiki")
 
 
 def _load_state():

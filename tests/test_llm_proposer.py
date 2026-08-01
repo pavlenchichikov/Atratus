@@ -148,6 +148,24 @@ def test_call_ollama_model_env_override(monkeypatch):
     assert captured["model"] == "gemma3:latest"
 
 
+def test_backend_traces_every_call(monkeypatch, capsys):
+    monkeypatch.setenv("GTRADE_AR_LLM", "openai")
+    monkeypatch.setenv("GTRADE_AR_LLM_MODEL", "gemma4:26b")
+    monkeypatch.setattr(lp, "_call_openai", lambda prompt: "reply")
+    assert lp._backend("genome")("a prompt") == "reply"
+    out = capsys.readouterr().out
+    assert "[llm] genome: asking openai/gemma4:26b, 8 char prompt" in out
+    assert "5 char reply in" in out
+
+    def boom(prompt):
+        raise RuntimeError("ollama down")
+
+    monkeypatch.setattr(lp, "_call_openai", boom)
+    with pytest.raises(RuntimeError):
+        lp._backend("wiki")("p")
+    assert "[llm] wiki: FAILED after" in capsys.readouterr().out
+
+
 def test_backend_knows_ollama(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_LLM", "ollama")
     monkeypatch.setattr(lp, "_call_ollama", lambda prompt: "[]")
