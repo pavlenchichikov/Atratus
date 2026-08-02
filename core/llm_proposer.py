@@ -35,7 +35,47 @@ def _proposer_prompt(log, base_features):
     )
 
 
-AVOID_BUDGET = 1500   # characters of history the prompt may spend
+AVOID_BUDGET = 3000   # characters of history the prompt may spend
+# 3000, not the 1500 this started at: compacting the entries roughly halved
+# them (460 characters to 244 on the real registry), and the whole prompt is
+# now about 9k against the 26k that used to time the local model out, so the
+# budget can afford the breadth. Twelve remembered candidates instead of three.
+
+
+def _compact_sig(entry):
+    """One already-tried genome as a short line.
+
+    The registry stores a canonical JSON signature whose `extra` field is itself
+    a list of JSON strings, so the quoting costs more than the content. The model
+    does not need to reconstruct a genome from this list, only to recognise what
+    is taken, and `drop rsi,vol_z +ratio(bb_pos,rsi) rel_median/30` says that in
+    a little under half the characters (460 to 244 measured on the real
+    registry). Unparseable entries fall back to a truncated raw string rather
+    than being dropped: a hint the model cannot read is still better than
+    silently pretending the candidate was never tried.
+    """
+    try:
+        d = json.loads(entry)
+    except Exception:
+        return str(entry)[:120]
+    parts = []
+    drops = d.get("drops") or []
+    if drops:
+        parts.append("drop " + ",".join(drops))
+    for spec in d.get("extra") or []:
+        try:
+            op, inputs, params = json.loads(spec)
+        except Exception:
+            continue
+        args = list(inputs) + [f"{k}={v}" for k, v in (params or [])]
+        parts.append("+%s(%s)" % (op, ",".join(str(a) for a in args)))
+    label = d.get("label")
+    if label:
+        parts.append("%s/%s" % (label[0], label[1]))
+    for gene in ("hyper", "nets", "tuning"):
+        if d.get(gene):
+            parts.append("%s=%s" % (gene, ",".join(str(x) for x in d[gene])))
+    return " ".join(parts) or str(entry)[:120]
 
 
 def _avoid_clause(avoid):
@@ -48,12 +88,16 @@ def _avoid_clause(avoid):
     history in double-escaped form. On a local CPU model that is minutes of
     prompt processing per call, and it was the difference between an answer and
     a timeout. Newest first: recent history is what the proposer must avoid.
+
+    Each entry is compacted (see _compact_sig), which is what makes the budget
+    worth having: the point of this clause is breadth of history rather than
+    detail, so more shorter entries beat fewer verbatim ones.
     """
     if not avoid:
         return ""
     kept, used = [], 0
     for item in reversed(list(avoid)):
-        s = str(item)
+        s = _compact_sig(item)
         if used + len(s) > AVOID_BUDGET:
             break
         kept.append(s)

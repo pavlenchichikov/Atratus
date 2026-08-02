@@ -331,19 +331,53 @@ def test_wiki_off_prompt_unchanged(monkeypatch):
     assert "research wiki" not in seen["prompt"].lower()          # off - unchanged
 
 
-def test_avoid_clause_is_budgeted_and_not_double_escaped():
+def _sig(i):
+    """A tried-registry entry in the real stored shape: a canonical JSON
+    signature whose `extra` is itself a list of JSON strings."""
+    return json.dumps({
+        # genome_sig stores drops sorted, so the fixture does too
+        "drops": sorted(["corr_sp500", "vol_z", "trend_strength", f"f{i}"]),
+        "extra": [json.dumps(["interaction", ["ret_20", "ret_5"], []]),
+                  json.dumps(["lag", ["vol_z"], [["k", 3]]]),
+                  json.dumps(["lead_lag", ["vix"], [["horizon", 5]]]),
+                  json.dumps(["zscore", ["vol_z"], [["window", 20]]])],
+        "label": ["rel_median", 30],
+        "tuning": [0.05, 0.0, "taleb_only"],
+    }, sort_keys=True)
+
+
+def test_compact_sig_keeps_the_identity_and_drops_the_syntax():
+    out = lp._compact_sig(_sig(7))
+    assert "drop corr_sp500,f7,trend_strength,vol_z" in out
+    assert "+lag(vol_z,k=3)" in out
+    assert "+lead_lag(vix,horizon=5)" in out
+    assert "rel_median/30" in out
+    assert "tuning=0.05,0.0,taleb_only" in out
+    # measured 460 to 244 characters on the real registry; the quoting is
+    # what goes, so do not claim more than the ~2x it actually buys
+    assert len(out) < len(_sig(7)) * 0.6
+    assert "\\" not in out                       # no re-escaped JSON
+
+
+def test_compact_sig_never_loses_an_unreadable_entry():
+    # A hint the model cannot parse still beats pretending it was never tried.
+    assert lp._compact_sig("not json at all").startswith("not json")
+    assert lp._compact_sig("") == ""
+
+
+def test_avoid_clause_is_budgeted_and_compacted():
     """This clause was 17.8k of a 25.9k prompt: 30 genome dumps re-escaped by
     json.dumps. On a local CPU model that alone was minutes per call."""
-    # Entries are the size the journal actually stores (about 470 chars each),
-    # so 30 of them is the 14k that became 17.8k once json.dumps re-escaped it.
-    entries = ['{"drops": ["f%d"], "extra": [%s]}' % (i, '"x" ' * 100)
-               for i in range(30)]
-    assert sum(len(e) for e in entries) > 12000        # the unbudgeted size
+    entries = [_sig(i) for i in range(30)]
+    raw = lp._avoid_clause.__globals__["json"].dumps(entries)
     out = lp._avoid_clause(entries)
-    assert len(out) < 1800
-    assert '\\"' not in out              # not JSON-encoded a second time
-    assert '"drops": ["f29"]' in out     # newest kept
-    assert '"drops": ["f0"]' not in out  # oldest dropped
+    assert len(out) <= lp.AVOID_BUDGET + 200
+    assert len(out) < len(raw) / 3           # budgeted AND compacted
+    assert "\\" not in out                    # not JSON-encoded a second time
+    assert "f29" in out                      # newest kept
+    assert "f0" not in out                   # oldest dropped
+    # compaction has to buy real breadth, not one extra line
+    assert out.count("drop ") >= 8
     assert lp._avoid_clause([]) == ""
 
 
