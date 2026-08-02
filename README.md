@@ -356,7 +356,14 @@ uvicorn webapp:app --port 8000     # http://127.0.0.1:8000
 | `/research` | What the research agent has learned so far |
 
 Signals alone do not tell you where to enter or where to get out. `/levels`
-does, and it is the page to trade from:
+does, and it is the page to trade from.
+
+Both numbers below are multiples of **ATR** (average true range over the last 14
+bars): the typical distance this asset travels in a day, counting overnight gaps
+rather than only the high-to-low range. Using it as the unit is what lets one
+rule fit every market - the same `2 ATR` stop is wide on Bitcoin and tight on
+EURUSD, with no per-asset tuning and no round numbers that a volatile asset would
+blow through on an ordinary day.
 
 - **Entry zone** - `close +- 0.5 ATR` around yesterday's close. Inside the zone,
   take the setup; outside it, skip that row. Atratus sees daily bars only, so it
@@ -776,7 +783,14 @@ uvicorn webapp:app --port 8000     # http://127.0.0.1:8000
 | `/research` | Что исследовательский агент выяснил к этому моменту |
 
 Сам по себе сигнал не говорит, где входить и где выходить. Это говорит
-`/levels`, и торговать надо с неё:
+`/levels`, и торговать надо с неё.
+
+Оба числа ниже кратны **ATR** (average true range, средний истинный диапазон за
+последние 14 баров): типичный дневной ход именно этого актива, с учётом ночных
+гэпов, а не только размах от максимума до минимума. Именно поэтому одно правило
+подходит всем рынкам сразу - тот же стоп в `2 ATR` широк на биткоине и узок на
+EURUSD, без ручной настройки под каждый актив и без круглых чисел, которые
+волатильный актив проходит за обычный день.
 
 - **Зона входа** - `close +- 0.5 ATR` вокруг вчерашнего закрытия. Цена внутри
   зоны - сетап берётся, вне - пропускается. Atratus видит только дневные бары и
