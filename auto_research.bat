@@ -128,6 +128,20 @@ echo.
 echo     LLM max tokens  (0 = no cap; gemma reasoning needs room)
 set "GTRADE_AR_LLM_MAX_TOKENS=8000"
 set /p "GTRADE_AR_LLM_MAX_TOKENS=    max tokens [8000]: "
+echo.
+echo     Seconds allowed for ONE call. A large local model on CPU needs far
+echo     more than the 600s SDK default; a timeout is not retried, so a value
+echo     that is too small costs the whole LLM arm for the run. 0 = no limit.
+set "GTRADE_AR_LLM_TIMEOUT=3600"
+set /p "GTRADE_AR_LLM_TIMEOUT=    timeout seconds [3600]: "
+echo.
+echo     Reflect before proposing?  The model first writes one line on why the
+echo     recent experiments failed, then proposes with that in front of it.
+echo     Costs one extra call per step.  1 = off (default)   2 = on
+set "REFL=1"
+set /p "REFL=    choice [1]: "
+set "GTRADE_AR_REFLECT="
+if "%REFL%"=="2" set "GTRADE_AR_REFLECT=1"
 :skiptoks
 
 echo.
@@ -146,6 +160,19 @@ if "%OBJ%"=="3" set "GTRADE_AR_OBJECTIVE=median"
 if "%OBJ%"=="4" set "GTRADE_AR_OBJECTIVE=cvar"
 if "%OBJ%"=="5" set "GTRADE_AR_OBJECTIVE=sharpe"
 if "%OBJ%"=="6" set "GTRADE_AR_OBJECTIVE=trimmed_mean"
+
+echo.
+echo [4b] Score basis (WHICH number the objective above is applied to):
+echo     1 = raw ensemble Score (default)
+echo     2 = neural contribution (ensemble minus a CatBoost-only run)
+echo         Use 2 to hunt specifically for something that revives the neural
+echo         members. Four attempts have measured flat or negative there, so the
+echo         evidence points at the labeling as the ceiling - pair it with a
+echo         labeling change rather than running it as a default.
+set "BAS=1"
+set /p "BAS=    choice [1]: "
+set "GTRADE_AR_SCORE_BASIS="
+if "%BAS%"=="2" set "GTRADE_AR_SCORE_BASIS=neural"
 
 echo.
 echo [5] Chronos forecast features?  (needs setup - see top of this file)
@@ -179,8 +206,9 @@ if "%RL%"=="2" set "GTRADE_AR_RL=1"
 echo.
 echo ------------------------------------------------------------
 echo   axes=%GTRADE_AR_AXES%  proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
-echo   model=%GTRADE_AR_LLM_MODEL%  maxtok=%GTRADE_AR_LLM_MAX_TOKENS%  chronos=%GTRADE_CHRONOS%  wiki=%GTRADE_AR_WIKI%
-echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%  rl=%GTRADE_AR_RL%
+echo   model=%GTRADE_AR_LLM_MODEL%  maxtok=%GTRADE_AR_LLM_MAX_TOKENS%  timeout=%GTRADE_AR_LLM_TIMEOUT%
+echo   chronos=%GTRADE_CHRONOS%  wiki=%GTRADE_AR_WIKI%  reflect=%GTRADE_AR_REFLECT%
+echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%  basis=%GTRADE_AR_SCORE_BASIS%  rl=%GTRADE_AR_RL%
 echo ------------------------------------------------------------
 set "GO=Y"
 set /p "GO=Start? [Y/n]: "

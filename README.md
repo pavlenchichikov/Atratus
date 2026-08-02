@@ -149,7 +149,47 @@ a working default, so pressing Enter through it is a valid run.
 | Proposer | `1` evolutionary needs nothing. `2` local Ollama, `3` Anthropic, `4` OpenAI |
 | Budget | How many NEW candidates this run. Past candidates are never re-tested |
 | Objective | How per-asset lifts become one number. `mean` by default; `cvar` and `min` optimize the worst assets instead of the average |
+| Score basis | `1` raw ensemble Score, `2` the neural contribution. See below |
 | Wiki, RL scheduler | Optional, off by default, described above |
+
+**Choosing the objective.** Every candidate produces one Score delta per
+held-out asset. The objective is how those numbers become the single value the
+adoption gate tests.
+
+| Objective | What it computes | Pick it when |
+| --- | --- | --- |
+| `mean` | Average lift across the held-out assets | Default. The book as a whole should improve, and one asset getting worse is acceptable if others gain more |
+| `min` | The worst asset's lift | Nothing may regress at all. The strictest and the noisiest: a single unlucky asset decides the verdict |
+| `median` | The middle lift | Same intent as `mean`, but you suspect one or two extreme assets are dragging the average around |
+| `cvar` | Average of the worst quarter | The floor matters but `min` is too jumpy. Usually the better "do no harm" setting |
+| `trimmed_mean` | Average with the single best and worst dropped | You want `mean` without the one lucky and the one unlucky asset (the menu calls this one `trimmed`) |
+| `sharpe` | Mean divided by the spread of the lifts | Consistency across assets matters more than the size of the average gain |
+
+`sharpe` is dimensionless, so it clears its own floor
+(`GTRADE_AR_ADOPT_SHARPE`, default 0.5) rather than the Score-delta floor the
+other five share. Changing the objective changes what "better" means, so runs
+are comparable only within one objective; the result cache keys on it for that
+reason.
+
+**Can neural_lift be the objective?** It already can, through a different
+setting. The objective decides how per-asset numbers are reduced; the *basis*
+decides which number is measured in the first place.
+
+```
+GTRADE_AR_SCORE_BASIS=neural
+```
+
+scores each candidate on the neural contribution (the full ensemble minus a
+CatBoost-only run) instead of the raw ensemble Score, and it composes with any
+of the six objectives above. The `neural_lift` figure printed next to each
+verdict is exactly that quantity, always reduced by `mean` for reporting.
+
+It is menu item `[4b]`, and the launcher spells out the caveat. Four separate attempts to
+lift the neural members - engineered features, Chronos base-model forecasts, a
+25-year pretraining set, and the adopted genome - each measured flat or
+negative, so the evidence points at the labeling as the ceiling rather than at
+the search target. Reach for this basis to test a labeling change, not as a
+default hunting ground.
 
 Budget is not wall-clock. The search phase is cheap (a CatBoost-only screen,
 one to three minutes per candidate); the cost is the final gate, which trains
@@ -566,7 +606,47 @@ $ python predict.py
 | Proposer | `1` эволюционный, ничего не требует. `2` локальная Ollama, `3` Anthropic, `4` OpenAI |
 | Budget | Сколько НОВЫХ кандидатов за этот прогон. Прошлые никогда не перепроверяются |
 | Objective | Как пер-активные приросты сводятся в одно число. По умолчанию `mean`; `cvar` и `min` оптимизируют худшие активы вместо среднего |
+| Score basis | `1` сырой Score ансамбля, `2` вклад нейросетей. См. ниже |
 | Wiki, RL scheduler | Опциональные, по умолчанию выключены, описаны выше |
+
+**Как выбирать objective.** Каждый кандидат даёт по одной дельте Score на
+каждый отложенный актив. Objective - это способ свести эти числа к одному,
+которое и проверяет гейт адопции.
+
+| Objective | Что считает | Когда брать |
+| --- | --- | --- |
+| `mean` | Средний прирост по отложенным активам | По умолчанию. Портфель в целом должен стать лучше, и просадка по одному активу приемлема, если другие выигрывают больше |
+| `min` | Прирост худшего актива | Ухудшаться не должно вообще ничего. Самый строгий и самый шумный: вердикт решает один невезучий актив |
+| `median` | Срединный прирост | Тот же смысл, что у `mean`, но есть подозрение, что пара крайних активов таскает среднее за собой |
+| `cvar` | Среднее по худшей четверти | Пол важен, но `min` слишком дёрганый. Обычно это более удачный вариант "не навреди" |
+| `trimmed_mean` | Среднее без одного лучшего и одного худшего | Нужен `mean`, но без одного везучего и одного невезучего актива (в меню этот пункт называется `trimmed`) |
+| `sharpe` | Среднее, делённое на разброс приростов | Важнее стабильность улучшения по активам, чем величина среднего выигрыша |
+
+`sharpe` безразмерный, поэтому проходит собственный порог
+(`GTRADE_AR_ADOPT_SHARPE`, по умолчанию 0.5), а не общий порог по дельте Score,
+который используют остальные пять. Смена objective меняет смысл слова "лучше",
+поэтому прогоны сравнимы только внутри одного objective; кеш результатов
+ключуется по нему именно поэтому.
+
+**Можно ли сделать objective из neural_lift?** Уже можно, но через другую
+настройку. Objective решает, как сводятся пер-активные числа; *basis* решает,
+какое число вообще измеряется.
+
+```
+GTRADE_AR_SCORE_BASIS=neural
+```
+
+оценивает кандидата по вкладу нейросетей (полный ансамбль минус прогон только
+на CatBoost) вместо сырого Score ансамбля и сочетается с любым из шести
+objective выше. Величина `neural_lift`, которую прогон печатает рядом с
+вердиктом, - это ровно она, для отчёта всегда сведённая через `mean`.
+
+Это пункт меню `[4b]`, и лаунчер проговаривает оговорку.
+Четыре отдельные попытки поднять нейро-члены - инженерные признаки, прогнозы
+базовой модели Chronos, 25-летний набор для предобучения и адоптированный геном
+- дали ноль или минус, так что данные указывают на разметку как на потолок, а не
+на цель поиска. Этот basis стоит доставать под проверку изменения разметки, а не
+как площадку по умолчанию.
 
 Бюджет - это не время. Фаза поиска дешёвая (скрин только на CatBoost, одна-три
 минуты на кандидата); платите вы за финальный гейт, который обучает элиты

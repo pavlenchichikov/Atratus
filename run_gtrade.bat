@@ -49,6 +49,9 @@ echo    [SG] Publish live signals to the site (Supabase)
 echo  GENOME
 echo    [AG] Adopt a genome   [AS] What is adopted   [AR] Revert adoption
 echo    [ABC] Configure a genome A/B     [ABR] Run the configured A/B
+echo  RESEARCH / MAINTENANCE
+echo    [RS] Auto-research agent (own menu)   [LC] Daily loop cycle
+echo    [RC] Recalibrate live probabilities   [TP] Fit the timing policy
 echo.
 echo =======================================================
 set /p choice="Select: "
@@ -81,6 +84,10 @@ if /i "%choice%"=="5C" goto train_chunked
 if /i "%choice%"=="AG" goto adopt_genome
 if /i "%choice%"=="AS" goto adopt_show
 if /i "%choice%"=="AR" goto adopt_revert
+if /i "%choice%"=="RS" goto auto_research
+if /i "%choice%"=="LC" goto loop_cycle
+if /i "%choice%"=="RC" goto recalibrate
+if /i "%choice%"=="TP" goto timing_policy
 if /i "%choice%"=="ABC" goto ab_configure
 if /i "%choice%"=="ABR" goto ab_run
 if /i "%choice%"=="L" goto signal_log
@@ -140,6 +147,48 @@ echo changes only if the new model beats it. Add --force-promote only to rebuild
 echo a baseline or repair registry metadata.
 echo.
 python train_chunked.py
+pause
+goto menu
+
+:auto_research
+cls
+echo Hands over to auto_research.bat, which has its own menu (mode, proposer,
+echo budget, objective, score basis). It never touches production: candidates
+echo train into temp dirs and nothing is adopted without you.
+echo.
+REM  setlocal so the agent's GTRADE_* choices (chronos features, extra columns,
+REM  objective) die with it. Without this they would leak into whatever the
+REM  main menu runs next, and a later Train would silently pick them up.
+setlocal
+call auto_research.bat
+endlocal
+goto menu
+
+:loop_cycle
+cls
+echo Daily pipeline (data, predict, reconcile) plus a drift scan. Proposals
+echo appear on the /loop page; nothing retrains without your approval.
+echo.
+python loop_cycle.py
+pause
+goto menu
+
+:recalibrate
+cls
+echo Refits the global live-calibration layer from verified outcomes and
+echo REPLACES models\live_calib_global.pkl. Weekly is enough. Delete that file
+echo to roll back to the raw model probabilities.
+echo.
+python recalibrate_live.py
+pause
+goto menu
+
+:timing_policy
+cls
+echo Fits the entry-timing policy from the live track record and writes
+echo timing_policy.json. It only takes effect when GTRADE_TIMING_POLICY=1.
+echo.
+python train_timing.py
 pause
 goto menu
 
