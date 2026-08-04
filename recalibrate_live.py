@@ -42,6 +42,20 @@ def collect_pairs(days=90, db_path=None):
     return probs, ups
 
 
+MIN_SPREAD = 0.02   # calibrated-probability range a fit must still produce
+
+
+def _fit_spread(iso, probs):
+    """How much of a range the fitted map still produces over the observed
+    probabilities. Zero means every input became the same output."""
+    lo, hi = min(probs), max(probs)
+    if hi <= lo:
+        return 0.0
+    grid = [lo + (hi - lo) * i / 20.0 for i in range(21)]
+    out = iso.predict(grid)
+    return float(max(out) - min(out))
+
+
 def main(days=90, min_n=None, model_dir=None, db_path=None):
     if min_n is None:
         try:
@@ -56,6 +70,21 @@ def main(days=90, min_n=None, model_dir=None, db_path=None):
     iso = fit_calibrator(probs, ups)
     if iso is None:
         print("[recalibrate-live] degenerate data - nothing written")
+        return None
+    # Isotonic can only fit a NON-DECREASING map. When the live stream is
+    # anti-calibrated (high probabilities scoring worse than low ones, which is
+    # exactly why this layer exists) the best non-decreasing fit of that data is
+    # a flat line at the base rate. It is a valid IsotonicRegression, so it
+    # passes every check above and then maps every asset to one number: the
+    # serve layer sees the same probability everywhere, no threshold is ever
+    # crossed, and the whole book prints WAIT. Refuse to ship that.
+    spread = _fit_spread(iso, probs)
+    if spread < MIN_SPREAD:
+        print("[recalibrate-live] fit collapsed to a constant (spread %.4f < %.2f): "
+              "the live stream is anti-calibrated over these %d days, so isotonic "
+              "flattens to the base rate. Nothing written - the previous layer, or "
+              "none, stays in force. Try a shorter --days window."
+              % (spread, MIN_SPREAD, days))
         return None
     path = save_live_global(
         iso, {"n": len(probs), "fitted_at": datetime.utcnow().isoformat(),
