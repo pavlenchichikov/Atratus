@@ -541,8 +541,7 @@ def levels_sheet(equity=0.0):
     """
     from core import levels as levels_mod
     from core import positions as positions_mod
-    from core import timing_policy
-    from core import track_record
+    from core import timing_policy, track_record
     from risk_manager import RISK_CONFIG
 
     # Resolved once per sheet, not per row: this is the reversibility guard, and
