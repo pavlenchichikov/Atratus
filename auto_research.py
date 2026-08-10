@@ -63,9 +63,13 @@ PROGRESS_SEED = {"holdout_14": [35765, 37058, 46714, 29930],
                  "screen_14": [222, 94, 215, 116],
                  "assets": {}}
 
+# The workload knobs (folds, epochs, promotion) are hardware-independent and stay
+# here. The CONCURRENCY knobs deliberately do NOT: GTRADE_LIGHT asks train_hybrid
+# for its own light profile, because only the child knows whether TF found a GPU.
+# Hard-coding workers/slots/threads here pinned CatBoost to a single core even on
+# the GPU box, which is how a 12-thread machine ended up running at 1.5 cores.
 LIGHT_ENV = {
-    "GTRADE_WORKERS": "4", "GTRADE_NEURAL_SLOTS": "4", "GTRADE_TF_THREADS": "2",
-    "GTRADE_CB_THREADS": "1", "GTRADE_MAX_FOLDS": "5", "GTRADE_ADAPTIVE_NETS": "1",
+    "GTRADE_LIGHT": "1", "GTRADE_MAX_FOLDS": "5", "GTRADE_ADAPTIVE_NETS": "1",
     "GTRADE_NET_CAP": "80", "GTRADE_EPOCHS_LSTM": "90", "GTRADE_EPOCHS_TF": "60",
     "GTRADE_EPOCHS_TCN": "50", "GTRADE_FORCE_PROMOTE": "1", "TF_CPP_MIN_LOG_LEVEL": "2",
 }

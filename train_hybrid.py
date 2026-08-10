@@ -92,20 +92,29 @@ def _env_int(name: str, default: int) -> int:
 # so run several models at once, each capped to a few intra-op threads - total
 # threads ~= cores. Same models/epochs, scheduling only. Env-tunable below.
 _cores = os.cpu_count() or 8
+# GTRADE_LIGHT=1 is the research profile: leave the machine usable during the
+# long auto-research runs. It must be applied HERE, not by the caller, because
+# only this module knows whether a GPU was found - the old caller-side clamp set
+# CB_THREADS=1 and NEURAL_SLOTS=4 unconditionally, which on a GPU box starves
+# CatBoost of every core while risking four concurrent cuDNN contexts.
+_LIGHT = (os.getenv("GTRADE_LIGHT") or "").strip() in ("1", "true", "True")
 if _HAS_GPU:
     _GPU_SLOTS = _env_int("GTRADE_NEURAL_SLOTS", 1)
-    _CB_THREADS = _env_int("GTRADE_CB_THREADS", max(4, _cores))
-    _N_WORKERS = _env_int("GTRADE_WORKERS", 10)
+    _CB_THREADS = _env_int("GTRADE_CB_THREADS",
+                           max(4, _cores // 2) if _LIGHT else max(4, _cores))
+    _N_WORKERS = _env_int("GTRADE_WORKERS", 6 if _LIGHT else 10)
 else:
-    _TF_THREADS = _env_int("GTRADE_TF_THREADS", 3)
+    _TF_THREADS = _env_int("GTRADE_TF_THREADS", 2 if _LIGHT else 3)
     try:
         tf.config.threading.set_intra_op_parallelism_threads(_TF_THREADS)
         tf.config.threading.set_inter_op_parallelism_threads(2)
     except (RuntimeError, ValueError):
         pass
-    _GPU_SLOTS = _env_int("GTRADE_NEURAL_SLOTS", max(1, _cores // _TF_THREADS))
-    _CB_THREADS = _env_int("GTRADE_CB_THREADS", max(2, _TF_THREADS))  # CB runs alongside nets
-    _N_WORKERS = _env_int("GTRADE_WORKERS", _GPU_SLOTS + 2)
+    _GPU_SLOTS = _env_int("GTRADE_NEURAL_SLOTS",
+                          4 if _LIGHT else max(1, _cores // _TF_THREADS))
+    _CB_THREADS = _env_int("GTRADE_CB_THREADS",
+                           1 if _LIGHT else max(2, _TF_THREADS))  # CB runs alongside nets
+    _N_WORKERS = _env_int("GTRADE_WORKERS", 4 if _LIGHT else _GPU_SLOTS + 2)
 
 _gpu_lock = threading.Semaphore(_GPU_SLOTS)
 _print_lock = threading.Lock()

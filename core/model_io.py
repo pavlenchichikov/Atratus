@@ -65,10 +65,26 @@ def load_keras_native(path):
         lam_cls.call = _lambda_cast_call
         lam_cls.compute_output_shape = _lambda_identity_shape
         try:
-            model = tf.keras.models.load_model(
-                path, safe_mode=False, custom_objects=_SERVE_CUSTOM_OBJECTS)
+            try:
+                model = tf.keras.models.load_model(
+                    path, safe_mode=False, custom_objects=_SERVE_CUSTOM_OBJECTS)
+            except TypeError:
+                # safe_mode is a Keras 3 argument. The GPU env is pinned to TF 2.10
+                # (the last native-Windows CUDA build), whose load_model does not
+                # accept it - and there the flag is redundant anyway, because Keras
+                # 2 has no safe-mode lambda restriction to switch off. Without this
+                # fallback every champion fails to load in that env and the legacy
+                # rebuild path quietly serves a half-initialised net at ~0.5.
+                model = tf.keras.models.load_model(
+                    path, custom_objects=_SERVE_CUSTOM_OBJECTS)
         except Exception as e:
-            logger.debug("Native keras load failed for %s: %s", path, e)
+            # WARNING, not debug: the caller only reaches here for a file that
+            # EXISTS on disk, so a failure means a trained champion is silently
+            # dropped from the ensemble. That is exactly how the neural members
+            # died unnoticed once already; a wrong-environment load (Keras 2
+            # cannot open a Keras 3 zip .keras) must be visible in the console.
+            logger.warning("Champion exists but did not load: %s (%s: %s)",
+                           path, type(e).__name__, e)
             return None
         finally:
             lam_cls.call = orig_call

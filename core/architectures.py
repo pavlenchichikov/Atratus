@@ -99,15 +99,18 @@ def build_transformer_encoder(input_shape, num_heads=4, ff_dim=128, dropout=0.1,
     inputs = Input(shape=input_shape)
     n_feat = input_shape[1]
     compute_dt = tf.keras.mixed_precision.global_policy().compute_dtype
-    # Identity(dtype=...) casts the input to the compute dtype WITHOUT a Lambda:
-    # a saved Lambda(lambda t: tf.cast(...)) does not survive the Keras 3
+    # Activation("linear", dtype=...) casts the input to the compute dtype WITHOUT
+    # a Lambda: a saved Lambda(lambda t: tf.cast(...)) does not survive the Keras 3
     # save/load round-trip (shape inference fails, then the marshalled lambda
     # loses its `tf` global), which silently killed reloaded members at predict
-    # time. Identity is a builtin layer and serializes cleanly.
-    x = tf.keras.layers.Identity(dtype=compute_dt)(inputs)
+    # time. A builtin layer serializes cleanly.
+    # Not Identity: that layer only exists from Keras 2.13, and the GPU env is
+    # pinned to TF 2.10 (the last native-Windows CUDA build). Activation("linear")
+    # is the same no-op cast and exists in every Keras version.
+    x = tf.keras.layers.Activation("linear", dtype=compute_dt)(inputs)
     pos_emb = tf.keras.layers.Embedding(input_shape[0], n_feat)(
         tf.cast(tf.range(input_shape[0]), tf.int32))
-    x = x + tf.keras.layers.Identity(dtype=compute_dt)(pos_emb)
+    x = x + tf.keras.layers.Activation("linear", dtype=compute_dt)(pos_emb)
     for _ in range(2):
         key_dim = max(1, n_feat // num_heads)
         attn = tf.keras.layers.MultiHeadAttention(
@@ -189,12 +192,13 @@ def build_tcn(input_shape, n_filters=64, kernel_size=3, n_blocks=3, dropout=0.15
     """
     inputs = Input(shape=input_shape)
     compute_dt = tf.keras.mixed_precision.global_policy().compute_dtype
-    # Identity(dtype=...) instead of a cast Lambda: a saved Lambda does not
-    # survive the Keras 3 save/load round-trip, which is why every reloaded TCN
+    # Activation("linear", dtype=...) instead of a cast Lambda: a saved Lambda does
+    # not survive the Keras 3 save/load round-trip, which is why every reloaded TCN
     # champion failed predict ("could not infer the shape of the Lambda's
     # output", all 181 assets, 2026-07-16). Existing champions stay broken until
     # retrained; scoring falls back to a neutral 0.5 for them meanwhile.
-    x = tf.keras.layers.Identity(dtype=compute_dt)(inputs)
+    # Not Identity: it only exists from Keras 2.13, and the GPU env runs TF 2.10.
+    x = tf.keras.layers.Activation("linear", dtype=compute_dt)(inputs)
     for i in range(n_blocks):
         dilation = 2 ** i
         res = x

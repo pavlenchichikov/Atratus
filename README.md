@@ -34,6 +34,7 @@
 - [Mobile app](#mobile-app)
 - [Tech stack](#tech-stack)
 - [Requirements](#requirements)
+- [Environment and GPU](#environment-and-gpu)
 - [Quick start](#quick-start)
 - [Daily use](#daily-use)
 - [Training](#training)
@@ -304,11 +305,81 @@ notification when signals change, opening the Today screen. The Supabase schema 
 ## Requirements
 
 - **Python 3.12** (3.11+ likely works; 3.12 is what CI runs).
-- **OS:** Linux, macOS or Windows. On Windows, TensorFlow is CPU-only since 2.11 - fine for daily-bar training; for GPU use WSL2.
+- **OS:** Linux, macOS or Windows. On Windows a GPU needs the pinned environment described in [Environment and GPU](#environment-and-gpu): TensorFlow ships CPU-only Windows wheels from 2.11 on, so a default install never sees the card.
 - **Disk:** ~5 GB free - trained models (~4 GB for all 208 assets) plus `market.db` (~70 MB). Serving alone needs far less.
 - **RAM:** 8 GB is enough to run the dashboard and `predict.py` (no TensorFlow at serve time). Training the full universe wants ~16 GB, or train in chunks of ~15 assets (`GTRADE_ASSETS`) on a smaller box.
-- **GPU:** optional. Neural nets train on CPU by default; CatBoost can use a GPU (`GTRADE_CB_DEVICE=GPU`) but is often slower on the small per-asset datasets.
+- **GPU:** optional but worth having. On one RTX 2050 a single asset trains in 158 s against 2850 to 10480 s for the same asset on a 12-thread CPU. Everything still runs without a GPU, just slower. CatBoost can also use a GPU (`GTRADE_CB_DEVICE=GPU`) but is often slower on the small per-asset datasets.
 - **Network:** outbound access to Yahoo Finance and MOEX for data (`SOCKS5_PROXY` supported).
+
+## Environment and GPU
+
+On Windows the project runs inside a dedicated conda environment. This is not a preference: **TensorFlow dropped native-Windows CUDA support after 2.10**, so every wheel from 2.11 on is CPU-only no matter which card is installed, and 2.10 has no build for Python 3.11+. The pinned combination is therefore Python 3.10 with TensorFlow 2.10.
+
+### Getting it
+
+Nothing to prepare. Any launcher creates the environment on first use and activates it afterwards:
+
+```bat
+auto_research.bat        :: research agent
+run_gtrade.bat           :: main menu
+call activate_env.bat    :: just the environment, for a manual session
+```
+
+The first run downloads CUDA, cuDNN and TensorFlow, which takes a while. Later runs only activate.
+
+Three files, one responsibility each:
+
+| File | Purpose |
+| --- | --- |
+| `env_config.bat` | the only place that names the environment and pins versions |
+| `activate_env.bat` | finds conda, creates the environment if missing, activates, verifies |
+| `setup_gpu.bat` | the installer; detects the card and picks matching CUDA/cuDNN |
+
+### Different machines, different cards
+
+`setup_gpu.bat` reads `nvidia-smi` and installs accordingly, so the same repository works on a laptop with an RTX 2050 and on a desktop with a 3090 without editing anything.
+
+| Card | Result |
+| --- | --- |
+| GTX 16xx, RTX 20xx / 30xx / 40xx, Tesla and Quadro of those generations | GPU, CUDA 11.8 |
+| Older NVIDIA, or a driver too old for 11.8 | GPU, automatic fallback to CUDA 11.2 |
+| Anything newer than Ada (compute capability 9.0 and above) | CPU: CUDA 11.x does not support those cards, and TF 2.10 cannot use anything newer |
+| AMD, Intel, no discrete card | CPU, `tensorflow-cpu` is installed instead |
+
+VRAM matters more than model size here. The trainer keeps one neural slot per GPU precisely because concurrent cuDNN contexts fit poorly: on a 4 GB card TensorFlow gets about 1.6 GB after the desktop takes its share.
+
+### Confirming it actually worked
+
+Two lines in the first minute:
+
+```
+[env] jackpot_gpu active  (C:\Users\...\envs\jackpot_gpu)
+[GPU] /physical_device:GPU:0  |  VRAM: 4096MB  |  TF pool: 2457MB
+```
+
+If the second line reads `[CPU] No GPU detected`, stop the run. A wrong environment does not fail loudly on its own: it just trains many times slower.
+
+### Models are not portable between Keras versions
+
+This is the sharp edge. Keras 3 writes `.keras` as a zip archive, Keras 2 writes HDF5 under the same file name, and **neither reads the other**. A champion saved by one environment loads as `None` in the other, and the legacy rebuild path then serves a half-initialised network at about 0.5 without an obvious error.
+
+Consequences:
+
+- Switching an existing installation to this environment requires retraining every asset. There is no converter.
+- Back up `models/` before that retrain. Roughly 4 GB for 208 assets.
+- Do not mix: train in one environment and serve in the other, and the neural members silently disappear from the ensemble.
+- A champion that exists on disk but does not load now logs a `WARNING` naming the file and the reason. Grep the log for `Champion exists but did not load` after any environment change.
+
+### Linux and macOS
+
+No `.bat` files are involved. A normal virtualenv with the pinned requirements is enough, and TensorFlow finds a CUDA GPU natively without version gymnastics. The Windows constraints above exist only because of the dropped Windows CUDA builds.
+
+### Troubleshooting
+
+- **`conda activate` prints "The system cannot find the path specified"** and the run continues on the wrong python: conda has not been initialised for `cmd.exe`. `activate_env.bat` calls the conda hook itself, so use the launchers rather than typing `conda activate` in a bare console. Note that this failure does not set `errorlevel`, which is why the script verifies `CONDA_PREFIX` instead.
+- **`Could not load dynamic library 'cudnn64_8.dll'`**: the environment's `Library\bin` is missing from `PATH`. It happens when the environment's `python.exe` is called by full path instead of being activated. Activate, do not point at the interpreter.
+- **`conda env list` shows a different name**: edit `GTRADE_ENV` in `env_config.bat`. Both the installer and the launcher follow it.
+- **The research agent looks slower than expected on a fresh machine**: the ETA is computed from a stored timing history that may have been measured on other hardware. It corrects itself after a few units.
 
 ## Quick start
 
@@ -497,6 +568,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 - [Мобильное приложение](#мобильное-приложение)
 - [Технологии](#технологии)
 - [Требования](#требования)
+- [Окружение и GPU](#окружение-и-gpu)
 - [Быстрый старт](#быстрый-старт)
 - [Ежедневная работа](#ежедневная-работа)
 - [Обучение](#обучение)
@@ -731,11 +803,81 @@ python push_signals.py          # или пункт [SG] в run_gtrade.bat
 ## Требования
 
 - **Python 3.12** (3.11+ вероятно подойдёт; CI гоняет на 3.12).
-- **ОС:** Linux, macOS или Windows. На Windows TensorFlow только-CPU с версии 2.11 - нормально для обучения на дневных барах; для GPU используйте WSL2.
+- **ОС:** Linux, macOS или Windows. На Windows для GPU нужно закреплённое окружение из раздела [Окружение и GPU](#окружение-и-gpu): начиная с 2.11 TensorFlow собирает под Windows только CPU-колёса, поэтому обычная установка карту не увидит.
 - **Диск:** ~5 ГБ свободно - обученные модели (~4 ГБ на все 208 активов) плюс `market.db` (~70 МБ). Только для обслуживания нужно куда меньше.
 - **RAM:** 8 ГБ хватает для дашборда и `predict.py` (без TensorFlow во время обслуживания). Обучение всей вселенной хочет ~16 ГБ, либо обучайте чанками по ~15 активов (`GTRADE_ASSETS`) на слабой машине.
-- **GPU:** опционально. Нейросети по умолчанию учатся на CPU; CatBoost может использовать GPU (`GTRADE_CB_DEVICE=GPU`), но часто медленнее на маленьких пер-активных датасетах.
+- **GPU:** опционально, но заметно окупается. На RTX 2050 один актив обучается за 158 с против 2850-10480 с на том же активе на 12-поточном CPU. Без карты всё работает, просто дольше. CatBoost тоже умеет GPU (`GTRADE_CB_DEVICE=GPU`), но на маленьких пер-активных датасетах часто медленнее.
 - **Сеть:** исходящий доступ к Yahoo Finance и MOEX для данных (`SOCKS5_PROXY` поддерживается).
+
+## Окружение и GPU
+
+На Windows проект работает в отдельном conda-окружении. Это не вкусовщина: **TensorFlow перестал поддерживать CUDA под нативной Windows после версии 2.10**, поэтому все колёса начиная с 2.11 идут только с CPU, какая бы карта ни стояла, а сборки 2.10 под Python 3.11 и новее не существует. Отсюда закреплённая пара: Python 3.10 и TensorFlow 2.10.
+
+### Как получить
+
+Готовить ничего не нужно. Любой лаунчер при первом запуске создаёт окружение, дальше просто активирует его:
+
+```bat
+auto_research.bat        :: исследовательский агент
+run_gtrade.bat           :: главное меню
+call activate_env.bat    :: только окружение, для ручной сессии
+```
+
+Первый запуск качает CUDA, cuDNN и TensorFlow, это небыстро. Последующие только активируют.
+
+Три файла, у каждого одна задача:
+
+| Файл | Назначение |
+| --- | --- |
+| `env_config.bat` | единственное место, где задано имя окружения и версии |
+| `activate_env.bat` | находит conda, создаёт окружение при отсутствии, активирует, проверяет |
+| `setup_gpu.bat` | установщик; определяет карту и подбирает CUDA/cuDNN |
+
+### Разные машины, разные карты
+
+`setup_gpu.bat` читает `nvidia-smi` и ставит подходящее, поэтому один и тот же репозиторий работает и на ноутбуке с RTX 2050, и на десктопе с 3090 без правки файлов.
+
+| Карта | Что получится |
+| --- | --- |
+| GTX 16xx, RTX 20xx / 30xx / 40xx, Tesla и Quadro тех же поколений | GPU, CUDA 11.8 |
+| Более старые NVIDIA или слишком старый драйвер для 11.8 | GPU, автоматический откат на CUDA 11.2 |
+| Новее Ada (compute capability 9.0 и выше) | CPU: CUDA 11.x такие карты не поддерживает, а TF 2.10 не умеет новее |
+| AMD, Intel, без дискретной карты | CPU, ставится `tensorflow-cpu` |
+
+Объём видеопамяти здесь важнее размера моделей. Тренер держит один нейро-слот на карту именно потому, что параллельные контексты cuDNN плохо помещаются: на карте с 4 ГБ TensorFlow достаётся около 1.6 ГБ, остальное занимает рабочий стол.
+
+### Как убедиться, что сработало
+
+Две строки в первую минуту:
+
+```
+[env] jackpot_gpu active  (C:\Users\...\envs\jackpot_gpu)
+[GPU] /physical_device:GPU:0  |  VRAM: 4096MB  |  TF pool: 2457MB
+```
+
+Если во второй строке `[CPU] No GPU detected`, прогон надо остановить. Неправильное окружение само себя не выдаёт: оно просто считает в разы дольше.
+
+### Веса несовместимы между версиями Keras
+
+Это самое острое место. Keras 3 пишет `.keras` как zip-архив, Keras 2 под тем же именем пишет HDF5, и **ни один не читает чужой формат**. Чемпион, сохранённый в одном окружении, в другом загрузится как `None`, после чего legacy-путь подсунет недоинициализированную сеть, выдающую около 0.5 без внятной ошибки.
+
+Следствия:
+
+- Перевод существующей установки на это окружение требует переобучения всех активов. Конвертера нет.
+- Перед переобучением сделайте копию `models/`. Это примерно 4 ГБ на 208 активов.
+- Не смешивайте: обучение в одном окружении и обслуживание в другом молча выкидывает нейронки из ансамбля.
+- Чемпион, который лежит на диске, но не загрузился, теперь пишет `WARNING` с именем файла и причиной. После любой смены окружения ищите в логе `Champion exists but did not load`.
+
+### Linux и macOS
+
+Никакие `.bat` не нужны. Достаточно обычного virtualenv с закреплёнными зависимостями, TensorFlow находит CUDA-карту сам, без плясок с версиями. Ограничения выше существуют исключительно из-за прекращённых сборок под Windows.
+
+### Если что-то не так
+
+- **`conda activate` печатает "The system cannot find the path specified"**, и прогон продолжается на чужом питоне: conda не инициализирована для `cmd.exe`. `activate_env.bat` сам вызывает conda-хук, поэтому пользуйтесь лаунчерами, а не командой `conda activate` в голой консоли. Учтите, что этот сбой не выставляет `errorlevel`, поэтому скрипт проверяет `CONDA_PREFIX`, а не код возврата.
+- **`Could not load dynamic library 'cudnn64_8.dll'`**: в `PATH` не попал каталог `Library\bin` окружения. Так бывает, когда `python.exe` окружения вызывают по полному пути вместо активации. Активируйте окружение, а не указывайте на интерпретатор.
+- **`conda env list` показывает другое имя**: поправьте `GTRADE_ENV` в `env_config.bat`, за ним следуют и установщик, и лаунчер.
+- **Агент на новой машине кажется медленнее ожидаемого**: оценка времени берётся из накопленной истории таймингов, которая могла быть снята на другом железе. Через несколько единиц работы она выправится.
 
 ## Быстрый старт
 

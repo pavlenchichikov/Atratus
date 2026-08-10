@@ -5,12 +5,13 @@ set PYTHONIOENCODING=utf-8
 cls
 cd /d "%~dp0"
 
-REM Auto-detect Python: conda env > system python
+REM This menu mixes TRAINING and SERVING, so it stays on the base env until the
+REM full retrain runs under jackpot_gpu: TF 2.10 cannot open the current
+REM models/*.keras (Keras 3 zip), and predict would silently lose every neural
+REM member. Flip to `call "%~dp0activate_env.bat"` once the retrain is done.
+REM (The old line here activated "gtrade_gpu", an env that does not exist, and
+REM hid the failure with 2>nul - which is why the GPU sat unused for months.)
 set PY_PATH=python
-where conda >nul 2>nul
-if %errorlevel% equ 0 (
-    call conda activate gtrade_gpu 2>nul
-)
 where python >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Python not found. Install Python 3.10+ or run setup_gpu.bat

@@ -42,6 +42,11 @@ REM ===========================================================================
 
 cd /d "%~dp0"
 
+REM The GPU env must be active BEFORE python starts: auto_research spawns every
+REM train_hybrid child through sys.executable, so the whole tree inherits this
+REM interpreter and this PATH (which is where the CUDA/cuDNN DLLs live).
+call "%~dp0activate_env.bat"
+
 REM == Advanced knobs (edit here; the menu does not ask about these) ===========
 set "GTRADE_AR_SCREEN=1"
 set "GTRADE_AR_SCREEN_MIN=0.0"
