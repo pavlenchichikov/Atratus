@@ -541,8 +541,15 @@ def levels_sheet(equity=0.0):
     """
     from core import levels as levels_mod
     from core import positions as positions_mod
+    from core import timing_policy
     from core import track_record
     from risk_manager import RISK_CONFIG
+
+    # Resolved once per sheet, not per row: this is the reversibility guard, and
+    # it must match the radar exactly or the two pages disagree about the same
+    # asset. Only a DIVERGENCE is shown - the states where the policy agrees
+    # with the signal carry no label, same rule as webapp._timing_badge.
+    show_timing = timing_policy.timing_on() and timing_policy.load_policy() is not None
 
     rows = []
     for s in track_record.latest_signals():
@@ -565,7 +572,15 @@ def levels_sheet(equity=0.0):
         sz = levels_mod.size_for(lv["close"], lv["stop"], equity,
                                  RISK_CONFIG["risk_per_trade"],
                                  RISK_CONFIG["max_single_position"])
+        # The sheet is what a trade is actually placed from: entry, stop and a
+        # position size in money. A policy that would NOT take this trade has to
+        # be visible right here, not only on the radar.
+        badge = None
+        if show_timing and s.get("timing_action"):
+            text, is_div = timing_policy.display_label(s.get("timing_action"),
+                                                       s.get("timing_reason"))
+            badge = text if is_div else None
         rows.append({"asset": asset, "signal": s["signal"], "date": s["date"],
-                     "held_days": held, **lv, **sz})
+                     "held_days": held, "timing_badge": badge, **lv, **sz})
     rows.sort(key=lambda r: (r["status"] != "ok", r["asset"]))
     return rows

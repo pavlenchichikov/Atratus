@@ -37,7 +37,7 @@
       {% for r in rows %}
       <tr>
         <td><a class="asset-link" href="/asset/{{ r.asset }}">{{ r.asset }}</a></td>
-        <td><span class="chip chip-{{ 'BUY' if r.side == 1 else 'SELL' }}">{{ 'LONG' if r.side == 1 else 'SHORT' }}</span></td>
+        <td><span class="chip chip-{{ 'BUY' if r.side == 1 else 'SELL' }}">{{ 'LONG' if r.side == 1 else 'SHORT' }}</span>{% if r.timing_badge %} <span class="chip timing-badge" title="{{ r.timing_badge }}">{{ r.timing_badge }}</span>{% endif %}</td>
         <td class="num mono">
           {%- if r.entry_low is not none -%}
             {{ "%.4f"|format(r.entry_low) }} to {{ "%.4f"|format(r.entry_high) }}
