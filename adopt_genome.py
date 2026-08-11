@@ -114,6 +114,15 @@ def describe(cand):
             "%d extra" % len(g.get("extra") or []),
             "label {}/{}".format(g.get("label_mode", "direction"),
                              g.get("label_window", 30))]
+    # The tuning genes, shown only when they leave their default. Four elites of
+    # the same feature family print an identical line without them, and the
+    # picker then cannot express which one the reader means.
+    if g.get("thr_margin"):
+        bits.append("thr %.3f" % g["thr_margin"])
+    if g.get("band_delta"):
+        bits.append("band %+.4f" % g["band_delta"])
+    if g.get("regime_mode", "both") != "both":
+        bits.append("regime %s" % g["regime_mode"])
     value = "{:+.2f}".format(cand["value"]) if cand["value"] is not None else "n/a"
     if cand["kind"] == "measured":
         p = "{:.4f}".format(cand["p"]) if cand["p"] is not None else "n/a"

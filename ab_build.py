@@ -147,6 +147,54 @@ def _candidate_pool():
     return adopt_genome.candidates()
 
 
+def _gate_by_sig():
+    """Latest held-out gate verdict per genome signature, from the findings journal.
+
+    The picker lists archive elites by their SEARCH fitness, measured on the ten
+    selection assets. The number a decision is actually made on is the gate delta
+    on the held-out set, and it lives in a different file. Without this join the
+    same genome appears as two unrelated numbers and the reader has to match
+    genomes by hand to find the candidate a run just flagged.
+    """
+    import auto_research as ar
+    from core import ar_memory
+
+    out = {}
+    for rec in ar_memory.findings_all() or []:
+        ts = rec.get("ts") or ""
+        for w in rec.get("winners", []):
+            gd = w.get("genome")
+            if not isinstance(gd, dict):
+                continue
+            try:
+                sig = ar.genome_sig(ar.Genome(**gd))
+            except (TypeError, ValueError):
+                continue
+            prev = out.get(sig)
+            if prev is None or ts >= prev["ts"]:
+                out[sig] = {"ts": ts, "tag": w.get("tag"),
+                            "adoptable": bool(w.get("adoptable")),
+                            "clears": w.get("clears") or 0}
+    return out
+
+
+def _gate_note(cand, gates):
+    """The gate line for one candidate, or empty when it never reached a gate."""
+    import auto_research as ar
+
+    try:
+        sig = ar.genome_sig(ar.Genome(**cand["genome"]))
+    except (TypeError, ValueError):
+        return ""
+    hit = gates.get(sig)
+    if not hit:
+        return ""
+    flag = "ADOPTABLE" if hit["adoptable"] else "not adoptable"
+    rep = ", replicated" if hit["clears"] >= 2 else ""
+    return "\n      gate {}: {} [{}{}]".format(
+        hit["ts"][:16], hit["tag"], flag, rep)
+
+
 def _suggest_assets(n, seed):
     import auto_research as ar
     from config import ASSET_TYPES, FULL_ASSET_MAP
@@ -168,6 +216,7 @@ def _configure(args):
         print("No unvalidated elites in the archive to test.")
         return
     print("Measuring against: {}\n".format(ref["label"]))
+    gates = _gate_by_sig()
     for i, c in enumerate(pool, 1):
         notes = []
         if is_reference(c, ref):
@@ -175,7 +224,8 @@ def _configure(args):
         if c["kind"] == "measured":
             notes.append("already measured against a previous reference")
         suffix = "  <- " + "; ".join(notes) if notes else ""
-        print("  %d. %s%s" % (i, adopt_genome.describe(c), suffix))
+        print("  %d. %s%s%s" % (i, adopt_genome.describe(c), suffix,
+                                _gate_note(c, gates)))
     raw = input("\nWhich numbers (comma separated, blank to cancel)? ").strip()
     picks = []
     for p in raw.split(","):
