@@ -103,8 +103,12 @@ goto menu
 
 :full_run
 cls
+REM Mixed on purpose: data and the dashboard stay on the base env, only the
+REM training step moves to the GPU one. Until the migration retrain has covered
+REM every asset the dashboard will warn about champions it cannot read, which is
+REM the correct signal rather than a silent downgrade.
 python data_engine.py
-python train_hybrid.py
+cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
 python -m streamlit run app.py
 pause
 goto menu
@@ -137,7 +141,9 @@ goto menu
 
 :train_only
 cls
-python train_hybrid.py
+REM Training runs in the GPU environment: it is many times faster there, and the
+REM weights it writes are only readable by that environment anyway.
+cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
 pause
 goto menu
 
@@ -147,7 +153,12 @@ echo Chunked trainer: one fresh process per chunk, resumable, and a champion
 echo changes only if the new model beats it. Add --force-promote only to rebuild
 echo a baseline or repair registry metadata.
 echo.
-python train_chunked.py
+echo Runs in the GPU environment. Serving still reads the OLD weights until this
+echo finishes for every asset, so let it complete before switching predict over.
+echo.
+REM train_chunked spawns train_hybrid through sys.executable, so the whole chain
+REM inherits the interpreter this line picks.
+cmd /c ""%~dp0run_in_env.bat" python train_chunked.py"
 pause
 goto menu
 
@@ -195,18 +206,26 @@ goto menu
 
 :ab_configure
 cls
-python ab_build.py
+REM Same environment as the run below, so the picker and the measurement agree
+REM about the feature space and the training cache.
+cmd /c ""%~dp0run_in_env.bat" python ab_build.py"
 pause
 goto menu
 
 :ab_run
 cls
-echo This trains the holdout once per arm, roughly 8 to 11 hours each.
+echo This trains the holdout once per arm. On the GPU environment that is hours,
+echo not the day it used to take on CPU.
 echo Do not start it while a retrain is running: they compete for RAM and cores.
 echo Stop the scheduler and do not run data_engine while it works - new bars
 echo mid-run make the arms measure different windows.
 echo.
-python ab_build.py --run
+REM Runs in a CHILD cmd so the GPU environment does not leak into this menu:
+REM serving stays on the base env until the full retrain. It matters for more
+REM than speed - the training cache is keyed without the environment, so a run
+REM started on base python could reuse rows trained on the GPU and compare two
+REM arms measured under different TensorFlow builds.
+cmd /c ""%~dp0run_in_env.bat" python ab_build.py --run"
 pause
 goto menu
 
@@ -350,7 +369,9 @@ goto menu
 
 :optuna
 cls
-python optuna_tune.py
+REM Tuning is a training-class job: it writes models/optuna_params.json, no
+REM weights, so the environment is a speed choice only (6 CatBoost threads).
+cmd /c ""%~dp0run_in_env.bat" python optuna_tune.py"
 pause
 goto menu
 
