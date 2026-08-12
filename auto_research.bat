@@ -226,7 +226,7 @@ if not "%GTRADE_AR_WIKI%"=="1" goto :nolint
 echo.
 set "LINT=n"
 set /p "LINT=Lint the research wiki now (reconcile + prune)? [y/N]: "
-if /i "%LINT%"=="y" python -c "from core import ar_wiki; ar_wiki.lint_wiki()"
+if /i "%LINT%"=="y" python -c "from dotenv import load_dotenv; load_dotenv(); from core import ar_wiki; ar_wiki.lint_wiki()"
 :nolint
 
 echo.
