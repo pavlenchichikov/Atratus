@@ -119,6 +119,30 @@ else:
 _gpu_lock = threading.Semaphore(_GPU_SLOTS)
 _print_lock = threading.Lock()
 
+# --- Determinism -------------------------------------------------------------
+# Every stochastic learner here derives its seed from GTRADE_SEED (see
+# core.net_hygiene.seed_base). Before this the nets were trained with NO seed at
+# all unless seed-averaging was on, so re-running the same config gave a
+# different model - which made the research agent's neural_lift unmeasurable:
+# it read the reseed, not the genome. This process-wide call covers whatever
+# numpy/python randomness runs outside the explicitly seeded sites below.
+tf.keras.utils.set_random_seed(net_hygiene.seed_base())
+
+# Keras 3 draws a new layer's weights from PROCESS-GLOBAL RNG state, so the
+# set-seed and the build that consumes it must be atomic: several asset threads
+# building at once would interleave their draws and every run would differ again
+# despite the fixed seed. Only the build is serialized (milliseconds); the fits
+# stay parallel, because a Keras 3 layer's fit-time randomness (dropout) comes
+# from a SeedGenerator created during the build.
+_seed_lock = threading.Lock()
+
+
+def _seeded_build(seed, build):
+    """Build one net with `seed` in effect, atomically against other threads."""
+    with _seed_lock:
+        tf.keras.utils.set_random_seed(seed)
+        return build()
+
 # CatBoost device. CatBoost bundles its own CUDA and runs on native Windows
 # (unlike TF, whose Windows wheel is CPU-only), so this is independent of TF's
 # _HAS_GPU. Default CPU: on the small per-asset datasets here the host-device
@@ -320,7 +344,7 @@ from core.ensemble import (  # noqa: F401 (re-exported for signal_engine.py)
     ensemble_with_gating,
     tune_ensemble_weights,
 )
-from core.features import active_candidate_features, build_features
+from core.features import active_candidate_features, build_features, label_footprint
 from core.profiles import (
     FOREX,
     get_profile,
@@ -419,7 +443,8 @@ def adversarial_fold_weight(X_train, X_test):
     split = len(X) // 2
     try:
         cb = CatBoostClassifier(iterations=50, depth=3, verbose=0,
-                                task_type='CPU', thread_count=_CB_THREADS)
+                                task_type='CPU', thread_count=_CB_THREADS,
+                                random_seed=net_hygiene.seed_base())
         cb.fit(X[:split], y[:split])
         probs = cb.predict_proba(X[split:])[:, 1]
         auc = roc_auc_score(y[split:], probs)
@@ -461,8 +486,12 @@ def filter_noisy_samples(X_seq, y_seq, y_mag, noise_threshold=0.3):
 def derive_feature_set(df, train_idx, candidate_features, top_k):
     X = df.loc[train_idx, candidate_features].values
     y = df.loc[train_idx, 'target'].values
+    # Seeded because this one picks WHICH features the asset trains on: an
+    # unseeded importance ranking reshuffles the feature set between runs, so
+    # every downstream model differed even with identical inputs.
     cb = CatBoostClassifier(iterations=150, depth=6, learning_rate=0.05, verbose=0,
-                            task_type='CPU', thread_count=_CB_THREADS)
+                            task_type='CPU', thread_count=_CB_THREADS,
+                            random_seed=net_hygiene.seed_base())
     cb.fit(X, y)
     imps = cb.get_feature_importance()
     ranked = [f for _, f in sorted(zip(imps, candidate_features), reverse=True)]
@@ -567,6 +596,19 @@ def lookback_for(opt, profile):
     return _clamp(base + _env_signed_int("GTRADE_LOOKBACK_DELTA", 0), 5, 90)
 
 
+def embargo_for(opt, profile):
+    """Walk-forward embargo in bars: the larger of the sequence lookback and the
+    label's forward footprint, capped at the same 90 bars lookback_for enforces.
+
+    The lookback part purges overlap between train/val/test so sequence models
+    cannot peek at neighbouring windows. The label part stops a training row's
+    label from resolving inside the validation window, which a multi-bar barrier
+    label does whenever its horizon exceeds the lookback. The cap keeps an absurd
+    GTRADE_LABEL_HORIZON from starving short-history assets of folds, because the
+    embargo enters the window condition twice (see make_walk_forward_splits)."""
+    return min(90, max(lookback_for(opt, profile), label_footprint()))
+
+
 def apply_thr_margin(buy_thr, sell_thr):
     """Shift the tuned thresholds OUTWARD by GTRADE_THR_MARGIN (auto-research
     threshold axis): buy up (capped 0.95), sell down (floored 0.05). An
@@ -628,9 +670,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             _safe_print(f"  [SKIP] {asset:<12} insufficient rows ({len(df)})")
             return None
 
-        # Embargo = sequence lookback: purges overlap between train/val/test so
-        # sequence models cannot peek at neighbouring windows (purged walk-forward).
-        _embargo = lookback_for(opt, profile)
+        # Purged walk-forward: see embargo_for for why both terms and the cap.
+        _embargo = embargo_for(opt, profile)
         splits = make_walk_forward_splits(
             len(df),
             min_train=sp['min_train'],
@@ -708,6 +749,19 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             X_te = scaler.transform(df.loc[te, selected].values)
             y_te = df.loc[te, 'target'].values
 
+            # Label lifetime per row (core.features writes it next to 'target').
+            # Frames built by an older path have no such column: fall back to 1.0,
+            # which makes the uniqueness weights all-ones, i.e. today's behaviour.
+            if 'label_span' in df.columns:
+                span_tr = df.loc[tr, 'label_span'].values.astype('float64')
+                span_va = df.loc[va, 'label_span'].values.astype('float64')
+                span_te = df.loc[te, 'label_span'].values.astype('float64')
+            else:
+                span_tr = np.ones(len(X_tr), dtype='float64')
+                span_va = np.ones(len(X_va), dtype='float64')
+                span_te = np.ones(len(X_te), dtype='float64')
+            span_all = np.concatenate([span_tr, span_va, span_te])
+
             X_all_seq = np.vstack([X_tr, X_va, X_te])
             y_all_seq = np.concatenate([y_tr, y_va, y_te])
             X_seq, y_seq = build_sequences(X_all_seq, y_all_seq, lookback)
@@ -740,6 +794,11 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             ])
             _, y_mag_all_seq = build_sequences(X_all_seq, y_next_all, lookback)
 
+            # Same alignment rule as y_mag: build_sequences returns one row per
+            # source row from index `lookback` onward, so the span array lines up
+            # with X_seq without any extra offset arithmetic.
+            _, span_all_seq = build_sequences(X_all_seq, span_all, lookback)
+
             precomputed.append({
                 'scaler': scaler,
                 'X_train': X_tr, 'y_train': y_tr,
@@ -751,6 +810,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'va': va, 'te': te,
                 'y_mag_seq_train': y_mag_all_seq[:seq_tr_end],
                 'y_mag_seq_val':   y_mag_all_seq[seq_tr_end:seq_va_end],
+                'span_train': span_tr,
+                'span_seq_train': span_all_seq[:seq_tr_end],
             })
 
         fold_metrics = []
@@ -802,14 +863,23 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             X_seq_test = fold_data['X_seq_test'];   y_seq_test = fold_data['y_seq_test']
             va = fold_data['va']; te = fold_data['te']
             scaler = fold_data['scaler']
+            span_train = fold_data['span_train']
+            span_seq_train = fold_data['span_seq_train']
 
             # --- CatBoost (CPU, half cores) in a background thread ---
             cb_result = {}
 
+            # Overlapping labels inflate CatBoost's effective sample count exactly
+            # as they do the nets'. Off by default: no flag means _cb_w is None and
+            # the fit call is the original one.
+            _cb_w = None
+            if net_hygiene.cb_uniqueness_on():
+                _cb_w = net_hygiene.uniqueness_weights_spans(span_train)
+
             def _train_catboost(_X_train=X_train, _y_train=y_train,
                                 _X_val=X_val, _y_val=y_val,
                                 _X_test=X_test, _y_test=y_test,
-                                _opt=opt):
+                                _opt=opt, _cb_w=_cb_w, _fold=k):
                 _cb_iters, _cb_depth, _cb_lr = cb_params_for(_opt)
                 _cb_kwargs = {
                     "iterations": _cb_iters,
@@ -819,6 +889,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     "task_type": _CB_TASK_TYPE,
                     "thread_count": _CB_THREADS,
                     "early_stopping_rounds": 50,
+                    "random_seed": net_hygiene.asset_seed(asset, _fold),
                 }
                 if _CB_TASK_TYPE == 'GPU':
                     _cb_kwargs['devices'] = '0'
@@ -826,9 +897,11 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 if _CB_TASK_TYPE == 'GPU':
                     # 4GB VRAM: only one champion fit on the card at a time.
                     with _cb_gpu_lock:
-                        cb.fit(_X_train, _y_train, eval_set=(_X_val, _y_val))
+                        cb.fit(_X_train, _y_train, sample_weight=_cb_w,
+                               eval_set=(_X_val, _y_val))
                 else:
-                    cb.fit(_X_train, _y_train, eval_set=(_X_val, _y_val))
+                    cb.fit(_X_train, _y_train, sample_weight=_cb_w,
+                           eval_set=(_X_val, _y_val))
                 cb_result['cb'] = cb
                 cb_result['cb_val'] = cb.predict_proba(_X_val)[:, 1]
                 cb_result['cb_test'] = cb.predict_proba(_X_test)[:, 1]
@@ -864,25 +937,19 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 # byte-identical to the original code.
                 _uniq_w = None
                 if net_hygiene.uniqueness_on():
-                    # LdP average-uniqueness addresses OVERLAPPING FORWARD label windows.
-                    # Both current label modes (direction and rel_median) are next-bar
-                    # labels - rel_median's window sizes the TRAILING baseline, not a
-                    # forward hold - so their forward footprint is 1 bar, horizon 1,
-                    # all-ones (an honest no-op today). A future multi-bar forward label
-                    # (triple-barrier) sets GTRADE_LABEL_HORIZON to its barrier horizon to
-                    # activate real down-weighting.
-                    try:
-                        _horizon = max(1, int(os.getenv("GTRADE_LABEL_HORIZON", "1")))
-                    except ValueError:
-                        _horizon = 1
-                    _uniq_w = net_hygiene.uniqueness_weights(
-                        len(X_seq_train), _horizon
+                    # Weights come from the REAL per-sample label lifetime carried in
+                    # 'label_span', not from a scalar horizon. A scalar horizon makes
+                    # concurrency constant in the interior, and the mean-1.0
+                    # normalization then erases it, so the old form was a no-op.
+                    _uniq_w = net_hygiene.uniqueness_weights_spans(
+                        span_seq_train
                     ).astype("float32")
 
-                # Net hygiene: seed-averaging closure.  When GTRADE_NET_SEEDS is unset
-                # (default), net_seeds()==1 and _fit_all_nets() runs once with NO
-                # set_random_seed call, structurally identical to the original code.
-                def _fit_all_nets(multi_seed=False):
+                # Net hygiene: seed-averaging closure.  When GTRADE_NET_SEEDS is
+                # unset (default), net_seeds()==1 and this runs once as member 0.
+                # Every run is seeded, single-member included - see _seeded_build.
+                def _fit_all_nets(multi_seed=False, member=0):
+                    _seed = net_hygiene.asset_seed(asset, k, member)
                     if k == 1:
                         _placed = tf.constant(1.0).device
                         try:
@@ -895,9 +962,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                             f"  train={len(X_seq_train)} seq  batch={_batch}{_vram}"
                         )
                     # -- Multi-task LSTM --------------------------------------------
-                    lstm_mt = build_lstm_multitask((lookback, _net_feat_dim),
-                                                   n_train_samples=len(X_seq_train),
-                                                   **_lstm_kw)
+                    lstm_mt = _seeded_build(_seed, lambda: build_lstm_multitask(
+                        (lookback, _net_feat_dim),
+                        n_train_samples=len(X_seq_train),
+                        **_lstm_kw))
                     if not multi_seed:
                         _lstm_loaded = _ws_load(lstm_mt, 'lstm', _warm)
                         if _foundation is not None and k == 1:
@@ -912,13 +980,13 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                             {'direction': y_seq_train.astype('float32'),
                              'magnitude': y_mag_train},
                             _uniq_w,
-                        )).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        )).shuffle(len(X_seq_train), seed=_seed).batch(_batch).prefetch(tf.data.AUTOTUNE)
                     else:
                         train_ds = tf.data.Dataset.from_tensor_slices((
                             X_seq_train.astype('float32'),
                             {'direction': y_seq_train.astype('float32'),
                              'magnitude': y_mag_train}
-                        )).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        )).shuffle(len(X_seq_train), seed=_seed).batch(_batch).prefetch(tf.data.AUTOTUNE)
                     val_ds = tf.data.Dataset.from_tensor_slices((
                         X_seq_val.astype('float32'),
                         {'direction': y_seq_val.astype('float32'),
@@ -980,9 +1048,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     del lstm_mt  # Python obj freed; shared layers still in lstm - OK
 
                     # -- Transformer encoder ------------------------------------------
-                    tf_enc = build_transformer_encoder((lookback, _net_feat_dim),
-                                                       n_train_samples=len(X_seq_train),
-                                                       **_tf_kw)
+                    tf_enc = _seeded_build(_seed, lambda: build_transformer_encoder(
+                        (lookback, _net_feat_dim),
+                        n_train_samples=len(X_seq_train),
+                        **_tf_kw))
                     if not multi_seed:
                         _tf_loaded = _ws_load(tf_enc, 'tf', _warm)
                         if _foundation is not None and k == 1:
@@ -992,11 +1061,11 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                             (X_seq_train.astype('float32'),
                              y_seq_train.astype('float32'),
                              _uniq_w)
-                        ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        ).shuffle(len(X_seq_train), seed=_seed).batch(_batch).prefetch(tf.data.AUTOTUNE)
                     else:
                         train_ds_tf = tf.data.Dataset.from_tensor_slices(
                             (X_seq_train.astype('float32'), y_seq_train.astype('float32'))
-                        ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        ).shuffle(len(X_seq_train), seed=_seed).batch(_batch).prefetch(tf.data.AUTOTUNE)
                     val_ds_tf = tf.data.Dataset.from_tensor_slices(
                         (X_seq_val.astype('float32'), y_seq_val.astype('float32'))
                     ).batch(BATCH).prefetch(tf.data.AUTOTUNE)
@@ -1014,9 +1083,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         X_seq_val.astype('float32'),  batch_size=BATCH, verbose=0).flatten()
 
                     # -- TCN (4th ensemble member) ------------------------------------
-                    tcn_model = build_tcn((lookback, _net_feat_dim),
-                                          n_train_samples=len(X_seq_train),
-                                          **_tcn_kw)
+                    tcn_model = _seeded_build(_seed, lambda: build_tcn(
+                        (lookback, _net_feat_dim),
+                        n_train_samples=len(X_seq_train),
+                        **_tcn_kw))
                     if not multi_seed:
                         _tcn_loaded = _ws_load(tcn_model, 'tcn', _warm)
                         if _foundation is not None and k == 1:
@@ -1026,11 +1096,11 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                             (X_seq_train.astype('float32'),
                              y_seq_train.astype('float32'),
                              _uniq_w)
-                        ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        ).shuffle(len(X_seq_train), seed=_seed).batch(_batch).prefetch(tf.data.AUTOTUNE)
                     else:
                         train_ds_tcn = tf.data.Dataset.from_tensor_slices(
                             (X_seq_train.astype('float32'), y_seq_train.astype('float32'))
-                        ).shuffle(len(X_seq_train)).batch(_batch).prefetch(tf.data.AUTOTUNE)
+                        ).shuffle(len(X_seq_train), seed=_seed).batch(_batch).prefetch(tf.data.AUTOTUNE)
                     val_ds_tcn = tf.data.Dataset.from_tensor_slices(
                         (X_seq_val.astype('float32'), y_seq_val.astype('float32'))
                     ).batch(BATCH).prefetch(tf.data.AUTOTUNE)
@@ -1057,13 +1127,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     _dev = '/GPU:0' if _HAS_GPU else '/CPU:0'
                     with tf.device(_dev):
                         n_seeds = net_hygiene.net_seeds()
-                        if n_seeds <= 1:
-                            runs = [_fit_all_nets()]
-                        else:
-                            runs = []
-                            for _s in range(n_seeds):
-                                tf.keras.utils.set_random_seed(1000 + _s)
-                                runs.append(_fit_all_nets(multi_seed=True))
+                        # multi_seed also gates warm-start and foundation transfer,
+                        # so it must stay False in the single-member default.
+                        runs = [_fit_all_nets(multi_seed=n_seeds > 1, member=_s)
+                                for _s in range(n_seeds)]
                     if len(runs) == 1:
                         r0 = runs[0]
                         lstm_test_prob, lstm_val_prob = r0["lstm_test"], r0["lstm_val"]

@@ -28,6 +28,16 @@ def _env_float(name, default):
         return default
 
 
+def label_footprint():
+    """Forward reach in bars of the active label mode. triple_barrier reaches its
+    horizon; direction and rel_median look one bar ahead (rel_median's window sizes
+    a TRAILING baseline, not a forward hold). Used to size the walk-forward embargo
+    so a train row's label cannot resolve inside the validation window."""
+    if (os.getenv("GTRADE_LABEL_MODE", "direction") or "").strip() != "triple_barrier":
+        return 1
+    return max(1, _env_int("GTRADE_LABEL_HORIZON", 1))
+
+
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     """14-period RSI (simple rolling mean of gains/losses, Wilder-style)."""
     delta = close.diff()
@@ -40,7 +50,7 @@ def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
 def make_target(close: pd.Series, mode: str = "direction", window: int = 30,
                 high: pd.Series = None, low: pd.Series = None,
                 horizon: int = 1, barrier_k: float = 1.0,
-                vol_window: int = 20) -> pd.Series:
+                vol_window: int = 20, with_span: bool = False) -> pd.Series:
     """Binary label. `direction` and `rel_median` are unchanged (see history).
 
     `triple_barrier`: 1 if the price hits the upper barrier close_t*(1+k*sigma_t)
@@ -48,23 +58,39 @@ def make_target(close: pd.Series, mode: str = "direction", window: int = 30,
     Touch is checked intrabar via high/low; sigma_t is the EWM std of close-to-close
     returns up to t (no look-ahead). No touch within the (fully available) horizon -
     sign of the horizon return. Warm-up rows and the final horizon-incomplete rows
-    are NaN and dropped downstream. high/low None falls back to close for touch."""
+    are NaN and dropped downstream. high/low None falls back to close for touch.
+
+    with_span=True additionally returns the per-sample label lifetime in bars, which
+    is what LdP uniqueness weighting needs. direction and rel_median look one bar
+    forward, so their span is a constant 1.0."""
     if mode == "direction":
-        return (close.shift(-1) > close).astype(int)
+        target = (close.shift(-1) > close).astype(int)
+        return (target, _unit_span(target)) if with_span else target
     if mode == "rel_median":
         ret = close.pct_change()
         baseline = ret.rolling(window).median()
         next_ret = ret.shift(-1)
         target = (next_ret > baseline).astype(float)
         target[baseline.isna() | next_ret.isna()] = np.nan
-        return target
+        return (target, _unit_span(target)) if with_span else target
     if mode == "triple_barrier":
-        return _triple_barrier(close, high, low, horizon, barrier_k, vol_window)
+        target, span = _triple_barrier(close, high, low, horizon, barrier_k,
+                                       vol_window)
+        return (target, span) if with_span else target
     raise ValueError(f"unknown GTRADE_LABEL_MODE: {mode!r}")
 
 
+def _unit_span(target):
+    """Span series for a one-bar-forward label: 1.0 where the label exists, NaN
+    where it does not, so the two series drop the same rows downstream."""
+    return pd.Series(np.where(target.isna(), np.nan, 1.0), index=target.index)
+
+
 def _triple_barrier(close, high, low, horizon, barrier_k, vol_window):
-    """See make_target. Returns a {0.0, 1.0, NaN} Series aligned to close.index."""
+    """See make_target. Returns (labels, spans): a {0.0, 1.0, NaN} Series and the
+    matching per-sample lifetime in bars (NaN where the label is NaN). The span is
+    what the LdP uniqueness weights need - a barrier touch usually resolves well
+    before the vertical barrier, so the spans are variable, not a constant horizon."""
     c = close.to_numpy(dtype="float64")
     n = len(c)
     hi = c if high is None else high.to_numpy(dtype="float64")
@@ -72,6 +98,7 @@ def _triple_barrier(close, high, low, horizon, barrier_k, vol_window):
     sigma = close.pct_change().ewm(span=vol_window,
                                    min_periods=vol_window).std().to_numpy()
     out = np.full(n, np.nan)
+    span = np.full(n, np.nan)
     for t in range(n - 1):
         s = sigma[t]
         if not np.isfinite(s) or s <= 0.0:
@@ -80,23 +107,30 @@ def _triple_barrier(close, high, low, horizon, barrier_k, vol_window):
         lower = c[t] * (1.0 - barrier_k * s)
         end = min(t + horizon, n - 1)
         label = None
+        life = None
         for j in range(t + 1, end + 1):
             up = hi[j] >= upper
             dn = lo[j] <= lower
             if up and dn:
                 label = 1 if c[j] >= c[t] else 0   # same-bar path unknown: sign
+                life = j - t
                 break
             if up:
                 label = 1
+                life = j - t
                 break
             if dn:
                 label = 0
+                life = j - t
                 break
         if label is None and t + horizon <= n - 1:
             label = 1 if c[t + horizon] > c[t] else 0   # vertical barrier
+            life = horizon
         if label is not None:
             out[t] = float(label)
-    return pd.Series(out, index=close.index)
+            span[t] = float(life)
+    return (pd.Series(out, index=close.index),
+            pd.Series(span, index=close.index))
 
 
 def compute_taleb_risk(close: pd.Series, window: int = 60, min_periods: int = 30) -> pd.Series:
@@ -239,11 +273,13 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         _vol_window = _env_int("GTRADE_LABEL_VOL_WINDOW", 20)
         _hi = df['high'] if 'high' in df.columns else None
         _lo = df['low'] if 'low' in df.columns else None
-        df['target'] = make_target(df['close'], _label_mode, _label_window,
-                                   high=_hi, low=_lo, horizon=_horizon,
-                                   barrier_k=_barrier_k, vol_window=_vol_window)
+        df['target'], df['label_span'] = make_target(
+            df['close'], _label_mode, _label_window, high=_hi, low=_lo,
+            horizon=_horizon, barrier_k=_barrier_k, vol_window=_vol_window,
+            with_span=True)
     else:
-        df['target'] = make_target(df['close'], _label_mode, _label_window)
+        df['target'], df['label_span'] = make_target(
+            df['close'], _label_mode, _label_window, with_span=True)
     df['next_ret'] = df['close'].pct_change().shift(-1)
 
     # Non-positive or near-zero prices (e.g. SHIB) make ratio/log features blow

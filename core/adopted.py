@@ -23,6 +23,7 @@ _DEFAULTS = {
     "drops": [], "extra": [], "label_mode": "direction", "label_window": 30,
     "cb_depth_delta": 0, "cb_lr_mult": 1.0, "cb_iter_mult": 1.0,
     "lookback_delta": 0, "net_seeds": 1, "net_uniqueness": 0,
+    "cb_uniqueness": 0,
     "net_calibrate": 0, "thr_margin": 0.0, "band_delta": 0.0,
     "regime_mode": "both",
 }
@@ -93,6 +94,8 @@ def env_overrides(genome):
         env["GTRADE_NET_SEEDS"] = str(_g(genome, "net_seeds"))
     if _g(genome, "net_uniqueness"):
         env["GTRADE_NET_UNIQUENESS"] = "1"
+    if _g(genome, "cb_uniqueness"):
+        env["GTRADE_CB_UNIQUENESS"] = "1"
     if _g(genome, "net_calibrate"):
         env["GTRADE_NET_CALIBRATE"] = "1"
     if _g(genome, "thr_margin"):

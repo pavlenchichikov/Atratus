@@ -187,6 +187,34 @@ def _adopt_floor(objective="mean"):
     return ADOPT_MEAN_SCORE_DELTA
 
 
+def neural_floor():
+    """How far the neural members are allowed to fall for a candidate to still be
+    adoptable, as a Score delta (default: one adopt floor down, i.e. -0.5).
+
+    Always on the plain Score scale, never the objective's: neural_lift is
+    computed with the "mean" reduction whatever GTRADE_AR_OBJECTIVE is, so the
+    dimensionless 'sharpe' floor would be comparing two different units."""
+    try:
+        return float(os.getenv("GTRADE_AR_NEURAL_FLOOR")
+                     or str(-ADOPT_MEAN_SCORE_DELTA))
+    except ValueError:
+        return -ADOPT_MEAN_SCORE_DELTA
+
+
+def adopt_ok(significant, value, objective, neural_lift=None):
+    """The shared adoption decision: statistically significant, over the practical
+    floor, and not paid for by killing the nets.
+
+    The neural clause is the point. The search fitness is the CatBoost-only screen
+    (see the note in run_qd), so a genome is selected purely on CatBoost and is free
+    to win by starving the sequence members - which is what the 2026-08 elite did,
+    tagged ADOPTABLE while carrying neural_lift -2.38. Without this clause
+    neural_lift was reported and then ignored. neural_lift=None (not measured)
+    never blocks."""
+    return bool(significant and value > _adopt_floor(objective)
+                and (neural_lift is None or neural_lift > neural_floor()))
+
+
 def holdout_stats(base_rows, ext_rows, objective="mean"):
     """Raw held-out stats for a variant: (wilcoxon p, objective value, deltas, tag).
     No adoption decision - main applies BH across the axis-winners."""
@@ -319,6 +347,31 @@ def _heldout_eval(subset, env, full_fn, done_out=None):
     return full, contrib
 
 
+def qd_screen_mode():
+    """GTRADE_AR_QD_SCREEN: what one MAP-Elites illumination step trains.
+
+    'cb' (default, unchanged): the CatBoost-only screen over SELECTION_ASSETS.
+    Cheap, but the nets are stubbed out at 0.5 and never train, so every elite is
+    chosen on CatBoost alone and the search is free to win by starving the
+    sequence members. That is the structural reason a genome can arrive at the
+    gate with a strong Score and a negative neural_lift.
+
+    'tier': the tier ladder's env (4 assets, roughly half epochs) - a REAL
+    ensemble train, nets included, so the search can finally see them. Pair it
+    with GTRADE_AR_SCORE_BASIS=neural to make the search optimize the neural
+    contribution rather than merely tolerate it. Costs a tier train per step
+    instead of a CatBoost train, which is the whole price of the change.
+
+    The basis knob is deliberately ignored in 'cb' mode: with the nets stubbed
+    out, full minus CB-only is identically zero, so a neural basis there would
+    score every genome 0."""
+    m = (os.getenv("GTRADE_AR_QD_SCREEN") or "cb").strip().lower()
+    if m not in ("cb", "tier"):
+        logger.warning("unknown GTRADE_AR_QD_SCREEN %r, using cb", m)
+        return "cb"
+    return m
+
+
 def _score_basis():
     """What the search scores: 'raw' (default) or 'neural' (neural contribution)."""
     b = (os.getenv("GTRADE_AR_SCORE_BASIS") or "raw").strip().lower()
@@ -368,7 +421,7 @@ BAND_DELTAS = (-0.01, 0, 0.01, 0.02)
 REGIME_MODES = ("both", "off", "sma_only", "taleb_only")
 
 _HYPER_DEFAULTS = (0, 1.0, 1.0, 0)
-_NET_DEFAULTS = (1, 0, 0)
+_NET_DEFAULTS = (1, 0, 0, 0)
 _TUNING_DEFAULTS = (0.0, 0.0, "both")
 
 
@@ -381,7 +434,11 @@ class Genome:
     label_window doubles as the horizon H when label_mode == "triple_barrier".
     net_uniqueness is a SEPARATE gene from the label on purpose: the negative
     2026-07-11 triple-barrier A/B bundled them, so the agent could never tell which
-    one hurt - now it can test the label with and without uniqueness weighting."""
+    one hurt - now it can test the label with and without uniqueness weighting.
+    cb_uniqueness follows the same reasoning: it is CatBoost's own copy of the
+    uniqueness-weighting toggle, kept separate from net_uniqueness so the agent
+    can test the shared lever on each learner independently (or both at once via
+    the weighting axis) instead of the two always moving together."""
     drops: list = field(default_factory=list)
     extra: list = field(default_factory=list)
     label_mode: str = "direction"
@@ -392,6 +449,7 @@ class Genome:
     lookback_delta: int = 0
     net_seeds: int = 1
     net_uniqueness: int = 0
+    cb_uniqueness: int = 0
     net_calibrate: int = 0
     thr_margin: float = 0.0
     band_delta: float = 0.0
@@ -403,7 +461,7 @@ def _hyper_genes(g):
 
 
 def _net_genes(g):
-    return (g.net_seeds, g.net_uniqueness, g.net_calibrate)
+    return (g.net_seeds, g.net_uniqueness, g.cb_uniqueness, g.net_calibrate)
 
 
 def _tuning_genes(g):
@@ -501,7 +559,8 @@ def valid(g, active, prune_min, continuous=False):
             return False
     if g.net_seeds not in NET_SEED_CHOICES:
         return False
-    if g.net_uniqueness not in (0, 1) or g.net_calibrate not in (0, 1):
+    if (g.net_uniqueness not in (0, 1) or g.cb_uniqueness not in (0, 1)
+            or g.net_calibrate not in (0, 1)):
         return False
     if g.regime_mode not in REGIME_MODES:
         return False
@@ -551,11 +610,13 @@ def _mutate_hyper(g):
 
 def _mutate_nets(g):
     """Flip one net-hygiene gene."""
-    gene = random.choice(("seeds", "uniq", "calib"))
+    gene = random.choice(("seeds", "uniq", "cb_uniq", "calib"))
     if gene == "seeds":
         g.net_seeds = random.choice([s for s in NET_SEED_CHOICES if s != g.net_seeds])
     elif gene == "uniq":
         g.net_uniqueness = 1 - g.net_uniqueness
+    elif gene == "cb_uniq":
+        g.cb_uniqueness = 1 - g.cb_uniqueness
     else:
         g.net_calibrate = 1 - g.net_calibrate
 
@@ -632,6 +693,7 @@ def crossover(g1, g2, active):
     child.cb_iter_mult, child.lookback_delta = hp.cb_iter_mult, hp.lookback_delta
     np_ = g1 if random.random() < 0.5 else g2
     child.net_seeds, child.net_uniqueness = np_.net_seeds, np_.net_uniqueness
+    child.cb_uniqueness = np_.cb_uniqueness
     child.net_calibrate = np_.net_calibrate
     tp = g1 if random.random() < 0.5 else g2
     child.thr_margin, child.band_delta = tp.thr_margin, tp.band_delta
@@ -690,6 +752,25 @@ def behavior(genome, rows, base_score, active):
 _QD_ARCHIVE_PATH = os.path.join(BASE, "_qd_archive.json")
 
 
+def _qd_archive_path():
+    """The archive file for the ACTIVE illumination configuration.
+
+    A cell stores a fitness, and fitness only compares within one illumination
+    setup: the cb screen scores 10 assets with the nets stubbed out, the tier
+    screen scores 4 assets with them alive, and the neural basis scores a
+    difference instead of a level. Sharing one file across those makes
+    archive_put judge a tier child against a CatBoost-scale incumbent, so nearly
+    every child loses on scale alone - an expensive net-aware run would spend its
+    whole budget and then re-elect the old CatBoost elites it was meant to
+    replace. cb+raw keeps the original filename, so the existing archive and
+    every resume of it are untouched."""
+    mode, basis = qd_screen_mode(), _score_basis()
+    if (mode, basis) == ("cb", "raw"):
+        return _QD_ARCHIVE_PATH
+    root, ext = os.path.splitext(_QD_ARCHIVE_PATH)
+    return "%s_%s_%s%s" % (root, mode, basis, ext)
+
+
 def archive_put(archive, genome, rows, base_score, active):
     """Place a genome in its (floor, complexity) niche if it beats the niche's mean
     fitness (or the niche is empty). Returns True when stored."""
@@ -706,7 +787,7 @@ def archive_put(archive, genome, rows, base_score, active):
 def _qd_save(archive):
     out = {k: {"genome": asdict(v["genome"]), "fitness": v["fitness"]}
            for k, v in archive.items()}
-    with open(_QD_ARCHIVE_PATH, "w", encoding="utf-8") as fh:
+    with open(_qd_archive_path(), "w", encoding="utf-8") as fh:
         json.dump(out, fh)
 
 
@@ -714,10 +795,11 @@ def _qd_load():
     """Reload the archive (genomes only; rows are re-derived on resume) or {}.
     Old two-part "f_c" keys (pre lever-group descriptor) are migrated in place
     by appending the genome's lever-group bin - lossless, no retraining."""
-    if not os.path.exists(_QD_ARCHIVE_PATH):
+    path = _qd_archive_path()
+    if not os.path.exists(path):
         return {}
     try:
-        with open(_QD_ARCHIVE_PATH, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)
         out = {}
         for k, v in raw.items():
@@ -1041,8 +1123,9 @@ def _rl_controller_reset_for_tests():
 
 
 def run_qd(train_fn=None):
-    """MAP-Elites: illuminate an archive of diverse genomes via the cheap CB screen,
-    then full-evaluate + honest-gate the top elites. Returns the archive."""
+    """MAP-Elites: illuminate an archive of diverse genomes via the illumination
+    train chosen by GTRADE_AR_QD_SCREEN (default: the cheap CB screen), then
+    full-evaluate + honest-gate the top elites. Returns the archive."""
     from core.features import active_candidate_features
 
     base_fn = train_base_cached if train_fn is None else train_fn
@@ -1054,12 +1137,27 @@ def run_qd(train_fn=None):
     n_final = int(os.getenv("GTRADE_AR_QD_FINAL", "3"))
 
     # Derived, not hardcoded, so a changed SELECTION_ASSETS still finds its own
-    # seeded/measured history bucket (see PROGRESS_SEED's "screen_10").
-    screen_kind = "screen_%d" % len(SELECTION_ASSETS.split(","))
+    # seeded/measured history bucket (see PROGRESS_SEED's "screen_10"). The tier
+    # mode reuses the gate's own "tier_4" bucket - it is the identical train.
+    qd_mode = qd_screen_mode()
+    if qd_mode == "tier":
+        screen_subset = tier_assets()
+        screen_over = tier_env
+    else:
+        screen_subset = SELECTION_ASSETS
+        screen_over = screen_env
+    screen_kind = "%s_%d" % ("tier" if qd_mode == "tier" else "screen",
+                             len(screen_subset.split(",")))
+
+    def _illuminate(subset, env, fn):
+        """One illumination train. Only the tier mode honours GTRADE_AR_SCORE_BASIS:
+        under the CB screen the nets are stubbed out, so a neural contribution is
+        zero by construction (see qd_screen_mode)."""
+        return score_rows(subset, env, fn) if qd_mode == "tier" else fn(subset, env)
 
     _t0 = time.time()
     _mark = _progress_unit_marker()
-    screen_base = base_fn(SELECTION_ASSETS, {"GTRADE_SCREEN_ONLY": "1"})
+    screen_base = _illuminate(screen_subset, screen_over({}), base_fn)
     _progress_fold_unit(screen_kind, time.time() - _t0, since=_mark)
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in screen_base}
 
@@ -1071,7 +1169,7 @@ def run_qd(train_fn=None):
     _progress_publish("warmup", step={"kind": "screen", "unit_kind": screen_kind})
 
     def _screen_eval(g):
-        return train_fn(SELECTION_ASSETS, screen_env(genome_to_env(g)))
+        return _illuminate(screen_subset, screen_over(genome_to_env(g)), train_fn)
 
     archive = _qd_load()
     if not archive:
@@ -1085,10 +1183,11 @@ def run_qd(train_fn=None):
             archive_put(archive, g, rows, base_score, active)
         _qd_save(archive)
 
-    # NOTE: archive illumination always uses the cheap raw CB screen (fitness vs the
-    # CB base_score); GTRADE_AR_SCORE_BASIS=neural only re-scores the FINAL elite gate
-    # on neural contribution - it does NOT change which genomes become elites. Feeding
-    # contribution into illumination would require a full ensemble train per step.
+    # Illumination trains whatever qd_screen_mode() says. Under the default 'cb'
+    # the nets never train, so GTRADE_AR_SCORE_BASIS=neural only re-scores the
+    # FINAL elite gate and cannot change which genomes become elites - the search
+    # stays CatBoost-only. GTRADE_AR_QD_SCREEN=tier is what makes the search
+    # net-aware, at the cost of a tier train per step instead of a CB train.
     max_misses = int(os.getenv("GTRADE_AR_QD_MAX_MISSES", "5"))
     misses = 0
     for _step in range(BUDGET):
@@ -1195,7 +1294,7 @@ def run_qd(train_fn=None):
         ts_qd = datetime.utcnow().isoformat()
         finding_winners = []
         for (g, p, value, tag, nl), s in zip(results, flags):
-            ok = bool(s and value > _adopt_floor(obj))
+            ok = adopt_ok(s, value, obj, nl)
             replicated = clears = None
             if ok:
                 gsig = genome_sig(g)
@@ -1212,7 +1311,7 @@ def run_qd(train_fn=None):
             nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
             print("[qd] elite drops=%s label=%s/%d extra=%d: %s | %s%s" % (
                 g.drops, g.label_mode, g.label_window, len(g.extra),
-                _gate_verdict(ok, bool(replicated), clears), tag, nl_str))
+                _gate_verdict(ok, bool(replicated), clears, nl, s), tag, nl_str))
     ar_memory.findings_append({
         "ts": datetime.utcnow().isoformat(), "mode": "qd",
         "budget": BUDGET, "winners": finding_winners})
@@ -1284,10 +1383,11 @@ def _regate_candidates(archive_raw, findings, k):
 
 
 def _regate_load_archive_raw():
-    if not os.path.exists(_QD_ARCHIVE_PATH):
+    path = _qd_archive_path()
+    if not os.path.exists(path):
         return {}
     try:
-        with open(_QD_ARCHIVE_PATH, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except Exception:
         return {}
@@ -1402,7 +1502,7 @@ def regate(k=8, screen=False):
     ts = datetime.utcnow().isoformat()
     finding_winners = []
     for (g, old_score, p, value, tag, nl), s in zip(results, flags):
-        ok = bool(s and value > _adopt_floor(obj))
+        ok = adopt_ok(s, value, obj, nl)
         replicated = clears = None
         if ok:
             gsig = genome_sig(g)
@@ -1413,7 +1513,8 @@ def regate(k=8, screen=False):
                                 "neural_lift": nl, "replicated": bool(replicated),
                                 "clears": clears or 0})
         nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
-        _say(f"[regate] old {old_score:.2f} - {_gate_verdict(ok, bool(replicated), clears)} | {tag}{nl_str}")
+        _say(f"[regate] old {old_score:.2f} - "
+             f"{_gate_verdict(ok, bool(replicated), clears, nl, s)} | {tag}{nl_str}")
     ar_memory.findings_append({"ts": ts, "mode": "regate", "k": k,
                                "screen": bool(screen), "winners": finding_winners})
     _regate_progress_clear()
@@ -1792,7 +1893,18 @@ class Axis:
     turns the selected candidate (additive: the kept+new list; select_best: a single
     candidate) into training env overrides; `kind` is "additive" or "select_best";
     `validate(cand, selected)` and `prescreen(cand, screen_df)` default to accepting;
-    `sig(cand)` returns (kind, signature) for the permanent tried-registry; None = not registered."""
+    `sig(cand)` returns (kind, signature) for the permanent tried-registry; None = not registered.
+
+    cb_blind marks an axis whose lever the CatBoost-only screen cannot see at all,
+    so the screen must not judge it. Under GTRADE_SCREEN_ONLY the nets are replaced
+    by a neutral 0.5 and never train, which makes every net-only env key inert -
+    the screen then compares two identical CatBoost runs and passes or fails the
+    candidate on training noise. The 2026-08 log shows exactly that: all three
+    `weighting` candidates screened out, with {cb_uniqueness} and
+    {net_uniqueness, cb_uniqueness} scoring byte-identical deltas (adding the net
+    flag changed nothing) while the certified no-op {net_uniqueness} alone read
+    -1.71. A cb_blind axis skips the screen and is filtered by the tier ladder
+    instead, which does train the nets."""
     name: str
     propose: object
     to_env: object
@@ -1800,6 +1912,7 @@ class Axis:
     validate: object = None
     prescreen: object = None
     sig: object = None
+    cb_blind: bool = False
 
     def ok(self, cand, selected, screen_df):
         v = self.validate is None or self.validate(cand, selected)
@@ -1844,7 +1957,7 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
                 persist(log)
                 continue
             cand = kept + new
-            if screen_base is not None:
+            if screen_base is not None and not axis.cb_blind:
                 passed, sdelta = _passes_screen(axis, cand, train_fn, screen_base, screen_min, objective)
                 if not passed:
                     entry = {"axis": axis.name, "iter": i, "cand": new,
@@ -1892,7 +2005,7 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
             break
         if json.dumps(cand, sort_keys=True) in tried:
             continue
-        if screen_base is not None:
+        if screen_base is not None and not axis.cb_blind:
             passed, sdelta = _passes_screen(axis, cand, train_fn, screen_base, screen_min, objective)
             if not passed:
                 log.append({"axis": axis.name, "iter": i, "cand": cand,
@@ -2045,9 +2158,10 @@ def nets_env(cand):
 
 def make_nets_axis():
     """Sweep the net-hygiene levers (seed-averaging, per-net calibration).
-    Uniqueness weighting is intentionally NOT proposed alone - it is a no-op under
-    the next-bar base label (needs GTRADE_LABEL_HORIZON > 1); the QD genome can
-    still combine it with a triple_barrier label."""
+    Uniqueness weighting is intentionally NOT proposed here - it lives on its own
+    `weighting` axis because it is a SHARED lever (CatBoost takes the same weights),
+    and it stays a no-op until the label is multi-bar; the QD genome can still
+    combine it with a triple_barrier label."""
     def _propose(log):
         tried = {json.dumps(e["cand"], sort_keys=True) for e in log
                  if isinstance(e.get("cand"), dict)}
@@ -2062,6 +2176,71 @@ def make_nets_axis():
         to_env=nets_env,
         kind="select_best",
         sig=lambda c: ("nets", json.dumps(c, sort_keys=True)),
+        cb_blind=True,   # seeds/calibrate do nothing when the nets are stubbed out
+    )
+
+
+# --- weighting axis (label-uniqueness sample weights, per learner) -----------
+
+WEIGHTING_CANDIDATES = (
+    {"net_uniqueness": 1},
+    {"cb_uniqueness": 1},
+    {"net_uniqueness": 1, "cb_uniqueness": 1},
+)
+
+_WEIGHTING_ENV_KEYS = {"net_uniqueness": "GTRADE_NET_UNIQUENESS",
+                       "cb_uniqueness": "GTRADE_CB_UNIQUENESS"}
+
+
+def weighting_env(cand):
+    return {_WEIGHTING_ENV_KEYS[k]: str(v) for k, v in cand.items()}
+
+
+def _weighting_sig(cand):
+    """Registry signature for a weighting candidate, qualified by the active label
+    mode. The same on/off combination is a genuinely different experiment under a
+    multi-bar label than under the next-bar default, where the uniqueness weights
+    are all-ones and every candidate is a no-op. Without the qualifier, one no-op
+    run would mark all three candidates tried forever and the real run would
+    propose nothing."""
+    mode = (os.getenv("GTRADE_LABEL_MODE") or "direction").strip()
+    return mode + "|" + json.dumps(cand, sort_keys=True)
+
+
+def make_weighting_axis():
+    """Sweep LdP label-uniqueness sample weights per learner: nets only, CatBoost
+    only, or both. This is the one axis whose lever is genuinely SHARED - both
+    learners consume the identical weight array - so read it on the raw Score basis.
+    On the neural_lift basis a change that helps both learners equally cancels out by
+    construction and reads as zero.
+
+    Pair it with a multi-bar label. Under the next-bar base label every span is 1,
+    the weights are all-ones, and all three candidates are honest no-ops; the QD
+    genome is what combines this gene with a triple_barrier label. Running this axis
+    in a list next to labeling does NOT combine them either: run_axis evaluates each
+    axis independently against the same shared base environment, so axes in a list
+    never compose.
+
+    cb_blind because the axis is a select_best over all three candidates and one
+    of them ({net_uniqueness}) is invisible to the CatBoost screen by
+    construction. Screening the CB-visible candidates while the net-only one dies
+    on noise means the axis can never select the net variant, which is the
+    comparison the axis exists to make."""
+    def _propose(log):
+        tried = {json.dumps(e["cand"], sort_keys=True) for e in log
+                 if isinstance(e.get("cand"), dict)}
+        cands = [c for c in WEIGHTING_CANDIDATES
+                 if json.dumps(c, sort_keys=True) not in tried]
+        return [c for c in cands if not ar_memory.tried_seen(
+            "weighting", _weighting_sig(c))]
+
+    return Axis(
+        name="weighting",
+        propose=_propose,
+        to_env=weighting_env,
+        kind="select_best",
+        sig=lambda c: ("weighting", _weighting_sig(c)),
+        cb_blind=True,
     )
 
 
@@ -2197,6 +2376,7 @@ def build_axes(names, base_features):
         "pruning": lambda: make_pruning_axis(base_features),
         "hyper": make_hyper_axis,
         "nets": make_nets_axis,
+        "weighting": make_weighting_axis,
         "thresholds": make_thresholds_axis,
         "regime": make_regime_axis,
     }
@@ -2220,9 +2400,14 @@ def _persist(axis_name, log):
     save_state(state)
 
 
-def _gate_verdict(ok, replicated, clears):
-    """Console verdict string shared by the axis and QD gates."""
+def _gate_verdict(ok, replicated, clears, neural_lift=None, significant=None):
+    """Console verdict string shared by the axis and QD gates. A candidate that
+    cleared the Score bar and was stopped only by the neural floor says so - the
+    old bare "not adoptable" next to a strong dScore reads like a stats failure."""
     if not ok:
+        if (significant and neural_lift is not None
+                and neural_lift <= neural_floor()):
+            return "not adoptable (neural floor: nets pay for it)"
         return "not adoptable"
     if replicated:
         return "REPLICATED-ADOPTABLE (%d clears)" % clears
@@ -2313,7 +2498,7 @@ def main():
     ts = datetime.utcnow().isoformat()
     finding_winners = []
     for (name, winner, p, value, tag, nl), s in zip(winners, flags):
-        ok = bool(s and value > _adopt_floor(obj))
+        ok = adopt_ok(s, value, obj, nl)
         replicated = clears = None
         if ok:
             wsig = _winner_sig(name, winner)
@@ -2324,7 +2509,7 @@ def main():
         finding_winners.append({"axis": name, "p": p, "value": value, "tag": tag,
                                 "adoptable": ok, "neural_lift": nl,
                                 "replicated": bool(replicated), "clears": clears or 0})
-        verdict = _gate_verdict(ok, bool(replicated), clears)
+        verdict = _gate_verdict(ok, bool(replicated), clears, nl, s)
         nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
         print(f"[auto-research] axis {name}: {verdict} | {tag}{nl_str}")
     ar_memory.findings_append({

@@ -111,3 +111,9 @@ def test_the_research_loop_and_production_compose_a_genome_identically():
     # Research adds a per-candidate temp path; production reads the adopted file.
     from_research.pop("GTRADE_DSL_SPECS", None)
     assert from_research == adopted.env_overrides(asdict(g))
+
+
+def test_cb_uniqueness_gene_emits_its_env():
+    from core.adopted import env_overrides
+    assert env_overrides({"cb_uniqueness": 1}).get("GTRADE_CB_UNIQUENESS") == "1"
+    assert "GTRADE_CB_UNIQUENESS" not in env_overrides({"cb_uniqueness": 0})

@@ -353,6 +353,77 @@ def test_run_axis_screen_skips_full_eval_of_rejected():
     assert calls["full"] == 1 and calls["screen"] == 2
 
 
+def test_run_axis_cb_blind_axis_skips_the_screen():
+    # A net-only lever is invisible under GTRADE_SCREEN_ONLY, so the screen would
+    # judge it on CatBoost noise. cb_blind axes must reach the full eval anyway.
+    base = [{"Asset": "SP500", "Score": 1.0}, {"Asset": "NVDA", "Score": 1.0}]
+    calls = {"full": 0, "screen": 0}
+
+    def train(subset, env):
+        if env.get("GTRADE_SCREEN_ONLY") == "1":
+            calls["screen"] += 1
+            s = 0.5          # would fail the screen for every candidate
+        else:
+            calls["full"] += 1
+            s = 3.0
+        return [{"Asset": a, "Score": s} for a in ("SP500", "NVDA")]
+
+    def _axis(blind):
+        return ar.Axis(name="s", propose=lambda log: [{"name": "w20"}],
+                       to_env=lambda c: {"NAMES": c["name"]},
+                       kind="select_best", cb_blind=blind)
+
+    ar.run_axis(_axis(True), 5, base, train, persist=lambda log: None,
+                screen_base=base, screen_min=0.0)
+    assert calls == {"full": 1, "screen": 0}
+
+    calls.update(full=0, screen=0)
+    ar.run_axis(_axis(False), 5, base, train, persist=lambda log: None,
+                screen_base=base, screen_min=0.0)
+    assert calls == {"full": 0, "screen": 1}     # the blind screen kills it
+
+
+def test_nets_and_weighting_axes_are_cb_blind():
+    assert ar.make_nets_axis().cb_blind is True
+    assert ar.make_weighting_axis().cb_blind is True
+    # an axis whose lever CatBoost DOES see keeps its screen
+    assert ar.make_thresholds_axis().cb_blind is False
+
+
+def test_adopt_ok_blocks_a_score_win_paid_for_by_the_nets(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_NEURAL_FLOOR", raising=False)
+    big = ar.ADOPT_MEAN_SCORE_DELTA + 3.0
+    # the 2026-08 elite: significant, way over the Score floor, nets down 2.38
+    assert ar.adopt_ok(True, big, "mean", -2.38) is False
+    # a small neural dip inside the floor still adopts
+    assert ar.adopt_ok(True, big, "mean", -0.1) is True
+    assert ar.adopt_ok(True, big, "mean", +1.0) is True
+    # not measured never blocks
+    assert ar.adopt_ok(True, big, "mean", None) is True
+    # the Score bar and the significance flag still rule
+    assert ar.adopt_ok(False, big, "mean", +1.0) is False
+    assert ar.adopt_ok(True, 0.0, "mean", +1.0) is False
+    # the floor is tunable
+    monkeypatch.setenv("GTRADE_AR_NEURAL_FLOOR", "-5.0")
+    assert ar.adopt_ok(True, big, "mean", -2.38) is True
+
+
+def test_neural_floor_stays_on_the_score_scale(monkeypatch):
+    # sharpe's adopt floor is dimensionless; neural_lift is always a Score delta,
+    # so the neural floor must not follow the objective.
+    monkeypatch.delenv("GTRADE_AR_NEURAL_FLOOR", raising=False)
+    monkeypatch.setenv("GTRADE_AR_ADOPT_SHARPE", "9.0")
+    assert ar.neural_floor() == -ar.ADOPT_MEAN_SCORE_DELTA
+
+
+def test_gate_verdict_names_the_neural_block():
+    assert "neural floor" in ar._gate_verdict(False, False, 0, -2.38, True)
+    # a plain statistical failure keeps the old wording
+    assert ar._gate_verdict(False, False, 0, -2.38, False) == "not adoptable"
+    assert ar._gate_verdict(False, False, 0, None, True) == "not adoptable"
+    assert "ADOPTABLE" in ar._gate_verdict(True, False, 0, +1.0, True)
+
+
 def _rows2(scores):
     return [{"Asset": a, "Score": s} for a, s in scores.items()]
 
@@ -650,6 +721,110 @@ def test_qd_save_load_roundtrip(tmp_path, monkeypatch):
     (_k, v), = loaded.items()
     assert v["genome"].drops == ["rsi"] and v["genome"].label_mode == "rel_median"
     assert v["genome"].label_window == 20
+
+
+def _qd_illumination_trains(monkeypatch, mode, real_archive=False):
+    """Record what run_qd's illumination phase actually trains: (subset, env)
+    pairs for every call that is not the final held-out gate. real_archive lets
+    the real load/save run, so a test can assert which file they touch."""
+    if not real_archive:
+        monkeypatch.setattr(ar, "_qd_load", dict)
+        monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setattr(ar, "BUDGET", 2, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "2")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "1")
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")        # isolate the search phase
+    if mode is None:
+        monkeypatch.delenv("GTRADE_AR_QD_SCREEN", raising=False)
+    else:
+        monkeypatch.setenv("GTRADE_AR_QD_SCREEN", mode)
+    import random as _r
+    _r.seed(0)
+    seen = []
+
+    def fake_train(subset, env):
+        if subset != ar.HELDOUT_ASSETS:
+            seen.append((subset, dict(env)))
+        return [{"Asset": a, "Score": 1.0} for a in subset.split(",")]
+
+    ar.run_qd(train_fn=fake_train)
+    return seen
+
+
+def test_qd_archive_is_namespaced_per_illumination(monkeypatch, tmp_path):
+    # A cb-basis fitness and a tier-basis fitness are different scales; sharing
+    # one archive would make archive_put reject tier children on scale alone.
+    default = str(tmp_path / "_qd_archive.json")
+    monkeypatch.setattr(ar, "_QD_ARCHIVE_PATH", default)
+    monkeypatch.delenv("GTRADE_AR_QD_SCREEN", raising=False)
+    monkeypatch.delenv("GTRADE_AR_SCORE_BASIS", raising=False)
+    assert ar._qd_archive_path() == default          # the legacy file is untouched
+    seen = {ar._qd_archive_path()}
+    for mode, basis in (("tier", "raw"), ("tier", "neural"), ("cb", "neural")):
+        monkeypatch.setenv("GTRADE_AR_QD_SCREEN", mode)
+        monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", basis)
+        p = ar._qd_archive_path()
+        assert p != default and p.endswith(".json")
+        seen.add(p)
+    assert len(seen) == 4                            # every setup gets its own file
+
+
+def test_qd_tier_run_does_not_touch_the_cb_archive(monkeypatch, tmp_path):
+    """The end-to-end guard: a tier run must neither read nor overwrite the
+    existing CatBoost-illuminated archive."""
+    default = tmp_path / "_qd_archive.json"
+    default.write_text(json.dumps(
+        {"9_9_9": {"genome": ar.asdict(ar.Genome()), "fitness": 99.0}}), encoding="utf-8")
+    monkeypatch.setattr(ar, "_QD_ARCHIVE_PATH", str(default))
+    before = default.read_text(encoding="utf-8")
+    _qd_illumination_trains(monkeypatch, "tier", real_archive=True)
+    # the CatBoost-scale archive is neither overwritten nor inherited
+    assert default.read_text(encoding="utf-8") == before
+    tier = tmp_path / "_qd_archive_tier_raw.json"
+    assert tier.exists(), "the tier run must build its own archive"
+    assert "9_9_9" not in json.loads(tier.read_text(encoding="utf-8"))
+
+
+def test_qd_screen_mode_env(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_QD_SCREEN", raising=False)
+    assert ar.qd_screen_mode() == "cb"
+    monkeypatch.setenv("GTRADE_AR_QD_SCREEN", "tier")
+    assert ar.qd_screen_mode() == "tier"
+    monkeypatch.setenv("GTRADE_AR_QD_SCREEN", "nonsense")
+    assert ar.qd_screen_mode() == "cb"
+
+
+def test_qd_cb_mode_never_trains_a_net(monkeypatch):
+    # The default must stay exactly as it was: CatBoost-only over SELECTION_ASSETS.
+    seen = _qd_illumination_trains(monkeypatch, None)
+    assert seen, "illumination trained nothing"
+    for subset, env in seen:
+        assert subset == ar.SELECTION_ASSETS
+        assert env.get("GTRADE_SCREEN_ONLY") == "1"
+
+
+def test_qd_tier_mode_trains_the_nets_on_tier_assets(monkeypatch):
+    seen = _qd_illumination_trains(monkeypatch, "tier")
+    assert seen, "illumination trained nothing"
+    for subset, env in seen:
+        assert subset == ar.tier_assets()
+        # the point of the mode: no stub flag, so the nets really train
+        assert "GTRADE_SCREEN_ONLY" not in env
+        assert env.get("GTRADE_EPOCHS_LSTM") == ar.TIER_ENV["GTRADE_EPOCHS_LSTM"]
+
+
+def test_qd_tier_mode_honours_the_neural_basis(monkeypatch):
+    # basis=neural pairs each tier train with a CB-only tier train, so the search
+    # fitness becomes the neural contribution instead of the raw ensemble Score.
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "neural")
+    seen = _qd_illumination_trains(monkeypatch, "tier")
+    stubbed = [e for _s, e in seen if e.get("GTRADE_SCREEN_ONLY") == "1"]
+    full = [e for _s, e in seen if "GTRADE_SCREEN_ONLY" not in e]
+    assert stubbed and full and len(stubbed) == len(full)
+    # and the CB screen mode must NOT pay for that pair (contribution is 0 there)
+    monkeypatch.setenv("GTRADE_AR_QD_SCREEN", "cb")
+    cb_seen = _qd_illumination_trains(monkeypatch, "cb")
+    assert all(e.get("GTRADE_SCREEN_ONLY") == "1" for _s, e in cb_seen)
 
 
 def test_run_qd_illuminates_and_gates(monkeypatch):
@@ -1890,3 +2065,75 @@ class TestRlIntegration:
             ctl._note_origin("s%d" % i, "feat", "fill")
             ctl.on_result("s%d" % i, stored=False)
         assert ctl.disabled is True
+
+
+class TestWeightingAxis:
+    def test_axis_is_registered(self):
+        axes = ar.build_axes(["weighting"], ["rsi"])
+        assert len(axes) == 1
+        assert axes[0].name == "weighting"
+
+    def test_candidates_cover_each_learner_and_both(self):
+        got = {tuple(sorted(c.items())) for c in ar.WEIGHTING_CANDIDATES}
+        assert (("net_uniqueness", 1),) in got
+        assert (("cb_uniqueness", 1),) in got
+        assert (("cb_uniqueness", 1), ("net_uniqueness", 1)) in got
+
+    def test_env_mapping(self):
+        assert ar.weighting_env({"net_uniqueness": 1}) == {"GTRADE_NET_UNIQUENESS": "1"}
+        assert ar.weighting_env({"cb_uniqueness": 1}) == {"GTRADE_CB_UNIQUENESS": "1"}
+        assert ar.weighting_env({"net_uniqueness": 1, "cb_uniqueness": 1}) == {
+            "GTRADE_NET_UNIQUENESS": "1", "GTRADE_CB_UNIQUENESS": "1"}
+
+    def test_axis_is_select_best(self):
+        axis = ar.make_weighting_axis()
+        assert axis.kind == "select_best"
+
+    def test_axis_proposes_every_candidate_on_an_empty_log(self):
+        axis = ar.make_weighting_axis()
+        assert len(axis.propose([])) == len(ar.WEIGHTING_CANDIDATES)
+
+    def test_axis_does_not_repropose_a_tried_candidate(self):
+        axis = ar.make_weighting_axis()
+        log = [{"cand": {"cb_uniqueness": 1}}]
+        out = axis.propose(log)
+        assert {"cb_uniqueness": 1} not in out
+
+    def test_genome_has_the_cb_gene(self):
+        g = ar.Genome()
+        assert g.cb_uniqueness == 0
+        assert ar._net_genes(ar.Genome(cb_uniqueness=1)) != ar._net_genes(ar.Genome())
+
+    def test_mutation_can_reach_the_cb_gene(self):
+        # The QD search must be able to switch the gene on; if _mutate_nets never
+        # picks it, the gene exists but is dead code for every QD run.
+        import random as _r
+        _r.seed(0)
+        g = ar.Genome()
+        for _ in range(400):
+            ar._mutate_nets(g)
+            if g.cb_uniqueness == 1:
+                break
+        assert g.cb_uniqueness == 1
+
+    def test_crossover_carries_the_cb_gene(self):
+        import random as _r
+        _r.seed(0)
+        donor = ar.Genome(net_seeds=3, net_uniqueness=1, cb_uniqueness=1,
+                          net_calibrate=1)
+        plain = ar.Genome()
+        seen = set()
+        for _ in range(50):
+            child = ar.crossover(donor, plain, ["rsi"])
+            seen.add(child.cb_uniqueness)
+        # The net group is inherited whole from one parent, so both values must
+        # appear across repeated draws; a child stuck at 0 means the gene is dropped.
+        assert seen == {0, 1}
+
+    def test_valid_rejects_an_out_of_range_cb_gene(self):
+        # valid()'s third positional arg is prune_min (required, no default); a
+        # single-feature active list needs prune_min <= 1 or the floor check
+        # (len(active) - len(drops) < prune_min) masks the cb_uniqueness check by
+        # returning False regardless of it.
+        assert ar.valid(ar.Genome(cb_uniqueness=1), ["rsi"], 1) is True
+        assert ar.valid(ar.Genome(cb_uniqueness=7), ["rsi"], 1) is False

@@ -9,6 +9,7 @@ from core.features import (
     add_macro_features,
     compute_taleb_risk,
     engineer_features,
+    label_footprint,
     latest_taleb_risk,
     make_target,
 )
@@ -541,3 +542,102 @@ def test_add_chronos_features_auto_detects_cached_model(monkeypatch, tmp_path):
     out = F.add_chronos_features(df.copy(), "sp500", eng)
     assert "chronos_ret" in out.columns                       # base cache auto-detected + joined
     assert abs(out.iloc[0]["chronos_ret"] - 0.01) < 1e-9
+
+
+class TestLabelSpan:
+    def _bars(self, n=60):
+        idx = pd.date_range("2024-01-01", periods=n, freq="D")
+        close = pd.Series(np.linspace(100.0, 120.0, n), index=idx)
+        return close
+
+    def test_direction_span_is_one(self):
+        close = self._bars()
+        tgt, span = make_target(close, "direction", with_span=True)
+        assert len(span) == len(tgt)
+        assert (span.dropna() == 1.0).all()
+
+    def test_rel_median_span_is_one(self):
+        close = self._bars()
+        tgt, span = make_target(close, "rel_median", window=10, with_span=True)
+        assert (span.dropna() == 1.0).all()
+
+    def test_triple_barrier_span_is_bars_to_touch(self):
+        # A seeded random walk gives a real EWM sigma, so the barriers sit at a
+        # meaningful distance and each sample resolves after a different number of
+        # bars. That variability is the whole point of the span: a constant span
+        # carries no information for uniqueness weighting.
+        rng = np.random.default_rng(7)
+        idx = pd.date_range("2024-01-01", periods=120, freq="D")
+        close = pd.Series(100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 120))),
+                          index=idx)
+        tgt, span = make_target(close, "triple_barrier", high=close, low=close,
+                                horizon=20, barrier_k=1.0, vol_window=10,
+                                with_span=True)
+        resolved = span.dropna()
+        assert len(resolved) > 50
+        assert (resolved >= 1).all()
+        assert (resolved <= 20).all()
+        # A variable-length labeler must not emit one constant span.
+        assert resolved.nunique() > 5
+
+    def test_span_is_nan_exactly_where_target_is_nan(self):
+        idx = pd.date_range("2024-01-01", periods=40, freq="D")
+        close = pd.Series(np.linspace(100.0, 110.0, 40), index=idx)
+        tgt, span = make_target(close, "triple_barrier", high=close, low=close,
+                                horizon=10, barrier_k=1.0, vol_window=5,
+                                with_span=True)
+        assert list(tgt.isna()) == list(span.isna())
+
+    def test_with_span_false_returns_a_bare_series(self):
+        close = self._bars()
+        out = make_target(close, "direction")
+        assert isinstance(out, pd.Series)
+
+    def test_label_footprint_reads_env(self, monkeypatch):
+        monkeypatch.delenv("GTRADE_LABEL_MODE", raising=False)
+        monkeypatch.delenv("GTRADE_LABEL_HORIZON", raising=False)
+        assert label_footprint() == 1
+        monkeypatch.setenv("GTRADE_LABEL_MODE", "rel_median")
+        monkeypatch.setenv("GTRADE_LABEL_WINDOW", "60")
+        assert label_footprint() == 1          # trailing baseline, forward reach 1
+        monkeypatch.setenv("GTRADE_LABEL_MODE", "triple_barrier")
+        monkeypatch.setenv("GTRADE_LABEL_HORIZON", "20")
+        assert label_footprint() == 20
+        monkeypatch.setenv("GTRADE_LABEL_HORIZON", "bad")
+        assert label_footprint() == 1          # invalid value falls back
+
+    def test_engineer_features_emits_the_span_column(self, monkeypatch):
+        # The end-to-end guard: every other test of this feature reads source text,
+        # so without this one, deleting the engineer_features edit is invisible and
+        # the sample weights silently degrade to all-ones.
+        monkeypatch.setenv("GTRADE_LABEL_MODE", "triple_barrier")
+        monkeypatch.setenv("GTRADE_LABEL_HORIZON", "10")
+        rng = np.random.default_rng(11)
+        n = 400
+        idx = pd.date_range("2022-01-01", periods=n, freq="D")
+        close = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.012, n)))
+        frame = pd.DataFrame({"open": close, "high": close * 1.004,
+                              "low": close * 0.996, "close": close,
+                              "volume": np.full(n, 1000.0)}, index=idx)
+        out = engineer_features(frame)
+        assert "label_span" in out.columns
+        assert out["label_span"].notna().all()
+        assert (out["label_span"] >= 1).all()
+        assert out["label_span"].nunique() > 1
+
+    def test_span_column_does_not_change_the_surviving_row_count(self, monkeypatch):
+        # The byte-identity claim for the default label: adding the column must not
+        # drop a single extra row through engineer_features' dropna.
+        monkeypatch.delenv("GTRADE_LABEL_MODE", raising=False)
+        monkeypatch.delenv("GTRADE_LABEL_HORIZON", raising=False)
+        rng = np.random.default_rng(12)
+        n = 300
+        idx = pd.date_range("2022-01-01", periods=n, freq="D")
+        close = 100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+        frame = pd.DataFrame({"open": close, "high": close * 1.003,
+                              "low": close * 0.997, "close": close,
+                              "volume": np.full(n, 1000.0)}, index=idx)
+        out = engineer_features(frame)
+        assert "label_span" in out.columns
+        assert (out["label_span"] == 1.0).all()
+        assert len(out) == len(out.dropna(subset=["target"]))

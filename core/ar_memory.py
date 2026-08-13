@@ -127,6 +127,17 @@ def _objective_suffix():
     return ["objective-v2"] if on else []
 
 
+def _seed_suffix():
+    """Cache-key marker for the training seed. Unconditional, unlike
+    _objective_suffix: every entry cached before training became deterministic
+    came from an UNSEEDED run, so it must not be served to a seeded one - a
+    stale base row against a fresh variant row is a delta made of the seed
+    change. It also gives each GTRADE_SEED re-roll its own cache namespace, so
+    re-rolling to measure seed noise does not read the previous roll's rows."""
+    from core.net_hygiene import seed_base
+    return ["seed-%d" % seed_base()]
+
+
 def data_fingerprint(subset):
     """Newest bar date per asset table of the subset; changes when new data
     arrives. A missing table is a deterministic marker; a whole-DB failure
@@ -155,7 +166,8 @@ def base_key(subset, env):
     data snapshot means the same quality rows."""
     from core.features import feature_version
     payload = json.dumps(
-        [subset, env, feature_version(), data_fingerprint(subset)] + _objective_suffix(),
+        [subset, env, feature_version(), data_fingerprint(subset)]
+        + _objective_suffix() + _seed_suffix(),
         sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
@@ -167,7 +179,8 @@ def genome_key(subset, gsig, kind=""):
     invalidation rules as base_key: feature space or new data means a MISS."""
     from core.features import feature_version
     payload = json.dumps(
-        [subset, gsig, kind, feature_version(), data_fingerprint(subset)] + _objective_suffix(),
+        [subset, gsig, kind, feature_version(), data_fingerprint(subset)]
+        + _objective_suffix() + _seed_suffix(),
         sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 

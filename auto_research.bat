@@ -53,7 +53,18 @@ set "GTRADE_AR_SCREEN_MIN=0.0"
 set "GTRADE_AR_PRUNE_MIN=8"
 set "GTRADE_AR_QD_INIT=8"
 set "GTRADE_AR_QD_FINAL=3"
+REM    GTRADE_AR_SEED seeds the SEARCH (which genomes get proposed).
+REM    GTRADE_SEED seeds the TRAINING (weights, shuffling, CatBoost). Two
+REM    different things despite the names. Change GTRADE_SEED to re-roll a whole
+REM    run: that is how you measure how much of a result is seed noise, and it
+REM    gives the re-roll its own eval-cache namespace so it cannot read the
+REM    previous roll's rows.
 set "GTRADE_AR_SEED=42"
+set "GTRADE_SEED=1000"
+REM    Floor on neural_lift for adoption (Score scale). A candidate that clears
+REM    the Score bar but sinks the nets below this is rejected instead of merely
+REM    reported. Blank = default -0.5.
+set "GTRADE_AR_NEURAL_FLOOR="
 set "AR_PRESCREEN_MIN=0.02"
 set "GTRADE_AR_QD_LLM_P=0.3"
 set "GTRADE_AR_QD_MAX_MISSES=5"
@@ -79,6 +90,9 @@ echo     1 = qd (MAP-Elites quality-diversity, the flagship; genome now also
 echo         carries hyperparameter, net-hygiene and triple-barrier genes)
 echo     2 = features (DSL forward-selection)
 echo     3 = labeling,pruning (rel_median windows + triple_barrier horizons; drops)
+echo         (the weighting axis is deliberately NOT here: axes do not compose, and
+echo         its candidates are no-ops unless GTRADE_LABEL_MODE is a multi-bar label,
+echo         so run it via option 5 with that env already set)
 echo     4 = hyper,nets,thresholds,regime (model + tuning levers)
 echo     5 = custom (type your own axes list)
 set "MODE=1"
@@ -91,6 +105,27 @@ if "%MODE%"=="4" set "GTRADE_AR_AXES=hyper,nets,thresholds,regime"
 if "%MODE%"=="5" set /p "GTRADE_AR_AXES=    axes (comma-separated): "
 REM  Not one of 1-5: use whatever was typed verbatim as the axes (e.g. "qd" or "qd,features").
 if not defined GTRADE_AR_AXES set "GTRADE_AR_AXES=%MODE%"
+
+REM  Label for the WHOLE run: the base and every candidate share it, so this is
+REM  the setting that decides what an axis is even able to measure. Flat ifs, no
+REM  parenthesized block, so each set /p sees the fresh value.
+echo.
+echo [1a] Label for this run (applies to the base AND every candidate):
+echo     1 = direction (default; next-bar label)
+echo     2 = triple_barrier, horizon 20 bars
+echo     3 = triple_barrier, custom horizon
+echo         The weighting axis is a no-op under 1: a next-bar label spans one
+echo         bar, the uniqueness weights come out all-ones, and every candidate
+echo         equals the base. Pick 2 or 3 when running that axis.
+set "LBL=1"
+set /p "LBL=    choice [1]: "
+set "GTRADE_LABEL_MODE=direction"
+set "GTRADE_LABEL_HORIZON=1"
+if "%LBL%"=="2" set "GTRADE_LABEL_MODE=triple_barrier"
+if "%LBL%"=="2" set "GTRADE_LABEL_HORIZON=20"
+if "%LBL%"=="3" set "GTRADE_LABEL_MODE=triple_barrier"
+if "%LBL%"=="3" set "GTRADE_LABEL_HORIZON=20"
+if "%LBL%"=="3" set /p "GTRADE_LABEL_HORIZON=    horizon in bars [20]: "
 
 echo.
 echo [2] Proposer:
@@ -171,13 +206,33 @@ echo [4b] Score basis (WHICH number the objective above is applied to):
 echo     1 = raw ensemble Score (default)
 echo     2 = neural contribution (ensemble minus a CatBoost-only run)
 echo         Use 2 to hunt specifically for something that revives the neural
-echo         members. Four attempts have measured flat or negative there, so the
-echo         evidence points at the labeling as the ceiling - pair it with a
-echo         labeling change rather than running it as a default.
+echo         members. On the qd mode it only bites together with [4c]=2: under
+echo         the cb screen the nets never train during the search, so basis 2
+echo         re-scores the final gate while the elites are still picked by
+echo         CatBoost alone. That is why earlier neural runs read flat.
+echo         Basis 2 is a DIFFERENCE, so an axis that helps both learners equally
+echo         (weighting, labeling, folds) reads as zero on it. Use basis 1 there.
 set "BAS=1"
 set /p "BAS=    choice [1]: "
 set "GTRADE_AR_SCORE_BASIS="
 if "%BAS%"=="2" set "GTRADE_AR_SCORE_BASIS=neural"
+
+echo.
+echo [4c] Search screen (qd mode: what ONE illumination step trains):
+echo     1 = cb   - CatBoost-only over the selection assets (default, ~45s/step).
+echo                The nets are stubbed out at 0.5 and never train, so the
+echo                search cannot see them and is free to win by starving them.
+echo     2 = tier - the 4-asset half-epoch ensemble train (~550s/step, ~12x).
+echo                A real train, nets included, so the search can finally
+echo                optimize them. Pair with [4b]=2.
+set "QDS=1"
+set /p "QDS=    choice [1]: "
+set "GTRADE_AR_QD_SCREEN=cb"
+set "GTRADE_AR_TIER=1"
+REM  Picking tier also switches the gate's tier stage OFF: it would retrain
+REM  exactly the filter the search has already applied to every elite.
+if "%QDS%"=="2" set "GTRADE_AR_QD_SCREEN=tier"
+if "%QDS%"=="2" set "GTRADE_AR_TIER=0"
 
 echo.
 echo [5] Chronos forecast features?  (needs setup - see top of this file)
@@ -196,7 +251,12 @@ echo [6] Research wiki?  (compounding findings; uses the LLM backend)
 echo     1 = off (default)   2 = on
 set "WIKI=1"
 set /p "WIKI=    choice [1]: "
-set "GTRADE_AR_WIKI="
+REM  "0", not empty. `set "VAR="` DELETES the variable in cmd, and auto_research
+REM  then calls load_dotenv(), which fills a MISSING key from .env - where
+REM  GTRADE_AR_WIKI=1. So the empty form silently ran the wiki (and its gemma4
+REM  calls) on every run that answered "off" here. An explicit falsy value is
+REM  present in the environment, so load_dotenv leaves it alone.
+set "GTRADE_AR_WIKI=0"
 if "%WIKI%"=="2" set "GTRADE_AR_WIKI=1"
 
 echo.
@@ -210,10 +270,12 @@ if "%RL%"=="2" set "GTRADE_AR_RL=1"
 
 echo.
 echo ------------------------------------------------------------
-echo   axes=%GTRADE_AR_AXES%  proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
+echo   axes=%GTRADE_AR_AXES%  label=%GTRADE_LABEL_MODE%/%GTRADE_LABEL_HORIZON%
+echo   proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
 echo   model=%GTRADE_AR_LLM_MODEL%  maxtok=%GTRADE_AR_LLM_MAX_TOKENS%  timeout=%GTRADE_AR_LLM_TIMEOUT%
 echo   chronos=%GTRADE_CHRONOS%  wiki=%GTRADE_AR_WIKI%  reflect=%GTRADE_AR_REFLECT%
 echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%  basis=%GTRADE_AR_SCORE_BASIS%  rl=%GTRADE_AR_RL%
+echo   qd_screen=%GTRADE_AR_QD_SCREEN%  gate_tier=%GTRADE_AR_TIER%  train_seed=%GTRADE_SEED%
 echo ------------------------------------------------------------
 set "GO=Y"
 set /p "GO=Start? [Y/n]: "

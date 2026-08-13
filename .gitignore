@@ -34,6 +34,11 @@ market_data/
 *.log.*
 catboost_info/
 
+# Safety copies taken before editing local research state (_ar_tried.json and
+# friends). They hold the same strategy data as the originals, so they must not
+# reach a public remote either.
+*.bak
+
 # Backups & exports
 backups/
 exports/
@@ -78,10 +83,12 @@ ab_chronos.py
 ab_objective.py
 ab_foundation.py
 ab_genomes.py
+ab_noise.py
 # companion test of the local ab_labeling.py: keep it out of Git too, else CI
 # checks out the test without the module and the unguarded import fails collection.
 tests/test_ab_labeling.py
 tests/test_ab_objective.py
+tests/test_ab_noise.py
 train_chunked.py
 _chunk_progress.txt
 _chunk_quality.json
