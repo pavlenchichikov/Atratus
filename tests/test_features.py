@@ -558,7 +558,7 @@ class TestLabelSpan:
 
     def test_rel_median_span_is_one(self):
         close = self._bars()
-        tgt, span = make_target(close, "rel_median", window=10, with_span=True)
+        _tgt, span = make_target(close, "rel_median", window=10, with_span=True)
         assert (span.dropna() == 1.0).all()
 
     def test_triple_barrier_span_is_bars_to_touch(self):
@@ -570,9 +570,9 @@ class TestLabelSpan:
         idx = pd.date_range("2024-01-01", periods=120, freq="D")
         close = pd.Series(100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 120))),
                           index=idx)
-        tgt, span = make_target(close, "triple_barrier", high=close, low=close,
-                                horizon=20, barrier_k=1.0, vol_window=10,
-                                with_span=True)
+        _tgt, span = make_target(close, "triple_barrier", high=close, low=close,
+                                 horizon=20, barrier_k=1.0, vol_window=10,
+                                 with_span=True)
         resolved = span.dropna()
         assert len(resolved) > 50
         assert (resolved >= 1).all()
