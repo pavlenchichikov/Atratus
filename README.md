@@ -160,14 +160,19 @@ a working default, so pressing Enter through it is a valid run.
 
 | Prompt | What it decides |
 | --- | --- |
-| Action | `1` searches for new candidates; `2` re-gates candidates already stored, reusing their cached trainings |
-| Mode | `qd` is the flagship (MAP-Elites over the whole genome). The named axes search one lever at a time |
-| Proposer | `1` evolutionary needs nothing. `2` local Ollama, `3` Anthropic, `4` OpenAI |
-| Budget | How many NEW candidates this run. Past candidates are never re-tested |
-| Objective | How per-asset lifts become one number. `mean` by default; `cvar` and `min` optimize the worst assets instead of the average |
-| Score basis | `1` raw ensemble Score, `2` the neural contribution, `3` the nets' own AUC. See below |
-| Illumination | Not a prompt: `GTRADE_AR_ILLUM` in the launcher. `cb` (default) illuminates the QD archive on the CatBoost-only screen, `full` on real nets. See below |
-| Wiki, RL scheduler | Optional, off by default, described above |
+| `[0]` Action | `1` searches for new candidates; `2` re-gates candidates already stored, reusing their cached trainings |
+| `[1]` Mode | `1` qd, the flagship MAP-Elites over the whole genome. `2` features, `3` labeling and pruning, `4` hyper / nets / thresholds / regime, `5` your own axes list. Axes search one lever at a time and do NOT compose, so a list runs them in sequence rather than together |
+| `[1a]` Label | The label the whole run uses - the base and every candidate alike - so this is what decides which questions the run can even ask. `1` next-bar direction, `2` triple-barrier at 20 bars, `3` triple-barrier at a horizon you type. The `weighting` axis is a no-op under `1`: a next-bar label spans a single bar, the uniqueness weights come out all ones, and every candidate equals the base |
+| `[2]` Proposer | `1` evolutionary, needs nothing. `2` local Ollama, `3` Anthropic, `4` OpenAI. Each then asks for a model name (`auto` picks the largest installed Ollama model) |
+| LLM only: max tokens | Cap on one reply, `0` for none. A reasoning model needs room; too small a cap truncates the proposal into an unusable one |
+| LLM only: timeout | Seconds for ONE call, `0` for no limit. A timeout is not retried, so a value that is too small quietly costs the whole LLM arm for the run. The 600s SDK default is short for a large local model |
+| LLM only: reflect | `2` makes the model first write one line on why the recent experiments failed, then propose with that in front of it. One extra call per step |
+| `[3]` Budget | How many NEW candidates this run. Past candidates are never re-tested |
+| `[4]` Objective | How per-asset lifts become one number. `mean` by default; `cvar` and `min` optimize the worst assets instead of the average. Six options, table below |
+| `[4b]` Score basis | `1` raw ensemble Score, `2` the neural contribution, `3` the nets' own AUC. See below |
+| `[5]` Research wiki | `2` folds this run's findings into the knowledge base under `_ar_wiki/` and lets the proposer read it. Uses the LLM backend, so it costs one call at the end. Off by default |
+| `[6]` RL scheduler | `2` lets the bandit allocate the budget across child sources instead of drawing uniformly. Off by default; it never affects what passes the gate |
+| Illumination | Not a prompt: `GTRADE_AR_ILLUM` in the launcher's knobs block. `cb` (default) illuminates the QD archive on the CatBoost-only screen, `full` on real nets. See below |
 
 **Choosing the objective.** Every candidate produces one Score delta per
 held-out asset. The objective is how those numbers become the single value the
@@ -739,14 +744,19 @@ $ python predict.py
 
 | Вопрос | Что определяет |
 | --- | --- |
-| Action | `1` ищет новых кандидатов; `2` перегейчивает уже сохранённых, переиспользуя их закешированные обучения |
-| Mode | `qd` - флагман (MAP-Elites по всему геному). Именованные оси ищут по одному рычагу за раз |
-| Proposer | `1` эволюционный, ничего не требует. `2` локальная Ollama, `3` Anthropic, `4` OpenAI |
-| Budget | Сколько НОВЫХ кандидатов за этот прогон. Прошлые никогда не перепроверяются |
-| Objective | Как пер-активные приросты сводятся в одно число. По умолчанию `mean`; `cvar` и `min` оптимизируют худшие активы вместо среднего |
-| Score basis | `1` сырой Score ансамбля, `2` вклад нейросетей, `3` собственный AUC сетей. См. ниже |
-| Illumination | Не вопрос меню: `GTRADE_AR_ILLUM` в лаунчере. `cb` (по умолчанию) наполняет QD-архив по скрину только на CatBoost, `full` - на живых сетях. См. ниже |
-| Wiki, RL scheduler | Опциональные, по умолчанию выключены, описаны выше |
+| `[0]` Action | `1` ищет новых кандидатов; `2` перегейчивает уже сохранённых, переиспользуя их закешированные обучения |
+| `[1]` Mode | `1` qd - флагман, MAP-Elites по всему геному. `2` features, `3` labeling и pruning, `4` hyper / nets / thresholds / regime, `5` свой список осей. Оси ищут по одному рычагу за раз и НЕ комбинируются: список прогоняет их последовательно, а не совместно |
+| `[1a]` Label | Лейбл всего прогона - и базы, и каждого кандидата, - то есть именно он определяет, какие вопросы прогон вообще способен задать. `1` направление на следующий бар, `2` тройной барьер на 20 барах, `3` тройной барьер с вашим горизонтом. Ось `weighting` под вариантом `1` бессмысленна: лейбл на один бар даёт веса уникальности из одних единиц, и каждый кандидат равен базе |
+| `[2]` Proposer | `1` эволюционный, ничего не требует. `2` локальная Ollama, `3` Anthropic, `4` OpenAI. Каждый затем спрашивает имя модели (`auto` берёт самую крупную установленную модель Ollama) |
+| Только LLM: max tokens | Потолок одного ответа, `0` снимает. Рассуждающей модели нужен запас; слишком маленький потолок обрезает предложение до неработающего |
+| Только LLM: timeout | Секунды на ОДИН вызов, `0` снимает лимит. Таймаут не повторяется, поэтому слишком малое значение тихо стоит всей LLM-руки на прогон. Дефолтные 600 с SDK малы для крупной локальной модели |
+| Только LLM: reflect | `2` заставляет модель сперва написать строку о том, почему провалились недавние эксперименты, и предлагать уже с ней перед глазами. Один лишний вызов на шаг |
+| `[3]` Budget | Сколько НОВЫХ кандидатов за этот прогон. Прошлые никогда не перепроверяются |
+| `[4]` Objective | Как пер-активные приросты сводятся в одно число. По умолчанию `mean`; `cvar` и `min` оптимизируют худшие активы вместо среднего. Шесть вариантов, таблица ниже |
+| `[4b]` Score basis | `1` сырой Score ансамбля, `2` вклад нейросетей, `3` собственный AUC сетей. См. ниже |
+| `[5]` Research wiki | `2` вплетает находки этого прогона в базу знаний под `_ar_wiki/` и даёт предлагателю её читать. Работает через LLM-бэкенд, то есть стоит одного вызова в конце. По умолчанию выключено |
+| `[6]` RL scheduler | `2` отдаёт распределение бюджета по источникам детей бандиту вместо равномерного розыгрыша. По умолчанию выключено; на то, что проходит гейт, не влияет никогда |
+| Illumination | Не вопрос меню: `GTRADE_AR_ILLUM` в блоке ручных настроек лаунчера. `cb` (по умолчанию) наполняет QD-архив по скрину только на CatBoost, `full` - на живых сетях. См. ниже |
 
 **Как выбирать objective.** Каждый кандидат даёт по одной дельте Score на
 каждый отложенный актив. Objective - это способ свести эти числа к одному,
