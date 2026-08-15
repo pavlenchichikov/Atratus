@@ -445,76 +445,6 @@ def add_macro_features(df: pd.DataFrame, engine) -> pd.DataFrame:
     return df.reset_index()
 
 
-CHRONOS_CACHE_TABLE = "chronos_cache"
-CHRONOS_COLS = ["chronos_ret", "chronos_spread", "chronos_dir"]
-
-
-def _chronos_on():
-    return (os.getenv("GTRADE_CHRONOS") or "").strip() in ("1", "true", "True")
-
-
-def _chronos_model(engine, table):
-    """Which cached Chronos model to read, determined by the SYSTEM so there is no
-    tiny/base to configure: GTRADE_CHRONOS_MODEL if the user set one, else the model
-    actually present in the cache for this asset (the single cached model, or the one
-    with the most rows if several). None when nothing is cached."""
-    override = os.getenv("GTRADE_CHRONOS_MODEL")
-    if override:
-        from core.chronos_features import resolve_model
-        return resolve_model(override)
-    try:
-        cnt = pd.read_sql(
-            f"SELECT model, COUNT(*) c FROM {CHRONOS_CACHE_TABLE} WHERE asset = ? GROUP BY model "
-            "ORDER BY c DESC", engine, params=(table,))
-        models = [m for m in cnt["model"].tolist() if m]
-        return models[0] if models else None
-    except Exception:
-        return None
-
-
-def add_chronos_features(df, table, engine):
-    """LEFT-JOIN cached Chronos forecast columns onto df by date, when GTRADE_CHRONOS
-    is set and a cache exists for `table`. The model is auto-detected from the cache (see
-    _chronos_model), so precomputing one model is enough - no GTRADE_CHRONOS_MODEL needed.
-    Off / no cache - df unchanged (so the production feature space and feature_version are
-    untouched). The column names enter training only via GTRADE_EXTRA_FEATURES."""
-    if not _chronos_on():
-        return df
-    model = _chronos_model(engine, table)
-    try:
-        if model is not None:
-            q = "SELECT date, {} FROM {} WHERE asset = ? AND model = ?".format(
-                ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
-            cache = pd.read_sql(q, engine, params=(table, model))
-        else:
-            # legacy cache without a model column (pre-migration) - un-filtered read
-            q = "SELECT date, {} FROM {} WHERE asset = ?".format(
-                ",".join(CHRONOS_COLS), CHRONOS_CACHE_TABLE)
-            cache = pd.read_sql(q, engine, params=(table,))
-    except Exception:
-        return df                                   # no cache table - no-op
-    if cache.empty:
-        return df
-    cache["date"] = pd.to_datetime(cache["date"])
-    cache = cache.set_index("date")
-    cache = cache[~cache.index.duplicated(keep="last")]   # unique right index - no row multiplication
-    cache.index = cache.index.normalize()
-    # Follow the sibling add_* convention: in the pipeline df carries a Date/date
-    # COLUMN (each add_* does set_index(date) - work - reset_index), so join on
-    # that column and restore the frame. Without this, a df that arrives with a
-    # RangeIndex after a sibling reset_index would join dates-vs-integers and yield
-    # SILENTLY all-NaN Chronos columns. When df is already date-indexed (isolated
-    # use), join directly.
-    date_col = 'Date' if 'Date' in df.columns else ('date' if 'date' in df.columns else None)
-    if date_col is None:
-        df.index = pd.to_datetime(df.index).normalize()
-        return df.join(cache[CHRONOS_COLS], how="left")
-    df = df.set_index(date_col)
-    df.index = pd.to_datetime(df.index).normalize()
-    df = df.join(cache[CHRONOS_COLS], how="left")
-    return df.reset_index()
-
-
 _CROSS_LAG_FEATURES = ['lead_sp500_ret', 'lead_vix_ret', 'lead_btc_ret']
 
 
@@ -570,8 +500,7 @@ def build_features(df_raw, table, engine):
     forgotten at serve - which is exactly how the DSL step came to exist in the
     trainer and in none of the six other callers.
 
-    With nothing adopted this is byte-identical to the old five-step chains:
-    add_chronos_features returns df unchanged while GTRADE_CHRONOS is unset, and
+    With nothing adopted this is byte-identical to the old five-step chain:
     add_dsl_features with no specs does nothing.
     """
     df = engineer_features(df_raw)
@@ -579,7 +508,6 @@ def build_features(df_raw, table, engine):
     df = add_crossasset_features(df, table, engine)
     df = add_macro_features(df, engine)
     df = add_cross_lag_features(df, engine)
-    df = add_chronos_features(df, table, engine)
     return add_dsl_features(df, engine, load_dsl_specs())
 
 

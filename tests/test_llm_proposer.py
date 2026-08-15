@@ -428,3 +428,30 @@ def test_menu_settings_win_over_the_env_file(monkeypatch):
     from dotenv import load_dotenv
     load_dotenv()
     assert lp._llm_timeout() == 120.0
+
+
+def test_model_override_treats_auto_as_unset(monkeypatch):
+    """The launcher cannot emit a blank: cmd's  set "VAR="  DELETES the variable
+    and load_dotenv then refills it from .env. That is how gemma4:26b (17 GB)
+    stayed pinned on a 15.7 GB machine through every menu choice and crashed
+    llama-server on every wiki compile (2026-08-14). "auto" is the sentinel."""
+    from core.llm_proposer import model_override
+    for blank in ("auto", "AUTO", " auto ", "", "   "):
+        monkeypatch.setenv("GTRADE_AR_LLM_MODEL", blank)
+        assert model_override() is None, blank
+    monkeypatch.delenv("GTRADE_AR_LLM_MODEL", raising=False)
+    assert model_override() is None
+    monkeypatch.setenv("GTRADE_AR_LLM_MODEL", "gemma4:12b")
+    assert model_override() == "gemma4:12b"
+
+
+def test_the_launcher_never_emits_a_blank_model(monkeypatch):
+    """Positive control on the .bat itself: a blank there is silently overridden
+    by .env, so the launcher must set a real value."""
+    import io
+    import os
+    bat = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "auto_research.bat")
+    text = io.open(bat, encoding="utf-8", errors="replace").read()
+    assert 'set "GTRADE_AR_LLM_MODEL="' not in text
+    assert 'set "GTRADE_AR_LLM_MODEL=auto"' in text

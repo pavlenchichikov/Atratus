@@ -723,21 +723,49 @@ def test_qd_save_load_roundtrip(tmp_path, monkeypatch):
     assert v["genome"].label_window == 20
 
 
-def _qd_illumination_trains(monkeypatch, mode, real_archive=False):
-    """Record what run_qd's illumination phase actually trains: (subset, env)
-    pairs for every call that is not the final held-out gate. real_archive lets
-    the real load/save run, so a test can assert which file they touch."""
-    if not real_archive:
-        monkeypatch.setattr(ar, "_qd_load", dict)
-        monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+def test_qd_illumination_full_trains_real_nets(monkeypatch):
+    """GTRADE_AR_ILLUM=full moves illumination onto the tier assets with real
+    nets, so the archive is no longer a pure CatBoost selection. Without it the
+    search can never find a net lever: under the CB screen every neural member is
+    a constant 0.5, so a net-only mutation scores exactly like its parent."""
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
     monkeypatch.setattr(ar, "BUDGET", 2, raising=False)
     monkeypatch.setenv("GTRADE_AR_QD_INIT", "2")
     monkeypatch.setenv("GTRADE_AR_QD_FINAL", "1")
-    monkeypatch.setenv("GTRADE_AR_TIER", "0")        # isolate the search phase
-    if mode is None:
-        monkeypatch.delenv("GTRADE_AR_QD_SCREEN", raising=False)
-    else:
-        monkeypatch.setenv("GTRADE_AR_QD_SCREEN", mode)
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "full")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    import random as _r
+    _r.seed(0)
+    seen = []
+
+    def fake_train(subset, env):
+        if subset != ar.HELDOUT_ASSETS:
+            seen.append((subset, dict(env)))
+        return [{"Asset": a, "Score": 1.0, "Net_AUC": 0.6} for a in subset.split(",")]
+
+    ar.run_qd(train_fn=fake_train)
+    assert seen, "illumination trained nothing"
+    for subset, env in seen:
+        assert subset == ar.tier_assets()
+        assert "GTRADE_SCREEN_ONLY" not in env, "the nets must be real here"
+        assert env.get("GTRADE_EPOCHS_LSTM") == ar.TIER_ENV["GTRADE_EPOCHS_LSTM"]
+
+
+def test_qd_illumination_never_trains_a_net(monkeypatch):
+    """DEFAULT (GTRADE_AR_ILLUM unset) stays on the CatBoost-only screen: it is
+    the one training unit that reproduces bit-for-bit on this GPU (measured
+    2026-08-14), so a net-training illumination on the Score basis would rank
+    noise. Opt in with ILLUM=full + a net basis, see the test above."""
+    monkeypatch.delenv("GTRADE_AR_ILLUM", raising=False)
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setattr(ar, "BUDGET", 2, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "2")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "1")
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "neural")   # must not bite here
     import random as _r
     _r.seed(0)
     seen = []
@@ -748,83 +776,10 @@ def _qd_illumination_trains(monkeypatch, mode, real_archive=False):
         return [{"Asset": a, "Score": 1.0} for a in subset.split(",")]
 
     ar.run_qd(train_fn=fake_train)
-    return seen
-
-
-def test_qd_archive_is_namespaced_per_illumination(monkeypatch, tmp_path):
-    # A cb-basis fitness and a tier-basis fitness are different scales; sharing
-    # one archive would make archive_put reject tier children on scale alone.
-    default = str(tmp_path / "_qd_archive.json")
-    monkeypatch.setattr(ar, "_QD_ARCHIVE_PATH", default)
-    monkeypatch.delenv("GTRADE_AR_QD_SCREEN", raising=False)
-    monkeypatch.delenv("GTRADE_AR_SCORE_BASIS", raising=False)
-    assert ar._qd_archive_path() == default          # the legacy file is untouched
-    seen = {ar._qd_archive_path()}
-    for mode, basis in (("tier", "raw"), ("tier", "neural"), ("cb", "neural")):
-        monkeypatch.setenv("GTRADE_AR_QD_SCREEN", mode)
-        monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", basis)
-        p = ar._qd_archive_path()
-        assert p != default and p.endswith(".json")
-        seen.add(p)
-    assert len(seen) == 4                            # every setup gets its own file
-
-
-def test_qd_tier_run_does_not_touch_the_cb_archive(monkeypatch, tmp_path):
-    """The end-to-end guard: a tier run must neither read nor overwrite the
-    existing CatBoost-illuminated archive."""
-    default = tmp_path / "_qd_archive.json"
-    default.write_text(json.dumps(
-        {"9_9_9": {"genome": ar.asdict(ar.Genome()), "fitness": 99.0}}), encoding="utf-8")
-    monkeypatch.setattr(ar, "_QD_ARCHIVE_PATH", str(default))
-    before = default.read_text(encoding="utf-8")
-    _qd_illumination_trains(monkeypatch, "tier", real_archive=True)
-    # the CatBoost-scale archive is neither overwritten nor inherited
-    assert default.read_text(encoding="utf-8") == before
-    tier = tmp_path / "_qd_archive_tier_raw.json"
-    assert tier.exists(), "the tier run must build its own archive"
-    assert "9_9_9" not in json.loads(tier.read_text(encoding="utf-8"))
-
-
-def test_qd_screen_mode_env(monkeypatch):
-    monkeypatch.delenv("GTRADE_AR_QD_SCREEN", raising=False)
-    assert ar.qd_screen_mode() == "cb"
-    monkeypatch.setenv("GTRADE_AR_QD_SCREEN", "tier")
-    assert ar.qd_screen_mode() == "tier"
-    monkeypatch.setenv("GTRADE_AR_QD_SCREEN", "nonsense")
-    assert ar.qd_screen_mode() == "cb"
-
-
-def test_qd_cb_mode_never_trains_a_net(monkeypatch):
-    # The default must stay exactly as it was: CatBoost-only over SELECTION_ASSETS.
-    seen = _qd_illumination_trains(monkeypatch, None)
     assert seen, "illumination trained nothing"
     for subset, env in seen:
         assert subset == ar.SELECTION_ASSETS
         assert env.get("GTRADE_SCREEN_ONLY") == "1"
-
-
-def test_qd_tier_mode_trains_the_nets_on_tier_assets(monkeypatch):
-    seen = _qd_illumination_trains(monkeypatch, "tier")
-    assert seen, "illumination trained nothing"
-    for subset, env in seen:
-        assert subset == ar.tier_assets()
-        # the point of the mode: no stub flag, so the nets really train
-        assert "GTRADE_SCREEN_ONLY" not in env
-        assert env.get("GTRADE_EPOCHS_LSTM") == ar.TIER_ENV["GTRADE_EPOCHS_LSTM"]
-
-
-def test_qd_tier_mode_honours_the_neural_basis(monkeypatch):
-    # basis=neural pairs each tier train with a CB-only tier train, so the search
-    # fitness becomes the neural contribution instead of the raw ensemble Score.
-    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "neural")
-    seen = _qd_illumination_trains(monkeypatch, "tier")
-    stubbed = [e for _s, e in seen if e.get("GTRADE_SCREEN_ONLY") == "1"]
-    full = [e for _s, e in seen if "GTRADE_SCREEN_ONLY" not in e]
-    assert stubbed and full and len(stubbed) == len(full)
-    # and the CB screen mode must NOT pay for that pair (contribution is 0 there)
-    monkeypatch.setenv("GTRADE_AR_QD_SCREEN", "cb")
-    cb_seen = _qd_illumination_trains(monkeypatch, "cb")
-    assert all(e.get("GTRADE_SCREEN_ONLY") == "1" for _s, e in cb_seen)
 
 
 def test_run_qd_illuminates_and_gates(monkeypatch):
@@ -2137,3 +2092,224 @@ class TestWeightingAxis:
         # returning False regardless of it.
         assert ar.valid(ar.Genome(cb_uniqueness=1), ["rsi"], 1) is True
         assert ar.valid(ar.Genome(cb_uniqueness=7), ["rsi"], 1) is False
+
+
+def test_heldout_set_is_selectable(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_HELDOUT", raising=False)
+    assert ar.heldout_assets() == ar.PROD_HELDOUT
+    monkeypatch.setenv("GTRADE_AR_HELDOUT", "neural")
+    assert ar.heldout_assets() == ar.NEURAL_HELDOUT
+    monkeypatch.setenv("GTRADE_AR_HELDOUT", "BTC,GOLD")
+    assert ar.heldout_assets() == "BTC,GOLD"
+
+
+def test_the_two_heldout_sets_are_actually_different(monkeypatch):
+    """The neural set exists to carry more neural weight than the production one.
+    If they ever converge, the diagnostic has stopped diagnosing anything."""
+    prod = set(ar.PROD_HELDOUT.split(","))
+    neural = set(ar.NEURAL_HELDOUT.split(","))
+    assert len(prod) == len(ar.PROD_HELDOUT.split(","))      # no duplicates
+    assert len(neural) == len(ar.NEURAL_HELDOUT.split(","))
+    assert len(neural - prod) >= 5, "neural set barely differs from production"
+    # the measured net-reliant leaders must be in the neural set and absent from prod
+    for a in ("AFLT", "IMOEX", "LKOH"):
+        assert a in neural and a not in prod
+
+
+def test_net_auc_basis_rekeys_rows_and_drops_unmeasured(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    rows = [{"Asset": "A", "Score": 9.9, "Net_AUC": 0.61},
+            {"Asset": "B", "Score": 1.0, "Net_AUC": None},   # no usable AUC
+            {"Asset": "C", "Score": 2.0}]                    # older report, no column
+    got = ar.score_rows("A,B,C", {}, lambda s, e: rows)
+    assert got == [{"Asset": "A", "Score": 0.61}]
+    # one train only: the basis must not cost an extra CatBoost-only run
+    calls = []
+    ar.score_rows("A", {}, lambda s, e: (calls.append(e), rows)[1])
+    assert len(calls) == 1
+
+
+def test_net_auc_basis_uses_an_auc_scale_floor(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_ADOPT_AUC", raising=False)
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert ar._adopt_floor("mean") == ar.ADOPT_MEAN_SCORE_DELTA
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    assert ar._adopt_floor("mean") == 0.005
+    # a realistic AUC gain adopts on net_auc and would be rejected on Score units
+    assert ar.adopt_ok(True, 0.012, "mean", None) is True
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert ar.adopt_ok(True, 0.012, "mean", None) is False
+
+
+def test_neural_floor_is_off_on_the_net_auc_basis(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_NEURAL_FLOOR", raising=False)
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert ar.adopt_ok(True, 5.0, "mean", -2.38) is False      # vetoed, as designed
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    # same noisy Score-scale neural_lift must NOT veto here: the basis already
+    # measures the nets, and neural_lift carries the instability we escaped
+    assert ar.adopt_ok(True, 0.012, "mean", -2.38) is True
+
+
+def test_qd_scheduler_does_not_offer_the_nets_arm(monkeypatch):
+    """A net-gene child is invisible to the CatBoost-only screen, so picking that
+    arm spends a screen train to book a guaranteed archive miss and teaches the
+    bandit a lie. Net genes belong to the cb_blind axes instead."""
+    monkeypatch.setenv("GTRADE_AR_RL", "1")
+    seen = {}
+
+    class _Sched:
+        def choose(self, available, phase):
+            seen["available"] = list(available)
+            return "feat", False
+
+        def update(self, *a, **k):
+            pass
+
+    ctl = ar._RlController.__new__(ar._RlController)
+    ctl.sched = _Sched()
+    ctl.disabled = False
+    ctl.origin = {}
+    ctl.monitor = type("M", (), {"record": lambda *a: None})()
+    ctl._pick_parent = lambda archive, rng: (ar.Genome(), "sig")
+    ctl._emit = lambda arm, *a: ar.Genome(drops=["vol_z"])
+    archive = {"0_0_0": {"genome": ar.Genome(), "fitness": 1.0}}
+    ctl.next_child(archive, ["vol_z", "rsi"], ["rsi"])
+
+    assert "nets" not in seen["available"]
+    # the arms that the screen CAN judge are still offered
+    assert {"feat", "hyper", "tuning"} <= set(seen["available"])
+
+
+def test_net_gain_basis_is_the_ensemble_lift_over_catboost(monkeypatch):
+    """What neural_lift always meant, on a rank statistic. Assets missing either
+    column are dropped, not scored 0 - a missing measurement is not a loss."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_gain")
+    rows = [{"Asset": "A", "Score": 9.9, "CB_AUC": 0.650, "Ens_AUC": 0.670},
+            {"Asset": "B", "Score": 1.0, "CB_AUC": 0.600},          # no ensemble
+            {"Asset": "C", "Score": 2.0, "Ens_AUC": 0.700},         # no CatBoost
+            {"Asset": "D", "Score": 3.0}]                           # older report
+    got = ar.score_rows("A,B,C,D", {}, lambda s, e: rows)
+    assert len(got) == 1 and got[0]["Asset"] == "A"
+    assert abs(got[0]["Score"] - 0.02) < 1e-9
+    # one train only: re-keying must not cost a second CatBoost-only run
+    calls = []
+    ar.score_rows("A", {}, lambda s, e: (calls.append(e), rows)[1])
+    assert len(calls) == 1
+
+
+def test_net_gain_can_be_negative_when_the_nets_hurt(monkeypatch):
+    """The direction that matters for a veto: an ensemble worse than CatBoost
+    alone must read negative, not be clamped or dropped."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_gain")
+    rows = [{"Asset": "A", "CB_AUC": 0.66, "Ens_AUC": 0.63}]
+    got = ar.score_rows("A", {}, lambda s, e: rows)
+    assert got[0]["Score"] < 0
+
+
+def test_both_auc_bases_share_the_auc_floor_and_disable_the_score_veto(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_ADOPT_AUC", raising=False)
+    for basis in ("net_auc", "net_gain"):
+        monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", basis)
+        assert ar._adopt_floor("mean") == 0.005, basis
+        # a Score-scale neural_lift must not veto on either AUC basis
+        assert ar.adopt_ok(True, 0.012, "mean", -2.38) is True, basis
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert ar._adopt_floor("mean") == ar.ADOPT_MEAN_SCORE_DELTA
+    assert ar.adopt_ok(True, 0.012, "mean", -2.38) is False
+
+
+def test_an_unknown_basis_falls_back_to_raw(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_gian")   # typo
+    assert ar._score_basis() == "raw"
+
+
+def test_ens_auc_basis_is_a_level_not_a_difference(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_auc")
+    rows = [{"Asset": "A", "Score": 9.9, "CB_AUC": 0.65, "Ens_AUC": 0.67},
+            {"Asset": "B", "Score": 1.0, "CB_AUC": 0.60}]          # no ensemble
+    got = ar.score_rows("A,B", {}, lambda s, e: rows)
+    assert got == [{"Asset": "A", "Score": 0.67}]
+
+
+def test_tier_gate_uses_the_active_basis(monkeypatch):
+    """The tier stage trains its OWN mini rows and used to compare them on the raw
+    Score whatever basis was selected. That silently pruned candidates on the one
+    metric measured to be unusable here, which is what killed vol_z on 2026-08-14
+    at -0.135 against a same-config noise of 0.64."""
+    rows = [{"Asset": "BTC", "Score": 9.9, "CB_AUC": 0.65, "Ens_AUC": 0.67}]
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert ar.rekey_rows(rows)[0]["Score"] == 9.9
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_auc")
+    assert ar.rekey_rows(rows)[0]["Score"] == 0.67
+
+    # and the tier base itself, not just the candidate side
+    monkeypatch.setattr(ar, "tier_assets", lambda: "BTC")
+    monkeypatch.setattr(ar, "tier_env", lambda e: e)
+    assert ar._tier_base(lambda s, e: rows)[0]["Score"] == 0.67
+
+
+def test_passes_tier_compares_both_sides_on_the_same_basis(monkeypatch):
+    """A candidate whose raw Score collapses but whose ensemble AUC improves must
+    pass on ens_auc. Reading one side raw and the other re-keyed is worse than
+    either alone."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_auc")
+    monkeypatch.setattr(ar, "tier_assets", lambda: "BTC")
+    monkeypatch.setattr(ar, "tier_env", lambda e: e)
+    monkeypatch.setattr(ar.ar_memory, "cache_get", lambda k: None)
+    monkeypatch.setattr(ar.ar_memory, "cache_put", lambda k, v: None)
+
+    base = ar._tier_base(lambda s, e: [{"Asset": "BTC", "Score": 9.9, "Ens_AUC": 0.65}])
+    cand = [{"Asset": "BTC", "Score": 1.0, "Ens_AUC": 0.68}]   # raw down, AUC up
+    passed, delta = ar._passes_tier({}, "k", base, "mean", train_fn=lambda s, e: cand)
+    assert passed is True
+    assert abs(delta - 0.03) < 1e-9
+
+
+def test_tier_retrains_when_the_cache_predates_the_basis(monkeypatch):
+    """The mini cache holds RAW rows so one train is reusable across bases, but a
+    set trained before Ens_AUC existed re-keys to NOTHING. Passing that through
+    as "no opinion" spends a full evaluation on an unmeasured candidate - it must
+    retrain instead. 13 of 19 cached 4-asset entries were in that state on
+    2026-08-14."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_auc")
+    monkeypatch.setattr(ar, "tier_assets", lambda: "BTC")
+    monkeypatch.setattr(ar, "tier_env", lambda e: e)
+    stale = [{"Asset": "BTC", "Score": 2.0}]                      # no Ens_AUC
+    fresh = [{"Asset": "BTC", "Score": 2.0, "Ens_AUC": 0.70}]
+    monkeypatch.setattr(ar.ar_memory, "cache_get", lambda k: stale)
+    saved = {}
+    monkeypatch.setattr(ar.ar_memory, "cache_put", lambda k, v: saved.update(rows=v))
+    trained = {"n": 0}
+
+    def _train(subset, env):
+        trained["n"] += 1
+        return fresh
+
+    base = [{"Asset": "BTC", "Score": 9.9, "Ens_AUC": 0.65}]
+    passed, delta = ar._passes_tier({}, "k", ar.rekey_rows(base), "mean", train_fn=_train)
+    assert trained["n"] == 1, "stale cache must trigger a retrain, not a free pass"
+    assert saved["rows"] == fresh, "the retrained rows must replace the stale cache"
+    assert passed is True and abs(delta - 0.05) < 1e-9
+
+
+def test_tier_still_uses_a_cache_that_carries_the_basis(monkeypatch):
+    """Control: a usable cache must NOT trigger a retrain."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_auc")
+    monkeypatch.setattr(ar, "tier_assets", lambda: "BTC")
+    monkeypatch.setattr(ar, "tier_env", lambda e: e)
+    monkeypatch.setattr(ar.ar_memory, "cache_get",
+                        lambda k: [{"Asset": "BTC", "Score": 2.0, "Ens_AUC": 0.66}])
+    monkeypatch.setattr(ar.ar_memory, "cache_put", lambda k, v: None)
+    calls = {"n": 0}
+
+    def _train(subset, env):
+        calls["n"] += 1
+        return []
+
+    base = [{"Asset": "BTC", "Score": 9.9, "Ens_AUC": 0.65}]
+    passed, delta = ar._passes_tier({}, "k", ar.rekey_rows(base), "mean", train_fn=_train)
+    assert calls["n"] == 0
+    assert passed is True and abs(delta - 0.01) < 1e-9

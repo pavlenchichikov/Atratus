@@ -48,7 +48,38 @@ logger = get_logger("auto_research")
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 SELECTION_ASSETS = "SP500,NVDA,BTC,ETH,EURUSD,GBPJPY,GAS,AAPL,SBER,DAX"
-HELDOUT_ASSETS = "MSFT,GOLD,USDJPY,ADA,CAC40,XOM,GOOGL,SOL,SILVER,GBPUSD,NASDAQ,DXY,TNX,AIRBUS"
+
+# The production holdout: a deliberately mixed set, so an adoption decision is
+# taken on assets that look like the book as a whole.
+PROD_HELDOUT = "MSFT,GOLD,USDJPY,ADA,CAC40,XOM,GOOGL,SOL,SILVER,GBPUSD,NASDAQ,DXY,TNX,AIRBUS"
+
+# The NEURAL-DIAGNOSTIC holdout: the assets whose stacker actually leans on the
+# neural members. Measured 2026-08-14 from the |coef| shares in models/*_meta.pkl
+# (share of the stacker's absolute weight held by lstm+tf+tcn):
+#
+#     AFLT .69  IMOEX .62  LKOH .61  SBER .54  DOW .54  ...
+#     PROD_HELDOUT median .17, with ADA .05, MSFT .08, TNX .09, GOOGL .09
+#
+# A neural change measured on PROD_HELDOUT is measured mostly where the nets are
+# nearly irrelevant, which throws away effect size for nothing. This set exists
+# to make a neural effect VISIBLE, not to decide adoption: it is biased by
+# construction and over-represents RU equities, so a winner here still has to
+# clear the production holdout before it means anything.
+NEURAL_HELDOUT = "AFLT,IMOEX,LKOH,SBER,DOW,SILVER,XOM,GBPUSD,NASDAQ,BTC,EURUSD,AAPL,GAS,SOL"
+
+
+def heldout_assets():
+    """GTRADE_AR_HELDOUT: 'prod' (default) or 'neural' - see the two lists above.
+    Anything else is taken verbatim as a comma-separated asset list."""
+    v = (os.getenv("GTRADE_AR_HELDOUT") or "prod").strip()
+    if v.lower() == "prod":
+        return PROD_HELDOUT
+    if v.lower() == "neural":
+        return NEURAL_HELDOUT
+    return v
+
+
+HELDOUT_ASSETS = PROD_HELDOUT   # back-compat alias; live code calls heldout_assets()
 BUDGET = int(os.getenv("AR_BUDGET", "15"))
 ADOPT_MEAN_SCORE_DELTA = 0.5
 
@@ -176,9 +207,19 @@ def _objective():
 
 
 def _adopt_floor(objective="mean"):
-    """The practical-effect floor the objective value must beat to adopt. Score-scale
-    objectives (mean/min/median/cvar/trimmed_mean) use ADOPT_MEAN_SCORE_DELTA; the
+    """The practical-effect floor the objective value must beat to adopt.
+
+    The floor follows the UNITS of what is being reduced, so it depends on the
+    basis as well as the objective. On net_auc the values are areas under a
+    curve near 0.5, where a real move is a few thousandths; the Score floor of
+    0.5 there would demand an AUC gain no model can produce and reject
+    everything. Score-scale objectives use ADOPT_MEAN_SCORE_DELTA; the
     dimensionless 'sharpe' uses GTRADE_AR_ADOPT_SHARPE (default 0.5)."""
+    if _score_basis() in ("net_auc", "net_gain", "ens_auc"):
+        try:
+            return float(os.getenv("GTRADE_AR_ADOPT_AUC") or "0.005")
+        except ValueError:
+            return 0.005
     if objective == "sharpe":
         try:
             return float(os.getenv("GTRADE_AR_ADOPT_SHARPE") or "0.5")
@@ -193,7 +234,14 @@ def neural_floor():
 
     Always on the plain Score scale, never the objective's: neural_lift is
     computed with the "mean" reduction whatever GTRADE_AR_OBJECTIVE is, so the
-    dimensionless 'sharpe' floor would be comparing two different units."""
+    dimensionless 'sharpe' floor would be comparing two different units.
+
+    Switched OFF entirely on the net_auc basis. There the objective already IS
+    the neural read-out, so the clause would be redundant - and worse, harmful:
+    neural_lift is a Score difference and carries the Score's instability, so it
+    would veto good candidates on noise the basis was chosen to escape."""
+    if _score_basis() in ("net_auc", "net_gain", "ens_auc"):
+        return float("-inf")
     try:
         return float(os.getenv("GTRADE_AR_NEURAL_FLOOR")
                      or str(-ADOPT_MEAN_SCORE_DELTA))
@@ -347,46 +395,121 @@ def _heldout_eval(subset, env, full_fn, done_out=None):
     return full, contrib
 
 
-def qd_screen_mode():
-    """GTRADE_AR_QD_SCREEN: what one MAP-Elites illumination step trains.
-
-    'cb' (default, unchanged): the CatBoost-only screen over SELECTION_ASSETS.
-    Cheap, but the nets are stubbed out at 0.5 and never train, so every elite is
-    chosen on CatBoost alone and the search is free to win by starving the
-    sequence members. That is the structural reason a genome can arrive at the
-    gate with a strong Score and a negative neural_lift.
-
-    'tier': the tier ladder's env (4 assets, roughly half epochs) - a REAL
-    ensemble train, nets included, so the search can finally see them. Pair it
-    with GTRADE_AR_SCORE_BASIS=neural to make the search optimize the neural
-    contribution rather than merely tolerate it. Costs a tier train per step
-    instead of a CatBoost train, which is the whole price of the change.
-
-    The basis knob is deliberately ignored in 'cb' mode: with the nets stubbed
-    out, full minus CB-only is identically zero, so a neural basis there would
-    score every genome 0."""
-    m = (os.getenv("GTRADE_AR_QD_SCREEN") or "cb").strip().lower()
-    if m not in ("cb", "tier"):
-        logger.warning("unknown GTRADE_AR_QD_SCREEN %r, using cb", m)
-        return "cb"
-    return m
-
-
 def _score_basis():
-    """What the search scores: 'raw' (default) or 'neural' (neural contribution)."""
+    """What the search scores.
+
+    raw      the ensemble Score (default).
+    neural   the neural CONTRIBUTION, i.e. full Score minus a CatBoost-only run.
+             Still a Score, so it still carries the Score's instability.
+    net_auc  the fold-averaged AUC of the neural members on their own raw
+             probabilities (train_hybrid writes Net_AUC). This is the only
+             neural read-out that is measurable on this GPU: the Score is a
+             backtest of discrete signals behind a fold-admission threshold and
+             moves by whole points when the nets drift in the 4th decimal
+             (measured 2026-08-14), while AUC is a rank statistic and does not.
+    net_gain the ensemble's AUC MINUS CatBoost's own (train_hybrid writes
+             Ens_AUC and CB_AUC). This is what neural_lift was always trying to
+             ask - what do the nets ADD - on a rank statistic instead of a
+             backtest Score. Unlike net_auc it stays correct if the nets are
+             given a target other than direction, so it is the basis P3 needs.
+    ens_auc  the ENSEMBLE's own fold-averaged AUC. The right basis whenever a
+             candidate changes BOTH learners: net_gain would then reward simply
+             damaging CatBoost, since
+                 d(net_gain) = d(Ens_AUC) - d(CB_AUC)
+             and a candidate that removes a feature from CatBoost drives the
+             second term negative, inflating the score while the ensemble gets
+             worse. ens_auc asks the only question that matters there - did the
+             final ensemble end up ranking better - on the same stable scale.
+             DIFFERENT UNITS: all three AUC bases live near 0.5 and their deltas
+             are thousandths, so their adoption floor is GTRADE_AR_ADOPT_AUC,
+             not the Score floor."""
     b = (os.getenv("GTRADE_AR_SCORE_BASIS") or "raw").strip().lower()
-    if b not in ("raw", "neural"):
+    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc"):
         logger.warning("unknown GTRADE_AR_SCORE_BASIS %r, using raw", b)
         return "raw"
     return b
 
 
+def ens_auc_rows(rows):
+    """Re-key quality rows onto the ensemble's own AUC (a LEVEL, not a
+    difference), so a candidate that changes both learners is judged on where
+    the ensemble ends up."""
+    out = []
+    for r in rows:
+        v = r.get("Ens_AUC")
+        if v is None:
+            continue
+        try:
+            out.append({"Asset": r["Asset"], "Score": float(v)})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def net_gain_rows(rows):
+    """Re-key quality rows onto the ensemble's AUC gain over CatBoost alone.
+
+    A DIFFERENCE of two rank statistics, so a change that helps both learners
+    equally reads as zero here by construction - the same caveat the `neural`
+    basis carries, minus the Score's instability. Assets missing either column
+    are dropped rather than scored 0, which would read as a catastrophic loss
+    instead of a missing measurement."""
+    out = []
+    for r in rows:
+        e, c = r.get("Ens_AUC"), r.get("CB_AUC")
+        if e is None or c is None:
+            continue
+        try:
+            out.append({"Asset": r["Asset"], "Score": float(e) - float(c)})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def net_auc_rows(rows):
+    """Re-key quality rows onto Net_AUC so the whole agent (delta, objective,
+    Wilcoxon, gate) keeps working unchanged on the new basis. Assets whose
+    training produced no usable AUC are dropped rather than scored 0, which
+    would read as a catastrophic loss instead of a missing measurement."""
+    out = []
+    for r in rows:
+        v = r.get("Net_AUC")
+        if v is None:
+            continue
+        try:
+            out.append({"Asset": r["Asset"], "Score": float(v)})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def score_rows(subset, env, full_fn):
     """Scoring rows for a config under the active basis. raw - full_fn(subset, env)
-    (current behavior, caching preserved). neural - neural-contribution rows."""
-    if _score_basis() == "neural":
+    (current behavior, caching preserved). neural - neural-contribution rows.
+    net_auc / net_gain - the same single train, re-keyed onto the fold-averaged
+    neural AUC or onto the ensemble's AUC gain over CatBoost (no extra training,
+    so both bases are free)."""
+    basis = _score_basis()
+    if basis == "neural":
         return contribution_rows(subset, env, full_fn)
-    return full_fn(subset, env)
+    return rekey_rows(full_fn(subset, env))
+
+
+def rekey_rows(rows):
+    """Re-key already-trained rows onto the active basis. Split out of score_rows
+    so the TIER gate can use it too: the tier stage trains its own mini rows and
+    used to compare them on the raw Score no matter which basis was selected,
+    which silently pruned candidates on the one metric measured to be unusable
+    here (2026-08-14: same config, same seed, 0.64 apart). The `neural` basis is
+    NOT here - it needs a second training run, so it stays in score_rows."""
+    basis = _score_basis()
+    if basis == "net_auc":
+        return net_auc_rows(rows)
+    if basis == "net_gain":
+        return net_gain_rows(rows)
+    if basis == "ens_auc":
+        return ens_auc_rows(rows)
+    return rows
 
 
 def _feature_env(specs, extra_names):
@@ -608,9 +731,9 @@ def _mutate_hyper(g):
         g.lookback_delta = random.choice(LOOKBACK_DELTAS)
 
 
-def _mutate_nets(g):
+def _mutate_nets(g, active=None):
     """Flip one net-hygiene gene."""
-    gene = random.choice(("seeds", "uniq", "cb_uniq", "calib"))
+    gene = random.choice(["seeds", "uniq", "cb_uniq", "calib"])
     if gene == "seeds":
         g.net_seeds = random.choice([s for s in NET_SEED_CHOICES if s != g.net_seeds])
     elif gene == "uniq":
@@ -752,25 +875,6 @@ def behavior(genome, rows, base_score, active):
 _QD_ARCHIVE_PATH = os.path.join(BASE, "_qd_archive.json")
 
 
-def _qd_archive_path():
-    """The archive file for the ACTIVE illumination configuration.
-
-    A cell stores a fitness, and fitness only compares within one illumination
-    setup: the cb screen scores 10 assets with the nets stubbed out, the tier
-    screen scores 4 assets with them alive, and the neural basis scores a
-    difference instead of a level. Sharing one file across those makes
-    archive_put judge a tier child against a CatBoost-scale incumbent, so nearly
-    every child loses on scale alone - an expensive net-aware run would spend its
-    whole budget and then re-elect the old CatBoost elites it was meant to
-    replace. cb+raw keeps the original filename, so the existing archive and
-    every resume of it are untouched."""
-    mode, basis = qd_screen_mode(), _score_basis()
-    if (mode, basis) == ("cb", "raw"):
-        return _QD_ARCHIVE_PATH
-    root, ext = os.path.splitext(_QD_ARCHIVE_PATH)
-    return "%s_%s_%s%s" % (root, mode, basis, ext)
-
-
 def archive_put(archive, genome, rows, base_score, active):
     """Place a genome in its (floor, complexity) niche if it beats the niche's mean
     fitness (or the niche is empty). Returns True when stored."""
@@ -787,7 +891,7 @@ def archive_put(archive, genome, rows, base_score, active):
 def _qd_save(archive):
     out = {k: {"genome": asdict(v["genome"]), "fitness": v["fitness"]}
            for k, v in archive.items()}
-    with open(_qd_archive_path(), "w", encoding="utf-8") as fh:
+    with open(_QD_ARCHIVE_PATH, "w", encoding="utf-8") as fh:
         json.dump(out, fh)
 
 
@@ -795,11 +899,10 @@ def _qd_load():
     """Reload the archive (genomes only; rows are re-derived on resume) or {}.
     Old two-part "f_c" keys (pre lever-group descriptor) are migrated in place
     by appending the genome's lever-group bin - lossless, no retraining."""
-    path = _qd_archive_path()
-    if not os.path.exists(path):
+    if not os.path.exists(_QD_ARCHIVE_PATH):
         return {}
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(_QD_ARCHIVE_PATH, encoding="utf-8") as fh:
             raw = json.load(fh)
         out = {}
         for k, v in raw.items():
@@ -978,7 +1081,19 @@ class _RlController:
             return None
         occupancy = len(archive) / float(_TOTAL_CELLS)
         phase = ar_rl.phase_of(occupancy)
-        available = ["feat", "hyper", "nets", "tuning", "novelty"]
+        # "nets" is absent under the CB screen, which replaces every neural member
+        # with a constant 0.5 (train_hybrid._screen_only): mutate(ops=["nets"])
+        # changes ONLY net genes, so such a child scores identically to its
+        # parent, can never enter the archive, and the bandit books a guaranteed
+        # failure. That is not evidence about net genes, it is an artifact of the
+        # screen - and it had already taught the scheduler to avoid them (measured
+        # posterior 2026-08-14: nets 1.8/9.7, P=0.16, the worst of the informative
+        # arms; reset that arm before trusting a full-illumination run). Under
+        # GTRADE_AR_ILLUM=full the nets are real during illumination, so net genes
+        # score differently from their parent and the arm is informative again.
+        available = ["feat", "hyper", "tuning", "novelty"]
+        if illum_full():
+            available.append("nets")
         if len(elites) >= 2:
             available.append("cross")
         if llm_proposer.llm_selected():
@@ -1123,9 +1238,8 @@ def _rl_controller_reset_for_tests():
 
 
 def run_qd(train_fn=None):
-    """MAP-Elites: illuminate an archive of diverse genomes via the illumination
-    train chosen by GTRADE_AR_QD_SCREEN (default: the cheap CB screen), then
-    full-evaluate + honest-gate the top elites. Returns the archive."""
+    """MAP-Elites: illuminate an archive of diverse genomes via the cheap CB screen,
+    then full-evaluate + honest-gate the top elites. Returns the archive."""
     from core.features import active_candidate_features
 
     base_fn = train_base_cached if train_fn is None else train_fn
@@ -1137,27 +1251,27 @@ def run_qd(train_fn=None):
     n_final = int(os.getenv("GTRADE_AR_QD_FINAL", "3"))
 
     # Derived, not hardcoded, so a changed SELECTION_ASSETS still finds its own
-    # seeded/measured history bucket (see PROGRESS_SEED's "screen_10"). The tier
-    # mode reuses the gate's own "tier_4" bucket - it is the identical train.
-    qd_mode = qd_screen_mode()
-    if qd_mode == "tier":
-        screen_subset = tier_assets()
-        screen_over = tier_env
-    else:
-        screen_subset = SELECTION_ASSETS
-        screen_over = screen_env
-    screen_kind = "%s_%d" % ("tier" if qd_mode == "tier" else "screen",
-                             len(screen_subset.split(",")))
+    # seeded/measured history bucket (see PROGRESS_SEED's "screen_10").
+    _illum_assets = tier_assets() if illum_full() else SELECTION_ASSETS
+    _illum_env = tier_env if illum_full() else screen_env
+    if illum_full() and _score_basis() == "raw":
+        logger.warning(
+            "GTRADE_AR_ILLUM=full on the raw Score basis: net training does not "
+            "reproduce on this GPU (same seed, same config, 0.45-1.52 Score apart), "
+            "so the archive would rank noise. Use GTRADE_AR_SCORE_BASIS=net_auc.")
 
-    def _illuminate(subset, env, fn):
-        """One illumination train. Only the tier mode honours GTRADE_AR_SCORE_BASIS:
-        under the CB screen the nets are stubbed out, so a neural contribution is
-        zero by construction (see qd_screen_mode)."""
-        return score_rows(subset, env, fn) if qd_mode == "tier" else fn(subset, env)
+    def _illum_rows(rows):
+        # Only the full illumination has real nets to re-key onto; under the CB
+        # screen every net column is the 0.5 stub, so re-keying there would score
+        # every genome identically instead of measuring anything.
+        return rekey_rows(rows) if illum_full() else rows
+
+    screen_kind = ("illum_%d" if illum_full() else "screen_%d") % len(
+        _illum_assets.split(","))
 
     _t0 = time.time()
     _mark = _progress_unit_marker()
-    screen_base = _illuminate(screen_subset, screen_over({}), base_fn)
+    screen_base = _illum_rows(base_fn(_illum_assets, _illum_env({})))
     _progress_fold_unit(screen_kind, time.time() - _t0, since=_mark)
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in screen_base}
 
@@ -1169,7 +1283,7 @@ def run_qd(train_fn=None):
     _progress_publish("warmup", step={"kind": "screen", "unit_kind": screen_kind})
 
     def _screen_eval(g):
-        return _illuminate(screen_subset, screen_over(genome_to_env(g)), train_fn)
+        return _illum_rows(train_fn(_illum_assets, _illum_env(genome_to_env(g))))
 
     archive = _qd_load()
     if not archive:
@@ -1183,11 +1297,12 @@ def run_qd(train_fn=None):
             archive_put(archive, g, rows, base_score, active)
         _qd_save(archive)
 
-    # Illumination trains whatever qd_screen_mode() says. Under the default 'cb'
-    # the nets never train, so GTRADE_AR_SCORE_BASIS=neural only re-scores the
-    # FINAL elite gate and cannot change which genomes become elites - the search
-    # stays CatBoost-only. GTRADE_AR_QD_SCREEN=tier is what makes the search
-    # net-aware, at the cost of a tier train per step instead of a CB train.
+    # NOTE: by default archive illumination uses the cheap raw CB screen (fitness vs
+    # the CB base_score), so GTRADE_AR_SCORE_BASIS only re-scores the FINAL elite gate
+    # and does NOT change which genomes become elites - the nets are stubbed out here,
+    # so a net basis would score every genome identically. GTRADE_AR_ILLUM=full trains
+    # the tier assets with real nets instead, and then the active basis DOES decide
+    # which genomes are illuminated. That is the only way a search can hunt net levers.
     max_misses = int(os.getenv("GTRADE_AR_QD_MAX_MISSES", "5"))
     misses = 0
     for _step in range(BUDGET):
@@ -1252,7 +1367,7 @@ def run_qd(train_fn=None):
         _t0 = time.time()
         _mark = _progress_unit_marker()
         _snap = []
-        ho_base_full, ho_base_contrib = _heldout_eval(HELDOUT_ASSETS, {}, base_fn, done_out=_snap)
+        ho_base_full, ho_base_contrib = _heldout_eval(heldout_assets(), {}, base_fn, done_out=_snap)
         _progress_fold_unit("holdout_14", time.time() - _t0, since=_mark,
                             done_pairs=(_snap[0] if _snap else None))
         qd_tier_base = _tier_base(base_fn) if tier_on() else None
@@ -1280,7 +1395,7 @@ def run_qd(train_fn=None):
             _mark = _progress_unit_marker()
             _snap = []
             var_full, var_contrib = _heldout_eval(
-                HELDOUT_ASSETS, genome_to_env(g), train_fn, done_out=_snap)
+                heldout_assets(), genome_to_env(g), train_fn, done_out=_snap)
             _progress_fold_unit("holdout_14", time.time() - _t0, since=_mark,
                                 done_pairs=(_snap[0] if _snap else None))
             nl, _d = _objective_delta(var_contrib, base_contrib, "mean")
@@ -1383,11 +1498,10 @@ def _regate_candidates(archive_raw, findings, k):
 
 
 def _regate_load_archive_raw():
-    path = _qd_archive_path()
-    if not os.path.exists(path):
+    if not os.path.exists(_QD_ARCHIVE_PATH):
         return {}
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(_QD_ARCHIVE_PATH, encoding="utf-8") as fh:
             return json.load(fh)
     except Exception:
         return {}
@@ -1461,16 +1575,16 @@ def regate(k=8, screen=False):
     obj, basis = _objective(), _score_basis()
     _say("[regate] %d candidate(s) | objective=%s basis=%s screen=%s"
          % (len(cands), obj, basis, screen))
-    ho_base_full, ho_base_contrib = _heldout_eval(HELDOUT_ASSETS, {}, train_base_cached)
+    ho_base_full, ho_base_contrib = _heldout_eval(heldout_assets(), {}, train_base_cached)
     base_contrib = {r["Asset"]: r["Score"] for r in ho_base_contrib}
-    base_sig = "|".join([ar_memory.base_key(HELDOUT_ASSETS, {}), obj, basis,
+    base_sig = "|".join([ar_memory.base_key(heldout_assets(), {}), obj, basis,
                          "screen" if screen else "noscreen"])
     done = _regate_progress_load(base_sig)
     if done:
         _say("[regate] resuming: %d candidate(s) already evaluated." % len(done))
     if screen:
         screen_base = {r["Asset"]: r["Score"]
-                       for r in train_base_cached(HELDOUT_ASSETS, screen_env({}))}
+                       for r in train_base_cached(heldout_assets(), screen_env({}))}
         cands = [c for c in cands
                  if genome_sig(c[0]) in done or _regate_passes_screen(c[0], screen_base)]
         _say("[regate] %d candidate(s) after the CB-only screen." % len(cands))
@@ -1487,7 +1601,7 @@ def regate(k=8, screen=False):
         def _fn(s, e, _sig=gsig):
             return _candidate_train_cached(s, e, _sig)
 
-        var_full, var_contrib = _heldout_eval(HELDOUT_ASSETS, genome_to_env(g), _fn)
+        var_full, var_contrib = _heldout_eval(heldout_assets(), genome_to_env(g), _fn)
         nl, _d = _objective_delta(var_contrib, base_contrib, "mean")
         nl = round(nl, 4) if _d else None
         if basis == "neural":
@@ -1527,7 +1641,7 @@ def _regate_passes_screen(g, screen_base):
     floor). `screen_base` is a {asset: CB-only Score} dict. The train is cached by
     genome signature, so the held-out eval reuses it as its CB side."""
     try:
-        rows = _candidate_train_cached(HELDOUT_ASSETS, screen_env(genome_to_env(g)),
+        rows = _candidate_train_cached(heldout_assets(), screen_env(genome_to_env(g)),
                                        genome_sig(g))
         d, deltas = _objective_delta(rows, screen_base, "mean")
         return (not deltas) or d >= SCREEN_MIN
@@ -1817,6 +1931,20 @@ def tier_on():
         "0", "false", "False")
 
 
+def illum_full():
+    """Whether the QD search illuminates on REAL nets (GTRADE_AR_ILLUM=full).
+
+    Default "cb" is the historical cheap screen: 10 assets, every neural member
+    replaced by a constant 0.5. That makes the archive - and therefore every
+    elite the run ever proposes - a pure CatBoost selection, which is why
+    mutate(ops=["nets"]) is absent from the bandit arms and why a net basis
+    scores every genome identically here. On "full" the search trains the tier
+    assets with the tier's reduced epochs instead, so the nets are real and the
+    active basis (net_auc etc.) actually means something during illumination.
+    Costs roughly 12x per genome, so it is opt-in."""
+    return (os.getenv("GTRADE_AR_ILLUM", "cb") or "cb").strip().lower() == "full"
+
+
 def tier_assets():
     return os.getenv("GTRADE_AR_TIER_ASSETS") or "SP500,BTC,EURUSD,GOLD"
 
@@ -1825,9 +1953,28 @@ def tier_env(env):
     return {**env, **TIER_ENV}
 
 
+def _rekeyed(rows, basis_name="the active basis"):
+    """rekey_rows, but None when the rows predate the column the basis needs.
+
+    The mini-run cache stores RAW rows so one training run is reusable across
+    bases. A set trained before Ens_AUC/Net_AUC existed still loads fine and
+    re-keys to an EMPTY list, which would sail through the tier as "no opinion"
+    and spend a full evaluation on a candidate nobody measured. Empty-out means
+    stale, not neutral: the caller must retrain.
+    """
+    out = rekey_rows(rows)
+    return out if out or not rows else None
+
+
 def _tier_base(base_fn):
-    """Mini-tier BASE rows (cached via base_fn = train_base_cached)."""
-    return base_fn(tier_assets(), tier_env({}))
+    """Mini-tier BASE rows (cached via base_fn = train_base_cached), on the
+    ACTIVE basis - the candidate side is re-keyed the same way in _passes_tier."""
+    rows = base_fn(tier_assets(), tier_env({}))
+    out = _rekeyed(rows)
+    if out is None:
+        # cached from before this basis existed: bypass the cache and train
+        out = rekey_rows(train_env(tier_assets(), tier_env({})))
+    return out
 
 
 def _tier_key(axis, cand):
@@ -1855,6 +2002,18 @@ def _passes_tier(env, cache_key, tier_base, objective="mean", train_fn=None):
             ar_memory.cache_put(key, rows)
     if not rows:
         return True, 0.0
+    # Cache stores RAW rows (basis-independent, so a cached mini run stays valid
+    # across bases); the basis is applied on read. Rows older than the basis
+    # column re-key to nothing - drop them and train rather than pass vacuously.
+    out = _rekeyed(rows)
+    if out is None:
+        rows = train_fn(tier_assets(), tier_env(env))
+        if rows:
+            ar_memory.cache_put(key, rows)
+        out = rekey_rows(rows)
+        if not out:
+            return True, 0.0
+    rows = out
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in tier_base}
     d, deltas = _objective_delta(rows, base_score, objective)
     try:
@@ -2346,24 +2505,15 @@ def _try_sample_frame():
         import pandas as pd
         from sqlalchemy import create_engine
 
-        from core.features import (
-            add_chronos_features,
-            add_cross_lag_features,
-            add_crossasset_features,
-            add_macro_features,
-            add_weekly_features,
-            engineer_features,
-        )
+        # build_features, not a hand-rolled chain: this copy silently went stale
+        # once already, and screening on a different feature space than the
+        # trainer's is a screen that measures the wrong thing.
+        from core.features import build_features
         from core.track_record import _table_name
         engine = create_engine("sqlite:///" + os.path.join(BASE, "market.db"))
         table = _table_name(SELECTION_ASSETS.split(",")[0])
         df = pd.read_sql(f"SELECT * FROM {table}", engine)
-        df = engineer_features(df)
-        df = add_weekly_features(df, table, engine)
-        df = add_crossasset_features(df, table, engine)
-        df = add_macro_features(df, engine)
-        df = add_cross_lag_features(df, engine)
-        return add_chronos_features(df, table, engine)
+        return build_features(df, table, engine)[0]
     except Exception:
         return None
 
@@ -2480,8 +2630,8 @@ def main():
             winner_env = axis.to_env(winner)
             if ho_base_full is None:
                 ho_base_full, ho_base_contrib = _heldout_eval(
-                    HELDOUT_ASSETS, {}, train_base_cached)
-            var_full, var_contrib = _heldout_eval(HELDOUT_ASSETS, winner_env, train_env)
+                    heldout_assets(), {}, train_base_cached)
+            var_full, var_contrib = _heldout_eval(heldout_assets(), winner_env, train_env)
             base_contrib = {r["Asset"]: r["Score"] for r in ho_base_contrib}
             nl, _d = _objective_delta(var_contrib, base_contrib, "mean")
             nl = round(nl, 4) if _d else None

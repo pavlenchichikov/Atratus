@@ -168,7 +168,7 @@ echo Hands over to auto_research.bat, which has its own menu (mode, proposer,
 echo budget, objective, score basis). It never touches production: candidates
 echo train into temp dirs and nothing is adopted without you.
 echo.
-REM  setlocal so the agent's GTRADE_* choices (chronos features, extra columns,
+REM  setlocal so the agent's GTRADE_* choices (extra columns,
 REM  objective) die with it. Without this they would leak into whatever the
 REM  main menu runs next, and a later Train would silently pick them up.
 setlocal

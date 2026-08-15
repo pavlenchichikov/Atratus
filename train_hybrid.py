@@ -189,118 +189,9 @@ def _ws_load(model, key, store):
     return False
 
 
-def _log_foundation_transfer(asset, net_label, loaded):
-    """Honest fold-1 transfer log for a foundation-seeded net (see _ws_load)."""
-    _safe_print(
-        f"  [foundation] {asset}: {net_label} transfer "
-        + ("OK" if loaded else "FAILED (shape mismatch) - fresh init")
-    )
-
-
 def _ws_save(model, key, store):
     if _NET_WARMSTART:
         store[key] = model.get_weights()
-
-# -- Foundation pretraining warm-start (GTRADE_FOUNDATION, default OFF) -------
-# When on, each asset's fold-1 nets are seeded from a shared cross-asset
-# pretrained model (models/foundation/, built by pretrain_foundation.py)
-# instead of random init, via the existing warm-start store above. Best
-# effort: _ws_load already falls back silently on a shape mismatch.
-_FOUNDATION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "models", "foundation")
-_FOUNDATION_CACHE = None  # None=not tried yet, False=tried+failed, dict=loaded
-
-
-def foundation_on():
-    return os.getenv("GTRADE_FOUNDATION") == "1"
-
-
-def _load_foundation():
-    """Manifest + per-net weight lists from models/foundation/, cached after
-    the first call. Returns None (logging one line) when the directory or
-    manifest is missing or corrupt, a weight file fails to load, or this run's
-    GTRADE_MAX_FOLDS exceeds the number of folds the foundation's own cutoff
-    protected against (using more folds than that would let pretraining leak
-    into bars this run's eval folds need)."""
-    global _FOUNDATION_CACHE
-    if _FOUNDATION_CACHE is not None:
-        return _FOUNDATION_CACHE or None
-    try:
-        with open(os.path.join(_FOUNDATION_DIR, "manifest.json"),
-                  encoding="utf-8") as fh:
-            manifest = json.load(fh)
-        _run_max_folds = _env_int("GTRADE_MAX_FOLDS", 10)
-        _cutoff_max_folds = manifest.get("max_folds", 0)
-        if _run_max_folds > _cutoff_max_folds:
-            _safe_print(
-                f"  [foundation] refused: GTRADE_MAX_FOLDS={_run_max_folds} > "
-                f"manifest max_folds={_cutoff_max_folds} - would leak eval bars "
-                f"into pretraining, training without it"
-            )
-            _FOUNDATION_CACHE = False
-            return None
-        # Foundation nets are built by the same core.architectures builders as
-        # the champions, so reuse the serve-side native .keras loader (Lambda
-        # patch + custom_objects) rather than a bare keras.models.load_model.
-        from core.model_io import load_keras_native
-        weights = {}
-        for key, fname in (("lstm", "lstm.keras"),
-                           ("tf", "transformer.keras"),
-                           ("tcn", "tcn.keras")):
-            m = load_keras_native(os.path.join(_FOUNDATION_DIR, fname))
-            if m is None:
-                raise RuntimeError(f"could not load {fname}")
-            weights[key] = m.get_weights()
-        _FOUNDATION_CACHE = {"manifest": manifest, "weights": weights}
-    except Exception as e:
-        _safe_print(f"  [foundation] unavailable ({e}) - training without it")
-        _FOUNDATION_CACHE = False
-        return None
-    return _FOUNDATION_CACHE
-
-
-def _foundation_seed_warm(warm, foundation, asset):
-    """Pre-seed the warm-start store from the foundation weights, BEFORE the
-    fold loop starts, so _ws_load applies them at fold 1. This only stages the
-    weights - whether the transfer actually took (shapes matched) is reported
-    per-net at the fold-1 _ws_load call sites, not here, since staging always
-    "succeeds" even when the eventual set_weights will fall back to fresh init."""
-    for key in ("lstm", "tf", "tcn"):
-        warm[key] = foundation["weights"][key]
-
-
-def _foundation_onehot(asset, classes):
-    from pretrain_foundation import class_of
-    v = np.zeros(len(classes), dtype=np.float32)
-    cls = class_of(asset)
-    if cls in classes:
-        v[classes.index(cls)] = 1.0
-    return v
-
-
-def _fit_frozen_then_full(model, freeze_epochs, compile_fn, fit_fn):
-    """Two-stage fine-tune for a foundation-seeded net: all layers but the
-    last Dense are frozen for `freeze_epochs` epochs (head-only adaptation),
-    then everything is unfrozen and fit resumes for the remaining epochs.
-    `compile_fn` recompiles after each trainable-flag flip (required for the
-    frozen layers to actually stop updating); `fit_fn(n)` runs the fit call
-    for `n` epochs (fit_fn(None) means "the net's own full epoch budget").
-
-    The frozen stage runs inside try/finally so a raise from compile_fn() or
-    fit_fn() during that stage can never leave `model` stuck with most of its
-    layers frozen - trainable is always restored before the exception
-    propagates."""
-    for layer in model.layers[:-1]:
-        layer.trainable = False
-    try:
-        compile_fn()
-        fit_fn(freeze_epochs)
-    finally:
-        for layer in model.layers:
-            layer.trainable = True
-    compile_fn()
-    fit_fn(None)
-
 
 # --- SHARED EPOCH STATE (callback - ticker thread) ---
 _progress_state = {'label': '-', 'epoch': 0, 'total_ep': 0, 'loss': float('nan')}
@@ -315,9 +206,6 @@ if _HAS_GPU:
         print("  [WARN] mixed_float16 not supported on this GPU, using float32")
 
 # -- Imports from core/ modules ------------------------------------------------
-from core.architectures import (
-    _Adam as _lstm_optimizer_cls,
-)
 from core.architectures import (
     adaptive_units,
     build_lstm_multitask,
@@ -462,9 +350,25 @@ def adversarial_fold_weight(X_train, X_test):
 # pnl_from_signals, max_drawdown_from_returns, score_strategy - core.backtesting
 
 def build_sequences(X, y, lookback):
+    """Sequence windows for the neural members: one row per source row from
+    `lookback` onward, window k covering rows [i-lookback+1 .. i] for label y[i].
+
+    The window ENDS ON the labelled row. `target[i]` is `close[i+1] > close[i]`,
+    decided by information available at bar i, and CatBoost is trained on exactly
+    X[i] -> target[i]; serving likewise feeds `X_all[-lookback:]`, a window ending
+    on the latest bar. Until 2026-08-14 this built X[i-lookback:i], which STOPS at
+    i-1: the nets had to predict a move starting from a bar they never saw, and at
+    serve the window they got was one bar ahead of the one they were trained on.
+    Measured on a synthetic label that is literally a column of the input, the old
+    windowing scored AUC 0.487 against 0.999 for the same label shifted back a bar.
+
+    The index mapping (row k <-> source row k+lookback) is unchanged, so the
+    caller's train/val/test sequence slicing and the y_mag / span arrays built
+    through this same function stay aligned.
+    """
     Xs, ys = [], []
     for i in range(lookback, len(X)):
-        Xs.append(X[i - lookback:i])
+        Xs.append(X[i - lookback + 1:i + 1])
         ys.append(y[i])
     return np.array(Xs), np.array(ys)
 
@@ -482,6 +386,39 @@ def filter_noisy_samples(X_seq, y_seq, y_mag, noise_threshold=0.3):
         adaptive_thr = sorted_mag[-cutoff_idx] if cutoff_idx < len(sorted_mag) else 0.0
         mask = mag_abs > adaptive_thr
     return X_seq[mask], y_seq[mask], y_mag[mask], mask
+
+def _safe_auc(y, p):
+    """ROC AUC of one member on one fold, or None when the fold cannot support
+    it (single class, too few rows, ragged arrays). Never raises: a missing AUC
+    must skip that fold, not kill the training."""
+    try:
+        y = np.asarray(y).astype(int)
+        p = np.asarray(p, dtype=float)
+        n = min(len(y), len(p))
+        if n < 10 or len(np.unique(y[:n])) < 2:
+            return None
+        return float(roc_auc_score(y[:n], p[:n]))
+    except Exception:
+        return None
+
+
+def _mean_auc(y, probs):
+    """Mean AUC over the members that produced one, or None if none did."""
+    vals = [a for a in (_safe_auc(y, p) for p in probs) if a is not None]
+    return float(np.mean(vals)) if vals else None
+
+
+def _fold_mean(folds, key):
+    """Mean of `key` over EVERY fold that has one.
+
+    Deliberately over all folds, not the `valid_folds` subset: that subset is
+    gated on `test_trades >= floor`, a discrete threshold on a discrete count,
+    and it is the main reason the reported Score jumps by whole points when the
+    nets drift in the 4th decimal. An average with no admission step does not
+    inherit that."""
+    vals = [f[key] for f in folds if f.get(key) is not None]
+    return float(np.mean(vals)) if vals else None
+
 
 def derive_feature_set(df, train_idx, candidate_features, top_k):
     X = df.loc[train_idx, candidate_features].values
@@ -709,34 +646,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         # Optuna lookback overrides profile default (plus the relative delta knob)
         lookback = lookback_for(opt, profile)
 
-        # Foundation pretraining (GTRADE_FOUNDATION=1, default OFF): best-effort
-        # load once per asset. None when off, or when models/foundation/ is
-        # absent/corrupt - in which case everything below is untouched and the
-        # net feature schema/dim fall back to the CatBoost `selected` set.
-        _foundation = _load_foundation() if foundation_on() else None
-        if _foundation is not None:
-            _f_feats = [f for f in _foundation['manifest']['features']
-                       if f in df.columns]
-            _f_onehot = _foundation_onehot(asset, _foundation['manifest']['classes'])
-            _net_feat_dim = len(_f_feats) + len(_foundation['manifest']['classes'])
-        else:
-            _f_feats = None
-            _f_onehot = None
-            _net_feat_dim = len(selected)
-        _freeze_epochs = _env_int("GTRADE_FOUNDATION_FREEZE_EPOCHS", 0)
-
-        # Foundation lookback: the LSTM's attention Dense(time, time) makes
-        # lookback part of the net weight shapes, so under the flag every
-        # asset's sequences must be built at the foundation's OWN lookback
-        # (manifest["lookback"]) rather than this asset's Optuna-tuned
-        # lookback, or set_weights below would shape-mismatch on nearly every
-        # asset. `_embargo`/`splits` above were already computed with the
-        # asset's own tuned lookback and are left untouched here - CatBoost
-        # (built from `selected`/`splits`, not this `lookback`) stays
-        # completely unaffected. Flag off (or foundation unavailable): the
-        # asset's own tuned lookback applies, unchanged.
-        if _foundation is not None:
-            lookback = _foundation['manifest']['lookback']
+        _net_feat_dim = len(selected)
 
         # --- PRE-COMPUTE: all fold data computed up front ---
         precomputed = []
@@ -765,22 +675,6 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             X_all_seq = np.vstack([X_tr, X_va, X_te])
             y_all_seq = np.concatenate([y_tr, y_va, y_te])
             X_seq, y_seq = build_sequences(X_all_seq, y_all_seq, lookback)
-
-            if _foundation is not None:
-                # Parallel net-only matrix on the foundation's own feature
-                # schema (+ class one-hot); a second StandardScaler fit on
-                # this fold's train rows, mirroring the CatBoost scaler above.
-                # CatBoost's X_tr/X_va/X_te (built from `selected`) are
-                # untouched - only the sequence matrix below is swapped.
-                _f_scaler = StandardScaler()
-                Xf_tr = _f_scaler.fit_transform(df.loc[tr, _f_feats].values)
-                Xf_va = _f_scaler.transform(df.loc[va, _f_feats].values)
-                Xf_te = _f_scaler.transform(df.loc[te, _f_feats].values)
-                Xf_tr = np.hstack([Xf_tr, np.tile(_f_onehot, (len(Xf_tr), 1))])
-                Xf_va = np.hstack([Xf_va, np.tile(_f_onehot, (len(Xf_va), 1))])
-                Xf_te = np.hstack([Xf_te, np.tile(_f_onehot, (len(Xf_te), 1))])
-                Xf_all_seq = np.vstack([Xf_tr, Xf_va, Xf_te])
-                X_seq, _ = build_sequences(Xf_all_seq, y_all_seq, lookback)
 
             seq_tr_end = max(0, len(X_tr) - lookback)
             seq_va_end = seq_tr_end + len(X_va)
@@ -822,17 +716,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         # so the architecture is constant across folds and warm-start can reuse
         # weights. Flag off means empty kwargs, so builders keep their flat defaults.
         _max_seq = max((len(p['X_seq_train']) for p in precomputed), default=0)
-        if _foundation is not None:
-            # Guarantee shape-match: build every asset's nets at the
-            # foundation's OWN architecture (manifest["net_kwargs"], the exact
-            # kwargs train_foundation used) instead of the adaptive per-asset
-            # sizing below, so the _ws_load calls below always shape-match
-            # instead of silently falling back to fresh init.
-            _nk = _foundation['manifest'].get('net_kwargs', {})
-            _lstm_kw = dict(_nk.get('lstm', {}))
-            _tf_kw = dict(_nk.get('transformer', {}))
-            _tcn_kw = dict(_nk.get('tcn', {}))
-        elif _ADAPTIVE_NETS and _max_seq > 0:
+        if _ADAPTIVE_NETS and _max_seq > 0:
             _u1 = adaptive_units(_max_seq, lo=32, hi=_NET_CAP, divisor=16)
             # No recurrent_dropout: it forces Keras off the fused LSTM kernel and
             # is ~1.4x slower on CPU. L2 + the data-adaptive (smaller) size carry
@@ -847,8 +731,6 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         else:
             _lstm_kw, _tf_kw, _tcn_kw = {}, {}, {}
         _warm = {}  # per-asset weight carry across folds (warm-start)
-        if _foundation is not None:
-            _foundation_seed_warm(_warm, _foundation, asset)
 
         for k, fold_data in enumerate(precomputed, 1):
             if _stop_requested:
@@ -968,8 +850,6 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         **_lstm_kw))
                     if not multi_seed:
                         _lstm_loaded = _ws_load(lstm_mt, 'lstm', _warm)
-                        if _foundation is not None and k == 1:
-                            _log_foundation_transfer(asset, 'lstm', _lstm_loaded)
                     if _uniq_w is not None:
                         # A single sample_weight array applies to all outputs. A dict
                         # sample_weight (even keyed by output name) is rejected by this
@@ -999,43 +879,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                                             mode='min', restore_best_weights=True)
                     _lstm_cb = EpochStateCallback(asset, k, _EP_LSTM,
                                                  label="LSTM", val_metric="val_direction_loss")
-                    # Foundation freeze knob (GTRADE_FOUNDATION_FREEZE_EPOCHS, default
-                    # 0=off): only on the fold-1 foundation-seeded, non-multi-seed fit -
-                    # head-only warm-up before unfreezing the transferred layers. When
-                    # off (the default), the else branch below is unchanged from before.
-                    if (_freeze_epochs > 0 and _foundation is not None
-                            and k == 1 and not multi_seed):
-                        def _compile_lstm():
-                            # A FRESH optimizer every recompile (not
-                            # lstm_mt.optimizer, the same instance across the
-                            # frozen -> unfrozen flip): reusing one optimizer
-                            # across a trainable-set change carries over stale
-                            # slot-variable/iteration state built for the
-                            # frozen stage's smaller variable set. Config
-                            # cloned from build_lstm_multitask's own compile
-                            # (core/architectures.py) so behaviour matches the
-                            # non-foundation path.
-                            _steps_per_epoch = max(1, len(X_seq_train) // 128)
-                            _lr_schedule = tf.keras.optimizers.schedules.CosineDecay(
-                                initial_learning_rate=0.002,
-                                decay_steps=_steps_per_epoch * 120,
-                                alpha=0.0001,
-                            )
-                            lstm_mt.compile(
-                                optimizer=_lstm_optimizer_cls(_lr_schedule),
-                                loss={'direction': 'binary_crossentropy', 'magnitude': 'huber'},
-                                loss_weights={'direction': 1.0, 'magnitude': 0.2},
-                                metrics={'direction': 'accuracy'},
-                            )
-                        def _fit_lstm_stage(n_epochs):
-                            _ep = n_epochs if n_epochs is not None else _EP_LSTM
-                            lstm_mt.fit(train_ds, validation_data=val_ds, epochs=_ep,
-                                        callbacks=[es_lstm, _lstm_cb], verbose=0)
-                        _fit_frozen_then_full(lstm_mt, _freeze_epochs,
-                                              _compile_lstm, _fit_lstm_stage)
-                    else:
-                        lstm_mt.fit(train_ds, validation_data=val_ds, epochs=_EP_LSTM,
-                                    callbacks=[es_lstm, _lstm_cb], verbose=0)
+                    lstm_mt.fit(train_ds, validation_data=val_ds, epochs=_EP_LSTM,
+                                callbacks=[es_lstm, _lstm_cb], verbose=0)
                     if not multi_seed:
                         _ws_save(lstm_mt, 'lstm', _warm)
                     lstm_test_prob = lstm_mt.predict(
@@ -1054,8 +899,6 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         **_tf_kw))
                     if not multi_seed:
                         _tf_loaded = _ws_load(tf_enc, 'tf', _warm)
-                        if _foundation is not None and k == 1:
-                            _log_foundation_transfer(asset, 'transformer', _tf_loaded)
                     if _uniq_w is not None:
                         train_ds_tf = tf.data.Dataset.from_tensor_slices(
                             (X_seq_train.astype('float32'),
@@ -1089,8 +932,6 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         **_tcn_kw))
                     if not multi_seed:
                         _tcn_loaded = _ws_load(tcn_model, 'tcn', _warm)
-                        if _foundation is not None and k == 1:
-                            _log_foundation_transfer(asset, 'tcn', _tcn_loaded)
                     if _uniq_w is not None:
                         train_ds_tcn = tf.data.Dataset.from_tensor_slices(
                             (X_seq_train.astype('float32'),
@@ -1127,8 +968,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     _dev = '/GPU:0' if _HAS_GPU else '/CPU:0'
                     with tf.device(_dev):
                         n_seeds = net_hygiene.net_seeds()
-                        # multi_seed also gates warm-start and foundation transfer,
-                        # so it must stay False in the single-member default.
+                        # multi_seed also gates warm-start, so it must stay
+                        # False in the single-member default.
                         runs = [_fit_all_nets(multi_seed=n_seeds > 1, member=_s)
                                 for _s in range(n_seeds)]
                     if len(runs) == 1:
@@ -1214,6 +1055,19 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             else:
                 lstm_val_cal, lstm_test_cal = lstm_val_prob[:n_val], lstm_test_prob[:n_test]
 
+            # -- Member quality on the RAW probabilities ------------------
+            # The Score is a backtest of discrete BUY/SELL/HOLD signals taken
+            # from a fold that had to clear a trade-count threshold, so a 1e-4
+            # probability drift moves it by whole points (measured 2026-08-14:
+            # same seed, same config, 0.45 to 1.52 Score apart on GPU). AUC is a
+            # rank statistic: at this n a 1e-4 drift reorders almost no pairs,
+            # and one reordered pair is worth ~1e-5 of AUC. This is the read-out
+            # a neural A/B can actually be run on.
+            test_target_aligned = df.loc[te, 'target'].values[:n_test]
+            cb_auc = _safe_auc(test_target_aligned, cb_test_aligned)
+            net_auc = _mean_auc(test_target_aligned,
+                                [lstm_test_cal, tf_test_al, tcn_test_al])
+
             # -- Stacking meta-classifier --------------------------------
             X_meta_val = build_stacking_features(
                 cb_val_aligned, lstm_val_cal, tf_val_al, tcn_val_al,
@@ -1237,6 +1091,15 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 test_prob = 0.25 * (cb_test_aligned[:n_test]
                                     + lstm_test_cal
                                     + tf_test_al + tcn_test_al)
+
+            # The ensemble's own rank quality. `ens_auc - cb_auc` is the honest
+            # replacement for neural_lift: the same question - what do the nets
+            # ADD - asked on a rank statistic instead of a backtest Score, so it
+            # survives the discrete amplifier that made neural_lift unreadable
+            # here (measured 2026-08-14). It also stays meaningful if the nets
+            # are ever given a target other than direction, where net_auc
+            # against the direction label stops measuring anything.
+            ens_auc = _safe_auc(test_target_aligned, test_prob)
 
             # threshold tuning on validation (top-3 averaging for stability)
             comm = FOREX_COMMISSION if asset in FOREX else COMMISSION
@@ -1283,6 +1146,9 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'features': selected,
                 'cb_acc': cb_acc,
                 'lstm_acc': lstm_acc,
+                'cb_auc': cb_auc,
+                'net_auc': net_auc,
+                'ens_auc': ens_auc,
                 'buy_thr': buy_thr,
                 'sell_thr': sell_thr,
                 'val_profit': val_profit,
@@ -1409,10 +1275,18 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 policy_status = "FROZEN_CHAMPION"
 
         status = "TRUSTED" if (best_fold['score'] > 1.5 and best_fold['test_trades'] >= _trusted_floor) else "UNSTABLE"
+        # Averaged over EVERY fold, not the champion one: the champion is picked
+        # by argmax and so inherits the same instability as the Score.
+        _net_auc = _fold_mean(fold_metrics, 'net_auc')
+        _cb_auc = _fold_mean(fold_metrics, 'cb_auc')
+        _ens_auc = _fold_mean(fold_metrics, 'ens_auc')
         quality_row = {
             'Asset': asset,
             'CB_Acc': float(best_fold['cb_acc']),
             'LSTM_Acc': float(best_fold['lstm_acc']),
+            'Net_AUC': None if _net_auc is None else float(_net_auc),
+            'CB_AUC': None if _cb_auc is None else float(_cb_auc),
+            'Ens_AUC': None if _ens_auc is None else float(_ens_auc),
             'Score': float(best_fold['score']),
             'Score_v2': float(best_fold.get('test_score_v2', 0.0)),
             'Profit': float(best_fold['test_profit']),

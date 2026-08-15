@@ -12,7 +12,9 @@ from sklearn.preprocessing import StandardScaler
 
 
 def scaler_path(model_dir: str, table: str) -> str:
-    return os.path.join(model_dir, f"{table}_scaler.pkl")
+    """Path of the fitted StandardScaler persisted next to the champion."""
+    suffix = "_scaler.pkl"
+    return os.path.join(model_dir, f"{table}{suffix}")
 
 
 def save_scaler(scaler, model_dir: str, table: str) -> str:
@@ -20,6 +22,24 @@ def save_scaler(scaler, model_dir: str, table: str) -> str:
     path = scaler_path(model_dir, table)
     joblib.dump(scaler, path)
     return path
+
+
+def load_scaler(model_dir: str, table: str, n_cols=None):
+    """Load a saved scaler, or None. Unlike load_or_fit_scaler this NEVER falls
+    back to fitting: for the net scaler a silent refit on the serving window is
+    exactly the train/serve skew this file exists to prevent, and the caller must
+    be able to tell that the artifact is missing."""
+    path = scaler_path(model_dir, table)
+    if not os.path.exists(path):
+        return None
+    try:
+        scaler = joblib.load(path)
+    except Exception:
+        return None
+    saved_n = getattr(scaler, "n_features_in_", None)
+    if n_cols is not None and saved_n is not None and saved_n != n_cols:
+        return None
+    return scaler
 
 
 def load_or_fit_scaler(model_dir: str, table: str, x_fit):

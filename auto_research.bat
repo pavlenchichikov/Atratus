@@ -10,15 +10,7 @@ REM  _ar_eval_cache.json (base runs reused while the data is unchanged),
 REM  _ar_findings.json (cumulative findings journal). Budget = NEW iterations
 REM  per run, so periodic launches keep exploring fresh candidates.
 REM
-REM  Chronos forecast features (menu item 5): zero-shot price-forecast columns
-REM  (chronos_dir / chronos_ret / chronos_spread) from Amazon's Chronos model,
-REM  added to every asset as extra inputs. They are OFF by default and require
-REM  a one-time setup:
-REM    1) pip install -r requirements-chronos.txt   (torch + chronos-forecasting)
-REM    2) python precompute_chronos.py              (fills the forecast cache)
-REM  Without that cache the columns are empty and the toggle is a no-op.
-REM
-REM  Research wiki (menu item 6): a compounding, self-maintained knowledge base
+REM  Research wiki (menu item 5): a compounding, self-maintained knowledge base
 REM  (GTRADE_AR_WIKI). After each run an LLM distills the findings journal into
 REM  _ar_wiki/*.md topic pages the proposer then reads, so learning accumulates
 REM  across runs instead of a sliding window. It uses the LLM backend, so pick an
@@ -48,7 +40,20 @@ REM interpreter and this PATH (which is where the CUDA/cuDNN DLLs live).
 call "%~dp0activate_env.bat"
 
 REM == Advanced knobs (edit here; the menu does not ask about these) ===========
-set "GTRADE_AR_SCREEN=1"
+REM    The screen replaces the nets with a constant 0.5, so on a NET basis
+REM    (GTRADE_AR_SCORE_BASIS=net_auc) every candidate screens identically and
+REM    the screen carries no information - it only throws net levers away on
+REM    CatBoost's opinion. Set to 0 for any net-basis run. 1 for Score runs.
+set "GTRADE_AR_SCREEN=0"
+REM    QD search illumination. "cb" = the historical cheap CatBoost-only screen
+REM    (nets stubbed to 0.5, ~43s/genome) - fast, but every elite is then a pure
+REM    CatBoost pick and no net lever can ever be found. "full" trains the tier
+REM    assets with real nets (~545s/genome, 12x) so the net basis actually decides
+REM    what gets illuminated. Use "full" ONLY with GTRADE_AR_SCORE_BASIS=net_auc:
+REM    on the raw Score basis the nets do not reproduce on this GPU and the
+REM    archive would rank noise. Clear _qd_archive.json when switching basis -
+REM    Score-scale fitness (1.5-8.9) never loses to AUC-scale fitness (~0.01).
+set "GTRADE_AR_ILLUM=full"
 set "GTRADE_AR_SCREEN_MIN=0.0"
 set "GTRADE_AR_PRUNE_MIN=8"
 set "GTRADE_AR_QD_INIT=8"
@@ -65,14 +70,19 @@ REM    Floor on neural_lift for adoption (Score scale). A candidate that clears
 REM    the Score bar but sinks the nets below this is rejected instead of merely
 REM    reported. Blank = default -0.5.
 set "GTRADE_AR_NEURAL_FLOOR="
+REM    Adoption floor on the net_auc basis (AUC units, not Score). Blank = 0.005.
+set "GTRADE_AR_ADOPT_AUC="
 set "AR_PRESCREEN_MIN=0.02"
 set "GTRADE_AR_QD_LLM_P=0.3"
 set "GTRADE_AR_QD_MAX_MISSES=5"
 REM    Base URL override (blank = provider default / Ollama localhost):
 set "GTRADE_AR_LLM_BASE_URL="
-REM    Model override (blank = auto-detect for Ollama / provider default);
+REM    Model override ("auto" = auto-detect for Ollama / provider default);
 REM    the menu sets this for you when you pick a local or OpenAI model.
-set "GTRADE_AR_LLM_MODEL="
+REM    NOT blank on purpose: cmd's  set "VAR="  DELETES the variable, so
+REM    load_dotenv refills it from .env - which silently overrode this menu
+REM    and pinned a 17 GB model on a 15.7 GB machine (2026-08-14).
+set "GTRADE_AR_LLM_MODEL=auto"
 
 echo ============================================================
 echo   AUTO-RESEARCH  (Enter = default)
@@ -206,48 +216,42 @@ echo [4b] Score basis (WHICH number the objective above is applied to):
 echo     1 = raw ensemble Score (default)
 echo     2 = neural contribution (ensemble minus a CatBoost-only run)
 echo         Use 2 to hunt specifically for something that revives the neural
-echo         members. On the qd mode it only bites together with [4c]=2: under
-echo         the cb screen the nets never train during the search, so basis 2
-echo         re-scores the final gate while the elites are still picked by
-echo         CatBoost alone. That is why earlier neural runs read flat.
+echo         members. The qd SEARCH always runs the CatBoost-only screen, so
+echo         basis 2 re-scores the final GATE only; the elites are still picked
+echo         by CatBoost alone. That is why earlier neural runs read flat.
 echo         Basis 2 is a DIFFERENCE, so an axis that helps both learners equally
 echo         (weighting, labeling, folds) reads as zero on it. Use basis 1 there.
+echo     3 = neural AUC (Net_AUC: the nets' own probabilities, averaged over ALL
+echo         folds). Bases 1 and 2 are both Score, and the Score is a backtest of
+echo         discrete signals behind a fold-admission threshold: measured on this
+echo         GPU, the SAME config and seed lands 0.45 to 1.52 Score apart, more
+echo         than the adoption floor. Basis 3 is a rank statistic on raw
+echo         probabilities and does not inherit that. Use 3 for any neural A/B.
+echo         Floor is GTRADE_AR_ADOPT_AUC (0.005), not the Score floor, and the
+echo         neural_lift veto switches off because basis 3 already measures the
+echo         nets. Costs nothing extra: the same single training run.
+echo     4 = neural GAIN (Ens_AUC minus CB_AUC: what the ensemble adds over
+echo         CatBoost alone). What basis 2 always meant, on a rank statistic
+echo         instead of a Score. Use 4 rather than 3 when the nets are given a
+echo         target other than direction - there basis 3 measures nothing,
+echo         because it scores them against the direction label. Same floor
+echo         (GTRADE_AR_ADOPT_AUC) and the same free re-key of one train.
+echo     5 = ensemble AUC (Ens_AUC as a level). Use this whenever a candidate
+echo         changes BOTH learners at once. There basis 4 would reward simply
+echo         damaging CatBoost, because its delta is d(Ens_AUC) - d(CB_AUC) and
+echo         anything that hurts CatBoost drives the second term negative.
+echo         Basis 5 asks only: did the ensemble improve.
 set "BAS=1"
 set /p "BAS=    choice [1]: "
 set "GTRADE_AR_SCORE_BASIS="
 if "%BAS%"=="2" set "GTRADE_AR_SCORE_BASIS=neural"
+if "%BAS%"=="3" set "GTRADE_AR_SCORE_BASIS=net_auc"
+if "%BAS%"=="4" set "GTRADE_AR_SCORE_BASIS=net_gain"
+if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=ens_auc"
+
 
 echo.
-echo [4c] Search screen (qd mode: what ONE illumination step trains):
-echo     1 = cb   - CatBoost-only over the selection assets (default, ~45s/step).
-echo                The nets are stubbed out at 0.5 and never train, so the
-echo                search cannot see them and is free to win by starving them.
-echo     2 = tier - the 4-asset half-epoch ensemble train (~550s/step, ~12x).
-echo                A real train, nets included, so the search can finally
-echo                optimize them. Pair with [4b]=2.
-set "QDS=1"
-set /p "QDS=    choice [1]: "
-set "GTRADE_AR_QD_SCREEN=cb"
-set "GTRADE_AR_TIER=1"
-REM  Picking tier also switches the gate's tier stage OFF: it would retrain
-REM  exactly the filter the search has already applied to every elite.
-if "%QDS%"=="2" set "GTRADE_AR_QD_SCREEN=tier"
-if "%QDS%"=="2" set "GTRADE_AR_TIER=0"
-
-echo.
-echo [5] Chronos forecast features?  (needs setup - see top of this file)
-echo     1 = off (default)   2 = on
-set "CHR=1"
-set /p "CHR=    choice [1]: "
-set "GTRADE_CHRONOS="
-if "%CHR%"=="2" (
-  set "GTRADE_CHRONOS=1"
-  set "GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread"
-  echo     Chronos ON - make sure you ran: python precompute_chronos.py
-)
-
-echo.
-echo [6] Research wiki?  (compounding findings; uses the LLM backend)
+echo [5] Research wiki?  (compounding findings; uses the LLM backend)
 echo     1 = off (default)   2 = on
 set "WIKI=1"
 set /p "WIKI=    choice [1]: "
@@ -260,7 +264,7 @@ set "GTRADE_AR_WIKI=0"
 if "%WIKI%"=="2" set "GTRADE_AR_WIKI=1"
 
 echo.
-echo [7] RL scheduler?  (learned budget allocation over the QD child sources;
+echo [6] RL scheduler?  (learned budget allocation over the QD child sources;
 echo     Thompson bandit + CMA/novelty emitters; the adoption gate is untouched)
 echo     1 = off (default)   2 = on
 set "RL=1"
@@ -273,9 +277,9 @@ echo ------------------------------------------------------------
 echo   axes=%GTRADE_AR_AXES%  label=%GTRADE_LABEL_MODE%/%GTRADE_LABEL_HORIZON%
 echo   proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
 echo   model=%GTRADE_AR_LLM_MODEL%  maxtok=%GTRADE_AR_LLM_MAX_TOKENS%  timeout=%GTRADE_AR_LLM_TIMEOUT%
-echo   chronos=%GTRADE_CHRONOS%  wiki=%GTRADE_AR_WIKI%  reflect=%GTRADE_AR_REFLECT%
+echo   wiki=%GTRADE_AR_WIKI%  reflect=%GTRADE_AR_REFLECT%
 echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%  basis=%GTRADE_AR_SCORE_BASIS%  rl=%GTRADE_AR_RL%
-echo   qd_screen=%GTRADE_AR_QD_SCREEN%  gate_tier=%GTRADE_AR_TIER%  train_seed=%GTRADE_SEED%
+echo   heldout=%GTRADE_AR_HELDOUT%  train_seed=%GTRADE_SEED%
 echo ------------------------------------------------------------
 set "GO=Y"
 set /p "GO=Start? [Y/n]: "

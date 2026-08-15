@@ -126,7 +126,7 @@ def _call_anthropic(prompt):
     """Anthropic SDK. Model via GTRADE_AR_LLM_MODEL (default claude-opus-4-8)."""
     import anthropic
     client = anthropic.Anthropic()
-    model = os.getenv("GTRADE_AR_LLM_MODEL") or "claude-opus-4-8"
+    model = model_override() or "claude-opus-4-8"
     last_err = None
     for _attempt in range(3):
         try:
@@ -146,7 +146,7 @@ def _call_openai(prompt):
     import openai
     client = openai.OpenAI(base_url=os.getenv("GTRADE_AR_LLM_BASE_URL") or None,
                            timeout=_llm_timeout())
-    model = os.getenv("GTRADE_AR_LLM_MODEL") or "gpt-4o"
+    model = model_override() or "gpt-4o"
     last_err = None
     for _attempt in range(3):
         try:
@@ -199,6 +199,18 @@ def list_ollama_models():
     return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
 
 
+def model_override():
+    """GTRADE_AR_LLM_MODEL, or None when the caller wants the provider default.
+
+    "auto" counts as not-set. The launcher must emit a real value rather than a
+    blank, because cmd's  set "VAR="  DELETES the variable and load_dotenv then
+    refills it from .env - which is how a 17 GB model stayed pinned on a 15.7 GB
+    machine through every menu choice (2026-08-14).
+    """
+    v = (os.getenv("GTRADE_AR_LLM_MODEL") or "").strip()
+    return None if v.lower() in ("", "auto") else v
+
+
 def _detect_ollama_model():
     """The installed model to use when GTRADE_AR_LLM_MODEL is not set: the first
     gemma* model, else the first installed model (any local model works)."""
@@ -230,7 +242,7 @@ def _call_ollama(prompt):
     GTRADE_AR_LLM_MODEL or auto-detected (gemma preferred)."""
     import openai
     base = _ollama_base_url()
-    model = os.getenv("GTRADE_AR_LLM_MODEL") or _detect_ollama_model()
+    model = model_override() or _detect_ollama_model()
     # Reasoning models (e.g. gemma) spend tokens on an internal reasoning trace before
     # the answer; a small cap gets fully consumed by reasoning and returns EMPTY content
     # (the silent cause of a wiki/proposer that "runs" but produces nothing). Budget
@@ -285,7 +297,7 @@ def _traced(fn, what, provider):
     from a refusal, so a silent LLM arm is unreadable from the run output."""
     def call(prompt):
         import time
-        model = os.getenv("GTRADE_AR_LLM_MODEL") or "auto"
+        model = model_override() or "auto"
         print("[llm] %s: asking %s/%s, %d char prompt" % (what, provider, model,
                                                           len(prompt)), flush=True)
         t0 = time.time()

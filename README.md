@@ -126,6 +126,23 @@ The genome also carries **relative model-hyperparameter genes** (a depth delta, 
 
 Selection-time TUNING is searchable too: a threshold margin and neutral-band delta applied over each asset's own tuned thresholds, and the regime-filter mode (both / off / SMA-only / Taleb-only). The QD archive niches now also key on WHICH lever group a genome touches, so one lever class cannot monopolize the map, and a cheap mid tier (4 assets at half epochs, `GTRADE_AR_TIER=0` to disable) drops clearly-negative candidates before they earn a full training run.
 
+**Illumination mode (`GTRADE_AR_ILLUM`, default `cb`).** What the QD search
+trains while it fills the archive. Under `cb` every neural member is replaced by
+a constant 0.5, which makes one search step cost seconds instead of minutes - but
+it also means the archive, and therefore every elite the run proposes, is a pure
+CatBoost selection. A net-only mutation scores exactly like its parent under that
+screen, which is why the `nets` emitter is withheld from the bandit there. Set
+`full` and the search trains the tier assets with real nets instead, re-keys both
+baseline and candidate onto the active basis, and restores the `nets` emitter, so
+the search can finally chase a neural lever. It costs roughly 12x per candidate
+and is only meaningful together with `GTRADE_AR_SCORE_BASIS=net_auc`: the nets do
+not reproduce bit-for-bit on GPU, so on the raw Score basis a full illumination
+ranks noise. The launcher warns if the two are mismatched. One caveat that is
+silent rather than loud: archive fitness is stored in the units of whichever
+basis produced it, so `_qd_archive.json` must be cleared when the basis changes,
+or Score-scale elites (1.5 to 8.9) will never lose their niche to an AUC-scale
+challenger (~0.01).
+
 Re-gating stored candidates (`--regate`) is **crash-safe**: every finished candidate checkpoints to `_regate_progress.json` and its trains are cached by genome signature, so an interrupted multi-day run resumes where it stopped (as long as the market data has not refreshed in between) instead of restarting from zero.
 
 **It never touches production.** Candidates train into isolated temp directories, and a winner is flagged only after clearing a separate held-out set under a one-sided **Wilcoxon signed-rank** test (with a practical effect-size floor, a **Benjamini-Hochberg** correction across candidates, an iteration budget, and a **cross-run replication** gate) - designed to reject improvements that are only noise. Adopting a flagged winner stays a manual full retrain.
@@ -135,8 +152,6 @@ Permanent cross-run memory: `_ar_tried.json` (no candidate is re-tested), `_ar_e
 **Research wiki (optional, `GTRADE_AR_WIKI=1`).** Distills the append-only findings journal into a compounding, self-maintained knowledge base (Karpathy's "LLM Wiki" pattern): after each run an LLM folds new findings into a few interlinked markdown topic pages under `_ar_wiki/`, tagging claims by confidence and reconciling contradictions, and the proposer reads that distilled wiki instead of only the last few findings. The pages also render read-only on `/research`. Off by default (byte-identical).
 
 **RL search scheduler (optional, `GTRADE_AR_RL=1`).** A learned budget allocator over the QD child sources: a discounted Thompson-sampling bandit (with a two-phase context and a guaranteed exploration floor) learns which of nine emitters - feature / hyperparameter / net-hygiene / tuning mutations, crossover, LLM proposals, surrogate picks, a CMA evolution strategy over the continuous genes, and a novelty emitter that targets empty archive niches - actually produce archive improvements, and spends the experiment budget accordingly. Curiosity-based parent selection favors elites whose children keep succeeding. The statistical adoption gate is untouched: the scheduler decides only what to TRY, never what passes. It self-disables within a run if it underperforms the uniform baseline (estimated live from its own exploration draws), and its arm posteriors are printed at run start/end - no black box. Off by default (byte-identical uniform search); toggle in the `auto_research.bat` menu, state in `rl_scheduler_v1.json`.
-
-**Chronos forecast features (optional, experimental).** Zero-shot forecasts from a pretrained time-series model as extra CatBoost features. Install `requirements-chronos.txt`, precompute the cache (`python precompute_chronos.py --assets all`), then A/B via `GTRADE_CHRONOS=1 GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread`. They enter only through `GTRADE_EXTRA_FEATURES`, so the production model is unchanged until adopted.
 
 ### Running it
 
@@ -150,7 +165,8 @@ a working default, so pressing Enter through it is a valid run.
 | Proposer | `1` evolutionary needs nothing. `2` local Ollama, `3` Anthropic, `4` OpenAI |
 | Budget | How many NEW candidates this run. Past candidates are never re-tested |
 | Objective | How per-asset lifts become one number. `mean` by default; `cvar` and `min` optimize the worst assets instead of the average |
-| Score basis | `1` raw ensemble Score, `2` the neural contribution. See below |
+| Score basis | `1` raw ensemble Score, `2` the neural contribution, `3` the nets' own AUC. See below |
+| Illumination | Not a prompt: `GTRADE_AR_ILLUM` in the launcher. `cb` (default) illuminates the QD archive on the CatBoost-only screen, `full` on real nets. See below |
 | Wiki, RL scheduler | Optional, off by default, described above |
 
 **Choosing the objective.** Every candidate produces one Score delta per
@@ -185,18 +201,47 @@ CatBoost-only run) instead of the raw ensemble Score, and it composes with any
 of the six objectives above. The `neural_lift` figure printed next to each
 verdict is exactly that quantity, always reduced by `mean` for reporting.
 
-It is menu item `[4b]`, and the launcher spells out the caveat. Four separate attempts to
-lift the neural members - engineered features, Chronos base-model forecasts, a
-25-year pretraining set, and the adopted genome - each measured flat or
-negative, so the evidence points at the labeling as the ceiling rather than at
-the search target. Reach for this basis to test a labeling change, not as a
-default hunting ground.
+It is menu item `[4b]`, which also offers a third basis, `net_auc`: the neural
+members' own probabilities, scored as a fold-averaged AUC. Unlike the two Score
+bases it is a rank statistic on raw probabilities, so it does not inherit the
+Score's instability (measured: on an identical pair of runs the Score moved 129%
+of its own noise floor and `net_auc` 6% of its own), which makes it the basis to
+use whenever the nets are the subject.
 
-Budget is not wall-clock. The search phase is cheap (a CatBoost-only screen,
-one to three minutes per candidate); the cost is the final gate, which trains
-the elites in full on the held-out assets. A 15-candidate run is hours, not
-minutes, and `Ctrl+C` is safe at any point - finished work is cached and a
-re-run resumes.
+That distinction stopped being academic in August 2026. Five attempts to lift the
+neural members - engineered features, a 25-year pretraining set, the adopted
+genome, giving the nets their own feature set, and net hygiene - all measured
+flat or negative, and the conclusion drawn was that the labeling was the ceiling.
+It was not. `build_sequences` was assembling a window that ended one bar BEFORE
+the labelled row, so every sequence model was asked to forecast a move starting
+from a bar it had never been shown, while CatBoost trained on exactly that bar.
+The nets scored 0.5155 AUC, a coin. With the window fixed they read 0.60 and
+several assets now beat CatBoost outright. The five earlier results were not
+refuted by this, they were never measured, and each is worth re-running.
+
+The practical lesson is in the controls, not the bug: a control has to be a
+quantity the change cannot reach, and "cannot reach" has to be checked in the
+code rather than assumed from the name. Two clean runs were discarded here
+because the control was a CHAMPION-fold statistic, and the champion fold is
+chosen by the ensemble's own score - so the nets moved it without CatBoost
+changing at all. The honest control is the fold MEAN (`CB_AUC`), which reads
+identically whether the nets are real or stubbed out.
+
+Budget is not wall-clock. Under the default `cb` illumination the search phase is
+cheap (a CatBoost-only screen, well under a minute per candidate on a GPU) and
+the cost is the final gate, which trains the elites in full on the held-out
+assets; a 15-candidate run is hours, not minutes. Under `GTRADE_AR_ILLUM=full`
+the arithmetic inverts: the search itself becomes the bill at roughly nine
+minutes per candidate, so a 100-candidate run is most of a day. `Ctrl+C` is safe
+at any point - finished work is cached, the archive persists, and a re-run
+resumes where it stopped.
+
+Before spending a long budget, measure what the run can actually resolve:
+`ab_noise.py --unit tier --seeds 1000,2000,3000` retrains one identical config
+under different seeds and prints the spread next to the adoption floor. A search
+whose candidate deltas are smaller than that spread is ranking noise. Run it in
+the GPU environment - on CPU the training repeats bit-for-bit and the spread
+reads zero, which is the one answer guaranteed to mislead.
 
 Reading the output: `SCREEN_SKIPPED` is the cheap pre-screen doing its job, not
 an error. What matters is the per-axis verdict line at the end, and only a
@@ -295,7 +340,7 @@ notification when signals change, opening the Today screen. The Supabase schema 
 ## Tech stack
 
 - **Language:** Python 3.12
-- **ML:** CatBoost, TensorFlow / Keras (LSTM, Transformer, TCN), scikit-learn, Optuna, scipy; optional Amazon Chronos (zero-shot forecasts)
+- **ML:** CatBoost, TensorFlow / Keras (LSTM, Transformer, TCN), scikit-learn, Optuna, scipy
 - **Serving / UI:** FastAPI + Uvicorn (web UI), Streamlit (`app.py`), Jinja2
 - **Mobile:** Flutter (Android) thin client over Supabase; Firebase Cloud Messaging
 - **Data:** SQLite (`market.db`), pandas / numpy, Yahoo Finance + MOEX
@@ -660,6 +705,22 @@ $ python predict.py
 
 Настройки времени отбора тоже ищутся: маржа порогов и дельта нейтральной полосы поверх собственных настроенных порогов каждого актива, и режим режим-фильтра (both / off / только-SMA / только-Талеб). Ниши QD-архива теперь ключуются ещё и по тому, КАКУЮ группу рычагов трогает геном, чтобы один класс рычагов не монополизировал карту, а дешёвый средний тир (4 актива на половине эпох, `GTRADE_AR_TIER=0` отключает) отсеивает явно отрицательных кандидатов до полного трейна.
 
+**Режим иллюминации (`GTRADE_AR_ILLUM`, по умолчанию `cb`).** То, что QD-поиск
+обучает, пока наполняет архив. Под `cb` каждый нейро-член заменяется константой
+0.5, и шаг поиска стоит секунды вместо минут - но это же означает, что архив, а
+значит и любая элита прогона, отобран одним CatBoost. Мутация только сетевых
+генов под таким скрином даёт балл, идентичный родительскому, поэтому эмиттер
+`nets` там из бандита изъят. Значение `full` переводит поиск на тир-активы с
+живыми сетями, перекладывает и базу, и кандидата на активный базис и возвращает
+эмиттер `nets` - только так поиск может гнаться за нейронным рычагом. Стоит это
+примерно в 12 раз дороже за кандидата и осмысленно лишь вместе с
+`GTRADE_AR_SCORE_BASIS=net_auc`: сети не воспроизводятся бит-в-бит на GPU,
+поэтому на сыром Score полная иллюминация ранжирует шум. При несоответствии
+лаунчер предупреждает. Одна оговорка, которая молчит, а не кричит: фитнес архива
+хранится в единицах того базиса, который его породил, поэтому при смене базиса
+`_qd_archive.json` надо очищать - иначе элиты в шкале Score (от 1.5 до 8.9)
+никогда не уступят нишу претенденту в шкале AUC (~0.01).
+
 Ре-гейтинг сохранённых кандидатов (`--regate`) **устойчив к сбоям**: каждый готовый кандидат чекпойнтится в `_regate_progress.json`, а его тренировки кешируются по сигнатуре генома, поэтому прерванный многодневный прогон продолжается с места остановки (пока рыночные данные не обновились), а не начинается заново.
 
 **Он никогда не трогает прод.** Кандидаты обучаются в изолированные временные каталоги, а победитель помечается только после прохождения отдельной отложенной выборки под односторонним тестом **Wilcoxon signed-rank** (с практическим порогом размера эффекта, поправкой **Benjamini-Hochberg** по кандидатам, бюджетом итераций и гейтом **межзапусковой репликации**) - чтобы отсекать улучшения, которые лишь шум. Адопция помеченного победителя остаётся ручным полным ретрейном.
@@ -669,8 +730,6 @@ $ python predict.py
 **Research wiki (опционально, `GTRADE_AR_WIKI=1`).** Дистиллирует append-only журнал находок в накопительную самоподдерживающуюся базу знаний (паттерн "LLM Wiki" Карпаты): после каждого прогона LLM сворачивает новые находки в несколько связанных markdown-страниц под `_ar_wiki/`, помечая утверждения по уверенности и разрешая противоречия, и предлагатель читает эту дистилляцию вместо только последних находок. Страницы также рендерятся read-only на `/research`. По умолчанию выключено (байт-в-байт).
 
 **RL-планировщик поиска (опционально, `GTRADE_AR_RL=1`).** Обучаемый распределитель бюджета по источникам детей QD-поиска: дисконтированный Thompson-sampling бандит (с двухфазным контекстом и гарантированным полом исследования) учится, какие из девяти эмиттеров - мутации признаков / гиперпараметров / нейро-гигиены / тюнинга, кроссовер, LLM-предложения, surrogate-подсказки, CMA-эволюционная стратегия по непрерывным генам и novelty-эмиттер, целящийся в пустые ниши архива - реально приносят улучшения архива, и тратит бюджет экспериментов соответственно. Curiosity-выбор родителей отдаёт предпочтение элитам, чьи дети продолжают побеждать. Статистический гейт адопции нетронут: планировщик решает только, что ПРОБОВАТЬ, но не что проходит. Он сам отключается внутри запуска, если проигрывает равномерному бейзлайну (оцениваемому вживую по его же исследовательским выборам), а постериоры рук печатаются на старте/финише запуска - никакого чёрного ящика. По умолчанию выключен (байт-идентичный равномерный поиск); включается в меню `auto_research.bat`, состояние в `rl_scheduler_v1.json`.
-
-**Признаки-прогнозы Chronos (опционально, экспериментально).** Zero-shot прогнозы предобученной time-series модели как дополнительные признаки CatBoost. Установите `requirements-chronos.txt`, предпосчитайте кеш (`python precompute_chronos.py --assets all`), затем A/B через `GTRADE_CHRONOS=1 GTRADE_EXTRA_FEATURES=chronos_dir,chronos_ret,chronos_spread`. Они входят только через `GTRADE_EXTRA_FEATURES`, поэтому продовая модель не меняется до адопции.
 
 ### Как запускать
 
@@ -685,7 +744,8 @@ $ python predict.py
 | Proposer | `1` эволюционный, ничего не требует. `2` локальная Ollama, `3` Anthropic, `4` OpenAI |
 | Budget | Сколько НОВЫХ кандидатов за этот прогон. Прошлые никогда не перепроверяются |
 | Objective | Как пер-активные приросты сводятся в одно число. По умолчанию `mean`; `cvar` и `min` оптимизируют худшие активы вместо среднего |
-| Score basis | `1` сырой Score ансамбля, `2` вклад нейросетей. См. ниже |
+| Score basis | `1` сырой Score ансамбля, `2` вклад нейросетей, `3` собственный AUC сетей. См. ниже |
+| Illumination | Не вопрос меню: `GTRADE_AR_ILLUM` в лаунчере. `cb` (по умолчанию) наполняет QD-архив по скрину только на CatBoost, `full` - на живых сетях. См. ниже |
 | Wiki, RL scheduler | Опциональные, по умолчанию выключены, описаны выше |
 
 **Как выбирать objective.** Каждый кандидат даёт по одной дельте Score на
@@ -720,18 +780,49 @@ GTRADE_AR_SCORE_BASIS=neural
 objective выше. Величина `neural_lift`, которую прогон печатает рядом с
 вердиктом, - это ровно она, для отчёта всегда сведённая через `mean`.
 
-Это пункт меню `[4b]`, и лаунчер проговаривает оговорку.
-Четыре отдельные попытки поднять нейро-члены - инженерные признаки, прогнозы
-базовой модели Chronos, 25-летний набор для предобучения и адоптированный геном
-- дали ноль или минус, так что данные указывают на разметку как на потолок, а не
-на цель поиска. Этот basis стоит доставать под проверку изменения разметки, а не
-как площадку по умолчанию.
+Это пункт меню `[4b]`, и там же есть третий базис, `net_auc`: собственные
+вероятности нейро-членов, оценённые как усреднённый по свёрткам AUC. В отличие
+от двух Score-базисов это ранговая статистика по сырым вероятностям, поэтому она
+не наследует нестабильность Score (замерено: на паре идентичных прогонов Score
+сдвинулся на 129% своего шумового пола, а `net_auc` - на 6% своего). Это базис
+для любых работ, где предмет измерения - сети.
 
-Бюджет - это не время. Фаза поиска дешёвая (скрин только на CatBoost, одна-три
-минуты на кандидата); платите вы за финальный гейт, который обучает элиты
-целиком на отложенных активах. Прогон на 15 кандидатов - это часы, а не минуты,
-и `Ctrl+C` безопасен в любой момент: сделанное закешировано, повторный запуск
+Различие перестало быть теоретическим в августе 2026. Пять попыток поднять
+нейро-члены - инженерные признаки, 25-летний набор для предобучения,
+адоптированный геном, собственный набор признаков для нейронок и нейро-гигиена -
+дали ноль или минус, и был сделан вывод, что потолок задаёт разметка. Это
+оказалось не так. `build_sequences` собирал окно, которое заканчивалось на бар
+РАНЬШЕ размеченной строки, поэтому каждую последовательностную модель просили
+предсказать движение от бара, который ей никогда не показывали, тогда как
+CatBoost обучался ровно на этом баре. Сети давали AUC 0.5155, то есть монетку.
+С исправленным окном они читаются как 0.60, а на нескольких активах уже
+обгоняют CatBoost. Пять прежних результатов этим не опровергнуты - они просто не
+были измерены, и каждый стоит перепроверить.
+
+Практический урок здесь не в самом баге, а в контролях: контроль обязан быть
+величиной, до которой изменение не дотягивается, и «не дотягивается» надо
+проверять по коду, а не выводить из названия. Два чистых прогона были выброшены
+именно потому, что контролем взяли статистику ЧЕМПИОНСКОЙ свёртки, а чемпион
+выбирается по score самого ансамбля - то есть сети двигали её, ничего не меняя в
+CatBoost. Честный контроль - среднее по свёрткам (`CB_AUC`): оно читается
+одинаково и с живыми сетями, и с заглушками.
+
+Бюджет - это не время. При иллюминации по умолчанию (`cb`) фаза поиска дешёвая
+(скрин только на CatBoost, меньше минуты на кандидата на видеокарте), а платите
+вы за финальный гейт, который обучает элиты целиком на отложенных активах:
+прогон на 15 кандидатов - это часы, а не минуты. При `GTRADE_AR_ILLUM=full`
+арифметика переворачивается: счёт выставляет сам поиск, около девяти минут на
+кандидата, поэтому сотня кандидатов - это почти сутки. `Ctrl+C` безопасен в
+любой момент: сделанное закешировано, архив сохраняется, повторный запуск
 продолжит с места остановки.
+
+Перед длинным бюджетом измерьте, что прогон вообще способен различить:
+`ab_noise.py --unit tier --seeds 1000,2000,3000` переобучает одну и ту же
+конфигурацию под разными сидами и печатает разброс рядом с порогом адопции.
+Поиск, у которого дельты кандидатов меньше этого разброса, ранжирует шум.
+Запускать надо в GPU-окружении: на процессоре обучение повторяется бит-в-бит и
+разброс выйдет нулевым, а это единственный ответ, который гарантированно
+введёт в заблуждение.
 
 Как читать вывод: `SCREEN_SKIPPED` - это дешёвый предварительный отсев за
 работой, а не ошибка. Значение имеет строка вердикта по каждой оси в конце, и
@@ -793,7 +884,7 @@ python push_signals.py          # или пункт [SG] в run_gtrade.bat
 ## Технологии
 
 - **Язык:** Python 3.12
-- **ML:** CatBoost, TensorFlow / Keras (LSTM, Transformer, TCN), scikit-learn, Optuna, scipy; опционально Amazon Chronos (zero-shot прогнозы)
+- **ML:** CatBoost, TensorFlow / Keras (LSTM, Transformer, TCN), scikit-learn, Optuna, scipy
 - **Обслуживание / UI:** FastAPI + Uvicorn (веб-интерфейс), Streamlit (`app.py`), Jinja2
 - **Мобильное:** тонкий клиент на Flutter (Android) поверх Supabase; Firebase Cloud Messaging
 - **Данные:** SQLite (`market.db`), pandas / numpy, Yahoo Finance + MOEX
