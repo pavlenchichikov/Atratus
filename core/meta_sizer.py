@@ -46,6 +46,7 @@ def build_meta_label(feat, cb_cols, meta_cols, target_col="target", n_blocks=5,
     Returns (None, None) when unfittable. Lazy-imports catboost."""
     import numpy as np
     from catboost import CatBoostClassifier
+
     from core.net_hygiene import seed_base
     params = {"iterations": 200, "depth": 4, "random_seed": seed_base()}
     if cb_params:

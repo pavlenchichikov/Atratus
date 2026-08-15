@@ -4,7 +4,6 @@
 import pandas as pd
 
 
-
 def frame(n=60):
     idx = pd.date_range("2026-01-01", periods=n, freq="D")
     return pd.DataFrame({"open": 1.0, "high": 1.2, "low": 0.9,

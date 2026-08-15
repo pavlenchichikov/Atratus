@@ -448,10 +448,9 @@ def test_model_override_treats_auto_as_unset(monkeypatch):
 def test_the_launcher_never_emits_a_blank_model(monkeypatch):
     """Positive control on the .bat itself: a blank there is silently overridden
     by .env, so the launcher must set a real value."""
-    import io
     import os
     bat = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "auto_research.bat")
-    text = io.open(bat, encoding="utf-8", errors="replace").read()
+    text = open(bat, encoding="utf-8", errors="replace").read()
     assert 'set "GTRADE_AR_LLM_MODEL="' not in text
     assert 'set "GTRADE_AR_LLM_MODEL=auto"' in text
