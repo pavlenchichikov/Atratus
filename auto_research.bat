@@ -329,6 +329,21 @@ echo.
 echo   RE-GATE: re-scores the best already-found candidate genomes (from _qd_archive +
 echo   _ar_findings) under the current stronger gate. Reuses past experiments; trains only
 echo   the top-K on the held-out set. Adopts nothing - flags winners for you.
+echo.
+echo   Score basis (this branch skips [4b], so it must be asked here - without it
+echo   a re-gate silently runs on the raw Score and ranks the Score-scale winners
+echo   of every past run ahead of anything measured on the nets):
+echo     1 = raw ensemble Score (default)   2 = neural contribution
+echo     3 = neural AUC       4 = neural GAIN       5 = ensemble AUC
+echo   See [4b] in the search branch for what each one means.
+set "RGB=1"
+set /p "RGB=    choice [1]: "
+set "GTRADE_AR_SCORE_BASIS=raw"
+if "%RGB%"=="2" set "GTRADE_AR_SCORE_BASIS=neural"
+if "%RGB%"=="3" set "GTRADE_AR_SCORE_BASIS=net_auc"
+if "%RGB%"=="4" set "GTRADE_AR_SCORE_BASIS=net_gain"
+if "%RGB%"=="5" set "GTRADE_AR_SCORE_BASIS=ens_auc"
+echo.
 set "RGK=8"
 set /p "RGK=    top-K candidates [8]: "
 echo.
@@ -338,7 +353,7 @@ set /p "RGS=    choice [1]: "
 set "RGSCREEN="
 if "%RGS%"=="2" set "RGSCREEN=--regate-screen"
 echo.
-echo   Running: auto_research.py --regate --regate-k %RGK% %RGSCREEN%
+echo   Running: auto_research.py --regate --regate-k %RGK% %RGSCREEN%  (basis %GTRADE_AR_SCORE_BASIS%)
 python auto_research.py --regate --regate-k %RGK% %RGSCREEN%
 echo.
 echo Done. Review _ar_findings.json (mode=regate) for the new verdicts.
