@@ -2352,3 +2352,27 @@ def test_gate_judges_on_the_active_basis(monkeypatch):
     assert abs(value - 0.06) < 1e-6, (
         "gate reported %r; the Score delta is 0.0 and the Net_AUC delta is 0.06" % value)
     assert value > ar._adopt_floor("mean"), "an AUC gain of 0.06 must clear the 0.005 floor"
+
+
+def test_regate_ranks_only_within_the_active_basis(monkeypatch):
+    """A held-out value is comparable only inside its own basis. Ranking a Score
+    delta (~5) against a net_auc delta (~0.06) in one list buries every AUC
+    winner under every legacy Score winner, whatever their merit."""
+    g_score = ar.Genome(drops=["rsi"], extra=[], label_mode="direction", label_window=1)
+    g_auc = ar.Genome(drops=["vol_z"], extra=[], label_mode="direction", label_window=1)
+    findings = [
+        {"mode": "qd", "winners": [{"genome": ar.asdict(g_score), "value": 5.05,
+                                    "neural_lift": -0.54}]},          # untagged = legacy raw
+        {"mode": "qd", "basis": "net_auc",
+         "winners": [{"genome": ar.asdict(g_auc), "value": 0.065, "neural_lift": None}]},
+    ]
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    picked = ar._regate_candidates({}, findings, 8)
+    assert [ar.genome_sig(g) for g, _v, _n in picked] == [ar.genome_sig(g_auc)], (
+        "under net_auc the Score winner must not be ranked in at all")
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    picked = ar._regate_candidates({}, findings, 8)
+    assert [ar.genome_sig(g) for g, _v, _n in picked] == [ar.genome_sig(g_score)], (
+        "untagged records are legacy raw Score and must still rank on the raw basis")

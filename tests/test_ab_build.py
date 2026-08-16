@@ -287,3 +287,26 @@ def test_evaluate_reports_a_sample_size_not_a_list_of_deltas(monkeypatch):
     st = ab_build.evaluate({"label": "C", "genome": {"drops": []},
                             "sig": "s"}, "A1,A2,A3", [], [], "mean")
     assert st["n"] == 3
+
+
+def test_verdict_is_measured_in_the_floors_units(monkeypatch):
+    """The floor comes from ar._adopt_floor(), which switches to AUC units on
+    net_auc. If the value stayed a raw Score (~0.4) it would clear a 0.005 floor
+    unconditionally, so every candidate would PASS right before an adoption."""
+    import ab_build
+    import auto_research as ar
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    assets = "A,B,C,D,E,F,G,H,I,J,K,L,M,N"
+    # identical Score on both arms, the candidate ahead only on Net_AUC
+    ref = [{"Asset": a, "Score": 1.0, "Net_AUC": 0.60} for a in assets.split(",")]
+    var = [{"Asset": a, "Score": 1.0, "Net_AUC": 0.66} for a in assets.split(",")]
+    monkeypatch.setattr(ab_build, "_heldout_eval",
+                        lambda subset, env, fn, **kw: (var, []))
+
+    st = ab_build.evaluate({"genome": {"drops": [], "extra": [],
+                                       "label_mode": "direction", "label_window": 1},
+                            "sig": "x"}, assets, ref, [], "mean")
+    assert abs(st["value"] - 0.06) < 1e-9, (
+        "measured %r; the Score delta is 0.0 and the Net_AUC delta is 0.06" % st["value"])
+    assert st["value"] > ar._adopt_floor("mean")

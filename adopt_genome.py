@@ -123,7 +123,10 @@ def describe(cand):
         bits.append("band %+.4f" % g["band_delta"])
     if g.get("regime_mode", "both") != "both":
         bits.append("regime %s" % g["regime_mode"])
-    value = "{:+.2f}".format(cand["value"]) if cand["value"] is not None else "n/a"
+    # %.4g: on an AUC basis a +0.065 finding and a 0.005 floor both round to
+    # two decimals as "+0.07" and "+0.01" on the one screen where the adoption
+    # decision is actually taken.
+    value = "{:+.4g}".format(cand["value"]) if cand["value"] is not None else "n/a"
     if cand["kind"] == "measured":
         p = "{:.4f}".format(cand["p"]) if cand["p"] is not None else "n/a"
         n = cand["n"] if cand["n"] is not None else "?"

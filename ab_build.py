@@ -111,11 +111,16 @@ def build_config(candidates, assets, ref, floor, alpha, seed, objective):
     """The run description, with the reference written down.
 
     floor and alpha are frozen here rather than read at run time, so a later
-    change to either constant cannot silently reinterpret a pending run.
+    change to either constant cannot silently reinterpret a pending run. The
+    BASIS is frozen for the same reason and belongs with them: it decides the
+    units the floor is even in, so a config built on net_auc and run after the
+    environment fell back to raw would compare a Score against an AUC floor.
     """
+    import auto_research as ar
     return {
         "holdout": ",".join(assets),
         "objective": objective,
+        "basis": ar._score_basis(),
         "floor": floor,
         "alpha": alpha,
         "seed": seed,
@@ -272,7 +277,8 @@ def _configure(args):
 def _print_config(cfg):
     print("  reference : {}".format(cfg["reference"]))
     print("  holdout   : {}".format(cfg["holdout"]))
-    print("  objective : {}   floor {:+.2f}   alpha {:.3f}".format(cfg["objective"], cfg["floor"], cfg["alpha"]))
+    print("  objective : {}   floor {:+.4g}   alpha {:.3f}   basis {}".format(
+        cfg["objective"], cfg["floor"], cfg["alpha"], cfg.get("basis", "raw")))
     for c in cfg["candidates"]:
         g = c["genome"]
         print("  candidate : %-8s %d drops, %d extra, label %s/%s"
@@ -316,7 +322,18 @@ def evaluate(cand, subset, ref_full, ref_contrib, objective):
         return ar._candidate_train_cached(sub, env, _sig)
 
     var_full, var_contrib = _heldout_eval(subset, ar.genome_to_env(g), _fn)
-    p, value, deltas, _tag = ar.holdout_stats(ref_full, var_full, objective)
+    # Both sides onto the ACTIVE basis before comparing. The floor this verdict
+    # is checked against comes from ar._adopt_floor(), which already switches to
+    # AUC units on net_auc / net_gain / ens_auc - so an unre-keyed raw Score
+    # (~0.4) would be compared against a floor of 0.005 and PASS everything.
+    # rekey_rows is the identity on the raw basis. _rekeyed returns None when the
+    # rows predate the column: unmeasurable, which verdict() reads as FAILED
+    # rather than inventing a number right before an adoption decision.
+    ref_scored, var_scored = ar._rekeyed(ref_full), ar._rekeyed(var_full)
+    if ref_scored is None or var_scored is None:
+        return {"sig": sig, "p": None, "value": None, "n": 0,
+                "p_neural": None, "value_neural": None}
+    p, value, deltas, _tag = ar.holdout_stats(ref_scored, var_scored, objective)
     p_n, value_n, _d2, _t2 = ar.holdout_stats(ref_contrib, var_contrib,
                                               objective)
     return {"sig": sig, "p": p, "value": value, "n": len(deltas),
@@ -405,8 +422,11 @@ def run(cfg):
     for label, st in results.items():
         v = verdict(st, cfg["floor"], cfg["alpha"])
         p_txt = "{:.4f}".format(st["p"]) if st["p"] is not None else "n/a"
-        v_txt = "{:+.2f}".format(st["value"]) if st["value"] is not None else "n/a"
-        print("  %-8s %s over %s   p=%s  n=%s   %s (floor %+.2f, alpha %.3f)"
+        # %.4g, not %.2f: on an AUC basis the whole adoption floor is 0.005 and
+        # would print as a reassuring "+0.01", with a real +0.065 finding shown
+        # as "+0.07". Same reason ab_noise prints its residual this way.
+        v_txt = "{:+.4g}".format(st["value"]) if st["value"] is not None else "n/a"
+        print("  %-8s %s over %s   p=%s  n=%s   %s (floor %+.4g, alpha %.3f)"
               % (label, v_txt, cfg["reference"], p_txt, st["n"], v,
                  cfg["floor"], cfg["alpha"]))
     if ar_memory.data_fingerprint(subset) != fp_start:

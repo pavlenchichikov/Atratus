@@ -53,14 +53,44 @@ def blob_put(name, obj):
     _save(os.path.join(_RL_BLOB_DIR, f"{name}.json"), obj)
 
 
+# Mirrors auto_research._score_basis's accepted set. Kept here rather than
+# imported because auto_research imports THIS module; tests/test_ar_memory.py
+# asserts the two lists still agree, so the copy cannot drift silently.
+SCORE_BASES = ("raw", "neural", "net_auc", "net_gain", "ens_auc")
+
+
+def tried_scope():
+    """The registry namespace for the active basis (raw keeps the bare kind).
+
+    "Tried" means "we already spent compute learning this candidate's value" -
+    and a value only exists inside one basis. The 1624 genome signatures banked
+    before 2026-08-16 were all scored by a CatBoost-only screen with the neural
+    members stubbed to a constant, so under net_auc they are UNMEASURED, not
+    tried. Sharing one namespace made the search refuse to revisit any of them:
+    measured 2026-08-16, ~52 of 100 steps died on dedup and the two emitters
+    that could have filled the empty niches (nets, novelty) booked zero children
+    all run, leaving 6 niches illuminated and the refine phase never reached.
+    """
+    b = (os.getenv("GTRADE_AR_SCORE_BASIS") or "raw").strip().lower()
+    if b not in SCORE_BASES:
+        b = "raw"
+    return b
+
+
+def _scoped(kind):
+    scope = tried_scope()
+    return kind if scope == "raw" else "%s@%s" % (kind, scope)
+
+
 def tried_seen(kind, sig):
-    """Whether this candidate signature was ever evaluated (any past run)."""
-    return sig in _load(TRIED_PATH, {}).get(kind, [])
+    """Whether this candidate signature was ever evaluated (any past run) ON THE
+    ACTIVE BASIS - see tried_scope."""
+    return sig in _load(TRIED_PATH, {}).get(_scoped(kind), [])
 
 
 def tried_add(kind, sig):
     reg = _load(TRIED_PATH, {})
-    bucket = reg.setdefault(kind, [])
+    bucket = reg.setdefault(_scoped(kind), [])
     if sig not in bucket:
         bucket.append(sig)
         _save(TRIED_PATH, reg)
@@ -73,7 +103,7 @@ def tried_count():
 def tried_recent(kind, n=20):
     """The last n evaluated signatures for a kind (as stored, oldest-first). Fed to
     the LLM proposer as an 'avoid these' list so it stops re-proposing tried candidates."""
-    return _load(TRIED_PATH, {}).get(kind, [])[-n:]
+    return _load(TRIED_PATH, {}).get(_scoped(kind), [])[-n:]
 
 
 def replication_seen(sig):

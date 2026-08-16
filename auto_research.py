@@ -1433,7 +1433,9 @@ def run_qd(train_fn=None):
                 g.drops, g.label_mode, g.label_window, len(g.extra),
                 _gate_verdict(ok, bool(replicated), clears, nl, s), tag, nl_str))
     ar_memory.findings_append({
-        "ts": datetime.utcnow().isoformat(), "mode": "qd",
+        # _score_basis(), not the local `basis`: that one is bound only inside the
+        # elites branch, and a run with an empty archive still journals.
+        "ts": datetime.utcnow().isoformat(), "mode": "qd", "basis": _score_basis(),
         "budget": BUDGET, "winners": finding_winners})
     if ar_wiki.wiki_on():
         ar_wiki.compile_wiki()
@@ -1470,7 +1472,16 @@ def _regate_candidates(archive_raw, findings, k):
     only elites (a bare selection `fitness`) fill the remaining slots. Pure - no
     training. archive_raw is the raw JSON dict {cell: {"genome": <dict>, "fitness"}}."""
     by_sig = {}  # sig - (Genome, value, neural_lift)
+    basis = _score_basis()
     for rec in findings or []:
+        # A held-out `value` is only comparable inside its own basis: a Score
+        # delta is ~1-5, a net_auc delta ~0.01, and ranking them in one list puts
+        # every legacy Score winner ahead of every AUC winner regardless of merit
+        # (measured 2026-08-16: k=8 filled with eight Score-scale genomes whose
+        # neural_lift ran -0.49 to -2.38, so the AUC elites were never reached).
+        # Records written before this tag existed are raw Score by construction.
+        if rec.get("basis", "raw") != basis:
+            continue
         for w in rec.get("winners", []):
             gd, v = w.get("genome"), w.get("value")
             if not isinstance(gd, dict) or v is None:
@@ -1638,7 +1649,7 @@ def regate(k=8, screen=False):
         nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
         _say(f"[regate] old {old_score:.2f} - "
              f"{_gate_verdict(ok, bool(replicated), clears, nl, s)} | {tag}{nl_str}")
-    ar_memory.findings_append({"ts": ts, "mode": "regate", "k": k,
+    ar_memory.findings_append({"ts": ts, "mode": "regate", "k": k, "basis": basis,
                                "screen": bool(screen), "winners": finding_winners})
     _regate_progress_clear()
     _say("[regate] re-gated %d candidate(s); nothing adopted automatically." % len(results))
@@ -2704,7 +2715,7 @@ def main():
         nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
         print(f"[auto-research] axis {name}: {verdict} | {tag}{nl_str}")
     ar_memory.findings_append({
-        "ts": ts, "mode": "axes",
+        "ts": ts, "mode": "axes", "basis": basis,
         "axes": [a.name for a in axes], "budget": BUDGET,
         "winners": finding_winners})
     if ar_wiki.wiki_on():

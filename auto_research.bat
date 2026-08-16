@@ -40,6 +40,27 @@ REM interpreter and this PATH (which is where the CUDA/cuDNN DLLs live).
 call "%~dp0activate_env.bat"
 
 REM == Advanced knobs (edit here; the menu does not ask about these) ===========
+REM    HARDWARE. Measured 2026-08-16 mid-run on the RTX 2050 box: CPU 25%% avg
+REM    (12 threads), GPU 39%% avg, RAM 4.1 GB free of 15.7. Neither is saturated,
+REM    because net training is serialised behind ONE GPU slot while CatBoost
+REM    waits. The knobs, safest first:
+REM      GTRADE_CB_THREADS   6 by default under GTRADE_LIGHT (half the threads,
+REM                          to keep the box usable). Raising it to 10-12 is free
+REM                          on the CPU side and costs nothing else.
+REM      GTRADE_WORKERS      6. Pointless above 4 on the tier unit - it only has
+REM                          4 assets - and RAM-bound on holdout_14, where the
+REM                          run already holds ~6 GB.
+REM      GTRADE_NEURAL_SLOTS 1. THE lever, and the risky one: cuDNN workspaces
+REM                          live OUTSIDE the TF pool, so 2 slots OOM at the
+REM                          default pool. Shrink GTRADE_TF_POOL_PCT to 0.45-0.50
+REM                          FIRST (that buys 400-600 MB of headroom), then try 2.
+REM    Changing any of these changes the measurement, and none of them is part of
+REM    the eval-cache key: a base cached under the old settings would be compared
+REM    against candidates trained under the new ones. Clear _ar_eval_cache.json
+REM    when you change them, and never change them mid-run.
+REM set "GTRADE_CB_THREADS=12"
+REM set "GTRADE_TF_POOL_PCT=0.50"
+REM set "GTRADE_NEURAL_SLOTS=2"
 REM    The screen replaces the nets with a constant 0.5, so on a NET basis
 REM    (GTRADE_AR_SCORE_BASIS=net_auc) every candidate screens identically and
 REM    the screen carries no information - it only throws net levers away on

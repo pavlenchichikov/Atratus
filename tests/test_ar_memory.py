@@ -1,3 +1,5 @@
+import inspect
+
 from core import ar_memory as am
 
 
@@ -143,10 +145,41 @@ def test_cache_keys_carry_objective_marker(monkeypatch):
     from core import ar_memory
     monkeypatch.setattr(ar_memory, "data_fingerprint", lambda subset: "frozen")
     monkeypatch.delenv("GTRADE_OBJECTIVE_V2", raising=False)
-    b1 = ar_memory.base_key("SP500", {})
-    g1 = ar_memory.genome_key("SP500", "sig", "full")
+    b1 = am.base_key("SP500", {})
+    g1 = am.genome_key("SP500", "sig", "full")
     monkeypatch.setenv("GTRADE_OBJECTIVE_V2", "1")
-    assert ar_memory.base_key("SP500", {}) != b1
-    assert ar_memory.genome_key("SP500", "sig", "full") != g1
+    assert am.base_key("SP500", {}) != b1
+    assert am.genome_key("SP500", "sig", "full") != g1
     monkeypatch.setenv("GTRADE_OBJECTIVE_V2", "0")
-    assert ar_memory.base_key("SP500", {}) == b1
+    assert am.base_key("SP500", {}) == b1
+
+
+def test_tried_registry_is_scoped_to_the_basis(monkeypatch, tmp_path):
+    """A signature "tried" under one basis is UNMEASURED under another: the value
+    that made it 'tried' only exists inside the basis that produced it."""
+    monkeypatch.setattr(am, "TRIED_PATH", str(tmp_path / "_tried.json"))
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    am.tried_add("genome", "sig1")
+    assert am.tried_seen("genome", "sig1")
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    assert not am.tried_seen("genome", "sig1"), (
+        "a CatBoost-screened genome must be proposable again once the nets decide")
+    am.tried_add("genome", "sig1")
+    assert am.tried_seen("genome", "sig1")
+    assert am.tried_recent("genome", 5) == ["sig1"]
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert am.tried_recent("genome", 5) == ["sig1"], "raw bucket untouched"
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "nonsense")
+    assert am.tried_scope() == "raw", "an unknown basis falls back to raw"
+
+
+def test_score_bases_match_auto_research():
+    """The mirrored list must not drift from the one auto_research validates."""
+    import auto_research as ar
+    src = inspect.getsource(ar._score_basis)
+    for b in am.SCORE_BASES:
+        assert '"%s"' % b in src, "%s is missing from auto_research._score_basis" % b

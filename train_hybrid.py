@@ -52,8 +52,17 @@ if gpus:
             logger.debug("VRAM detection failed: %s", _e)
 
         if _vram_mb and _vram_mb > 0:
-            # Reserve 60% of VRAM for TF pool, leave rest for cuDNN + OS
-            _tf_pool_mb = int(_vram_mb * 0.60)
+            # Reserve 60% of VRAM for TF pool, leave rest for cuDNN + OS.
+            # GTRADE_TF_POOL_PCT trades pool for headroom: cuDNN allocates its
+            # workspaces OUTSIDE this pool, which is why GTRADE_NEURAL_SLOTS>1
+            # OOMs at the default on a 4GB card. Shrink the pool first, then
+            # raise the slots, and watch nvidia-smi - not the other way round.
+            try:
+                _pool_pct = float((os.getenv("GTRADE_TF_POOL_PCT") or "0.60").strip())
+            except ValueError:
+                _pool_pct = 0.60
+            _pool_pct = min(max(_pool_pct, 0.20), 0.90)
+            _tf_pool_mb = int(_vram_mb * _pool_pct)
             _tf_pool_mb = max(1024, min(_tf_pool_mb, _vram_mb - 1024))  # at least 1GB free
             tf.config.set_logical_device_configuration(
                 gpus[0],
