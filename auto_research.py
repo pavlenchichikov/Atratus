@@ -1403,7 +1403,12 @@ def run_qd(train_fn=None):
             if basis == "neural":
                 p, value, _d, tag = holdout_stats(ho_base_contrib, var_contrib, obj)
             else:
-                p, value, _d, tag = holdout_stats(ho_base_full, var_full, obj)
+                _st = _gate_stats(ho_base_full, var_full, obj)
+                if _st is None:
+                    print("[gate] skipped: the candidate's holdout rows carry no "
+                          "column for basis %s" % basis)
+                    continue
+                p, value, _d, tag = _st
             results.append((g, p, value, tag, nl))
         flags = benjamini_hochberg([r[1] for r in results])
         ts_qd = datetime.utcnow().isoformat()
@@ -1607,7 +1612,11 @@ def regate(k=8, screen=False):
         if basis == "neural":
             p, value, _d, tag = holdout_stats(ho_base_contrib, var_contrib, obj)
         else:
-            p, value, _d, tag = holdout_stats(ho_base_full, var_full, obj)
+            _st = _gate_stats(ho_base_full, var_full, obj)
+            if _st is None:
+                _say("[regate] %d/%d skipped: no column for basis %s" % (i, len(cands), basis))
+                continue
+            p, value, _d, tag = _st
         results.append((g, old_score, p, value, tag, nl))
         done[gsig] = {"p": p, "value": value, "tag": tag, "nl": nl}
         _regate_progress_save(base_sig, done)
@@ -1964,6 +1973,33 @@ def _rekeyed(rows, basis_name="the active basis"):
     """
     out = rekey_rows(rows)
     return out if out or not rows else None
+
+
+def _gate_stats(base_full, var_full, obj):
+    """`holdout_stats` for the adoption gate, on the ACTIVE basis.
+
+    Only the `neural` basis ever had its own branch at the three call sites, so
+    net_auc / net_gain / ens_auc fell through to the raw ensemble Score - while
+    `adopt_floor` had ALREADY switched to AUC units for exactly those bases. The
+    verdict then compared a value in Score against a floor in AUC. Measured
+    2026-08-16: a search that had found genomes worth +0.065 Net_AUC, thirteen
+    times that floor, was rejected on a money Score nobody asked it to optimize,
+    and the neural finding was never tested at all.
+
+    `rekey_rows` is the identity on the raw basis, so that path is unchanged.
+
+    Returns None when the CANDIDATE rows carry no column for this basis: empty
+    means stale, not neutral (see `_rekeyed`), and the caller must not read a
+    vacuous pass out of it. A stale BASE is retrained instead, the way
+    `_tier_base` handles the same trap.
+    """
+    base = _rekeyed(base_full)
+    if base is None:
+        base = rekey_rows(train_env(heldout_assets(), {}))
+    var = _rekeyed(var_full)
+    if var is None:
+        return None
+    return holdout_stats(base, var, obj)
 
 
 def _tier_base(base_fn):
@@ -2638,7 +2674,12 @@ def main():
             if basis == "neural":
                 p, value, _d, tag = holdout_stats(ho_base_contrib, var_contrib, obj)
             else:
-                p, value, _d, tag = holdout_stats(ho_base_full, var_full, obj)
+                _st = _gate_stats(ho_base_full, var_full, obj)
+                if _st is None:
+                    print("[gate] skipped: the candidate's holdout rows carry no "
+                          "column for basis %s" % basis)
+                    continue
+                p, value, _d, tag = _st
             winners.append((axis.name, winner, p, value, tag, nl))
         except RuntimeError as exc:
             print(f"[auto-research] axis {axis.name}: LLM proposer unavailable, skipping ({exc})")

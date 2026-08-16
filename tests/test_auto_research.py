@@ -2313,3 +2313,42 @@ def test_tier_still_uses_a_cache_that_carries_the_basis(monkeypatch):
     passed, delta = ar._passes_tier({}, "k", ar.rekey_rows(base), "mean", train_fn=_train)
     assert calls["n"] == 0
     assert passed is True and abs(delta - 0.01) < 1e-9
+
+
+def _net_basis_gate_run(monkeypatch, ar_mod):
+    """Shared body: base and candidate share an identical Score and differ ONLY in
+    Net_AUC, so a Score-based gate reports exactly 0.0 and an AUC-based gate
+    reports the real +0.06. Returns the recorded verdict value."""
+    monkeypatch.setattr(ar_mod, "_qd_load", dict)
+    monkeypatch.setattr(ar_mod, "_qd_save", lambda a: None)
+    monkeypatch.setattr(ar_mod, "BUDGET", 2, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "2")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "1")
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    monkeypatch.delenv("GTRADE_AR_ILLUM", raising=False)
+    import random as _r
+    _r.seed(0)
+    recorded = {}
+    monkeypatch.setattr(ar_mod.ar_memory, "findings_append",
+                        lambda rec: recorded.update(rec))
+
+    def fake_train(subset, env):
+        is_base = not [k for k in env if k != "GTRADE_SCREEN_ONLY"]
+        auc = 0.60 if is_base else 0.66
+        return [{"Asset": a, "Score": 1.0, "Net_AUC": auc} for a in subset.split(",")]
+
+    ar_mod.run_qd(train_fn=fake_train)
+    winners = recorded.get("winners") or []
+    assert winners, "the gate recorded no verdict"
+    return winners[0]["value"]
+
+
+def test_gate_judges_on_the_active_basis(monkeypatch):
+    """The adoption gate must score on the basis the search optimized. net_auc
+    used to fall through to the raw Score while the adoption floor had already
+    switched to AUC units, so the verdict compared a Score against an AUC floor."""
+    value = _net_basis_gate_run(monkeypatch, ar)
+    assert abs(value - 0.06) < 1e-6, (
+        "gate reported %r; the Score delta is 0.0 and the Net_AUC delta is 0.06" % value)
+    assert value > ar._adopt_floor("mean"), "an AUC gain of 0.06 must clear the 0.005 floor"
