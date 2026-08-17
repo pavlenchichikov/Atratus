@@ -355,6 +355,27 @@ def train_jobs():
         return 1
 
 
+def effective_chunk_size(subset, size=None, jobs=None):
+    """Assets per chunk, small enough that every job actually gets one.
+
+    GTRADE_AR_TRAIN_CHUNK is a CAP, picked for how much an interruption may cost
+    and how much RAM one process may hold. It is not a target, and treating it as
+    one silently disabled the whole parallel path: at 7 it never split the
+    4-asset search unit, so `len(chunks) <= 1` took the single-process branch and
+    GTRADE_AR_TRAIN_JOBS was ignored exactly where the time goes. Only the
+    14-asset A/B arm ever reached it.
+
+    Chunking stays off entirely at size 0, jobs included: that is the default and
+    it must remain byte-identical.
+    """
+    size = train_chunk_size() if size is None else size
+    jobs = train_jobs() if jobs is None else jobs
+    n = len([a for a in subset.split(",") if a.strip()])
+    if size <= 0 or jobs <= 1 or n <= 1:
+        return size
+    return min(size, -(-n // jobs))     # ceil(n / jobs)
+
+
 def split_load(env, jobs, progress_dir=None):
     """One process's share of the box when `jobs` trainers run side by side.
 
@@ -453,7 +474,7 @@ def _cached_train(subset, env, key_of, label):
     if rows is not None:
         _say("[%s] cache hit: %s" % (label, subset))
         return rows
-    chunks = chunk_subsets(subset, train_chunk_size())
+    chunks = chunk_subsets(subset, effective_chunk_size(subset))
     if len(chunks) <= 1:
         rows = train_env(subset, env)
         if rows:

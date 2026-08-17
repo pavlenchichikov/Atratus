@@ -351,7 +351,10 @@ the four tier assets:
 
 27% faster, both returning all four rows. Each process is 43% slower than it was
 alone; the gain is purely overlap, which is what a host-bound workload looks
-like. The cost is headroom: 3956 of 4096 MiB leaves 140 MiB, so if a unit ever
+like. `GTRADE_AR_TRAIN_CHUNK` is a CAP on assets per chunk, not a target: the
+effective size is the smaller of it and `ceil(assets / jobs)`, because at 7 it
+never split the 4-asset search unit at all and the parallel path was dead
+exactly where the loop spends its time. The cost is headroom: 3956 of 4096 MiB leaves 140 MiB, so if a unit ever
 dies out of memory the retry drops to one process and the fix is to lower
 `GTRADE_TF_POOL_PCT`, not to raise the job count. `GTRADE_WORKERS` is
 deliberately left derived: a holdout arm already holds about 6 GB with 4.1 free,
@@ -1044,7 +1047,11 @@ p-значением и порогом в правильных единицах,
 
 Быстрее на 27%, обе конфигурации вернули все четыре строки. При этом каждый
 процесс на 43% медленнее, чем был в одиночку: выигрыш взялся исключительно из
-перекрытия, и так выглядит нагрузка, упирающаяся в хост. Цена - запас по памяти:
+перекрытия, и так выглядит нагрузка, упирающаяся в хост. `GTRADE_AR_TRAIN_CHUNK`
+это **потолок** активов на чанк, а не цель: действующий размер равен меньшему из
+него и `ceil(активы / процессы)`. При семёрке он вообще не резал поисковый юнит
+из четырёх активов, и параллельный путь был мёртв ровно там, где цикл проводит
+всё время. Цена - запас по памяти:
 3956 из 4096 МиБ оставляют 140. Если юнит когда-нибудь умрёт по памяти, повтор
 уходит на один процесс, а правильное лечение - понизить `GTRADE_TF_POOL_PCT`, а
 не поднимать число процессов. `GTRADE_WORKERS` намеренно оставлен выводимым: арм

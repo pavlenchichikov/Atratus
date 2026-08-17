@@ -476,3 +476,20 @@ def test_the_safe_retry_also_drops_back_to_one_training_process():
     would just fail again."""
     assert auto_loop.CAMPAIGN["GTRADE_AR_TRAIN_JOBS"] == "2"
     assert auto_loop.SAFE_LOAD["GTRADE_AR_TRAIN_JOBS"] == "1"
+
+
+def test_the_chunk_cap_still_splits_a_small_unit_across_the_jobs():
+    """The bug this closes: chunk 7 never split the 4-asset search unit, so the
+    two-process path was dead exactly where the loop spends its time."""
+    tier, holdout = "A,B,C,D", ",".join("ABCDEFGHIJKLMN")
+    assert ar.effective_chunk_size(tier, size=7, jobs=2) == 2
+    assert len(ar.chunk_subsets(tier, 2)) == 2
+    # the cap still wins where it is the smaller of the two
+    assert ar.effective_chunk_size(holdout, size=7, jobs=2) == 7
+    assert len(ar.chunk_subsets(holdout, 7)) == 2
+
+
+def test_one_job_leaves_the_chunk_cap_exactly_as_configured():
+    assert ar.effective_chunk_size("A,B,C,D", size=7, jobs=1) == 7
+    # and chunking off stays off, jobs or not
+    assert ar.effective_chunk_size("A,B,C,D", size=0, jobs=4) == 0
