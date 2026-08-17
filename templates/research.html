@@ -17,6 +17,45 @@
 </div>
 
 <section class="panel fade">
+  <div class="panel-head"><h2>Unattended cycle</h2></div>
+  {% if cycle.current %}
+  <div class="statgrid">
+    <div class="stat"><span class="stat-label">Stage</span>
+      <span class="stat-value mono">{{ cycle.current.phase }}</span></div>
+    <div class="stat"><span class="stat-label">Cycle</span>
+      <span class="stat-value mono">{{ cycle.current.cycle }}</span></div>
+    <div class="stat"><span class="stat-label">Since</span>
+      <span class="stat-value mono">{{ cycle.current.since }}</span></div>
+  </div>
+  {% if cycle.current.detail %}<p class="mono">{{ cycle.current.detail }}</p>{% endif %}
+  {% if cycle.campaign %}
+  <p class="dim">Campaign: basis {{ cycle.campaign.GTRADE_AR_SCORE_BASIS }},
+    objective {{ cycle.campaign.GTRADE_AR_OBJECTIVE }}. These are frozen for the
+    campaign, so a result is judged by what was chosen before it was measured.
+    {% if cycle.campaign_reason %}Started because: {{ cycle.campaign_reason }}.{% endif %}</p>
+  {% endif %}
+  {% if cycle.current.phase == "adopted" %}
+  <p class="mono">A genome was adopted and the cycle stopped. Production still runs
+    the previous generation until the retrain is run by hand.</p>
+  {% endif %}
+  {% if cycle.history %}
+  <table class="grid">
+    <thead><tr><th>When</th><th>Phase</th><th>Exit</th></tr></thead>
+    <tbody>
+      {% for h in cycle.history %}
+      <tr><td class="mono">{{ h.ts }}</td><td class="mono">{{ h.action }}</td>
+        <td class="mono">{{ h.rc }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% else %}
+  <p class="dim">The unattended cycle has not run. Start it with
+    <span class="mono">python auto_loop.py</span>.</p>
+  {% endif %}
+</section>
+
+<section class="panel fade">
   <div class="panel-head"><h2>Agent status</h2></div>
   {% if progress.state == "running" %}
   <div class="statgrid">

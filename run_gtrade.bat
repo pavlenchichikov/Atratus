@@ -52,6 +52,7 @@ echo    [AG] Adopt a genome   [AS] What is adopted   [AR] Revert adoption
 echo    [ABC] Configure a genome A/B     [ABR] Run the configured A/B
 echo  RESEARCH / MAINTENANCE
 echo    [RS] Auto-research agent (own menu)   [LC] Daily loop cycle
+echo    [AL] Autonomous cycle: search, A/B, adopt   [ALS] Its stage / stop it
 echo    [RC] Recalibrate live probabilities   [TP] Fit the timing policy
 echo.
 echo =======================================================
@@ -86,6 +87,8 @@ if /i "%choice%"=="AG" goto adopt_genome
 if /i "%choice%"=="AS" goto adopt_show
 if /i "%choice%"=="AR" goto adopt_revert
 if /i "%choice%"=="RS" goto auto_research
+if /i "%choice%"=="ALS" goto auto_loop_status
+if /i "%choice%"=="AL" goto auto_loop
 if /i "%choice%"=="LC" goto loop_cycle
 if /i "%choice%"=="RC" goto recalibrate
 if /i "%choice%"=="TP" goto timing_policy
@@ -174,6 +177,98 @@ REM  main menu runs next, and a later Train would silently pick them up.
 setlocal
 call auto_research.bat
 endlocal
+goto menu
+
+:auto_loop
+cls
+echo =======================================================
+echo   AUTONOMOUS CYCLE  (search - A/B - adopt)
+echo =======================================================
+echo Runs the three phases in sequence and keeps cycling until something is
+echo adopted, a phase fails, or you stop it. A failed A/B is not an ending: the
+echo next cycle takes the next candidate, and when none is left it searches again.
+echo.
+echo It STOPS before the retrain and prints the full report plus the genome.
+echo Production is untouched until you run the retrain yourself.
+echo.
+echo Stop it later with [ALS], or from any prompt: python auto_loop.py --stop
+echo Its stage is also on the /research page while it runs.
+echo.
+REM  setlocal so the campaign's GTRADE_* choices die with the run. The main menu
+REM  stays on the base env, and a leaked score basis or label mode would be
+REM  picked up by a later Train from this same window.
+setlocal
+REM  The GPU env must be active BEFORE python starts: auto_loop spawns every
+REM  train_hybrid through sys.executable, so the whole tree inherits this
+REM  interpreter and this PATH, which is where the CUDA/cuDNN DLLs live. Without
+REM  it the entire night runs on the CPU and nobody notices until morning.
+call "%~dp0activate_env.bat"
+
+echo [1] Campaign director (an LLM picks the axis, label and budget each cycle;
+echo     it can never touch the score basis or the objective)
+echo     1 = off (default: the campaign in auto_loop.py is used as written)
+echo     2 = on
+set "DIR=1"
+set /p "DIR=    choice [1]: "
+set "GTRADE_AR_DIRECTOR=0"
+if "%DIR%"=="2" set "GTRADE_AR_DIRECTOR=1"
+if not "%GTRADE_AR_DIRECTOR%"=="1" goto :al_budget
+
+echo.
+echo [1a] Which model directs?
+echo     1 = local Ollama (default, free)   2 = Anthropic API   3 = OpenAI API
+set "DLM=1"
+set /p "DLM=    choice [1]: "
+set "GTRADE_AR_LLM=ollama"
+if "%DLM%"=="2" set "GTRADE_AR_LLM=anthropic"
+if "%DLM%"=="3" set "GTRADE_AR_LLM=openai"
+REM  "auto", not empty: cmd's  set "VAR="  DELETES the variable, and the agent
+REM  then calls load_dotenv(), which refills a MISSING key from .env - which is
+REM  how a pinned 17 GB model once reached a 15.7 GB machine.
+set "GTRADE_AR_LLM_MODEL=auto"
+set "GTRADE_AR_LLM_MAX_TOKENS=8000"
+set "GTRADE_AR_LLM_TIMEOUT=3600"
+if "%DLM%"=="1" python -m core.llm_proposer --list-ollama
+if "%DLM%"=="1" set /p "GTRADE_AR_LLM_MODEL=    model name [auto]: "
+if "%DLM%"=="2" set /p "GTRADE_AR_LLM_MODEL=    Anthropic model [auto]: "
+if "%DLM%"=="3" set /p "GTRADE_AR_LLM_MODEL=    OpenAI model [auto]: "
+:al_budget
+
+echo.
+set "ALB=15"
+set /p "ALB=[2] Search iterations per cycle [15]: "
+echo.
+echo [3] Deadline in hours. 0 = none, which is what "keep going until something
+echo     is adopted" means. Any number stops it early, even mid-campaign.
+set "ALH=0"
+set /p "ALH=    hours [0]: "
+
+echo.
+echo ------------------------------------------------------------
+if "%GTRADE_AR_DIRECTOR%"=="1" echo   director=on  llm=%GTRADE_AR_LLM%  model=%GTRADE_AR_LLM_MODEL%
+if not "%GTRADE_AR_DIRECTOR%"=="1" echo   director=off  (campaign as written in auto_loop.py)
+echo   budget=%ALB% per cycle   deadline=%ALH% h
+echo ------------------------------------------------------------
+set "GO=Y"
+set /p "GO=Start? [Y/n]: "
+if /i "%GO%"=="n" goto :al_done
+python auto_loop.py --budget %ALB% --hours %ALH%
+:al_done
+endlocal
+pause
+goto menu
+
+:auto_loop_status
+cls
+echo Where the autonomous cycle stands. The same stage is on the /research page.
+echo.
+python auto_loop.py --status
+echo.
+echo   [1] back (default)   [2] ask a running loop to stop after its phase
+set "ALS=1"
+set /p "ALS=    choice [1]: "
+if "%ALS%"=="2" python auto_loop.py --stop
+pause
 goto menu
 
 :loop_cycle

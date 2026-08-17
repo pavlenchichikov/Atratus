@@ -23,7 +23,11 @@ TRIED_PATH = os.path.join(BASE, "_ar_tried.json")
 CACHE_PATH = os.path.join(BASE, "_ar_eval_cache.json")
 FINDINGS_PATH = os.path.join(BASE, "_ar_findings.json")
 DB_PATH = os.path.join(BASE, "market.db")
-CACHE_CAP = 120
+# Chunked held-out training (GTRADE_AR_TRAIN_CHUNK) turns one arm into several
+# entries: a 14-asset holdout at chunk 5 is 3 chunks, doubled by the CB-only
+# train, so a 4-arm A/B alone banks ~24. At the old cap of 120 a long unattended
+# run could evict a chunk it had already paid hours for and retrain it.
+CACHE_CAP = 400
 REPLICATION_PATH = os.path.join(BASE, "_ar_replication.json")
 _RL_BLOB_DIR = BASE
 

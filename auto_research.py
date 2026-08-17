@@ -325,19 +325,79 @@ def train_env(subset, env_overrides):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def train_chunk_size():
+    """Assets per training chunk, or 0 for the whole subset in one process.
+
+    0 by default so every existing path stays byte-identical; the unattended
+    loop turns it on.
+    """
+    try:
+        return max(0, int(os.getenv("GTRADE_AR_TRAIN_CHUNK", "0") or 0))
+    except ValueError:
+        return 0
+
+
+def chunk_subsets(subset, size):
+    """Split a comma-separated subset into training chunks, order preserved."""
+    assets = [a.strip() for a in subset.split(",") if a.strip()]
+    if not assets:
+        return []
+    if size <= 0 or size >= len(assets):
+        return [",".join(assets)]
+    return [",".join(assets[i:i + size]) for i in range(0, len(assets), size)]
+
+
+def _cached_train(subset, env, key_of, label):
+    """Train a subset behind the cross-run cache, one chunk at a time when
+    GTRADE_AR_TRAIN_CHUNK is set.
+
+    The same trick train_chunked.py uses on the production retrain, for the same
+    reason. One held-out arm is 8 to 11 hours inside a single train_hybrid
+    process, and an interruption loses all of it: the cache entry is only written
+    once the whole subset is back. Per-chunk entries mean a resumed run reads the
+    finished chunks and trains only the one that was in flight.
+
+    Assets train independently, so the split changes no per-asset row - only how
+    much work an interruption costs. Chunks below GTRADE_WORKERS do waste worker
+    slots, which is the price of the smaller loss window.
+    """
+    # The whole-subset key first, always. Chunking changes which keys a train
+    # writes, so without this every arm cached before it was switched on would
+    # read as a miss and be retrained - hours of finished work thrown away by a
+    # setting meant to protect exactly that work.
+    whole = key_of(subset)
+    rows = ar_memory.cache_get(whole)
+    if rows is not None:
+        _say("[%s] cache hit: %s" % (label, subset))
+        return rows
+    chunks = chunk_subsets(subset, train_chunk_size())
+    if len(chunks) <= 1:
+        rows = train_env(subset, env)
+        if rows:
+            ar_memory.cache_put(whole, rows)
+        return rows
+    out = []
+    for i, part in enumerate(chunks, 1):
+        key = key_of(part)
+        rows = ar_memory.cache_get(key)
+        if rows is None:
+            _say("[%s] chunk %d/%d training: %s" % (label, i, len(chunks), part))
+            rows = train_env(part, env)
+            if rows:
+                ar_memory.cache_put(key, rows)
+        else:
+            _say("[%s] chunk %d/%d cache hit: %s" % (label, i, len(chunks), part))
+        out.extend(rows or [])
+    return out
+
+
 def train_base_cached(subset, env):
     """Cache-first BASE training: identical subset + env + feature space +
     data snapshot reuses the stored quality rows instead of retraining.
     Candidate runs never go through here (their envs embed temp paths)."""
-    key = ar_memory.base_key(subset, env)
-    rows = ar_memory.cache_get(key)
-    if rows is not None:
-        print("[auto-research] base cache hit: {} {}".format(subset, env or "{}"))
-        return rows
-    rows = train_env(subset, env)
-    if rows:
-        ar_memory.cache_put(key, rows)
-    return rows
+    return _cached_train(subset, env,
+                         lambda sub: ar_memory.base_key(sub, env),
+                         "auto-research base")
 
 
 def neural_contribution(full_rows, cbonly_rows):
@@ -1564,15 +1624,9 @@ def _candidate_train_cached(subset, env, gsig):
     therefore REUSED by the held-out eval instead of being trained twice. A resumed
     or repeated re-gate reuses every finished candidate train (hours each)."""
     kind = "cb" if env.get("GTRADE_SCREEN_ONLY") else "full"
-    key = ar_memory.genome_key(subset, gsig, kind)
-    rows = ar_memory.cache_get(key)
-    if rows is not None:
-        _say(f"[regate] candidate cache hit ({kind}): {gsig[:12]}")
-        return rows
-    rows = train_env(subset, env)
-    if rows:
-        ar_memory.cache_put(key, rows)
-    return rows
+    return _cached_train(subset, env,
+                         lambda sub: ar_memory.genome_key(sub, gsig, kind),
+                         "regate %s %s" % (kind, gsig[:12]))
 
 
 def regate(k=8, screen=False):

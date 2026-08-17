@@ -53,6 +53,9 @@ scheduler_state.json
 # Self-maintaining loop runtime artifacts (generated at deploy time, not code)
 loop_state.json
 _loop.lock
+_auto_loop.lock
+_auto_loop.stop
+_auto_loop_report.txt
 
 # All JSON is runtime/generated state (logs, champion registry, quality reports,
 # app config, agent state). Only the *.example.json seeds (hand-edited config

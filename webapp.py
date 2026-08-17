@@ -177,8 +177,16 @@ def _research_snapshot():
     # Two independent caps: findings_recent(15) bounds the RECORDS read; rows[:40]
     # bounds the flattened winner-ROWS shown (one record can hold many winners).
     from core import ar_progress
+    # The unattended cycle's own stage. ar_progress reports what a TRAINING run
+    # is doing; this reports which phase of search / A/B / adopt that training
+    # belongs to, which is the question the page could not answer before.
+    try:
+        import auto_loop
+        cycle = auto_loop.read_state()
+    except Exception:
+        cycle = {"current": None, "campaign": None, "history": []}
     return {"summary": summary, "rows": rows[:40], "runs": len(recent),
-            "progress": ar_progress.snapshot()}
+            "progress": ar_progress.snapshot(), "cycle": cycle}
 
 
 def _spark(closes, w=110, h=26):

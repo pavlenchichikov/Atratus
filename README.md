@@ -271,6 +271,88 @@ visible rather than silent. A model that does not fit in RAM will be slow enough
 to hit the timeout; if it does, the run says so once and finishes on the
 evolutionary operators.
 
+### Running the whole cycle unattended
+
+`auto_loop.py` runs search, gate, A/B and adoption in sequence with no prompt,
+and stops before the retrain. It is a state machine, not a model pressing the
+menu buttons. Of the nine questions the menu asks, one is an open choice (the
+axes) and two are budget; the rest are a lookup from the score basis or a
+setting that must be frozen before anything is measured. Letting a model pick
+the basis, objective or alpha after seeing a verdict would be p-hacking on a
+schedule, so those live in `CAMPAIGN` at the top of the file, are frozen on the
+first cycle and re-checked on every one. Nothing in that file decides whether a
+result counts: that stays with the Benjamini-Hochberg gate in `auto_research`
+and with `ab_build.verdict`.
+
+```
+python auto_loop.py               # cycle until an adoption, a failure or --stop
+python auto_loop.py --dry-run     # the phase it would run now, touching nothing
+python auto_loop.py --status      # the stage it is in, plus recent history
+python auto_loop.py --hours 12    # add a deadline instead of running open-ended
+python auto_loop.py --stop        # ask a running loop to stop cleanly
+```
+
+It keeps cycling until something is adopted. A failed A/B is not an ending: the
+candidate is recorded as measured against this reference, the next cycle takes
+the next gate-adoptable elite, and when none is left it goes back to searching.
+Every phase prints a banner with the cycle number, the stage, the reference, the
+campaign and the load it is running under, and the same stage is published to
+the `/research` page so a run that started overnight can be read from a phone.
+When an adoption finally happens the loop stops and prints the full report:
+evidence with its p-value and floor in the right units, the genes that leave
+their default, the training env a retrain will run under, the previous adoption
+for comparison, and the genome itself. It is also written to
+`_auto_loop_report.txt`, because a night of scrollback buries it otherwise.
+
+The phase is derived from the files each cycle rather than stored, so a phase
+run by hand leaves the loop in the right state. The campaign is also checked for
+settings that contradict each other: `GTRADE_AR_SCREEN=1` on a net basis (the
+screen stubs every neural member to a constant, so every candidate screens
+alike), or `GTRADE_AR_ILLUM=full` on the raw Score basis (net training does not
+reproduce on this GPU, so the archive would rank noise). Those rules used to
+exist only as prose in the launcher's REM block, where a human reading the menu
+applied them.
+
+The phases are the same commands as by hand: `auto_research.py`,
+`ab_build.py --auto`, `ab_build.py --run`, `adopt_genome.py --auto`. It stops
+after an adoption on purpose: `models/` still holds the previous generation
+until `train_chunked.py` runs, so a second adoption would stack two genome
+changes onto one un-retrained model set.
+
+**Stopping and resuming.** `python auto_loop.py --stop` asks a running loop to
+finish its phase and exit, and `--status` prints where it stands. Killing it is
+safe too: it costs only what the running phase had not checkpointed, and every
+phase resumes on the next start. The search saves the archive after every genome
+and banks the signature before evaluating it, so at most one genome is lost. A
+finished A/B arm is cached by genome signature, so a restart re-reads it instead
+of retraining. Held-out training caches per chunk under `GTRADE_AR_TRAIN_CHUNK`
+(0, the default, is one process for the whole subset exactly as before), so an
+interrupted arm loses one chunk rather than all 8 to 11 hours. That is the same
+trick `train_chunked.py` uses on the production retrain, for the same reason.
+
+**Load.** The campaign runs the box hard: 12 CatBoost threads, the TF pool
+shrunk to 0.50 to buy headroom outside it, and two neural slots instead of one.
+The chunk size is 7 rather than 5 for the same reason - the trainer derives six
+workers on this GPU, and a smaller chunk would idle one for the whole run. Two
+neural slots is the one setting that can kill a run rather than slow it, because
+cuDNN workspaces are allocated outside the TF pool, so a failed training phase is
+retried once at one slot and the larger pool before the loop gives up.
+`GTRADE_WORKERS` is deliberately left derived: a holdout arm already holds about
+6 GB with 4.1 free, so raising it trades a stall for a swap.
+
+**Campaign director (optional, `GTRADE_AR_DIRECTOR=1`).** An LLM that reads the
+findings journal and picks the next experiment: axis, label, budget, whether to
+spend the LLM proposer arm. Its reply is checked against a whitelist. An unknown
+axis, a budget out of range, or any key outside the list is refused rather than
+clamped, and a partly understood reply is never half applied, because a run
+nobody chose is worse than a repeated one. It cannot set the score basis or the
+objective at all. The single route to those is a `new_campaign` request carrying
+a written reason, which the loop treats as a fresh campaign: the freeze is reset
+and the search archive is set aside, because Score-scale fitness (1.5 to 8.9)
+would outrank AUC-scale fitness (about 0.01) for the rest of the run. An
+unreachable or unparseable model falls back to the campaign already in force,
+so the loop never stops for it.
+
 ## Self-maintaining loop
 
 `loop_cycle.py` runs the safe daily pipeline (data, predict, reconcile) and scans every asset for drift - rolling accuracy below a floor, a drop from the trained baseline, model age, or stale data. Proposals surface on `/loop`. Approving one runs `loop_retrain.py`, a RAM-safe champion-challenger retrain that replaces a champion only if the fresh model beats it. **The loop never retrains on its own; retraining always waits for your approval.** Register `run_loop.bat` with Task Scheduler to run daily. Drift thresholds live in `core/drift.py` (`DRIFT_CONFIG`).
@@ -563,6 +645,7 @@ alert_bot.py          Telegram bot (hourly scan)
 risk_manager.py       Kelly sizing, loss/drawdown limits, Taleb gate
 guru_report.py        Guru Council fundamentals overlay
 auto_research.py      autonomous research agent (run via auto_research.bat)
+auto_loop.py          unattended search / A/B / adopt cycle, stops before retrain
 push_signals.py       publish the snapshot to Supabase (web + mobile)
 scheduler.py          daemon: data / predict / DB-check on a schedule
 run_gtrade.bat        Windows text menu over the whole pipeline
@@ -857,6 +940,87 @@ N char prompt`, затем размер ответа и потраченные �
 это произошло, прогон скажет об этом один раз и доработает на эволюционных
 операторах.
 
+### Полный цикл без участия человека
+
+`auto_loop.py` проходит поиск, гейт, A/B и адопцию подряд, ничего не спрашивая,
+и останавливается перед ретрейном. Это конечный автомат, а не модель, нажимающая
+пункты меню. Из девяти вопросов меню один - настоящий выбор (оси), два про
+бюджет, остальные либо выводятся из score basis, либо обязаны быть заморожены до
+любого измерения. Дать модели выбирать basis, objective или alpha после того как
+она увидела вердикт - это p-hacking по расписанию, поэтому они лежат в `CAMPAIGN`
+в начале файла, замораживаются на первом цикле и перепроверяются на каждом.
+Ничто в этом файле не решает, засчитывается ли результат: это остаётся за
+гейтом Бенджамини-Хохберга в `auto_research` и за `ab_build.verdict`.
+
+```
+python auto_loop.py               # крутиться до адопции, отказа или --stop
+python auto_loop.py --dry-run     # какая фаза пошла бы сейчас, ничего не трогая
+python auto_loop.py --status      # на какой стадии сейчас, плюс история
+python auto_loop.py --hours 12    # поставить дедлайн вместо бессрочной работы
+python auto_loop.py --stop        # попросить работающий цикл остановиться
+```
+
+Цикл идёт, пока что-нибудь не будет адоптировано. Проваленный A/B - не конец:
+кандидат записывается как измеренный против текущего референса, следующий цикл
+берёт следующую элиту с проходным гейтом, а когда таких не остаётся, снова уходит
+в поиск. Каждая фаза печатает баннер с номером цикла, стадией, референсом,
+кампанией и загрузкой, и та же стадия публикуется на страницу `/research`, чтобы
+запущенный на ночь прогон можно было прочитать с телефона. Когда адопция всё же
+происходит, цикл останавливается и печатает полный отчёт: доказательства с
+p-значением и порогом в правильных единицах, гены, ушедшие от дефолта, env, под
+которым пойдёт ретрейн, прошлую адопцию для сравнения и сам геном. Он же
+пишется в `_auto_loop_report.txt`, иначе за ночь его погребёт консольный вывод.
+
+Фаза выводится из файлов на каждом цикле, а не хранится, поэтому фаза, запущенная
+руками, оставляет автомат в правильном состоянии. Кампания дополнительно
+проверяется на внутренние противоречия: `GTRADE_AR_SCREEN=1` на нейробазисе
+(скрин подменяет каждого нейро-участника константой, и все кандидаты скринятся
+одинаково) или `GTRADE_AR_ILLUM=full` на сыром Score (обучение сетей на этой
+видеокарте не воспроизводится, и архив ранжировал бы шум). Раньше эти правила
+существовали только как текст в REM-блоке лаунчера, где их применял человек,
+читающий меню.
+
+Фазы - те же самые команды, что и вручную: `auto_research.py`,
+`ab_build.py --auto`, `ab_build.py --run`, `adopt_genome.py --auto`. После
+адопции автомат намеренно останавливается: в `models/` до запуска
+`train_chunked.py` лежит прошлое поколение, и вторая адопция наложила бы два
+изменения генома на один непереобученный набор моделей.
+
+**Остановка и продолжение.** `python auto_loop.py --stop` просит работающий цикл
+доработать текущую фазу и выйти, `--status` печатает, где он сейчас. Убить
+процесс тоже безопасно: теряется только то, что текущая фаза не успела
+сохранить, и любая фаза продолжается со следующего запуска. Поиск сохраняет
+архив после каждого генома и заносит подпись до оценки, поэтому теряется максимум
+один геном. Законченный арм A/B закеширован по подписи генома, и перезапуск
+читает его, а не переобучает. Обучение холдаута кешируется по чанкам через
+`GTRADE_AR_TRAIN_CHUNK` (0 по умолчанию - один процесс на весь набор, ровно как
+раньше), поэтому прерванный арм стоит одного чанка, а не всех 8-11 часов. Это тот
+же приём, которым `train_chunked.py` пользуется на боевом ретрейне, и по той же
+причине.
+
+**Загрузка.** Кампания грузит машину по максимуму: 12 потоков CatBoost, пул TF
+ужат до 0.50, чтобы освободить память вне пула, и два нейро-слота вместо одного.
+Размер чанка 7, а не 5, по той же причине: тренер выводит шесть воркеров на этой
+видеокарте, и меньший чанк держал бы один из них простаивающим весь прогон. Два
+нейро-слота - единственная настройка, способная не замедлить, а убить прогон,
+потому что воркспейсы cuDNN выделяются вне пула TF, поэтому упавшая фаза обучения
+один раз перезапускается на одном слоте и большем пуле, прежде чем цикл сдастся.
+`GTRADE_WORKERS` намеренно оставлен выводимым: арм холдаута и так держит около
+6 ГБ при 4.1 свободных, и его повышение меняет простой на своп.
+
+**Директор кампании (опционально, `GTRADE_AR_DIRECTOR=1`).** LLM, которая читает
+журнал находок и выбирает следующий эксперимент: ось, лейбл, бюджет, тратить ли
+руку LLM-пропозера. Ответ проверяется по белому списку. Неизвестная ось, бюджет
+вне диапазона или любой ключ вне списка отклоняются, а не подгоняются, и
+частично понятый ответ никогда не применяется наполовину: прогон, который никто
+не выбирал, хуже повторного. Score basis и objective директор задать не может
+вообще. Единственный путь к ним - запрос `new_campaign` с письменной причиной,
+который цикл трактует как новую кампанию: заморозка сбрасывается, а архив поиска
+откладывается в сторону, потому что фитнес в шкале Score (1.5-8.9) иначе
+навсегда переиграет фитнес в шкале AUC (около 0.01). Недоступная или
+неразобранная модель откатывается к действующей кампании, цикл из-за неё не
+останавливается.
+
 ## Самоподдерживающийся цикл
 
 `loop_cycle.py` гоняет безопасный дневной пайплайн (данные, предсказание, сверка) и сканирует каждый актив на дрейф - скользящая точность ниже порога, падение от тренировочного бейслайна, возраст модели или устаревшие данные. Предложения появляются на `/loop`. Подтверждение запускает `loop_retrain.py` - RAM-безопасный ретрейн "чемпион-претендент", который заменяет чемпиона только если свежая модель его превзошла. **Цикл никогда не переобучает сам; переобучение всегда ждёт вашего подтверждения.** Зарегистрируйте `run_loop.bat` в планировщике задач для ежедневного запуска. Пороги дрейфа - в `core/drift.py` (`DRIFT_CONFIG`).
@@ -1105,6 +1269,7 @@ alert_bot.py          Telegram-бот (ежечасный скан)
 risk_manager.py       размер по Келли, лимиты убытка/просадки, гейт Талеба
 guru_report.py        фундаментальный оверлей "Совет гуру"
 auto_research.py      автономный исследовательский агент (через auto_research.bat)
+auto_loop.py          цикл поиск / A/B / адопция без человека, стоп до ретрейна
 push_signals.py       публикация снимка в Supabase (веб + мобильное)
 scheduler.py          демон: данные / предсказание / проверка БД по расписанию
 run_gtrade.bat        текстовое меню (Windows) над всем пайплайном

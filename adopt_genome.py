@@ -107,6 +107,23 @@ def candidates(base=None):
     return out
 
 
+def best_validated(cands):
+    """The candidate an unattended adopt should take, or None.
+
+    Only candidates that PASSED their own A/B: `validated` already carries the
+    run's own alpha and floor, so this never re-decides significance, it only
+    ranks what already cleared. Highest measured value wins, ties go to the
+    smaller p. A search-archive elite can never be picked here - that stays
+    --unvalidated, which is a human decision on purpose.
+    """
+    passed = [c for c in cands
+              if c.get("validated") and c.get("value") is not None]
+    if not passed:
+        return None
+    return max(passed, key=lambda c: (c["value"],
+                                      -(c["p"] if c["p"] is not None else 1.0)))
+
+
 def describe(cand):
     """One line for the picker. A search fitness is never called a gain."""
     g = cand["genome"]
@@ -226,21 +243,89 @@ def reset_chunk_progress(base=None):
     return removed
 
 
+def _fmt(key, value):
+    """Effect sizes with enough digits to read. On an AUC basis the whole floor
+    is 0.005 and two decimals would print it as a reassuring 0.01."""
+    if key in ("value", "floor", "neural_value") and isinstance(value, (int, float)):
+        return f"{value:+.4g}"
+    if key == "p" and isinstance(value, (int, float)):
+        return f"{value:.4f}"
+    return str(value)
+
+
+def report_lines(rec, prev=None):
+    """The full adoption report: what is live, on what evidence, and the exact
+    genome a retrain would run on.
+
+    Returned as lines rather than printed so the unattended loop and `--show`
+    render the same thing, and so it can be written beside the run instead of
+    living only in console scrollback that a long night will bury.
+    """
+    from core import adopted as _adopted
+
+    if not rec:
+        return ["Nothing adopted: production defaults are in force."]
+    out = ["=" * 72,
+           "ADOPTED: {}    (on {})".format(rec.get("label"), rec.get("adopted")),
+           "=" * 72, "", "EVIDENCE"]
+    ev = rec.get("evidence") or {}
+    labels = (("kind", "measurement"), ("value", "effect"), ("p", "p-value"),
+              ("n", "assets"), ("alpha", "alpha"), ("floor", "floor"),
+              ("neural_value", "neural"), ("holdout", "holdout"),
+              ("source", "from"), ("bucket", "archive cell"))
+    for key, title in labels:
+        if ev.get(key) is not None:
+            out.append("  %-13s %s" % (title, _fmt(key, ev[key])))
+    if ev.get("caveat"):
+        out.append("  %-13s %s" % ("caveat", ev["caveat"]))
+
+    genome = rec.get("genome") or {}
+    out += ["", "GENOME (genes that leave their default)"]
+    changed = {k: v for k, v in sorted(genome.items())
+               if k in _adopted._DEFAULTS and v != _adopted._DEFAULTS[k]}
+    if changed:
+        for k, v in changed.items():
+            body = json.dumps(v, ensure_ascii=False)
+            out.append("  %-15s %s" % (k, body if len(body) < 90
+                                       else body[:87] + "..."))
+    else:
+        out.append("  none: this genome is the production default")
+
+    out += ["", "TRAINING ENV a retrain will run under"]
+    env = _adopted.env_overrides(genome)
+    for k, v in sorted(env.items()):
+        body = str(v)
+        out.append("  %s=%s" % (k, body if len(body) < 90 else body[:87] + "..."))
+    if not env:
+        out.append("  (none)")
+
+    if prev:
+        pev = prev.get("evidence") or {}
+        out += ["", "PREVIOUS ADOPTION (kept as adopted_genome.prev.json)",
+                "  %s on %s, effect %s"
+                % (prev.get("label"), prev.get("adopted"),
+                   _fmt("value", pev.get("value")) if pev.get("value") is not None
+                   else "n/a")]
+    out += ["", "FULL GENOME (copy of what was written to adopted_genome.json)",
+            json.dumps(genome, ensure_ascii=False, sort_keys=True)]
+    return out
+
+
+def _adopted_path():
+    from core import adopted as _adopted
+    return _adopted.PATH
+
+
+def _previous(path=None):
+    """The adoption this one replaced, or None."""
+    return _read_json((path or _adopted_path()).replace(".json", ".prev.json"))
+
+
 def _show():
     from core import adopted as _adopted
 
-    rec = _adopted.load()
-    if not rec:
-        print("Nothing adopted: production defaults are in force.")
-        return
-    print("Adopted {} on {}".format(rec.get("label"), rec.get("adopted")))
-    ev = rec.get("evidence") or {}
-    for key in ("kind", "value", "p", "n", "holdout", "caveat", "source"):
-        if ev.get(key) is not None:
-            print("  %-9s %s" % (key, ev[key]))
-    print("  env:")
-    for k, v in sorted(_adopted.env_overrides(rec.get("genome") or {}).items()):
-        print(f"    {k}={v}")
+    for line in report_lines(_adopted.load(), _previous()):
+        print(line)
 
 
 def main():
@@ -249,10 +334,31 @@ def main():
     ap.add_argument("--revert", action="store_true")
     ap.add_argument("--unvalidated", action="store_true",
                     help="also offer search-archive elites")
+    ap.add_argument("--auto", action="store_true",
+                    help="adopt the best candidate that passed its own A/B "
+                         "without asking; for auto_loop.py")
     args = ap.parse_args()
 
     if args.show:
         _show()
+        return
+    if args.auto:
+        pick = best_validated(candidates())
+        if not pick:
+            print("Nothing passed its own A/B; adopting nothing.")
+            return
+        prev = _read_json(_adopted_path())
+        print("Adopting: %s" % describe(pick))
+        write_adoption(pick)
+        # Not optional: a new genome means every asset must be retrained, and a
+        # stale progress file would make the next run print "Nothing to do" and
+        # leave a mixed-generation model set behind.
+        removed = ", ".join(reset_chunk_progress()) or "none"
+        print()
+        for line in report_lines(_read_json(_adopted_path()), prev):
+            print(line)
+        print("\nRemoved chunk progress: %s" % removed)
+        print("Next (manual): python train_chunked.py, then python predict.py")
         return
     if args.revert:
         if revert():

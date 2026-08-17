@@ -200,6 +200,53 @@ def _gate_note(cand, gates):
         hit["ts"][:16], hit["tag"], flag, rep)
 
 
+def tested_against(ref_sig, base=None):
+    """Genome signatures already measured against THIS reference.
+
+    Provenance is not a verdict: adopt_genome marks a candidate "measured" the
+    moment it appears in any A/B file, but a result taken against an earlier
+    reference is a number about a configuration that is no longer live, so it
+    stays retestable. Only a run whose reference_sig matches the live one has
+    settled the question. An unattended caller needs that distinction to
+    terminate: without it it would rebuild the same config every cycle.
+    """
+    out = set()
+    for path in sorted(glob.glob(os.path.join(base or BASE,
+                                              "_ab_genomes_*.json"))):
+        data = _read_json(path)
+        if not isinstance(data, dict) or data.get("reference_sig") != ref_sig:
+            continue
+        for res in (data.get("results") or {}).values():
+            if isinstance(res, dict) and res.get("sig"):
+                out.add(res["sig"])
+    return out
+
+
+def auto_picks(pool, ref, gates, tested, limit=MAX_CANDIDATES):
+    """The candidates an unattended run should test, strongest evidence first.
+
+    Only genomes the held-out gate already flagged adoptable. The pool also holds
+    every other archive elite, ranked by SEARCH fitness, and search fitness
+    shrinks: genome A scored 5.30 in the search and 1.63 on a fresh holdout. A
+    picker running without a human would otherwise spend a day of training per
+    arm on a number that was never measured on data it had not seen.
+    """
+    ranked, seen = [], set()
+    for cand in pool:
+        sig = cand.get("sig")
+        # candidates() yields one entry per A/B file, so a genome measured in
+        # several past runs appears several times; the first is enough.
+        if not sig or sig in seen or sig in tested or is_reference(cand, ref):
+            continue
+        hit = gates.get(sig)
+        if not hit or not hit["adoptable"]:
+            continue
+        seen.add(sig)
+        ranked.append((hit["clears"], hit["ts"], cand))
+    ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    return [cand for _, _, cand in ranked[:limit]]
+
+
 def _suggest_assets(n, seed):
     import auto_research as ar
     from config import ASSET_TYPES, FULL_ASSET_MAP
@@ -222,6 +269,30 @@ def _configure(args):
         return
     print("Measuring against: {}\n".format(ref["label"]))
     gates = _gate_by_sig()
+    if args.auto:
+        chosen = auto_picks(pool, ref, gates, tested_against(ref["sig"]))
+        if not chosen:
+            print("Nothing to test: no gate-adoptable elite is left that has not "
+                  "already been measured against {}.".format(ref["label"]))
+            return
+        for c in chosen:
+            print("  auto-picked %s%s" % (adopt_genome.describe(c),
+                                          _gate_note(c, gates)))
+        suggested, elig = _suggest_assets(args.n, args.seed)
+        assets = ([a.strip() for a in args.assets.split(",") if a.strip()]
+                  or suggested)
+        problems = holdout.validate(assets, elig)
+        if problems:
+            print("\nThis holdout cannot be used:")
+            for p in problems:
+                print(f"  - {p}")
+            return
+        cfg = build_config(chosen, assets, ref, ar._adopt_floor(args.objective),
+                           args.alpha, args.seed, args.objective)
+        write_config(cfg)
+        print(f"\nWrote {os.path.basename(CONFIG_PATH)}")
+        _print_config(cfg)
+        return
     for i, c in enumerate(pool, 1):
         notes = []
         if is_reference(c, ref):
@@ -447,6 +518,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--objective", default="mean")
+    ap.add_argument("--auto", action="store_true",
+                    help="pick the gate-adoptable elites and the suggested "
+                         "holdout without asking; for auto_loop.py")
     args = ap.parse_args()
 
     if args.show:
