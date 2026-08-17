@@ -158,6 +158,38 @@ def test_best_validated_never_takes_an_unvalidated_elite():
     assert adopt_genome.best_validated(cands) is None
 
 
+# --- what the launcher menu is allowed to decide ----------------------------
+
+def test_the_menu_can_override_a_campaign_default():
+    """The proposer and the wiki are asked about by run_gtrade.bat AND live in
+    CAMPAIGN. An update() here silently discarded the answer."""
+    env = auto_loop.build_env({"GTRADE_AR_PROPOSER": "llm", "GTRADE_AR_WIKI": "0"})
+    assert env["GTRADE_AR_PROPOSER"] == "llm"
+    assert env["GTRADE_AR_WIKI"] == "0"
+
+
+def test_every_campaign_key_is_present_even_when_unset():
+    # Presence is the protection: a key MISSING from the child's environment is
+    # refilled from .env by load_dotenv, which is how settings used to leak in.
+    env = auto_loop.build_env({})
+    for key in auto_loop.CAMPAIGN:
+        assert key in env, key
+    assert env["GTRADE_AR_SCORE_BASIS"] == "net_auc"
+
+
+def test_an_explicit_budget_beats_both():
+    env = auto_loop.build_env({"AR_BUDGET": "99"}, budget=7)
+    assert env["AR_BUDGET"] == "7"
+
+
+def test_a_menu_answer_cannot_quietly_move_a_frozen_constant():
+    # It can be set, but the freeze check is what stops the run using it.
+    env = auto_loop.build_env({"GTRADE_AR_OBJECTIVE": "cvar"})
+    assert env["GTRADE_AR_OBJECTIVE"] == "cvar"
+    assert auto_loop.freeze_problems({"GTRADE_AR_SCORE_BASIS": "net_auc",
+                                      "GTRADE_AR_OBJECTIVE": "mean"}, env)
+
+
 # --- the stage the cycle publishes ------------------------------------------
 
 def test_publish_records_the_stage_and_read_state_returns_it(tmp_path, monkeypatch):

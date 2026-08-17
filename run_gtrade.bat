@@ -204,49 +204,93 @@ REM  interpreter and this PATH, which is where the CUDA/cuDNN DLLs live. Without
 REM  it the entire night runs on the CPU and nobody notices until morning.
 call "%~dp0activate_env.bat"
 
-echo [1] Campaign director (an LLM picks the axis, label and budget each cycle;
-echo     it can never touch the score basis or the objective)
+echo [1] Campaign director: an LLM picks the axis, label and budget each cycle.
+echo     It can never touch the score basis or the objective - those are frozen
+echo     for the campaign, and only a written new-campaign request can move them.
 echo     1 = off (default: the campaign in auto_loop.py is used as written)
 echo     2 = on
 set "DIR=1"
 set /p "DIR=    choice [1]: "
 set "GTRADE_AR_DIRECTOR=0"
 if "%DIR%"=="2" set "GTRADE_AR_DIRECTOR=1"
-if not "%GTRADE_AR_DIRECTOR%"=="1" goto :al_budget
 
 echo.
-echo [1a] Which model directs?
-echo     1 = local Ollama (default, free)   2 = Anthropic API   3 = OpenAI API
-set "DLM=1"
-set /p "DLM=    choice [1]: "
+echo [2] Search proposer: what suggests each candidate genome INSIDE a search.
+echo     Separate from the director, which chooses what the search is about.
+echo     1 = evolutionary (default, no LLM, no API key)
+echo     2 = LLM-guided (adds the "llm" arm to the RL scheduler)
+set "PRP=1"
+set /p "PRP=    choice [1]: "
+set "GTRADE_AR_PROPOSER=evolutionary"
+if "%PRP%"=="2" set "GTRADE_AR_PROPOSER=llm"
+
+echo.
+echo [3] Research wiki: after each run an LLM distils the findings journal into
+echo     topic pages the proposer then reads, so learning compounds across runs.
+echo     1 = on (default)   2 = off
+set "WK=1"
+set /p "WK=    choice [1]: "
+set "GTRADE_AR_WIKI=1"
+if "%WK%"=="2" set "GTRADE_AR_WIKI=0"
+
+REM  THREE consumers can need a model: the director, the search proposer and the
+REM  wiki. Ask once, and ask whenever ANY of them is on. The model used to be
+REM  asked for under the director alone, so a default run - director off, wiki on
+REM  - still called an LLM every cycle, with the provider and model coming from
+REM  .env instead of from this menu.
+set "NEEDLLM=0"
+if "%GTRADE_AR_DIRECTOR%"=="1" set "NEEDLLM=1"
+if "%GTRADE_AR_PROPOSER%"=="llm" set "NEEDLLM=1"
+if "%GTRADE_AR_WIKI%"=="1" set "NEEDLLM=1"
+REM  Set unconditionally and never left blank: cmd's  set "VAR="  DELETES the
+REM  variable, and the agent's load_dotenv then refills a MISSING key from .env,
+REM  which is how a 17 GB model once got pinned on a 15.7 GB machine.
 set "GTRADE_AR_LLM=ollama"
-if "%DLM%"=="2" set "GTRADE_AR_LLM=anthropic"
-if "%DLM%"=="3" set "GTRADE_AR_LLM=openai"
-REM  "auto", not empty: cmd's  set "VAR="  DELETES the variable, and the agent
-REM  then calls load_dotenv(), which refills a MISSING key from .env - which is
-REM  how a pinned 17 GB model once reached a 15.7 GB machine.
 set "GTRADE_AR_LLM_MODEL=auto"
 set "GTRADE_AR_LLM_MAX_TOKENS=8000"
 set "GTRADE_AR_LLM_TIMEOUT=3600"
+if "%NEEDLLM%"=="0" goto :al_budget
+
+echo.
+echo [4] Which model serves them?
+echo     1 = local Ollama (default, free, nothing leaves the machine)
+echo     2 = Anthropic API (needs ANTHROPIC_API_KEY)
+echo     3 = OpenAI API (needs OPENAI_API_KEY)
+set "DLM=1"
+set /p "DLM=    choice [1]: "
+if "%DLM%"=="2" set "GTRADE_AR_LLM=anthropic"
+if "%DLM%"=="3" set "GTRADE_AR_LLM=openai"
+if "%DLM%"=="1" echo.
+if "%DLM%"=="1" echo     Installed local models:
 if "%DLM%"=="1" python -m core.llm_proposer --list-ollama
-if "%DLM%"=="1" set /p "GTRADE_AR_LLM_MODEL=    model name [auto]: "
-if "%DLM%"=="2" set /p "GTRADE_AR_LLM_MODEL=    Anthropic model [auto]: "
-if "%DLM%"=="3" set /p "GTRADE_AR_LLM_MODEL=    OpenAI model [auto]: "
+if "%DLM%"=="1" echo     Enter = auto-detect ^(first gemma, else first installed^).
+set /p "GTRADE_AR_LLM_MODEL=    model name [auto]: "
+echo.
+echo     Seconds allowed for ONE call. A large local model on CPU needs far more
+echo     than the 600s SDK default, and a timeout is not retried, so a value that
+echo     is too small costs that model its whole contribution for the run.
+set /p "GTRADE_AR_LLM_TIMEOUT=    timeout seconds [3600]: "
 :al_budget
 
 echo.
+echo [5] Search iterations per cycle: how many NEW genomes each search phase
+echo     trains and places in the archive. Nothing already in the tried registry
+echo     is re-tested, so the budget only buys unseen candidates. At the campaign
+echo     settings a genome costs roughly 9 minutes, so 15 is about 2 hours.
 set "ALB=15"
-set /p "ALB=[2] Search iterations per cycle [15]: "
+set /p "ALB=    iterations [15]: "
 echo.
-echo [3] Deadline in hours. 0 = none, which is what "keep going until something
+echo [6] Deadline in hours. 0 = none, which is what "keep going until something
 echo     is adopted" means. Any number stops it early, even mid-campaign.
 set "ALH=0"
 set /p "ALH=    hours [0]: "
 
 echo.
 echo ------------------------------------------------------------
-if "%GTRADE_AR_DIRECTOR%"=="1" echo   director=on  llm=%GTRADE_AR_LLM%  model=%GTRADE_AR_LLM_MODEL%
-if not "%GTRADE_AR_DIRECTOR%"=="1" echo   director=off  (campaign as written in auto_loop.py)
+if "%GTRADE_AR_DIRECTOR%"=="1" echo   director=on   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
+if not "%GTRADE_AR_DIRECTOR%"=="1" echo   director=off   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
+if "%NEEDLLM%"=="1" echo   llm=%GTRADE_AR_LLM%   model=%GTRADE_AR_LLM_MODEL%   timeout=%GTRADE_AR_LLM_TIMEOUT%s
+if "%NEEDLLM%"=="0" echo   llm=not used by this configuration
 echo   budget=%ALB% per cycle   deadline=%ALH% h
 echo ------------------------------------------------------------
 set "GO=Y"

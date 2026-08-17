@@ -108,6 +108,29 @@ FROZEN = ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_OBJECTIVE")
 NET_BASES = ("net_auc", "net_gain", "ens_auc")
 
 
+def build_env(environ=None, budget=0):
+    """The environment every phase runs under.
+
+    setdefault, not update: CAMPAIGN is the DEFAULT campaign and an explicit
+    environment value wins. update() discarded them, so every answer the
+    launcher menu collected for a key that also lives here - the proposer, the
+    wiki - was silently thrown away and the run went ahead on the built-in
+    value instead.
+
+    What the original update() protected is unaffected: every key still ends up
+    PRESENT in the child's environment, which is what stops the child's
+    load_dotenv refilling a missing one from .env. And the two keys where a
+    stray shell value would actually be dangerous are the frozen ones, which
+    freeze_problems checks separately.
+    """
+    env = dict(os.environ if environ is None else environ)
+    for key, value in CAMPAIGN.items():
+        env.setdefault(key, value)
+    if budget:
+        env["AR_BUDGET"] = str(budget)
+    return env
+
+
 def campaign_problems(env):
     """Settings that contradict each other, in plain words.
 
@@ -413,10 +436,7 @@ def main():
                     help="ask a running loop to finish its phase and exit")
     args = ap.parse_args()
 
-    env = dict(os.environ)
-    env.update(CAMPAIGN)
-    if args.budget:
-        env["AR_BUDGET"] = str(args.budget)
+    env = build_env(budget=args.budget)
 
     if args.stop:
         request_stop()
