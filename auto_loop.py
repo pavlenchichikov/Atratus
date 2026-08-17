@@ -81,21 +81,47 @@ CAMPAIGN = {
     # serialises behind one GPU slot while CatBoost waits.
     #   CB_THREADS   free on the CPU side, nothing else pays for it.
     #   TF_POOL_PCT  shrunk FIRST, which buys 400-600 MB outside the pool.
-    #   NEURAL_SLOTS the actual lever and the only risky one: cuDNN workspaces
-    #                live outside the TF pool, so a second slot can OOM even
-    #                though the pool itself fits. SAFE_LOAD below is the retry.
+    #   NEURAL_SLOTS stays at 1, and this is not caution: a second slot was
+    #                tried on 2026-08-17 and every unit came back empty. Assets
+    #                carry DIFFERENT sequence lengths (core/profiles.py holds
+    #                40, 45, 50 and 55), and training two at once produced
+    #                graphs built for one length fed data of another:
+    #                "padded_shape[0]=55 is not divisible by block_shape[0]=2"
+    #                in the TCN's dilated convolution, and a flatten wanting a
+    #                multiple of 55 handed 256x45. 27 genomes, six hours of GPU,
+    #                and an archive that never grew. The failure is in
+    #                concurrent training, not in any lookback value: 208
+    #                champions train fine at one slot on those same profiles.
+    #                Do not raise it again until that is understood; the
+    #                all-skipped exit code added to train_hybrid is what will
+    #                make the next attempt fail in minutes instead of hours.
     # GTRADE_WORKERS is deliberately left derived: the holdout arm already
     # holds about 6 GB and only 4.1 is free, so more workers is the one knob
     # here that trades a stall for a swap.
     "GTRADE_CB_THREADS": "12",
     "GTRADE_TF_POOL_PCT": "0.50",
-    "GTRADE_NEURAL_SLOTS": "2",
+    "GTRADE_NEURAL_SLOTS": "1",
+    # Two training PROCESSES, which is the parallelism that works: each gets its
+    # own TF graph, so the shape mismatch that a second in-process slot causes
+    # cannot happen. Measured on the 4 tier assets, 2026-08-17:
+    #   1 process   624.8 s   peak VRAM 3097 MiB
+    #   2 processes 458.8 s   peak VRAM 3956 MiB
+    # 27% faster, both runs returning all four rows. Each process is 43% SLOWER
+    # than it was alone; the gain comes purely from overlap, which is what a
+    # host-bound workload looks like.
+    # The cost is headroom: 3956 of 4096 MiB leaves 140 MiB. If a unit ever dies
+    # out of memory, the retry drops to one process (SAFE_LOAD) and the honest
+    # fix is to lower GTRADE_TF_POOL_PCT here, not to raise it.
+    "GTRADE_AR_TRAIN_JOBS": "2",
 }
 
-# What a failed training phase is retried under, once. Two neural slots is the
-# setting that buys the throughput and also the only one that can kill a run
-# outright, so the fallback turns an OOM from a dead loop into a slower one.
-SAFE_LOAD = {"GTRADE_NEURAL_SLOTS": "1", "GTRADE_TF_POOL_PCT": "0.60"}
+# What a failed training phase is retried under, once: the smallest, dullest
+# configuration that has ever trained this asset list end to end. TRAIN_JOBS
+# belongs here because two processes peak at 3956 MiB of a 4096 MiB card, so
+# running out of memory is the most likely way a phase dies now, and retrying
+# it at the same width would just fail again.
+SAFE_LOAD = {"GTRADE_NEURAL_SLOTS": "1", "GTRADE_TF_POOL_PCT": "0.60",
+             "GTRADE_CB_THREADS": "6", "GTRADE_AR_TRAIN_JOBS": "1"}
 
 # Phases where a retry at lower load can plausibly help: the ones that train.
 TRAINING_PHASES = ("search", "ab_run")

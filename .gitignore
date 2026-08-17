@@ -39,6 +39,13 @@ catboost_info/
 # reach a public remote either.
 *.bak
 
+# Half-written state from the atomic writers, named "<file>.<pid>.tmp" (see
+# core/ar_progress._write). They are cleaned up on a failed write, but a process
+# that is KILLED never runs that cleanup, so one is left in the worktree every
+# time a run is stopped the hard way. Same content as the file it was becoming,
+# so it must not reach a public remote either.
+*.tmp
+
 # Backups & exports
 backups/
 exports/

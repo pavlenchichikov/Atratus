@@ -347,6 +347,89 @@ def chunk_subsets(subset, size):
     return [",".join(assets[i:i + size]) for i in range(0, len(assets), size)]
 
 
+def train_jobs():
+    """How many training chunks run at once. 1 (the default) is sequential."""
+    try:
+        return max(1, int(os.getenv("GTRADE_AR_TRAIN_JOBS", "1") or 1))
+    except ValueError:
+        return 1
+
+
+def split_load(env, jobs, progress_dir=None):
+    """One process's share of the box when `jobs` trainers run side by side.
+
+    The settings sized against the WHOLE machine have to be divided, or the
+    second process OOMs a 4 GB card that was already sitting at 3097 MB with
+    one. Read from the overrides first and the ambient environment second,
+    because the campaign sets them there.
+
+    GTRADE_NEURAL_SLOTS is pinned to 1 no matter what: the parallelism now comes
+    from the process count, and a second slot INSIDE a process is exactly the
+    configuration that handed models the wrong sequence length and emptied 27
+    genomes on 2026-08-17.
+    """
+    out = dict(env)
+    if jobs > 1:
+        try:
+            pool = float(out.get("GTRADE_TF_POOL_PCT")
+                         or os.getenv("GTRADE_TF_POOL_PCT") or 0.6)
+            out["GTRADE_TF_POOL_PCT"] = "%.2f" % max(0.15, pool / jobs)
+        except (TypeError, ValueError):
+            pass
+        try:
+            threads = int(out.get("GTRADE_CB_THREADS")
+                          or os.getenv("GTRADE_CB_THREADS") or 0)
+        except (TypeError, ValueError):
+            threads = 0
+        if threads:
+            out["GTRADE_CB_THREADS"] = str(max(1, threads // jobs))
+        out["GTRADE_NEURAL_SLOTS"] = "1"
+    if progress_dir:
+        out["AR_PROGRESS_DIR"] = progress_dir
+    return out
+
+
+def _train_chunks_parallel(parts, env, jobs, label, key_of):
+    """Train several chunks at once, one train_hybrid PROCESS per chunk.
+
+    By process, never by thread. Two assets sharing one TF graph inside a single
+    process is what emptied every unit on 2026-08-17: a model built for one
+    sequence length was handed another's data ("padded_shape[0]=55 is not
+    divisible by block_shape[0]=2"). Separate processes cannot do that to each
+    other, because they do not share a graph at all.
+
+    Only the FIRST chunk keeps the real progress files. ar_progress documents
+    each trainer as their sole writer while it runs, and two writers would make
+    the per-asset ETA on the research page a lie; the others are pointed at a
+    scratch directory through AR_PROGRESS_DIR, which exists for exactly this.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    quiet = tempfile.mkdtemp(prefix="ar_prog_")
+    out = {}
+    try:
+        envs = [split_load(env, jobs, quiet if i else None)
+                for i in range(len(parts))]
+        _say("[%s] %d chunks on %d processes: %s"
+             % (label, len(parts), jobs, " | ".join(parts)))
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            results = pool.map(lambda pair: train_env(pair[0], pair[1]),
+                               list(zip(parts, envs)))
+            # Consumed in THIS thread, and banked as each one lands. cache_put is
+            # a read-modify-write of a single JSON file, so a worker doing it
+            # would lose the other worker's entry; and caching only after the
+            # whole set finished would throw away every completed chunk the
+            # moment one of them failed, which is the opposite of why chunks
+            # exist.
+            for part, rows in zip(parts, results):
+                out[part] = rows or []
+                if rows:
+                    ar_memory.cache_put(key_of(part), rows)
+    finally:
+        shutil.rmtree(quiet, ignore_errors=True)
+    return out
+
+
 def _cached_train(subset, env, key_of, label):
     """Train a subset behind the cross-run cache, one chunk at a time when
     GTRADE_AR_TRAIN_CHUNK is set.
@@ -376,18 +459,31 @@ def _cached_train(subset, env, key_of, label):
         if rows:
             ar_memory.cache_put(whole, rows)
         return rows
-    out = []
+    done, pending = {}, []
     for i, part in enumerate(chunks, 1):
-        key = key_of(part)
-        rows = ar_memory.cache_get(key)
+        rows = ar_memory.cache_get(key_of(part))
         if rows is None:
-            _say("[%s] chunk %d/%d training: %s" % (label, i, len(chunks), part))
-            rows = train_env(part, env)
-            if rows:
-                ar_memory.cache_put(key, rows)
+            pending.append(part)
         else:
             _say("[%s] chunk %d/%d cache hit: %s" % (label, i, len(chunks), part))
-        out.extend(rows or [])
+            done[part] = rows
+
+    jobs = min(train_jobs(), len(pending))
+    if jobs > 1:
+        done.update(_train_chunks_parallel(pending, env, jobs, label, key_of))
+    else:
+        for i, part in enumerate(pending, 1):
+            _say("[%s] chunk %d/%d training: %s" % (label, i, len(pending), part))
+            rows = train_env(part, env)
+            done[part] = rows or []
+            # Banked immediately, not after the loop: an interruption must cost
+            # the chunk in flight and nothing else.
+            if rows:
+                ar_memory.cache_put(key_of(part), rows)
+
+    out = []
+    for part in chunks:
+        out.extend(done.get(part) or [])
     return out
 
 

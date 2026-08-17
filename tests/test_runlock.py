@@ -2,7 +2,10 @@
 
 import json
 import os
+import sys
 import time
+
+import pytest
 
 from core import runlock
 
@@ -84,10 +87,26 @@ def test_a_missing_lock_is_not_stale(tmp_path):
     assert runlock.is_stale(str(tmp_path / "absent.lock")) is False
 
 
-def test_liveness_probe_never_signals_a_process(monkeypatch):
-    # os.kill(pid, 0) routes to TerminateProcess on Windows, so it must never be
-    # reached from here. If psutil is missing the answer is "unknown", not a kill.
+def test_liveness_is_unknown_without_psutil_and_signals_nothing(monkeypatch):
+    """Without psutil the answer is "unknown", never a kill.
+
+    This is the branch the Windows warning is about: os.kill(pid, 0) routes to
+    TerminateProcess there, so runlock must not reach for it itself.
+
+    The earlier version of this test patched os.kill globally and asserted it was
+    never called at all. That held only while psutil was absent: psutil's POSIX
+    pid_exists probes with os.kill(pid, 0), which is the correct call on Linux,
+    so declaring psutil a dependency turned this green test red in CI without
+    anything in runlock changing. What runlock owes is the ANSWER, not the
+    mechanism a third-party library uses to reach it.
+    """
+    monkeypatch.setitem(sys.modules, "psutil", None)   # makes `import psutil` fail
     called = []
     monkeypatch.setattr(os, "kill", lambda *a: called.append(a))
-    runlock._alive(os.getpid())
+    assert runlock._alive(os.getpid()) is None
     assert called == []
+
+
+def test_liveness_answers_from_psutil_when_it_is_installed():
+    pytest.importorskip("psutil")
+    assert runlock._alive(os.getpid()) is True

@@ -330,15 +330,32 @@ of retraining. Held-out training caches per chunk under `GTRADE_AR_TRAIN_CHUNK`
 interrupted arm loses one chunk rather than all 8 to 11 hours. That is the same
 trick `train_chunked.py` uses on the production retrain, for the same reason.
 
-**Load.** The campaign runs the box hard: 12 CatBoost threads, the TF pool
-shrunk to 0.50 to buy headroom outside it, and two neural slots instead of one.
-The chunk size is 7 rather than 5 for the same reason - the trainer derives six
-workers on this GPU, and a smaller chunk would idle one for the whole run. Two
-neural slots is the one setting that can kill a run rather than slow it, because
-cuDNN workspaces are allocated outside the TF pool, so a failed training phase is
-retried once at one slot and the larger pool before the loop gives up.
-`GTRADE_WORKERS` is deliberately left derived: a holdout arm already holds about
-6 GB with 4.1 free, so raising it trades a stall for a swap.
+**Load.** Net training on this box is host-bound, not compute-bound: the models
+are small enough that the GPU is busy about 5 ms per step and idle 50 ms, so
+roughly nine tenths of the wall clock is Python and TensorFlow bookkeeping
+between steps. That is why adding concurrency *inside* a process does not help.
+A second neural slot was tried on 2026-08-17 and every unit came back empty:
+assets carry different sequence lengths, and two of them sharing one TF graph
+produced models built for one length being handed another's data. It stays at 1.
+
+The parallelism that does work is by PROCESS. `GTRADE_AR_TRAIN_JOBS` runs that
+many training chunks at once, each a separate `train_hybrid` with its own graph,
+so that failure cannot happen at all. `split_load` divides what is sized against
+the whole box (the TF pool and the CatBoost threads) between them. Measured on
+the four tier assets:
+
+```
+1 process    624.8 s   peak VRAM 3097 MiB
+2 processes  458.8 s   peak VRAM 3956 MiB
+```
+
+27% faster, both returning all four rows. Each process is 43% slower than it was
+alone; the gain is purely overlap, which is what a host-bound workload looks
+like. The cost is headroom: 3956 of 4096 MiB leaves 140 MiB, so if a unit ever
+dies out of memory the retry drops to one process and the fix is to lower
+`GTRADE_TF_POOL_PCT`, not to raise the job count. `GTRADE_WORKERS` is
+deliberately left derived: a holdout arm already holds about 6 GB with 4.1 free,
+so raising it trades a stall for a swap.
 
 **Campaign director (optional, `GTRADE_AR_DIRECTOR=1`).** An LLM that reads the
 findings journal and picks the next experiment: axis, label, budget, whether to
@@ -1006,15 +1023,33 @@ p-значением и порогом в правильных единицах,
 же приём, которым `train_chunked.py` пользуется на боевом ретрейне, и по той же
 причине.
 
-**Загрузка.** Кампания грузит машину по максимуму: 12 потоков CatBoost, пул TF
-ужат до 0.50, чтобы освободить память вне пула, и два нейро-слота вместо одного.
-Размер чанка 7, а не 5, по той же причине: тренер выводит шесть воркеров на этой
-видеокарте, и меньший чанк держал бы один из них простаивающим весь прогон. Два
-нейро-слота - единственная настройка, способная не замедлить, а убить прогон,
-потому что воркспейсы cuDNN выделяются вне пула TF, поэтому упавшая фаза обучения
-один раз перезапускается на одном слоте и большем пуле, прежде чем цикл сдастся.
-`GTRADE_WORKERS` намеренно оставлен выводимым: арм холдаута и так держит около
-6 ГБ при 4.1 свободных, и его повышение меняет простой на своп.
+**Загрузка.** Обучение сетей на этой машине упирается в хост, а не в вычисления:
+модели настолько малы, что карта занята около 5 мс на шаг и простаивает 50, то
+есть примерно девять десятых времени уходит на питоновскую и TF-бухгалтерию между
+шагами. Поэтому добавление параллельности **внутри** процесса не помогает. Второй
+нейро-слот попробовали 17.08, и все юниты вернулись пустыми: у активов разная
+длина последовательности, и два из них на одном графе TF дали модели, собранные
+под одну длину и получившие данные другой. Слот остаётся равным 1.
+
+Работает параллельность **по процессам**. `GTRADE_AR_TRAIN_JOBS` запускает
+столько чанков обучения одновременно, каждый отдельным `train_hybrid` со своим
+графом, поэтому тот отказ там невозможен в принципе. `split_load` делит между
+ними то, что меряется относительно всей машины: пул TF и потоки CatBoost.
+Измерено на четырёх тир-активах:
+
+```
+1 процесс    624.8 с   пик VRAM 3097 МиБ
+2 процесса   458.8 с   пик VRAM 3956 МиБ
+```
+
+Быстрее на 27%, обе конфигурации вернули все четыре строки. При этом каждый
+процесс на 43% медленнее, чем был в одиночку: выигрыш взялся исключительно из
+перекрытия, и так выглядит нагрузка, упирающаяся в хост. Цена - запас по памяти:
+3956 из 4096 МиБ оставляют 140. Если юнит когда-нибудь умрёт по памяти, повтор
+уходит на один процесс, а правильное лечение - понизить `GTRADE_TF_POOL_PCT`, а
+не поднимать число процессов. `GTRADE_WORKERS` намеренно оставлен выводимым: арм
+холдаута и так держит около 6 ГБ при 4.1 свободных, и его повышение меняет
+простой на своп.
 
 **Директор кампании (опционально, `GTRADE_AR_DIRECTOR=1`).** LLM, которая читает
 журнал находок и выбирает следующий эксперимент: ось, лейбл, бюджет, тратить ли

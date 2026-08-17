@@ -299,13 +299,17 @@ def test_a_killed_run_does_not_keep_reporting_itself_as_running(tmp_path,
     assert auto_loop.read_state()["current"]["phase"] == "search"
 
 
-def test_the_campaign_asks_for_more_than_one_neural_slot_and_a_safe_retry():
-    # The load settings and their fallback have to disagree, or the retry is a
-    # second identical attempt dressed up as a recovery.
-    assert auto_loop.CAMPAIGN["GTRADE_NEURAL_SLOTS"] == "2"
-    assert auto_loop.SAFE_LOAD["GTRADE_NEURAL_SLOTS"] == "1"
-    assert (auto_loop.SAFE_LOAD["GTRADE_TF_POOL_PCT"]
-            != auto_loop.CAMPAIGN["GTRADE_TF_POOL_PCT"])
+def test_net_training_stays_on_one_slot():
+    """Assets carry different sequence lengths, and training two at once handed
+    models the wrong one: 27 genomes and six hours of GPU produced nothing on
+    2026-08-17. Raising this again needs the concurrency bug found first."""
+    assert auto_loop.CAMPAIGN["GTRADE_NEURAL_SLOTS"] == "1"
+
+
+def test_the_safe_retry_actually_differs_from_the_campaign():
+    # Otherwise the retry is a second identical attempt dressed up as a recovery.
+    assert any(auto_loop.CAMPAIGN.get(k) != v
+               for k, v in auto_loop.SAFE_LOAD.items())
     # and only the phases that actually train are worth retrying
     assert set(auto_loop.TRAINING_PHASES) == {"search", "ab_run"}
 
@@ -410,3 +414,65 @@ def test_chunked_training_resumes_where_an_interruption_left_it(monkeypatch):
     # only the chunk that was in flight is retrained, and the rows are whole
     assert calls == ["E,F"]
     assert [r["Asset"] for r in rows] == ["A", "B", "C", "D", "E", "F"]
+
+
+# --- parallel chunk training (process-level, never thread-level) -------------
+
+def test_split_load_divides_what_is_sized_against_the_whole_box(monkeypatch):
+    monkeypatch.setenv("GTRADE_TF_POOL_PCT", "0.50")
+    monkeypatch.setenv("GTRADE_CB_THREADS", "12")
+    one = ar.split_load({}, 1)
+    assert one == {}, "a single job must change nothing"
+    two = ar.split_load({}, 2)
+    assert two["GTRADE_TF_POOL_PCT"] == "0.25"
+    assert two["GTRADE_CB_THREADS"] == "6"
+
+
+def test_split_load_never_allows_a_second_neural_slot(monkeypatch):
+    """Parallelism comes from processes now. A second slot inside one process is
+    what handed models the wrong sequence length and emptied 27 genomes."""
+    monkeypatch.delenv("GTRADE_TF_POOL_PCT", raising=False)
+    out = ar.split_load({"GTRADE_NEURAL_SLOTS": "4"}, 2)
+    assert out["GTRADE_NEURAL_SLOTS"] == "1"
+
+
+def test_only_the_first_parallel_chunk_writes_the_real_progress_files():
+    # Two writers would make the per-asset ETA on the research page a lie.
+    first = ar.split_load({}, 2, progress_dir=None)
+    rest = ar.split_load({}, 2, progress_dir="/scratch/x")
+    assert "AR_PROGRESS_DIR" not in first
+    assert rest["AR_PROGRESS_DIR"] == "/scratch/x"
+
+
+def test_chunks_train_in_parallel_and_the_rows_stay_in_order(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "2")
+    monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "2")
+    seen = []
+    monkeypatch.setattr(ar, "train_env", lambda sub, env: (
+        seen.append((sub, env.get("GTRADE_TF_POOL_PCT"))) or
+        [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
+    rows = ar._cached_train("A,B,C,D", {}, lambda s: "k:" + s, "t")
+    assert [r["Asset"] for r in rows] == ["A", "B", "C", "D"]
+    assert sorted(s for s, _ in seen) == ["A,B", "C,D"]
+    # and each process was handed a divided share, not the whole card
+    assert all(pool is not None for _, pool in seen)
+
+
+def test_one_job_keeps_the_sequential_path_byte_identical(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "2")
+    monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "1")
+    seen = []
+    monkeypatch.setattr(ar, "train_env", lambda sub, env: (
+        seen.append((sub, dict(env))) or
+        [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
+    ar._cached_train("A,B,C,D", {}, lambda s: "k:" + s, "t")
+    assert [s for s, _ in seen] == ["A,B", "C,D"]
+    assert all(e == {} for _, e in seen), "no load splitting when jobs=1"
+
+
+def test_the_safe_retry_also_drops_back_to_one_training_process():
+    """Two processes peak at 3956 MiB of a 4096 MiB card, so running out of
+    memory is now the likeliest way a phase dies. Retrying at the same width
+    would just fail again."""
+    assert auto_loop.CAMPAIGN["GTRADE_AR_TRAIN_JOBS"] == "2"
+    assert auto_loop.SAFE_LOAD["GTRADE_AR_TRAIN_JOBS"] == "1"

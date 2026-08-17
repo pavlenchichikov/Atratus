@@ -535,6 +535,22 @@ def cb_params_for(opt):
     return iters, depth, lr
 
 
+def trained_nothing(total_assets, ok_count, stopped):
+    """Whether a run must NOT report success, because it trained nothing at all.
+
+    A unit where every asset failed used to exit 0, and callers read that as a
+    result: auto_research banked the genome as tried, auto_loop recorded a
+    completed phase, and the search moved on with no rows and nothing said.
+    Measured 2026-08-17, when concurrent net training began handing models the
+    wrong sequence length: 27 genomes, six hours of GPU, and a search archive
+    that never grew.
+
+    A deliberate Ctrl+C is not this. There the partial results are the point,
+    and the caller asked for the stop.
+    """
+    return bool(total_assets) and not ok_count and not stopped
+
+
 def lookback_for(opt, profile):
     """Per-asset sequence lookback: the optuna/profile baseline plus the
     GTRADE_LOOKBACK_DELTA override, clamped to [5, 90] bars."""
@@ -1675,6 +1691,13 @@ def train_system():
         print("  Stopped : Ctrl+C (results saved)")
     print("=" * 72)
     print()
+
+    if trained_nothing(total_assets, ok_count, _stop_requested):
+        print("  ERROR: every one of the %d assets failed or was skipped, so "
+              "nothing was trained and there is no quality report to compare. "
+              "See the [ERR] lines above." % total_assets)
+        print()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

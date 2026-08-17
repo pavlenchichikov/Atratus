@@ -30,3 +30,16 @@ def test_screen_only_trains_fast_cb_only(tmp_path, monkeypatch):
     assert report.exists()
     rows = json.load(open(report))
     assert rows and "Score" in rows[0]
+
+
+def test_a_run_that_trained_nothing_is_not_a_success():
+    """The failure this guards was invisible: every asset erroring still exited 0,
+    so the research agent banked the genome and the loop called the phase done."""
+    import train_hybrid as th
+    assert th.trained_nothing(total_assets=4, ok_count=0, stopped=False) is True
+    # one survivor is a result, however thin
+    assert th.trained_nothing(total_assets=4, ok_count=1, stopped=False) is False
+    # a deliberate Ctrl+C keeps whatever it managed, and is not a failure
+    assert th.trained_nothing(total_assets=4, ok_count=0, stopped=True) is False
+    # nothing was asked for, so nothing is missing
+    assert th.trained_nothing(total_assets=0, ok_count=0, stopped=False) is False
