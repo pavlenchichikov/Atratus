@@ -46,7 +46,17 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# The slow marker described itself as "excluded from the fast suite" but nothing
+# excluded it, so all five slow tests ran everywhere - including CI, which has no
+# market.db. Each guards on a RELATIVE "market.db", and the suite creates an
+# empty stub one in the working directory partway through a run. So whether they
+# skipped or ran depended on whether some earlier test had already made the stub,
+# and when they ran against it there were no tables to train on: the trainer
+# skipped every asset, wrote no quality_report, and the assertion failed. That is
+# a test that can only pass by accident. They stay runnable on purpose with
+# `pytest -m slow` from a checkout that has the real database, which is what
+# their own docstrings tell you to do.
+addopts = "-q -m 'not slow'"
 markers = [
-    "slow: real-training tests excluded from the fast suite (needs market.db)",
+    "slow: real-training tests, run with `pytest -m slow` where market.db exists",
 ]
