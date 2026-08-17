@@ -37,6 +37,13 @@ tqdm>=4.67,<5
 tabulate>=0.9,<1
 joblib>=1.5,<2
 h5py>=3.15,<4
+# core.runlock probes whether a lock's owner is still alive. Without psutil it
+# cannot, and falls back to calling a lock stale only after 48 hours - so a run
+# killed by closing its console window blocks the next one for two days. It was
+# ambient in the base env and MISSING from jackpot_gpu, which is the env that
+# actually runs the training, so the recovery silently did nothing exactly where
+# it was needed (auto_loop, loop_cycle and loop_retrain all take that lock).
+psutil>=5.9,<8
 
 # Mobile app push notifications
 firebase-admin>=6.2,<8  # send_each_for_multicast needs 6.2+; 7.x verified too
