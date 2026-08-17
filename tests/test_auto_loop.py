@@ -364,7 +364,7 @@ def test_chunk_subsets_splits_in_order_and_keeps_every_asset():
 def test_unchunked_training_still_trains_the_subset_in_one_call(monkeypatch):
     monkeypatch.delenv("GTRADE_AR_TRAIN_CHUNK", raising=False)
     calls = []
-    monkeypatch.setattr(ar, "train_env", lambda sub, env: (
+    monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
         calls.append(sub) or [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
     ar._cached_train("A,B,C,D", {}, lambda sub: "k:" + sub, "t")
     assert calls == ["A,B,C,D"]
@@ -374,7 +374,7 @@ def test_switching_chunking_on_still_reads_an_arm_cached_before_it(monkeypatch):
     """Turning on the safety net must not discard the work it exists to protect."""
     key_of = (lambda sub: "k:" + sub)
     calls = []
-    monkeypatch.setattr(ar, "train_env", lambda sub, env: (
+    monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
         calls.append(sub) or [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
     monkeypatch.delenv("GTRADE_AR_TRAIN_CHUNK", raising=False)
     ar._cached_train("A,B,C,D", {}, key_of, "t")     # cached whole, pre-chunking
@@ -399,7 +399,7 @@ def test_chunked_training_resumes_where_an_interruption_left_it(monkeypatch):
             raise RuntimeError("killed mid-chunk")
         return [{"Asset": a, "Score": 1.0} for a in sub.split(",")]
 
-    monkeypatch.setattr(ar, "train_env", dies_on_the_third_chunk)
+    monkeypatch.setattr(ar, "_train_once", dies_on_the_third_chunk)
     try:
         ar._cached_train("A,B,C,D,E,F", {}, key_of, "t")
         raise AssertionError("the fake trainer was supposed to die")
@@ -408,7 +408,7 @@ def test_chunked_training_resumes_where_an_interruption_left_it(monkeypatch):
     assert calls == ["A,B", "C,D", "E,F"]
 
     calls.clear()
-    monkeypatch.setattr(ar, "train_env", lambda sub, env: (
+    monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
         calls.append(sub) or [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
     rows = ar._cached_train("A,B,C,D,E,F", {}, key_of, "t")
     # only the chunk that was in flight is retrained, and the rows are whole
@@ -448,7 +448,7 @@ def test_chunks_train_in_parallel_and_the_rows_stay_in_order(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "2")
     monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "2")
     seen = []
-    monkeypatch.setattr(ar, "train_env", lambda sub, env: (
+    monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
         seen.append((sub, env.get("GTRADE_TF_POOL_PCT"))) or
         [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
     rows = ar._cached_train("A,B,C,D", {}, lambda s: "k:" + s, "t")
@@ -462,7 +462,7 @@ def test_one_job_keeps_the_sequential_path_byte_identical(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "2")
     monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "1")
     seen = []
-    monkeypatch.setattr(ar, "train_env", lambda sub, env: (
+    monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
         seen.append((sub, dict(env))) or
         [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
     ar._cached_train("A,B,C,D", {}, lambda s: "k:" + s, "t")
@@ -493,3 +493,40 @@ def test_one_job_leaves_the_chunk_cap_exactly_as_configured():
     assert ar.effective_chunk_size("A,B,C,D", size=7, jobs=1) == 7
     # and chunking off stays off, jobs or not
     assert ar.effective_chunk_size("A,B,C,D", size=0, jobs=4) == 0
+
+
+def test_the_search_path_itself_splits_not_only_the_cached_one(monkeypatch):
+    """The miss this covers: parallelism lived in _cached_train, but run_axis and
+    run_qd hand `train_env` to the trainer directly, so every candidate - the
+    hours of the run - went past the split while only the base was parallel."""
+    monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "7")
+    monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "2")
+    seen = []
+    monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
+        seen.append((sub, env.get("GTRADE_TF_POOL_PCT"))) or
+        [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
+    # the tier unit a search step trains: 4 assets, chunk cap 7
+    rows = ar.train_env("SP500,BTC,EURUSD,GOLD", {})
+    assert sorted(s for s, _ in seen) == ["EURUSD,GOLD", "SP500,BTC"], seen
+    assert [r["Asset"] for r in rows] == ["SP500", "BTC", "EURUSD", "GOLD"]
+    assert all(pool is not None for _, pool in seen), "load was not divided"
+
+
+def test_an_already_chunked_caller_is_not_split_again(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "7")
+    monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "2")
+    seen = []
+    monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
+        seen.append(sub) or [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
+    ar.train_env("SP500,BTC,EURUSD,GOLD", {}, split=False)
+    assert seen == ["SP500,BTC,EURUSD,GOLD"]
+
+
+def test_one_job_leaves_the_search_path_on_a_single_process(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "7")
+    monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "1")
+    seen = []
+    monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
+        seen.append((sub, dict(env))) or [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
+    ar.train_env("SP500,BTC,EURUSD,GOLD", {})
+    assert seen == [("SP500,BTC,EURUSD,GOLD", {})], "byte-identical at one job"

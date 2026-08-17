@@ -312,9 +312,8 @@ def _train(subset, env_overrides, model_dir):
         return json.load(f)
 
 
-def train_env(subset, env_overrides):
-    """Train the subset once with the given training env overrides; returns the
-    quality_report rows ([] on failure). The generic primitive every axis uses.
+def _train_once(subset, env_overrides):
+    """ONE train_hybrid process over the whole subset; rows back, [] on failure.
 
     The temp model dir is removed after the rows are read back, so long runs
     (e.g. a large re-gate) do not leak thousands of ar_* dirs into %TEMP%."""
@@ -323,6 +322,34 @@ def train_env(subset, env_overrides):
         return _train(subset, dict(env_overrides), os.path.join(tmp, "run"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def train_env(subset, env_overrides, split=True):
+    """Train the subset and return the quality rows. The primitive EVERY path uses.
+
+    The split lives here, and that is the point. It used to live in
+    _cached_train, where it did almost nothing: the search hands `train_env`
+    itself to run_axis as the trainer, and run_qd's illumination calls it too,
+    so every candidate evaluation went straight past the chunking. Only the base
+    training was ever parallel - minutes of the run, while the hours went down
+    the one path the split did not cover. Observed on 2026-08-17: the 10-asset
+    base came back "2 chunks on 2 processes", and every 4-asset candidate after
+    it ran alone on the full pool.
+
+    split=False is for a caller that has ALREADY chunked (_cached_train, which
+    chunks to cache per chunk), so a chunk is never split a second time.
+    """
+    if not split:
+        return _train_once(subset, env_overrides)
+    chunks = chunk_subsets(subset, effective_chunk_size(subset))
+    jobs = min(train_jobs(), len(chunks))
+    if jobs <= 1:
+        return _train_once(subset, env_overrides)
+    done = _train_chunks_parallel(chunks, env_overrides, jobs, "train")
+    rows = []
+    for part in chunks:
+        rows.extend(done.get(part) or [])
+    return rows
 
 
 def train_chunk_size():
@@ -410,7 +437,7 @@ def split_load(env, jobs, progress_dir=None):
     return out
 
 
-def _train_chunks_parallel(parts, env, jobs, label, key_of):
+def _train_chunks_parallel(parts, env, jobs, label, key_of=None):
     """Train several chunks at once, one train_hybrid PROCESS per chunk.
 
     By process, never by thread. Two assets sharing one TF graph inside a single
@@ -434,7 +461,9 @@ def _train_chunks_parallel(parts, env, jobs, label, key_of):
         _say("[%s] %d chunks on %d processes: %s"
              % (label, len(parts), jobs, " | ".join(parts)))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            results = pool.map(lambda pair: train_env(pair[0], pair[1]),
+            # _train_once, never train_env: these parts ARE the chunks, and
+            # train_env would split each of them again.
+            results = pool.map(lambda pair: _train_once(pair[0], pair[1]),
                                list(zip(parts, envs)))
             # Consumed in THIS thread, and banked as each one lands. cache_put is
             # a read-modify-write of a single JSON file, so a worker doing it
@@ -444,7 +473,7 @@ def _train_chunks_parallel(parts, env, jobs, label, key_of):
             # exist.
             for part, rows in zip(parts, results):
                 out[part] = rows or []
-                if rows:
+                if rows and key_of is not None:
                     ar_memory.cache_put(key_of(part), rows)
     finally:
         shutil.rmtree(quiet, ignore_errors=True)
@@ -476,7 +505,7 @@ def _cached_train(subset, env, key_of, label):
         return rows
     chunks = chunk_subsets(subset, effective_chunk_size(subset))
     if len(chunks) <= 1:
-        rows = train_env(subset, env)
+        rows = train_env(subset, env)     # one chunk: let train_env decide
         if rows:
             ar_memory.cache_put(whole, rows)
         return rows
@@ -495,7 +524,7 @@ def _cached_train(subset, env, key_of, label):
     else:
         for i, part in enumerate(pending, 1):
             _say("[%s] chunk %d/%d training: %s" % (label, i, len(pending), part))
-            rows = train_env(part, env)
+            rows = train_env(part, env, split=False)   # already a chunk
             done[part] = rows or []
             # Banked immediately, not after the loop: an interruption must cost
             # the chunk in flight and nothing else.
