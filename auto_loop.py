@@ -162,12 +162,27 @@ def campaign_problems(env):
 
 
 def freeze_problems(frozen, env):
-    """Frozen gate constants that moved since the campaign started."""
+    """Frozen gate constants that moved since the campaign started.
+
+    The refusal names its own way out. Without that this is a dead end: the
+    campaign is frozen in _auto_loop.json, so editing the basis anywhere makes
+    every later start print "not runnable" with nothing to do about it.
+    """
     if not frozen:
         return []
-    return ["%s changed mid-campaign: %s -> %s"
-            % (k, frozen[k], env.get(k)) for k in FROZEN
-            if frozen.get(k) != env.get(k)]
+    moved = ["%s changed mid-campaign: %s -> %s"
+             % (k, frozen[k], env.get(k)) for k in FROZEN
+             if frozen.get(k) != env.get(k)]
+    if moved:
+        moved.append(
+            "these decide whether a result counts, so moving them after a "
+            "verdict turns a measurement into a search for one that passes. To "
+            "measure something else, start a NEW campaign: pass --new-campaign "
+            "(or answer 2 to [0] in the launcher). It sets the search archive "
+            "aside, because Score-scale fitness runs 1.5 to 8.9 and AUC-scale "
+            "about 0.01, so one surviving Score elite would outrank every AUC "
+            "elite for the rest of the run.")
+    return moved
 
 
 def probe(base=None):
@@ -287,14 +302,29 @@ def publish(state, phase, detail="", cycle=None):
     return state
 
 
+LIVE_PHASES_EXEMPT = (None, "adopted", "stopped")
+
+
 def read_state():
     """The loop's stage for a read-only consumer (the /research page).
+
+    The written stage is cross-checked against the recorded pid, because the
+    exit path that rewrites it to "stopped" is a finally block, and a finally
+    block does not run when the console window is closed or the process is
+    killed. Observed 2026-08-17: a killed run left phase=search behind, and the
+    page would have reported a search still going with nothing running at all.
 
     Never raises and never imports the pipeline: an unreadable or missing file
     reads as "the loop is not running", which is the truth in that case.
     """
     st = _load_state()
-    return {"current": st.get("current"), "campaign": st.get("campaign"),
+    cur = st.get("current")
+    if (cur and cur.get("phase") not in LIVE_PHASES_EXEMPT
+            and runlock._alive(cur.get("pid")) is False):
+        cur = dict(cur, phase="stopped",
+                   detail="killed during %s; rerun auto_loop.py to resume "
+                          "from that phase" % cur.get("phase"))
+    return {"current": cur, "campaign": st.get("campaign"),
             "campaign_reason": st.get("campaign_reason"),
             "history": (st.get("history") or [])[:10]}
 
@@ -347,20 +377,60 @@ def adoption_report(env):
     return lines
 
 
-def start_campaign(state, env, reason=""):
-    """Freeze the gate constants for a campaign and set the old archive aside.
+# Above this, a stored fitness is a Score (the scale runs 1.5 to 8.9); below it,
+# an AUC delta (about 0.01). Nothing legitimate sits near the boundary.
+AUC_FITNESS_CEILING = 1.0
 
-    The archive MUST go when the basis changes: fitness on the Score scale runs
-    1.5 to 8.9 and on the AUC scale about 0.01, so one surviving Score elite
-    outranks every AUC elite for the rest of the run. Kept as a .bak beside it
-    rather than deleted, and .bak is already ignored as local research state.
+
+def archive_scale_mismatch(archive, basis):
+    """Whether the stored elites were scored on a different SCALE than this basis.
+
+    Measured from the stored fitnesses rather than assumed, because the archive
+    file does not record which basis produced it. This is the question that
+    actually matters: a Score elite (1.5 to 8.9) left in an archive being filled
+    on an AUC basis (about 0.01) outranks every AUC elite for the rest of the
+    run, and the reverse hides every real Score winner.
     """
+    fits = [e.get("fitness") for e in (archive or {}).values()
+            if isinstance(e, dict) and isinstance(e.get("fitness"), (int, float))]
+    if not fits:
+        return False
+    on_score_scale = max(abs(f) for f in fits) > AUC_FITNESS_CEILING
+    on_auc_basis = basis in NET_BASES
+    return on_score_scale == on_auc_basis
+
+
+def start_campaign(state, env, reason=""):
+    """Freeze the gate constants, and set the archive aside only if it is stale.
+
+    Not unconditionally. The first freeze has nothing to change FROM, so wiping
+    the archive there destroys prior search work for no reason - which is exactly
+    what happened on 2026-08-17, when a first run moved six perfectly good
+    net_auc elites out from under itself. The archive goes only when the frozen
+    constants actually moved, or when its own fitness scale disagrees with the
+    basis. Kept as a .bak rather than deleted; .bak is already ignored as local
+    research state.
+    """
+    prev = state.get("campaign") or {}
+    moved = bool(prev) and any(prev.get(k) != env[k] for k in FROZEN)
     state["campaign"] = {k: env[k] for k in FROZEN}
     state["campaign_started"] = datetime.datetime.now().isoformat(timespec="seconds")
     state["campaign_reason"] = reason
+    stale = False
     if os.path.exists(ARCHIVE_PATH):
+        try:
+            with open(ARCHIVE_PATH, encoding="utf-8") as fh:
+                stale = archive_scale_mismatch(json.load(fh),
+                                               env["GTRADE_AR_SCORE_BASIS"])
+        except (OSError, ValueError):
+            stale = False
+    if (moved or stale) and os.path.exists(ARCHIVE_PATH):
         os.replace(ARCHIVE_PATH, ARCHIVE_PATH + ".bak")
-        print("[loop] archive set aside as %s.bak" % os.path.basename(ARCHIVE_PATH))
+        print("[loop] archive set aside as %s.bak (%s)"
+              % (os.path.basename(ARCHIVE_PATH),
+                 "the frozen constants moved" if moved
+                 else "its fitness scale does not match basis "
+                      + env["GTRADE_AR_SCORE_BASIS"]))
     return state
 
 
@@ -401,7 +471,7 @@ def apply_director(env, state):
 def _status(env):
     st = probe()
     state = _load_state()
-    cur = state.get("current") or {}
+    cur = read_state()["current"] or {}
     print("stage     : %s%s" % (cur.get("phase") or "never run",
                                 "  since %s (cycle %s, pid %s)"
                                 % (cur.get("since"), cur.get("cycle"),
@@ -434,6 +504,10 @@ def main():
                     help="print where the cycle stands and exit")
     ap.add_argument("--stop", action="store_true",
                     help="ask a running loop to finish its phase and exit")
+    ap.add_argument("--new-campaign", action="store_true",
+                    help="re-freeze the score basis and objective from the "
+                         "current settings and set the search archive aside; "
+                         "the only way to move them, and never automatic")
     args = ap.parse_args()
 
     env = build_env(budget=args.budget)
@@ -446,7 +520,11 @@ def main():
 
     problems = campaign_problems(env)
     state = _load_state()
-    problems += freeze_problems(state.get("campaign"), env)
+    # --new-campaign is exactly the permission to move them, so the freeze check
+    # is what it overrides. campaign_problems still applies: a self-contradictory
+    # campaign is wrong whether or not it is new.
+    if not args.new_campaign:
+        problems += freeze_problems(state.get("campaign"), env)
     if problems:
         print("[loop] the campaign is not runnable:")
         for p in problems:
@@ -471,8 +549,13 @@ def main():
         return 1
     clear_stop()
     try:
-        if not state.get("campaign"):
-            state = start_campaign(state, env, "first campaign")
+        if args.new_campaign or not state.get("campaign"):
+            reason = ("asked for on the command line"
+                      if state.get("campaign") else "first campaign")
+            state = start_campaign(state, env, reason)
+            print("[loop] campaign frozen: basis %s, objective %s (%s)"
+                  % (env["GTRADE_AR_SCORE_BASIS"], env["GTRADE_AR_OBJECTIVE"],
+                     reason))
         deadline = time.time() + args.hours * 3600.0 if args.hours > 0 else None
         cycle = 0
         while deadline is None or time.time() < deadline:

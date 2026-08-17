@@ -346,12 +346,20 @@ spend the LLM proposer arm. Its reply is checked against a whitelist. An unknown
 axis, a budget out of range, or any key outside the list is refused rather than
 clamped, and a partly understood reply is never half applied, because a run
 nobody chose is worse than a repeated one. It cannot set the score basis or the
-objective at all. The single route to those is a `new_campaign` request carrying
-a written reason, which the loop treats as a fresh campaign: the freeze is reset
-and the search archive is set aside, because Score-scale fitness (1.5 to 8.9)
-would outrank AUC-scale fitness (about 0.01) for the rest of the run. An
-unreachable or unparseable model falls back to the campaign already in force,
-so the loop never stops for it.
+objective at all: its only route to those is a `new_campaign` request carrying a
+written reason. An unreachable or unparseable model falls back to the campaign
+already in force, so the loop never stops for it.
+
+**Choosing the basis and the objective.** They are frozen when a campaign starts,
+because choosing them after seeing a verdict is a search for a verdict that
+passes rather than a measurement. So they are picked at the start and nowhere
+else: answer 2 to `[0]` in the launcher, or pass `--new-campaign`. Either way the
+loop re-freezes them and sets the search archive aside, because Score-scale
+fitness (1.5 to 8.9) would outrank AUC-scale fitness (about 0.01) for the rest of
+the run. The screen and the illumination are then derived from the basis rather
+than asked, since only one pairing of them is coherent with each. Moving a frozen
+constant without starting a new campaign refuses the run, and the refusal names
+this way out.
 
 ## Self-maintaining loop
 
@@ -1014,12 +1022,19 @@ p-значением и порогом в правильных единицах,
 вне диапазона или любой ключ вне списка отклоняются, а не подгоняются, и
 частично понятый ответ никогда не применяется наполовину: прогон, который никто
 не выбирал, хуже повторного. Score basis и objective директор задать не может
-вообще. Единственный путь к ним - запрос `new_campaign` с письменной причиной,
-который цикл трактует как новую кампанию: заморозка сбрасывается, а архив поиска
-откладывается в сторону, потому что фитнес в шкале Score (1.5-8.9) иначе
-навсегда переиграет фитнес в шкале AUC (около 0.01). Недоступная или
-неразобранная модель откатывается к действующей кампании, цикл из-за неё не
-останавливается.
+вообще: его единственный путь к ним - запрос `new_campaign` с письменной
+причиной. Недоступная или неразобранная модель откатывается к действующей
+кампании, цикл из-за неё не останавливается.
+
+**Как выбрать basis и objective.** Они замораживаются в момент старта кампании,
+потому что выбирать их после увиденного вердикта - это поиск вердикта, который
+пройдёт, а не измерение. Поэтому их спрашивают в начале и больше нигде: ответ 2
+на пункт `[0]` в лаунчере либо флаг `--new-campaign`. В обоих случаях цикл
+перезамораживает их и откладывает архив поиска в сторону, потому что фитнес в
+шкале Score (1.5-8.9) иначе навсегда переиграет фитнес в шкале AUC (около 0.01).
+Screen и illumination после этого выводятся из базиса, а не спрашиваются: с
+каждым базисом согласована ровно одна их пара. Сдвиг замороженной константы без
+новой кампании останавливает запуск, и в отказе написано, как из него выйти.
 
 ## Самоподдерживающийся цикл
 

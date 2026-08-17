@@ -204,6 +204,69 @@ REM  interpreter and this PATH, which is where the CUDA/cuDNN DLLs live. Without
 REM  it the entire night runs on the CPU and nobody notices until morning.
 call "%~dp0activate_env.bat"
 
+echo [0] Campaign. The score basis and the objective decide HOW a result is
+echo     judged, so they are frozen once a campaign starts - choosing them after
+echo     seeing a verdict is a search for a verdict that passes, not a
+echo     measurement. That is why they are asked here and nowhere else.
+echo     1 = continue the current campaign (default)
+echo     2 = start a NEW one (sets the search archive aside and re-freezes)
+set "NEWC=1"
+set /p "NEWC=    choice [1]: "
+set "NEWCFLAG="
+if not "%NEWC%"=="2" goto :al_director
+
+echo.
+echo [0a] Score basis: WHICH number the objective is applied to.
+echo     1 = net_auc  (default) the nets' own AUC over all folds. The basis for
+echo         any neural work: a rank statistic, so it does not inherit the Score's
+echo         irreproducibility on this GPU (same seed, 0.45 to 1.52 apart).
+echo     2 = ens_auc  ensemble AUC as a level. Use when a change moves BOTH
+echo         learners, where net_gain would reward simply damaging CatBoost.
+echo     3 = net_gain ensemble AUC minus CatBoost's: what the nets add. Use when
+echo         the nets are given a target other than direction.
+echo     4 = raw      the ensemble Score (a backtest of discrete signals).
+echo     5 = neural   ensemble Score minus a CatBoost-only run.
+set "BAS=1"
+set /p "BAS=    choice [1]: "
+set "GTRADE_AR_SCORE_BASIS=net_auc"
+if "%BAS%"=="2" set "GTRADE_AR_SCORE_BASIS=ens_auc"
+if "%BAS%"=="3" set "GTRADE_AR_SCORE_BASIS=net_gain"
+if "%BAS%"=="4" set "GTRADE_AR_SCORE_BASIS=raw"
+if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=neural"
+REM  The screen and the illumination are DERIVED from the basis, not asked. On a
+REM  net basis the CB-only screen stubs every net to a constant, so every
+REM  candidate screens identically and net levers get thrown away on CatBoost's
+REM  opinion. On a Score basis the reverse: full illumination would rank noise,
+REM  because net training does not reproduce here. auto_loop refuses either
+REM  combination anyway; deriving it means the menu cannot build one.
+set "GTRADE_AR_SCREEN=0"
+set "GTRADE_AR_ILLUM=full"
+if "%BAS%"=="4" set "GTRADE_AR_SCREEN=1"
+if "%BAS%"=="4" set "GTRADE_AR_ILLUM=cb"
+if "%BAS%"=="5" set "GTRADE_AR_SCREEN=1"
+if "%BAS%"=="5" set "GTRADE_AR_ILLUM=cb"
+
+echo.
+echo [0b] Objective: how the per-asset held-out lifts reduce to ONE number.
+echo     1 = mean (default)   2 = min (lift the floor)   3 = median (robust)
+echo     4 = cvar (mean of the worst quarter)   5 = sharpe (consistency)
+echo     6 = trimmed (no extremes)
+set "OBJ=1"
+set /p "OBJ=    choice [1]: "
+set "GTRADE_AR_OBJECTIVE=mean"
+if "%OBJ%"=="2" set "GTRADE_AR_OBJECTIVE=min"
+if "%OBJ%"=="3" set "GTRADE_AR_OBJECTIVE=median"
+if "%OBJ%"=="4" set "GTRADE_AR_OBJECTIVE=cvar"
+if "%OBJ%"=="5" set "GTRADE_AR_OBJECTIVE=sharpe"
+if "%OBJ%"=="6" set "GTRADE_AR_OBJECTIVE=trimmed_mean"
+set "NEWCFLAG=--new-campaign"
+echo.
+echo     New campaign: basis %GTRADE_AR_SCORE_BASIS%, objective %GTRADE_AR_OBJECTIVE%,
+echo     screen %GTRADE_AR_SCREEN%, illumination %GTRADE_AR_ILLUM% (both derived from the basis).
+echo     The search archive will be set aside as _qd_archive.json.bak.
+:al_director
+
+echo.
 echo [1] Campaign director: an LLM picks the axis, label and budget each cycle.
 echo     It can never touch the score basis or the objective - those are frozen
 echo     for the campaign, and only a written new-campaign request can move them.
@@ -291,12 +354,14 @@ if "%GTRADE_AR_DIRECTOR%"=="1" echo   director=on   proposer=%GTRADE_AR_PROPOSER
 if not "%GTRADE_AR_DIRECTOR%"=="1" echo   director=off   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
 if "%NEEDLLM%"=="1" echo   llm=%GTRADE_AR_LLM%   model=%GTRADE_AR_LLM_MODEL%   timeout=%GTRADE_AR_LLM_TIMEOUT%s
 if "%NEEDLLM%"=="0" echo   llm=not used by this configuration
+if "%NEWC%"=="2" echo   NEW campaign: basis=%GTRADE_AR_SCORE_BASIS%  objective=%GTRADE_AR_OBJECTIVE%
+if not "%NEWC%"=="2" echo   campaign=continuing the frozen one (see [ALS] for what it is)
 echo   budget=%ALB% per cycle   deadline=%ALH% h
 echo ------------------------------------------------------------
 set "GO=Y"
 set /p "GO=Start? [Y/n]: "
 if /i "%GO%"=="n" goto :al_done
-python auto_loop.py --budget %ALB% --hours %ALH%
+python auto_loop.py --budget %ALB% --hours %ALH% %NEWCFLAG%
 :al_done
 endlocal
 pause

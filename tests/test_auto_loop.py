@@ -87,6 +87,78 @@ def test_a_moved_objective_stops_the_campaign():
     assert auto_loop.freeze_problems(frozen, dict(frozen)) == []
 
 
+def test_a_first_campaign_does_not_discard_a_matching_archive(tmp_path, monkeypatch):
+    """A first freeze has nothing to change FROM. Wiping the archive there
+    destroys prior search work, which is what happened on 2026-08-17."""
+    arch = tmp_path / "_qd_archive.json"
+    arch.write_text(json.dumps({"3_4_5": {"fitness": 0.065, "genome": {}}}),
+                    encoding="utf-8")
+    monkeypatch.setattr(auto_loop, "ARCHIVE_PATH", str(arch))
+    monkeypatch.setattr(auto_loop, "STATE_PATH", str(tmp_path / "s.json"))
+    auto_loop.start_campaign({"campaign": None, "history": []},
+                             dict(auto_loop.CAMPAIGN), "first campaign")
+    assert arch.exists(), "the archive was set aside for no reason"
+
+
+def test_a_basis_change_does_set_the_archive_aside(tmp_path, monkeypatch):
+    arch = tmp_path / "_qd_archive.json"
+    arch.write_text(json.dumps({"3_4_5": {"fitness": 0.065, "genome": {}}}),
+                    encoding="utf-8")
+    monkeypatch.setattr(auto_loop, "ARCHIVE_PATH", str(arch))
+    state = {"campaign": {"GTRADE_AR_SCORE_BASIS": "net_auc",
+                          "GTRADE_AR_OBJECTIVE": "mean"}, "history": []}
+    env = dict(auto_loop.CAMPAIGN, GTRADE_AR_SCORE_BASIS="raw",
+               GTRADE_AR_SCREEN="1", GTRADE_AR_ILLUM="cb")
+    auto_loop.start_campaign(state, env, "switching")
+    assert not arch.exists()
+    assert (tmp_path / "_qd_archive.json.bak").exists()
+
+
+def test_score_scale_elites_are_recognised_under_an_auc_basis():
+    score = {"a": {"fitness": 5.30}, "b": {"fitness": 1.63}}
+    auc = {"a": {"fitness": 0.065}, "b": {"fitness": -0.004}}
+    # Score elites would outrank every AUC elite forever
+    assert auto_loop.archive_scale_mismatch(score, "net_auc")
+    # and AUC elites would hide every real Score winner
+    assert auto_loop.archive_scale_mismatch(auc, "raw")
+    # matching scales are left alone, which is the case that must not fire
+    assert not auto_loop.archive_scale_mismatch(auc, "net_auc")
+    assert not auto_loop.archive_scale_mismatch(score, "raw")
+    assert not auto_loop.archive_scale_mismatch({}, "net_auc")
+
+
+def test_the_freeze_refusal_names_its_own_way_out():
+    """Without this the campaign is a dead end: it lives in _auto_loop.json, so
+    every later start would refuse and say nothing about how to proceed."""
+    frozen = {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_OBJECTIVE": "mean"}
+    text = " ".join(auto_loop.freeze_problems(
+        frozen, dict(frozen, GTRADE_AR_SCORE_BASIS="ens_auc")))
+    assert "--new-campaign" in text
+
+
+def test_every_basis_the_menu_offers_is_one_auto_research_accepts():
+    from core import ar_memory
+    menu = {"net_auc", "ens_auc", "net_gain", "raw", "neural"}
+    assert menu <= set(ar_memory.SCORE_BASES)
+
+
+def test_the_basis_pairings_the_menu_derives_are_all_runnable():
+    """The launcher derives screen and illumination from the basis instead of
+    asking. Every pairing it can produce must survive campaign_problems, or the
+    menu would be able to build a run that refuses to start."""
+    derived = {"net_auc": ("0", "full"), "ens_auc": ("0", "full"),
+               "net_gain": ("0", "full"), "raw": ("1", "cb"),
+               "neural": ("1", "cb")}
+    for basis, (screen, illum) in derived.items():
+        env = dict(auto_loop.CAMPAIGN, GTRADE_AR_SCORE_BASIS=basis,
+                   GTRADE_AR_SCREEN=screen, GTRADE_AR_ILLUM=illum)
+        assert auto_loop.campaign_problems(env) == [], basis
+    # positive control: the pairing the menu refuses to build IS rejected
+    bad = dict(auto_loop.CAMPAIGN, GTRADE_AR_SCORE_BASIS="raw",
+               GTRADE_AR_SCREEN="0", GTRADE_AR_ILLUM="full")
+    assert auto_loop.campaign_problems(bad)
+
+
 # --- what an unattended A/B is allowed to pick ------------------------------
 
 def test_auto_picks_ignores_an_elite_that_never_cleared_the_gate():
@@ -206,6 +278,25 @@ def test_publish_records_the_stage_and_read_state_returns_it(tmp_path, monkeypat
 def test_read_state_on_a_missing_file_reads_as_not_running(tmp_path, monkeypatch):
     monkeypatch.setattr(auto_loop, "STATE_PATH", str(tmp_path / "absent.json"))
     assert auto_loop.read_state()["current"] is None
+
+
+def test_a_killed_run_does_not_keep_reporting_itself_as_running(tmp_path,
+                                                                monkeypatch):
+    """The exit path that writes "stopped" is a finally block, and a closed
+    console window never runs one. Observed on 2026-08-17."""
+    monkeypatch.setattr(auto_loop, "STATE_PATH", str(tmp_path / "_auto_loop.json"))
+    state = {"campaign": None, "history": []}
+    auto_loop.publish(state, "search", "reference base", cycle=1)
+    monkeypatch.setattr(auto_loop.runlock, "_alive", lambda pid: False)
+    cur = auto_loop.read_state()["current"]
+    assert cur["phase"] == "stopped"
+    assert "resume" in cur["detail"]
+    # positive control: a live owner still reads as running
+    monkeypatch.setattr(auto_loop.runlock, "_alive", lambda pid: True)
+    assert auto_loop.read_state()["current"]["phase"] == "search"
+    # and an unknown owner (no psutil) is not called dead on a guess
+    monkeypatch.setattr(auto_loop.runlock, "_alive", lambda pid: None)
+    assert auto_loop.read_state()["current"]["phase"] == "search"
 
 
 def test_the_campaign_asks_for_more_than_one_neural_slot_and_a_safe_retry():
