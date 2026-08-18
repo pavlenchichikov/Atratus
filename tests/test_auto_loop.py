@@ -530,3 +530,41 @@ def test_one_job_leaves_the_search_path_on_a_single_process(monkeypatch):
         seen.append((sub, dict(env))) or [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
     ar.train_env("SP500,BTC,EURUSD,GOLD", {})
     assert seen == [("SP500,BTC,EURUSD,GOLD", {})], "byte-identical at one job"
+
+
+def test_a_hand_started_phase_borrows_the_campaigns_load_profile():
+    """The parallel training path lives entirely in these env keys, so a phase
+    started by hand ran one sequential process where the loop ran two."""
+    env = {}
+    took = auto_loop.apply_load_profile(env)
+    assert env["GTRADE_AR_TRAIN_JOBS"] == auto_loop.CAMPAIGN["GTRADE_AR_TRAIN_JOBS"]
+    assert env["GTRADE_AR_TRAIN_CHUNK"] == auto_loop.CAMPAIGN["GTRADE_AR_TRAIN_CHUNK"]
+    assert set(took) == set(auto_loop.LOAD_KEYS)
+
+
+def test_an_explicit_load_setting_outranks_the_profile():
+    env = {"GTRADE_AR_TRAIN_JOBS": "1"}
+    took = auto_loop.apply_load_profile(env)
+    assert env["GTRADE_AR_TRAIN_JOBS"] == "1"
+    assert "GTRADE_AR_TRAIN_JOBS" not in took
+
+
+def test_a_hand_started_ab_judges_on_the_campaigns_frozen_basis(tmp_path, monkeypatch):
+    """The floor, the re-keying and the verdict all follow the basis, so a run
+    that defaults it measures a different quantity than the campaign froze."""
+    monkeypatch.setattr(auto_loop, "STATE_PATH", str(tmp_path / "_auto_loop.json"))
+    (tmp_path / "_auto_loop.json").write_text(json.dumps(
+        {"campaign": {"GTRADE_AR_SCORE_BASIS": "net_auc",
+                      "GTRADE_AR_OBJECTIVE": "mean"}}), encoding="utf-8")
+    env = {}
+    took = auto_loop.apply_campaign_basis(env)
+    assert env["GTRADE_AR_SCORE_BASIS"] == "net_auc"
+    assert took == {"GTRADE_AR_SCORE_BASIS": "net_auc",
+                    "GTRADE_AR_OBJECTIVE": "mean"}
+
+
+def test_no_campaign_leaves_the_basis_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(auto_loop, "STATE_PATH", str(tmp_path / "nothing.json"))
+    env = {}
+    assert auto_loop.apply_campaign_basis(env) == {}
+    assert env == {}

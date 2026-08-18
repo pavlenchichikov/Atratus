@@ -457,8 +457,90 @@ def load_registry():
     return {}
 
 def save_registry(reg):
-    with open(REGISTRY_PATH, 'w', encoding='utf-8') as f:
-        json.dump(reg, f, ensure_ascii=False, indent=2)
+    _merged_map_write(REGISTRY_PATH, reg)
+
+
+# --- shared output files ----------------------------------------------------
+# MODEL_DIR holds three files that describe ALL assets while one run only knows
+# about the assets it trained: the champion registry, the tuned thresholds and
+# the quality report. Writing them whole is wrong in two ways that both happen
+# in practice.
+#
+#   Sequentially. train_chunked runs one process per chunk, so a whole-file
+#   write leaves tuned_thresholds.json holding the LAST chunk's assets alone;
+#   after a 208-asset retrain in chunks of 15, 193 assets quietly fall back to
+#   the default threshold.
+#
+#   Concurrently. Two chunk processes finish minutes apart and the second one's
+#   write erases the first one's champions.
+#
+# Assets are the keys and chunks are disjoint, so re-reading and updating is the
+# whole merge: nothing here ever has to reconcile two versions of one asset. The
+# lock only covers that read-modify-write, which takes milliseconds at the end
+# of a run measured in hours.
+SAVE_LOCK_WAIT = 120.0
+
+
+def _hold_save_lock(path, fn, *args):
+    """Run fn while holding the lock for `path`, waiting for another process.
+
+    One lock per file, next to the file: separate outputs never queue behind each
+    other, and a caller writing somewhere else (a test, an isolated research
+    MODEL_DIR) locks there too instead of in the production models directory.
+
+    Proceeds anyway after SAVE_LOCK_WAIT rather than losing a run's results to a
+    lock nobody will ever drop; runlock already forgives a lock whose owner died,
+    so this only fires when a live process is genuinely stuck.
+    """
+    from core import runlock
+
+    lock = path + ".lock"
+    deadline = time.time() + SAVE_LOCK_WAIT
+    held, _why = runlock.acquire(lock, "train_hybrid")
+    while not held and time.time() < deadline:
+        time.sleep(0.5)
+        held, _why = runlock.acquire(lock, "train_hybrid")
+    if not held:
+        print(f"  [save] {os.path.basename(lock)} held elsewhere for "
+              f"{SAVE_LOCK_WAIT:.0f}s; writing anyway")
+    try:
+        return fn(*args)
+    finally:
+        if held:
+            runlock.release(lock)
+
+
+def _read_json_or(path, default):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _merged_map_write(path, updates):
+    """Fold {asset: value} into a mapping file without dropping other assets."""
+    def _write():
+        cur = _read_json_or(path, {})
+        if not isinstance(cur, dict):
+            cur = {}
+        cur.update(updates)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(cur, f, ensure_ascii=False, indent=2)
+    return _hold_save_lock(path, _write)
+
+
+def _merged_rows_write(path, rows, key='Asset'):
+    """Fold a list of report rows into a list file, one row per key."""
+    def _write():
+        cur = _read_json_or(path, [])
+        merged = {r[key]: r for r in cur
+                  if isinstance(r, dict) and key in r}
+        for r in rows:
+            merged[r[key]] = r
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(list(merged.values()), f, ensure_ascii=False, indent=2)
+    return _hold_save_lock(path, _write)
 
 _stop_requested = False
 
@@ -1466,6 +1548,11 @@ def train_system():
     sys.stdout.flush()
 
     tuned_thresholds = {}
+    # What THIS run promoted, kept apart from the registry it started from. Only
+    # these entries are written back: the rest of `registry` is a snapshot taken
+    # at startup, and writing that whole snapshot would undo a champion another
+    # chunk process promoted while this one was training.
+    registry_updates = {}
     quality_rows = []
     exp_rows = []
     completed_assets = 0
@@ -1611,6 +1698,7 @@ def train_system():
                         tuned_thresholds[asset] = result['tuned_threshold']
                         if result['registry_update']:
                             registry[asset] = result['registry_update']
+                            registry_updates[asset] = result['registry_update']
                     ok_count += 1
                     score = result['quality_row'].get('Score', 0)
                     policy = result['quality_row'].get('Policy', '')
@@ -1643,7 +1731,11 @@ def train_system():
     print(f"\n  Saving results ({completed_assets}/{total_assets} assets)...")
     if quality_rows:
         rep_df = pd.DataFrame(quality_rows)
-        rep_df.to_json(os.path.join(MODEL_DIR, 'quality_report.json'), orient='records', indent=2)
+        # Serialized through pandas, not json.dump(quality_rows): the rows carry
+        # numpy scalars and NaN, which pandas renders and the stdlib encoder
+        # either refuses or writes as invalid JSON.
+        _merged_rows_write(os.path.join(MODEL_DIR, 'quality_report.json'),
+                           json.loads(rep_df.to_json(orient='records')))
         rep_sorted = rep_df.sort_values(by='Score', ascending=False)
         W2 = 72
         print()
@@ -1664,10 +1756,9 @@ def train_system():
             print(rep_sorted.to_string(index=False))
         print("=" * W2)
 
-    with open(THRESHOLDS_PATH, 'w', encoding='utf-8') as f:
-        json.dump(tuned_thresholds, f, ensure_ascii=False, indent=2)
+    _merged_map_write(THRESHOLDS_PATH, tuned_thresholds)
 
-    save_registry(registry)
+    save_registry(registry_updates)
 
     if exp_rows:
         # A cosmetic log must never crash the end of a run: the isolated model dirs

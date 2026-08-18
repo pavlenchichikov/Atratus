@@ -37,8 +37,51 @@ def _read_json(path):
         return None
 
 
+def _gated_axis_genomes(base):
+    """Axis winners the held-out gate flagged adoptable, keyed by genome sig.
+
+    The search archive is not the only place a testable genome comes from. An
+    axis run gates its winner on the same held-out set and writes the verdict to
+    the findings journal, but nothing used to join that back to a genome, so an
+    adoptable axis winner could never become an A/B arm or an adoption. It just
+    accumulated clears: the labeling winner of 2026-08-17/18 cleared seven times
+    while the loop, finding nothing to test, searched on.
+
+    Adoptable only, because this list is "what is worth training next" and an arm
+    costs hours. The journal is read from `base` rather than through ar_memory so
+    a caller pointed at a fixture directory stays inside it.
+
+    Filtered to the campaign's frozen basis, which is the same reasoning that
+    makes auto_loop set a mismatched search archive aside: a Score-basis winner
+    scores 1.5 to 8.9 where an AUC-basis one scores about 0.01, so leaving both
+    in one pool ranks the pool by units. Journal records written before the field
+    existed carry no basis and are therefore not this campaign's, which is also
+    the honest reading - they predate the 2026-08-14 sequence-alignment fix.
+    """
+    import auto_research as ar
+
+    campaign = (_read_json(os.path.join(base, "_auto_loop.json")) or {}).get("campaign")
+    basis = (campaign or {}).get("GTRADE_AR_SCORE_BASIS")
+    out = {}
+    for rec in _read_json(os.path.join(base, "_ar_findings.json")) or []:
+        if basis and rec.get("basis") != basis:
+            continue
+        for w in (rec.get("winners") or []):
+            genome = w.get("genome")
+            if not w.get("adoptable") or not isinstance(genome, dict):
+                continue
+            try:
+                sig = ar.genome_sig(ar.Genome(**genome))
+            except Exception:
+                continue
+            out[sig] = {"bucket": "axis:%s" % (w.get("axis") or "?"),
+                        "genome": genome, "fitness": w.get("value")}
+    return out
+
+
 def _archive_by_sig(base):
-    """Every archive elite keyed by its genome signature.
+    """Every candidate genome keyed by its signature: the search archive first,
+    then the gate-adoptable axis winners.
 
     The join that recovers a full genome from an A/B result, whose stored
     signature carries the DSL specs without their names.
@@ -57,6 +100,10 @@ def _archive_by_sig(base):
             continue
         out[sig] = {"bucket": key, "genome": genome,
                     "fitness": (entry or {}).get("fitness")}
+    # setdefault: an elite that is BOTH in the archive and in the journal keeps
+    # its archive cell, which is the label the search half of the tooling prints.
+    for sig, hit in _gated_axis_genomes(base).items():
+        out.setdefault(sig, hit)
     return out
 
 

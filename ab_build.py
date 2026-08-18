@@ -462,6 +462,15 @@ def run(cfg):
     come from the new adoption while reference_sig still named the old one, so
     the run would measure one thing and record another.
     """
+    # The A/B arm is the longest training this toolchain runs, and the parallel
+    # path lives entirely in env keys that a hand-started run does not set. Borrow
+    # the campaign's load profile so an arm measured by hand costs the same as the
+    # identical arm measured by the loop.
+    import auto_loop
+    took = auto_loop.apply_load_profile()
+    if took:
+        print("load profile: %s" % " ".join("%s=%s" % kv for kv in sorted(took.items())))
+
     subset = cfg["holdout"]
     live = reference()
     if live["sig"] != cfg["reference_sig"]:
@@ -522,6 +531,14 @@ def main():
                     help="pick the gate-adoptable elites and the suggested "
                          "holdout without asking; for auto_loop.py")
     args = ap.parse_args()
+
+    # Before anything reads the basis: the floor, the re-keying and the verdict
+    # all follow it, so a hand-started A/B must judge on the same quantity the
+    # campaign froze rather than on the built-in default.
+    import auto_loop
+    frozen = auto_loop.apply_campaign_basis()
+    if frozen:
+        print("campaign: %s" % " ".join("%s=%s" % kv for kv in sorted(frozen.items())))
 
     if args.show:
         cfg = read_config()

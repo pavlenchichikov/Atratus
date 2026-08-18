@@ -2828,6 +2828,60 @@ def _winner_sig(axis_name, winner):
     return axis_name + ":" + body
 
 
+# The two axis-candidate keys that are spelled differently on the Genome. Every
+# other key an axis proposes is already a gene name, which is why this is short.
+_AXIS_GENE_ALIASES = {"seeds": "net_seeds", "calibrate": "net_calibrate",
+                      "uniqueness": "net_uniqueness"}
+
+
+def _axis_genome(axis_name, winner):
+    """Literal translation of one axis winner into a Genome. May raise."""
+    if axis_name == "features":
+        return Genome(extra=[s for s in winner if isinstance(s, dict)])
+    if axis_name == "pruning":
+        return Genome(drops=[c["drop"] for c in winner
+                             if isinstance(c, dict) and "drop" in c])
+    if axis_name == "labeling":
+        return Genome(label_mode=winner["mode"],
+                      label_window=int(winner["window"]))
+    return Genome(**{_AXIS_GENE_ALIASES.get(k, k): v
+                     for k, v in winner.items()})
+
+
+def _env_without_specs(env):
+    """GTRADE_DSL_SPECS names a per-call temp file, so it can never compare
+    equal between two calls and says nothing about what was trained. The spec
+    NAMES still ride along in GTRADE_EXTRA_FEATURES, which does compare."""
+    return {k: v for k, v in env.items() if k != "GTRADE_DSL_SPECS"}
+
+
+def genome_from_axis(axis, winner):
+    """The axis winner as a Genome, or None when it has no genome form.
+
+    An axis finding is a verdict about an ENV; the A/B and the adoption speak
+    only Genome. Without this join an adoptable axis winner is unadoptable by
+    construction: it clears the held-out gate, is written to the journal, and
+    nothing downstream can reach it. That is not hypothetical - a labeling
+    winner cleared the gate seven times between 2026-08-17 and 08-18 while
+    auto_loop.next_action, finding no genome to test, kept searching.
+
+    The mapping is CHECKED rather than trusted: the genome is kept only when it
+    composes back to the same training env the gate actually measured. A wrong
+    or stale alias here would send the A/B off to train something else and then
+    file the result under this winner's evidence, which is worse than not
+    offering the candidate at all.
+    """
+    if winner is None:
+        return None
+    try:
+        g = _canon_genome(_axis_genome(axis.name, winner))
+        same = (_env_without_specs(genome_to_env(g))
+                == _env_without_specs(axis.to_env(winner)))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    return g if same else None
+
+
 def main():
     import argparse
     p = argparse.ArgumentParser(description="auto-research")
@@ -2891,7 +2945,7 @@ def main():
                           "column for basis %s" % basis)
                     continue
                 p, value, _d, tag = _st
-            winners.append((axis.name, winner, p, value, tag, nl))
+            winners.append((axis, winner, p, value, tag, nl))
         except RuntimeError as exc:
             print(f"[auto-research] axis {axis.name}: LLM proposer unavailable, skipping ({exc})")
             continue
@@ -2899,7 +2953,8 @@ def main():
     flags = benjamini_hochberg([w[2] for w in winners])
     ts = datetime.utcnow().isoformat()
     finding_winners = []
-    for (name, winner, p, value, tag, nl), s in zip(winners, flags):
+    for (axis, winner, p, value, tag, nl), s in zip(winners, flags):
+        name = axis.name
         ok = adopt_ok(s, value, obj, nl)
         replicated = clears = None
         if ok:
@@ -2908,12 +2963,21 @@ def main():
             clears = ar_memory.replication_add(wsig, ts)
             if ar_wiki.wiki_on() and clears >= 2:
                 ar_wiki.note_replicated(wsig, "replicated (%d clears)" % clears)
+        # Recorded for every winner, not only the adoptable ones: an axis result
+        # that misses the bar today can still be re-gated later, and a finding
+        # without its genome is a dead end no matter what its verdict was.
+        g = genome_from_axis(axis, winner)
         finding_winners.append({"axis": name, "p": p, "value": value, "tag": tag,
                                 "adoptable": ok, "neural_lift": nl,
+                                "genome": asdict(g) if g else None,
                                 "replicated": bool(replicated), "clears": clears or 0})
         verdict = _gate_verdict(ok, bool(replicated), clears, nl, s)
         nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
         print(f"[auto-research] axis {name}: {verdict} | {tag}{nl_str}")
+        if ok and g is None:
+            print("[auto-research] axis %s: adoptable, but this winner has no "
+                  "genome form, so no A/B can be built from it. It stays a note "
+                  "in the journal." % name)
     ar_memory.findings_append({
         "ts": ts, "mode": "axes", "basis": basis,
         "axes": [a.name for a in axes], "budget": BUDGET,

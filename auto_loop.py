@@ -115,6 +115,49 @@ CAMPAIGN = {
     "GTRADE_AR_TRAIN_JOBS": "2",
 }
 
+# The load half of CAMPAIGN: what a phase runs the box at, as opposed to what it
+# measures. Named separately so a phase started BY HAND can borrow the same
+# profile. Without that, `python ab_build.py --run` fell back to one sequential
+# training process while the identical arm started by the loop ran two, and the
+# same A/B took 27% longer purely because of who launched it.
+LOAD_KEYS = ("GTRADE_AR_TRAIN_CHUNK", "GTRADE_AR_TRAIN_JOBS",
+             "GTRADE_CB_THREADS", "GTRADE_TF_POOL_PCT", "GTRADE_NEURAL_SLOTS")
+
+
+def apply_campaign_basis(environ=None):
+    """Default the campaign's FROZEN gate constants into the environment.
+
+    Load and measurement are different things, so this is separate from
+    apply_load_profile: a wrong load setting costs time, a wrong basis costs the
+    comparison. A phase started by hand otherwise measures on the built-in
+    default while the campaign is frozen on another basis, and the result lands
+    in the same adoption evidence in different units - an AUC delta of 0.09
+    checked against the Score floor of 0.5, or a raw Score of 1.6 waved through a
+    floor of 0.005.
+
+    setdefault semantics again: an explicit value still wins, and freeze_problems
+    is what refuses a value that contradicts the campaign.
+    """
+    target = os.environ if environ is None else environ
+    frozen = _load_state().get("campaign") or {}
+    took = {k: v for k, v in frozen.items() if k not in target}
+    target.update(took)
+    return took
+
+
+def apply_load_profile(environ=None):
+    """Fill the load keys that are not set. Returns what it set.
+
+    setdefault, so an explicit shell value still wins - the profile is a default
+    for an unattended box, not a policy.
+    """
+    target = os.environ if environ is None else environ
+    missing = [k for k in LOAD_KEYS if k not in target]
+    for key in missing:
+        target[key] = CAMPAIGN[key]
+    return {k: CAMPAIGN[k] for k in missing}
+
+
 # What a failed training phase is retried under, once: the smallest, dullest
 # configuration that has ever trained this asset list end to end. TRAIN_JOBS
 # belongs here because two processes peak at 3956 MiB of a 4096 MiB card, so
