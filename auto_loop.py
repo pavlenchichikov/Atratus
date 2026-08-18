@@ -12,7 +12,8 @@ result is judged: the score basis and the objective are frozen on the first
 cycle and re-checked on every one, because picking those after seeing a verdict
 is a search for a measurement that passes rather than a measurement. The
 director can only ask to start a NEW campaign, with a written reason, which
-resets the freeze and sets the search archive aside.
+resets the freeze, and sets the search archive aside when the SEARCH basis moved
+or its fitness scale no longer matches it.
 
 Stopping. `python auto_loop.py --stop` asks the running loop to finish the phase
 it is in and exit; the loop also checks before starting each phase. Killing it
@@ -261,10 +262,13 @@ def freeze_problems(frozen, env):
             "these decide whether a result counts, so moving them after a "
             "verdict turns a measurement into a search for one that passes. To "
             "measure something else, start a NEW campaign: pass --new-campaign "
-            "(or answer 2 to [0] in the launcher). It sets the search archive "
-            "aside, because Score-scale fitness runs 1.5 to 8.9 and AUC-scale "
-            "about 0.01, so one surviving Score elite would outrank every AUC "
-            "elite for the rest of the run.")
+            "(or answer 2 to [0] in the launcher). The search archive is kept "
+            "unless the SEARCH basis itself moved or its fitness scale "
+            "disagrees with it - Score-scale fitness runs 1.5 to 8.9 and "
+            "AUC-scale about 0.01, so one surviving Score elite would outrank "
+            "every AUC elite for the rest of the run. Naming a different "
+            "DECISION basis leaves the archive alone: it changes how a result "
+            "is adopted, not how those elites were ranked.")
     return moved
 
 
@@ -495,7 +499,14 @@ def start_campaign(state, env, reason=""):
     research state.
     """
     prev = state.get("campaign") or {}
-    moved = bool(prev) and any(prev.get(k) != env[k] for k in FROZEN)
+    # Only the SEARCH basis can stale the archive, not every frozen constant.
+    # The archive holds elites ranked by search fitness; naming a different
+    # DECISION basis changes how a result is adopted and says nothing about how
+    # those elites were ranked. Keying this on all of FROZEN would have thrown
+    # away six perfectly good net_auc elites the first time a campaign split the
+    # two bases, which is the same mistake as the 2026-08-17 wipe this guard was
+    # written to prevent. The scale check below is the independent safety net.
+    moved = bool(prev) and prev.get("GTRADE_AR_SCORE_BASIS") != env["GTRADE_AR_SCORE_BASIS"]
     state["campaign"] = {k: env[k] for k in FROZEN}
     state["campaign_started"] = datetime.datetime.now().isoformat(timespec="seconds")
     state["campaign_reason"] = reason

@@ -65,3 +65,36 @@ def test_a_real_move_is_still_refused():
     env = dict(auto_loop.CAMPAIGN, GTRADE_AR_DECISION_BASIS="ens_auc")
     problems = auto_loop.freeze_problems(old, env)
     assert problems and "GTRADE_AR_DECISION_BASIS" in problems[0]
+
+
+def test_naming_a_decision_basis_does_not_throw_the_search_archive_away(tmp_path, monkeypatch):
+    """The archive ranks elites by SEARCH fitness. Changing how a result is
+    ADOPTED says nothing about that ranking, and discarding six good elites for
+    it would repeat the 2026-08-17 wipe the guard exists to prevent."""
+    import json
+    archive = tmp_path / "_qd_archive.json"
+    archive.write_text(json.dumps({"2_4_5": {"fitness": 0.065, "genome": {}}}),
+                       encoding="utf-8")
+    monkeypatch.setattr(auto_loop, "ARCHIVE_PATH", str(archive))
+    state = {"campaign": {"GTRADE_AR_SCORE_BASIS": "net_auc",
+                          "GTRADE_AR_OBJECTIVE": "mean",
+                          "GTRADE_AR_DECISION_BASIS": ""}}
+    env = dict(auto_loop.CAMPAIGN, GTRADE_AR_DECISION_BASIS="raw")
+    auto_loop.start_campaign(state, env, "split the bases")
+    assert archive.exists(), "the archive was set aside for a decision-basis change"
+
+
+def test_moving_the_search_basis_still_sets_the_archive_aside(tmp_path, monkeypatch):
+    """Score-scale fitness runs 1.5 to 8.9 and AUC-scale about 0.01, so one
+    survivor of the other scale outranks every elite of this one."""
+    import json
+    archive = tmp_path / "_qd_archive.json"
+    archive.write_text(json.dumps({"2_4_5": {"fitness": 0.065, "genome": {}}}),
+                       encoding="utf-8")
+    monkeypatch.setattr(auto_loop, "ARCHIVE_PATH", str(archive))
+    state = {"campaign": {"GTRADE_AR_SCORE_BASIS": "net_auc",
+                          "GTRADE_AR_OBJECTIVE": "mean"}}
+    env = dict(auto_loop.CAMPAIGN, GTRADE_AR_SCORE_BASIS="raw")
+    auto_loop.start_campaign(state, env, "different basis")
+    assert not archive.exists()
+    assert (tmp_path / "_qd_archive.json.bak").exists()

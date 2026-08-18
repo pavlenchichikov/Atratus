@@ -306,9 +306,22 @@ if "%OBJ%"=="5" set "GTRADE_AR_OBJECTIVE=sharpe"
 if "%OBJ%"=="6" set "GTRADE_AR_OBJECTIVE=trimmed_mean"
 set "NEWCFLAG=--new-campaign"
 echo.
-echo     New campaign: basis %GTRADE_AR_SCORE_BASIS%, objective %GTRADE_AR_OBJECTIVE%,
+echo [0c] Decision basis: WHICH number an ADOPTION is judged on. It need not be
+echo     the one the search optimises. The search basis is picked for signal to
+echo     noise; this one decides what counts as an improvement to production.
+echo     Measured 2026-08-18: over one holdout, mean Net_AUC +0.036 while mean
+echo     Score was -1.85, rank correlation -0.24. The A/B passed and the retrain
+echo     it authorised kept the champion on 23 of the first 29 assets.
+echo     1 = raw Score, what train_hybrid promotes champions on (recommended)
+echo     2 = same as the search basis (the behaviour before this existed)
+set "DEC=1"
+set /p "DEC=    choice [1]: "
+set "GTRADE_AR_DECISION_BASIS=raw"
+if "%DEC%"=="2" set "GTRADE_AR_DECISION_BASIS="
+echo.
+echo     New campaign: search basis %GTRADE_AR_SCORE_BASIS%, objective %GTRADE_AR_OBJECTIVE%,
 echo     screen %GTRADE_AR_SCREEN%, illumination %GTRADE_AR_ILLUM% (both derived from the basis).
-echo     The search archive will be set aside as _qd_archive.json.bak.
+echo     The search archive is kept: only a move of the SEARCH basis sets it aside.
 :al_director
 
 echo.
@@ -399,7 +412,7 @@ if "%GTRADE_AR_DIRECTOR%"=="1" echo   director=on   proposer=%GTRADE_AR_PROPOSER
 if not "%GTRADE_AR_DIRECTOR%"=="1" echo   director=off   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
 if "%NEEDLLM%"=="1" echo   llm=%GTRADE_AR_LLM%   model=%GTRADE_AR_LLM_MODEL%   timeout=%GTRADE_AR_LLM_TIMEOUT%s
 if "%NEEDLLM%"=="0" echo   llm=not used by this configuration
-if "%NEWC%"=="2" echo   NEW campaign: basis=%GTRADE_AR_SCORE_BASIS%  objective=%GTRADE_AR_OBJECTIVE%
+if "%NEWC%"=="2" echo   NEW campaign: search=%GTRADE_AR_SCORE_BASIS%  decision=%GTRADE_AR_DECISION_BASIS%  objective=%GTRADE_AR_OBJECTIVE%
 if not "%NEWC%"=="2" echo   campaign=continuing the frozen one (see [ALS] for what it is)
 echo   budget=%ALB% per cycle   deadline=%ALH% h
 echo ------------------------------------------------------------
