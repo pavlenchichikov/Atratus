@@ -6,8 +6,10 @@ an entry zone around the last close, an emergency stop a few ATR away, and a
 trailing version of that stop once a position has been held for more than one
 bar.
 
-Pure and serve-side: bars and numbers in, a dict out. No database, no models,
-no file. There is deliberately no take-profit: the model is trained on
+Serve-side and almost pure: bars and numbers in, a dict out. No database and no
+models. The one file it reads is levels_policy.json, the fitted multipliers, and
+it falls back to the constants below whenever that file is absent, corrupt or
+nonsense, so an install that never fitted anything behaves as it always did. There is deliberately no take-profit: the model is trained on
 "tomorrow's close beats today's" (core/features.py:53), so a target would be a
 payoff distribution nothing in this project has measured.
 
@@ -19,6 +21,41 @@ called on its own. tests/test_levels.py pins the two together on shared input.
 ATR_PERIOD = 14
 K_ENTRY = 0.5
 K_STOP = 2.0
+
+# A Taleb risk above this reads as the fat-tail regime. The same number
+# train_timing.py uses to build its taleb_hi flag, so the policy is fitted on
+# the regime serving will report.
+TALEB_HI = 0.7
+
+# The policy's genes. The four deltas default to zero, so a policy that carries
+# only k_entry and k_stop behaves exactly like one that never heard of regimes,
+# and the regime-conditioned form has the flat form as its own baseline.
+POLICY_DEFAULTS = {
+    "k_entry": K_ENTRY, "k_stop": K_STOP,
+    "d_entry_hi_taleb": 0.0, "d_entry_risky": 0.0,
+    "d_stop_hi_taleb": 0.0, "d_stop_risky": 0.0,
+}
+
+
+def effective_multipliers(params, taleb_hi=False, risky=False):
+    """(k_entry, k_stop) for one bar's regime.
+
+    Additive deltas on a base, which is how core/timing_policy resolves its own
+    regime variants: both conditions can apply at once, and a zero delta is a
+    no-op rather than a special case. Clamped positive because a non-positive
+    multiplier is not a wider or tighter level, it is a level on top of the
+    close and a stop on the wrong side of it.
+    """
+    p = dict(POLICY_DEFAULTS)
+    p.update(params or {})
+    k_entry, k_stop = p["k_entry"], p["k_stop"]
+    if taleb_hi:
+        k_entry += p["d_entry_hi_taleb"]
+        k_stop += p["d_stop_hi_taleb"]
+    if risky:
+        k_entry += p["d_entry_risky"]
+        k_stop += p["d_stop_risky"]
+    return max(0.01, float(k_entry)), max(0.01, float(k_stop))
 
 
 def _side(signal):
@@ -93,7 +130,34 @@ def _trailing_stop(bars, atrs, segment, side, k_stop):
     return best if seen else None
 
 
-def levels(bars, signal, segment=None, k_entry=K_ENTRY, k_stop=K_STOP):
+def load_policy(path=None):
+    """The fitted multipliers, or None when nothing has been adopted.
+
+    Kept BESIDE the constants rather than replacing them: an unfitted install, a
+    reverted policy and a corrupt file must all fall back to the numbers
+    production has always shipped, never to nothing. Same contract as
+    core.timing_policy.load_policy.
+    """
+    import json
+    import os
+
+    path = path or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "levels_policy.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            stored = (json.load(fh) or {}).get("params") or {}
+        params = dict(POLICY_DEFAULTS)
+        params.update({k: float(stored[k]) for k in POLICY_DEFAULTS if k in stored})
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    if params["k_entry"] <= 0 or params["k_stop"] <= 0:
+        return None
+    return params
+
+
+def levels(bars, signal, segment=None, k_entry=None, k_stop=None,
+           taleb_hi=False, risky=False):
     """One sheet row for one asset.
 
     `bars`: oldest-first OHLC dicts with `date`, `high`, `low`, `close`.
@@ -106,6 +170,11 @@ def levels(bars, signal, segment=None, k_entry=K_ENTRY, k_stop=K_STOP):
     never a silently dropped row: a sheet with a gap in it is worse than a sheet
     that says why.
     """
+    # An explicit multiplier is an experiment and always wins; otherwise the
+    # adopted policy decides, resolved for THIS bar's regime.
+    fit_entry, fit_stop = effective_multipliers(load_policy(), taleb_hi, risky)
+    k_entry = fit_entry if k_entry is None else k_entry
+    k_stop = fit_stop if k_stop is None else k_stop
     row = {"side": 0, "close": None, "atr": None, "entry_low": None,
            "entry_high": None, "stop": None, "trailing": False, "status": "ok"}
     side = _side(signal)
@@ -173,3 +242,55 @@ def size_for(close, stop, equity, risk_per_trade, max_single_position,
     if equity:
         out["amount"] = equity * pct
     return out
+
+
+def resolve_trade(side, entry_low, entry_high, stop, bars, sides, leg_cost):
+    """What became of one issued set of levels, or None while it is undecided.
+
+    ONE definition, shared by the live scorer (performance_tracker) and the
+    policy fitter (train_levels). Two lookalike implementations would let the
+    fitter optimise a rule that the journal does not score, which is the same
+    class of mistake as optimising a basis nobody checked against the target.
+
+    `bars` are the (open, high, low, close) bars AFTER the bar the levels were
+    computed from; `sides` is the signal side in force on each of those bars
+    (+1 long, -1 short, 0 flat), same length. The trade ends on the stop or on
+    the side turning away from the one it was issued for, which is what the
+    asset card tells a person to do and what core/positions.py calls a segment.
+
+    Fills are limit-order conventions taken at the WORSE edge of the zone, and a
+    gap through the stop fills at the gap, so nothing here flatters a result.
+    """
+    if side not in (1, -1):
+        return None
+    entry_price = None
+    entry_index = None
+    held = 0
+    for i, (op, hi, lo, cl) in enumerate(bars):
+        flipped = i < len(sides) and sides[i] != side
+        if entry_price is None:
+            touched = (lo <= entry_high) if side > 0 else (hi >= entry_low)
+            if touched:
+                entry_price = min(op, entry_high) if side > 0 else max(op, entry_low)
+                entry_index = i
+                continue          # costs and stops are judged from the next bar
+            if flipped:
+                return {"entered": 0, "exit_reason": "no_entry", "ret_net": 0.0,
+                        "bars_held": 0}
+            continue
+        held += 1
+        hit = (lo <= stop) if side > 0 else (hi >= stop)
+        if hit:
+            exit_price = min(op, stop) if side > 0 else max(op, stop)
+            reason = "stop"
+        elif flipped:
+            exit_price = cl
+            reason = "signal"
+        else:
+            continue
+        gross = side * (exit_price - entry_price) / entry_price
+        return {"entered": 1, "entry_index": entry_index,
+                "entry_price": float(entry_price), "exit_index": i,
+                "exit_price": float(exit_price), "exit_reason": reason,
+                "bars_held": held, "ret_net": float(gross - 2 * leg_cost)}
+    return None                    # still running, or not enough bars yet

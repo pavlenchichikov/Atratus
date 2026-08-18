@@ -418,6 +418,24 @@ def taleb_for_asset(asset):
         return None
 
 
+def regime_flags(asset, taleb=None):
+    """(taleb_hi, risky) for one asset, the two conditions a levels policy reads.
+
+    Resolved here rather than inside core.levels so that module stays a pure
+    function of bars and numbers. The Taleb cut is core.levels.TALEB_HI, the
+    same number train_timing.py builds its taleb_hi flag with, so the policy is
+    fitted on the regime serving reports.
+    """
+    import config
+    from core.levels import TALEB_HI
+
+    if taleb is None:
+        taleb = taleb_for_asset(asset)
+    groups = ("FOREX MAJORS", "FOREX CROSSES", "FOREX EXOTIC", "CRYPTO")
+    risky = any(asset in config.ASSET_TYPES.get(g, []) for g in groups)
+    return bool(taleb is not None and taleb > TALEB_HI), risky
+
+
 @ttl_cache(300)
 def taleb_index():
     """Latest Taleb tail-risk index per asset: {asset: float|None}.
@@ -567,7 +585,9 @@ def levels_sheet(equity=0.0):
             if segs and segs[-1]["open"]:
                 segment = segs[-1]
                 held = segment["bars"]
-        lv = levels_mod.levels(bars, s["signal"], segment=segment)
+        taleb_hi, risky = regime_flags(asset)
+        lv = levels_mod.levels(bars, s["signal"], segment=segment,
+                               taleb_hi=taleb_hi, risky=risky)
         sz = levels_mod.size_for(lv["close"], lv["stop"], equity,
                                  RISK_CONFIG["risk_per_trade"],
                                  RISK_CONFIG["max_single_position"])

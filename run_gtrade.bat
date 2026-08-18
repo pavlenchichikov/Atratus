@@ -22,7 +22,16 @@ if %errorlevel% neq 0 (
 :menu
 cls
 echo =======================================================
-echo    ATRATUS
+echo.
+echo         /\                 _____ _____  _____ _____
+echo        /  \   .-'''-.     ^|  _  ^|_   _^|^|  _  ^|  _  ^|
+echo       /    \ /       \    ^| ^|_^| ^| ^| ^|  ^| ^|_^| ^| ^|_^| ^|
+echo      /  /\  \  .-. .-.^\   ^|  _  ^| ^| ^|  ^|  _  ^|  _  ^|
+echo     /  /  \  \(o o^) ^|  ^\  ^|_^| ^|_^| ^|_^|  ^|_^| ^|_^|_^| ^|_^|
+echo    /__/    \__\ ^^^   /__/       A T R A T U S
+echo         \      /  ^\_/
+echo          \____/          signals, levels, and the evidence for both
+echo.
 echo =======================================================
 echo.
 echo  CORE                     ANALYTICS
@@ -55,6 +64,7 @@ echo  RESEARCH / MAINTENANCE
 echo    [RS] Auto-research agent (own menu)   [LC] Daily loop cycle
 echo    [AL] Autonomous cycle: search, A/B, adopt   [ALS] Its stage / stop it
 echo    [RC] Recalibrate live probabilities   [TP] Fit the timing policy
+echo    [TL] Fit the trade-levels policy (entry zone and stop)
 echo.
 echo =======================================================
 set /p choice="Select: "
@@ -94,6 +104,7 @@ if /i "%choice%"=="AL" goto auto_loop
 if /i "%choice%"=="LC" goto loop_cycle
 if /i "%choice%"=="RC" goto recalibrate
 if /i "%choice%"=="TP" goto timing_policy
+if /i "%choice%"=="TL" goto levels_policy
 if /i "%choice%"=="ABC" goto ab_configure
 if /i "%choice%"=="ABR" goto ab_run
 if /i "%choice%"=="L" goto signal_log
@@ -418,6 +429,22 @@ echo REPLACES models\live_calib_global.pkl. Weekly is enough. Delete that file
 echo to roll back to the raw model probabilities.
 echo.
 python recalibrate_live.py
+pause
+goto menu
+
+:levels_policy
+cls
+echo Подбирает две константы уровней (зона входа и стоп в ATR) на истории
+echo всех активов сразу и пишет levels_policy.json ТОЛЬКО если отложенная
+echo выборка это подтвердит. Иначе продакшн остаётся на своих числах.
+echo.
+echo Timing-политика при этом заморожена: она уже прошла свой гейт, а
+echo совместный подбор не дал бы понять, чья половина дала результат.
+echo.
+set /p TL_BUDGET="Итераций поиска (Enter = 300): "
+if "%TL_BUDGET%"=="" set TL_BUDGET=300
+python train_levels.py --budget %TL_BUDGET%
+set "TL_BUDGET="
 pause
 goto menu
 

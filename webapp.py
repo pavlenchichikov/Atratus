@@ -352,9 +352,11 @@ def asset_page(request: Request, name: str):
     # answers "where", not "how much".
     segments = pos.get("segments") or []
     open_segment = segments[-1] if segments and segments[-1].get("open") else None
+    taleb_hi, risky = dashboard.regime_flags(name, taleb=taleb)
     asset_levels = levels_mod.levels(
         track_record.ohlc_series(name, days=60),
-        (current or {}).get("signal"), segment=open_segment)
+        (current or {}).get("signal"), segment=open_segment,
+        taleb_hi=taleb_hi, risky=risky)
 
     return templates.TemplateResponse(request, "asset.html", {
         "asset": name,

@@ -587,8 +587,11 @@ def _issued_levels(asset, signal):
         segs = positions_mod.build_positions(list(reversed(track)))["segments"]
         if segs and segs[-1]["open"]:
             segment = segs[-1]
+    from core import dashboard
+
+    taleb_hi, risky = dashboard.regime_flags(asset)
     return levels_mod.levels(track_record.ohlc_series(asset, days=60), signal,
-                             segment=segment)
+                             segment=segment, taleb_hi=taleb_hi, risky=risky)
 
 
 def log_levels(asset, signal, date=None, row=None):
@@ -649,54 +652,39 @@ def _shown_signals(cur, asset):
 
 
 def _resolve_level_row(row, df, shown, leg_cost):
-    """What became of one issued level, or None while it is still undecided.
+    """Adapter: one level_log row plus this asset's bars -> core.levels.resolve_trade.
 
-    Fills are limit-order conventions taken at the WORSE edge of the zone, and a
-    gap through the stop fills at the gap, so nothing here flatters the result.
-    The trade ends on the stop or on the signal turning away from the side it was
-    issued for, which is the rule the product states in the asset card and the
-    one core/positions.py already uses for a segment.
+    The rule itself lives in core/levels.py so the fitter in train_levels.py
+    optimises exactly what this journal scores.
     """
+    from core.levels import resolve_trade
+
     date_str, signal, entry_low, entry_high, stop = row
     side = 1 if signal == "BUY" else -1 if signal == "SELL" else 0
     if not side or df is None or len(df) == 0:
         return None
     start = int(df.index.searchsorted(pd.Timestamp(date_str).normalize(),
                                       side="right"))
-    entry_date = entry_price = None
-    held = 0
-    for i in range(start, len(df)):
-        bar = df.iloc[i]
-        day = df.index[i].strftime("%Y-%m-%d")
-        flipped = shown.get(day) not in (None, signal)
-        if entry_price is None:
-            touched = (bar["low"] <= entry_high) if side > 0 else (bar["high"] >= entry_low)
-            if touched:
-                entry_price = (min(bar["open"], entry_high) if side > 0
-                               else max(bar["open"], entry_low))
-                entry_date = day
-                continue          # costs and stops are judged from the next bar
-            if flipped:
-                return {"entered": 0, "exit_reason": "no_entry", "ret_net": 0.0,
-                        "bars_held": 0}
-            continue
-        held += 1
-        hit = (bar["low"] <= stop) if side > 0 else (bar["high"] >= stop)
-        if hit:
-            exit_price = (min(bar["open"], stop) if side > 0
-                          else max(bar["open"], stop))
-            reason = "stop"
-        elif flipped:
-            exit_price = bar["close"]
-            reason = "signal"
-        else:
-            continue
-        gross = side * (exit_price - entry_price) / entry_price
-        return {"entered": 1, "entry_date": entry_date, "entry_price": float(entry_price),
-                "exit_date": day, "exit_price": float(exit_price),
-                "exit_reason": reason, "bars_held": held,
-                "ret_net": float(gross - 2 * leg_cost)}
-    return None                    # still running, or not enough bars yet
+    after = df.iloc[start:]
+    if len(after) == 0:
+        return None
+    bars = list(zip(after["open"], after["high"], after["low"], after["close"]))
+    days = [d.strftime("%Y-%m-%d") for d in after.index]
+    # The side in force on each later bar. A day with no logged prediction is
+    # not a flip: absence of a row is absence of an instruction, and treating it
+    # as one would close trades on days the pipeline simply did not run.
+    sides = []
+    for day in days:
+        sig = shown.get(day)
+        sides.append(side if sig is None else
+                     (1 if sig == "BUY" else -1 if sig == "SELL" else 0))
+    out = resolve_trade(side, entry_low, entry_high, stop, bars, sides, leg_cost)
+    if out is None:
+        return None
+    if out.get("entered"):
+        out["entry_date"] = days[out.pop("entry_index")]
+        out["exit_date"] = days[out.pop("exit_index")]
+    return out
 
 
 def update_level_outcomes():

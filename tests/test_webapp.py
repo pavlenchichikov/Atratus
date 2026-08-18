@@ -805,7 +805,7 @@ def test_asset_page_shows_the_trade_levels(client, monkeypatch):
     signal. Sizing is not here on purpose: it needs an equity figure and lives
     on the trade-levels sheet."""
     import webapp
-    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None: {
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
         "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
         "stop": 96.0, "trailing": False, "status": "ok"})
     r = client.get("/asset/BTC")
@@ -818,7 +818,7 @@ def test_asset_page_shows_the_trade_levels(client, monkeypatch):
 def test_the_card_says_why_there_are_no_levels_on_wait(client, monkeypatch):
     """A blank panel reads as a bug. WAIT has no side, so it has no levels."""
     import webapp
-    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None: {
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
         "close": None, "atr": None, "entry_low": None, "entry_high": None,
         "stop": None, "trailing": False, "status": "no_signal"})
     r = client.get("/asset/BTC")
@@ -828,7 +828,7 @@ def test_the_card_says_why_there_are_no_levels_on_wait(client, monkeypatch):
 
 def test_a_trailing_stop_says_so(client, monkeypatch):
     import webapp
-    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None: {
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
         "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
         "stop": 97.5, "trailing": True, "status": "ok"})
     r = client.get("/asset/BTC")

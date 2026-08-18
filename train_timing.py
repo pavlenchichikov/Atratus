@@ -208,14 +208,22 @@ def build_asset_series(asset, engine=None):
     is_forex = any(asset in config.ASSET_TYPES.get(g, []) for g in forex_groups)
     risky = is_forex or asset in config.ASSET_TYPES.get("CRYPTO", [])
 
+    # high/low/close ride along for the LEVELS policy (train_levels.py), which
+    # needs to know whether a bar traded into an entry zone or through a stop.
+    # Same slice as atr/next_ret above, so every per-bar array stays aligned.
     return {
         "probs": probs, "next_ret": next_ret, "atr": atr, "taleb_hi": taleb_hi,
+        "high": df_feat["high"].iloc[split:].to_numpy(dtype=float),
+        "low": df_feat["low"].iloc[split:].to_numpy(dtype=float),
+        "close": close_slice.to_numpy(dtype=float),
+        "open": df_feat["open"].iloc[split:].to_numpy(dtype=float),
         "buy_thr": buy_thr, "sell_thr": sell_thr, "risky": risky,
         "is_forex": is_forex, "dates": dates,
     }
 
 
-_SLICED = ("probs", "next_ret", "atr", "taleb_hi", "dates")
+_SLICED = ("probs", "next_ret", "atr", "taleb_hi", "dates",
+           "high", "low", "close", "open")
 
 
 def split_series(series, train_frac=0.6, val_frac=0.2):
@@ -230,7 +238,12 @@ def split_series(series, train_frac=0.6, val_frac=0.2):
     for lo, hi in ((0, a), (a, b), (b, n)):
         part = dict(series)
         for k in _SLICED:
-            part[k] = series[k][lo:hi]
+            # Only what this series actually carries. A timing series has no
+            # OHLC and does not need any: those arrays exist for the levels
+            # policy, and demanding them here would make every caller build
+            # columns it has no use for.
+            if k in series:
+                part[k] = series[k][lo:hi]
         out.append(part)
     return tuple(out)
 
