@@ -1,15 +1,14 @@
-"""MODEL_DIR's shared files survive being written by several chunk runs.
+"""MODEL_DIR's shared files survive being written by several training runs.
 
 Three files describe ALL assets while one train_hybrid run only knows the assets
 it trained: champion_registry.json, tuned_thresholds.json and quality_report.json.
-Writing them whole loses the other chunks' assets - sequentially it left
+Writing them whole loses the other runs' assets - sequentially it left
 tuned_thresholds.json holding only the last chunk of a 208-asset retrain, and
 concurrently the second process to finish erased the first one's champions.
 """
 
 import json
 
-import train_chunked
 import train_hybrid
 
 
@@ -44,24 +43,7 @@ def test_an_unreadable_shared_file_is_replaced_rather_than_inherited(tmp_path):
     assert json.loads(open(path, encoding="utf-8").read()) == {"AAPL": 0.51}
 
 
-# --- the chunk runner -------------------------------------------------------
-
-def test_workers_are_divided_between_parallel_chunk_processes():
-    """Two processes at the full worker count would double the concurrent
-    trainings on a card with no room for them."""
-    solo = train_chunked._chunk_env(["AAPL"], False, 1)
-    pair = train_chunked._chunk_env(["AAPL"], False, 2)
-    assert solo["GTRADE_WORKERS"] == train_chunked.LIGHT_ENV["GTRADE_WORKERS"]
-    assert int(pair["GTRADE_WORKERS"]) == int(solo["GTRADE_WORKERS"]) // 2
-
-
-def test_the_chunk_environment_names_only_that_chunks_assets():
-    env = train_chunked._chunk_env(["AAPL", "MSFT"], True, 2)
-    assert env["GTRADE_ASSETS"] == "AAPL,MSFT"
-    assert env["GTRADE_FORCE_PROMOTE"] == "1"
-
-
-def test_a_kept_champion_keeps_its_own_threshold(tmp_path, monkeypatch):
+def test_a_kept_champion_keeps_its_own_threshold(tmp_path):
     """A challenger that lost must not leave its buy/sell levels behind: the
     served model is still the old champion, and the thresholds are what turn its
     probabilities into signals."""

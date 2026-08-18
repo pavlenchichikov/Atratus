@@ -101,6 +101,7 @@ ab_netfix.py
 tests/test_ab_labeling.py
 tests/test_ab_objective.py
 tests/test_ab_noise.py
+tests/test_train_chunked_local.py
 train_chunked.py
 _chunk_progress.txt
 _chunk_quality.json

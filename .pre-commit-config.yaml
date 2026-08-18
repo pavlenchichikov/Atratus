@@ -1,14 +1,19 @@
 # https://pre-commit.com - run `pre-commit install` once; ruff then lints staged
-# Python on every commit, matching the CI gate. Uses the project's own ruff
-# (and its pyproject.toml config) via a local hook, so there is no second ruff
-# version to keep pinned in sync with CI.
+# Python on every commit, matching the CI gate.
+#
+# The version is PINNED here rather than taken from whatever ruff is on PATH.
+# The previous local hook assumed the two were the same tool; they were not. The
+# machine that writes this code carried ruff 0.12 while CI pinned 0.16, so a
+# clean local run proved nothing about the build and an unsorted import block
+# reached main. pre-commit fetches and caches this version itself, so nothing
+# global has to be upgraded to make the gate honest.
+#
+# Bump this and the pin in .github/workflows/ci.yml together;
+# tests/test_repo_hygiene.py fails if they drift apart.
 repos:
-  - repo: local
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.1
     hooks:
-      - id: ruff
-        name: ruff check
-        entry: ruff check
-        language: system
-        types: [python]
-        pass_filenames: false
+      - id: ruff-check
         args: ["."]
+        pass_filenames: false
