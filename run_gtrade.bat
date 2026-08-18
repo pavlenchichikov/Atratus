@@ -165,20 +165,20 @@ goto menu
 
 :train_assets
 cls
-echo Переобучение ВЫБРАННЫХ активов, в GPU-окружении, как и всякое обучение.
+echo Retrain CHOSEN assets, in the GPU environment like all training.
 echo.
-echo Зачем: реестр чемпионов пишется один раз в конце прогона, а файлы моделей
-echo по ходу. Прерванный прогон поэтому оставляет активы, где файл новее записи
-echo в реестре, и такой актив выпадает из сигналов с ошибкой о числе признаков.
-echo Переобучение этих активов переписывает и файлы, и запись разом.
+echo Why: an interrupted run leaves assets whose model files are newer than
+echo their champion-registry entry, because the files land per asset while the
+echo registry used to land once at the end. Such an asset drops out of the
+echo signals with a feature-count error; retraining rewrites both together.
 echo.
-set /p TR_ASSETS="Активы через запятую (QCOM,MU,EURUSD), Enter = отмена: "
+set /p TR_ASSETS="Assets, comma separated (QCOM,MU,EURUSD), Enter = cancel: "
 if "%TR_ASSETS%"=="" goto menu
 echo.
 echo [Retrain] %TR_ASSETS%
 set "GTRADE_ASSETS=%TR_ASSETS%"
 cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
-REM Снять переменную, иначе следующий пункт меню обучит только эти активы.
+REM Clear it, or the next menu item would train only these assets.
 set "GTRADE_ASSETS="
 pause
 goto menu
@@ -434,14 +434,14 @@ goto menu
 
 :levels_policy
 cls
-echo Подбирает две константы уровней (зона входа и стоп в ATR) на истории
-echo всех активов сразу и пишет levels_policy.json ТОЛЬКО если отложенная
-echo выборка это подтвердит. Иначе продакшн остаётся на своих числах.
+echo Fits the levels multipliers (entry zone and stop, in ATR) over the history
+echo of every asset at once, and writes levels_policy.json ONLY if a held-out
+echo slice agrees. Otherwise production keeps the levels it has.
 echo.
-echo Timing-политика при этом заморожена: она уже прошла свой гейт, а
-echo совместный подбор не дал бы понять, чья половина дала результат.
+echo The timing policy is frozen while this runs: it already passed its own
+echo gate, and fitting both at once would hide which half earned the result.
 echo.
-set /p TL_BUDGET="Итераций поиска (Enter = 300): "
+set /p TL_BUDGET="Search iterations (Enter = 300): "
 if "%TL_BUDGET%"=="" set TL_BUDGET=300
 python train_levels.py --budget %TL_BUDGET%
 set "TL_BUDGET="
@@ -630,41 +630,41 @@ goto menu
 
 :whatif_top5
 cls
-echo [What-If] Top-5 активов, 90 дней, равное распределение...
+echo [What-If] Top-5 signals, 90 days, equal weights...
 python whatif_simulator.py --top 5 --days 90 --strategy equal
 pause
 goto menu
 
 :whatif_top10
 cls
-echo [What-If] Top-10 активов, 90 дней, равное распределение...
+echo [What-If] Top-10 signals, 90 days, equal weights...
 python whatif_simulator.py --top 10 --days 90 --strategy equal
 pause
 goto menu
 
 :whatif_180
 cls
-echo [What-If] Top-5 активов, 180 дней, равное распределение...
+echo [What-If] Top-5 signals, 180 days, equal weights...
 python whatif_simulator.py --top 5 --days 180 --strategy equal
 pause
 goto menu
 
 :whatif_kelly
 cls
-echo [What-If] Top-5 активов, 90 дней, Kelly-аллокация...
+echo [What-If] Top-5 signals, 90 days, Kelly weights...
 python whatif_simulator.py --top 5 --days 90 --strategy kelly
 pause
 goto menu
 
 :whatif_custom
 cls
-set /p WI_ASSETS="Активы через пробел (BTC ETH NVDA ...): "
-set /p WI_DAYS="Количество дней (Enter = 90): "
+set /p WI_ASSETS="Assets, space separated (BTC ETH NVDA ...): "
+set /p WI_DAYS="Days (Enter = 90): "
 if "%WI_DAYS%"=="" set WI_DAYS=90
-set /p WI_CAP="Капитал USD (Enter = 10000): "
+set /p WI_CAP="Capital USD (Enter = 10000): "
 if "%WI_CAP%"=="" set WI_CAP=10000
 echo.
-echo [What-If] Активы: %WI_ASSETS% | Дней: %WI_DAYS% | Капитал: $%WI_CAP%
+echo [What-If] Assets: %WI_ASSETS% ^| Days: %WI_DAYS% ^| Capital: $%WI_CAP%
 python whatif_simulator.py %WI_ASSETS% --days %WI_DAYS% --capital %WI_CAP%
 pause
 goto menu

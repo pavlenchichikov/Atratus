@@ -50,7 +50,7 @@
 - **~208 assets, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
 - **Risk-managed by design.** Kelly-based position sizing, drawdown stops, sector-exposure and correlation checks, and a Taleb tail-risk index that shrinks size above a soft cap and blocks new buys above a hard cap.
-- **Prices, not just calls.** A daily trade-level sheet turns each signal into numbers you can act on: an ATR entry zone around the last close, an emergency stop that trails the position, and a size derived from the distance to that stop and clipped by the risk limits. Execution stays manual.
+- **Prices, not just calls.** A daily trade-level sheet turns each signal into numbers you can act on: an ATR entry zone around the last close, an emergency stop that trails the position, and a size derived from the distance to that stop and clipped by the risk limits. The same entry zone and stop appear on each asset's own page, every issued set is journalled and later scored against the bars that followed, and the two ATR multipliers behind them can be fitted over the whole history and are adopted only if a held-out slice agrees. Execution stays manual.
 - **Rich feature set.** Returns and volatility-normalized returns, tail risk (kurtosis / skew / VaR), RSI / MACD / SMA / ATR, weekly and cross-asset correlations, cross-asset lead-lag, calendar position, and a macro regime read (10y yield, VIX, dollar).
 - **Autonomous research agent.** A quality-diversity (MAP-Elites) search over features, labels and transforms, with a rigorous held-out adoption gate (Wilcoxon signed-rank + Benjamini-Hochberg + cross-run replication) so nothing is adopted on noise. Never touches production automatically.
 - **Instant FastAPI dashboard.** Reads ready-made predictions from the database (no TensorFlow at serve time), so it starts immediately - signal radar, per-asset detail, portfolio analytics, an interactive risk manager, and a what-if backtester.
@@ -146,6 +146,29 @@ challenger (~0.01).
 Re-gating stored candidates (`--regate`) is **crash-safe**: every finished candidate checkpoints to `_regate_progress.json` and its trains are cached by genome signature, so an interrupted multi-day run resumes where it stopped (as long as the market data has not refreshed in between) instead of restarting from zero.
 
 **It never touches production.** Candidates train into isolated temp directories, and a winner is flagged only after clearing a separate held-out set under a one-sided **Wilcoxon signed-rank** test (with a practical effect-size floor, a **Benjamini-Hochberg** correction across candidates, an iteration budget, and a **cross-run replication** gate) - designed to reject improvements that are only noise. Adopting a flagged winner stays a manual full retrain.
+
+**What the gate measures, and what production decides on.** These were one
+constant until they came apart in the open. The search basis is picked for
+signal-to-noise: raw Score cannot measure a neural change on this box, so the
+campaign searches on `net_auc`. That is an argument about measurability and says
+nothing about the quantity production promotes on. On 2026-08-18 an A/B passed on
+a mean `net_auc` gain of +0.036 over 14 held-out assets while the same rows, same
+models, carried 3 promotions against 10 demotions on Score - rank correlation
+between the two of -0.24. The retrain it authorised then kept the champion on 23
+of the first 29 assets. Three things came out of it:
+
+- `GTRADE_AR_DECISION_BASIS` lets a campaign name the basis an ADOPTION is judged
+  on separately from the one the search optimises. Unset means "the same one", so
+  every existing campaign is unchanged; both are frozen for the campaign's life.
+- the A/B now also reports the decision production will actually make: how many
+  held-out assets would be **promoted** and how many **demoted** at the same
+  `+0.2` margin `train_hybrid` uses, with a sign test. A candidate that would
+  take a champion away from more assets than it wins is refused whatever the mean
+  says.
+- a finding from an axis run is offered to the A/B twice: bare, and **composed
+  onto the running reference** (`axis:labeling+ref`). The bare form answers "is
+  this better than nothing"; only the composed one answers the adoption question,
+  "is what runs better with it".
 
 Permanent cross-run memory: `_ar_tried.json` (no candidate is re-tested), `_ar_eval_cache.json` (base trainings reused until new data arrives) and `_ar_findings.json` (the cumulative findings journal), so the budget buys **new** experiments every run.
 
@@ -607,6 +630,24 @@ blow through on an ordinary day.
 - **`past its stop`** - the price has already gone through the trailing stop, so
   the position should already be closed. These rows are not new setups.
 
+**Where those two multipliers come from, and whether they work.** They shipped as
+constants (`0.5 ATR` for the zone, `2 ATR` for the stop) that nobody had ever
+fitted or measured. Three things changed that:
+
+- the same entry zone and stop now appear on each asset's own page, beside the
+  signal, with a line saying whether the numbers come from the shipped constants
+  or from a fitted policy and what evidence that policy was accepted on;
+- every set of levels the radar issues is written to a `level_log` journal, and a
+  later pass walks each one forward over real bars: was the zone touched, did the
+  stop get hit or did the signal turn first, and what did the trade make net of
+  both legs. Until this existed, "did the levels make money" could not be
+  answered for a single day;
+- `[TL]` in the launcher fits the multipliers over the history of every asset at
+  once, with the timing policy held fixed, and writes `levels_policy.json` ONLY
+  if a held-out slice agrees. Every run writes `_levels_report.txt` either way,
+  including the per-asset breakdown of who carried the result and who argued
+  against it.
+
 Sizes appear in money only after the real account is declared: set **Account
 equity**, **Risk per trade** and **Fee per side** on `/risk`. Until then the
 sheet shows percentages, on purpose - the persisted risk book still holds
@@ -624,6 +665,14 @@ mobile app).
 TensorFlow on Windows is CPU-only since 2.11, so neural training runs on CPU - fine for daily data. For a GPU, use WSL2 and `pip install tensorflow[and-cuda]`.
 
 TensorFlow accumulates memory across many assets in one process, so a full 208-asset retrain on a memory-constrained box is best run in chunks (~15 assets via `GTRADE_ASSETS`), restarting a fresh process per chunk; the champion registry accumulates per asset, so chunks add up to a full run.
+
+A champion's registry entry is written the moment its model files are, not once
+at the end of the run. Before that, an interrupted retrain left assets whose
+`.cbm` on disk was newer than the entry describing it, and serving then handed a
+10-feature pool to a 12-feature champion and dropped the asset with `Feature 10
+is present in model but not in pool`. If you ever meet that, `[5R]` in the
+launcher retrains just the named assets and rewrites both together.
+
 
 Optional env flags for `train_hybrid.py`:
 
@@ -666,6 +715,7 @@ If `SOCKS5_PROXY` is set in `.env`, outbound requests go through it; `net.py` ch
 data_engine.py        fetch daily/weekly quotes (Yahoo + MOEX) into market.db
 train_hybrid.py       train the per-asset ensemble + walk-forward selection
 train_chunked.py      RAM-safe full retrain (fresh process per chunk)
+train_levels.py       fit + gate the trade-levels policy (entry zone, stop)
 predict.py            console signal radar
 backtest.py           held-out evaluation (PnL, Sharpe, Brier, alpha)
 webapp.py             FastAPI dashboard (app.py = Streamlit)
@@ -745,7 +795,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 - **~208 активов, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
 - **Честные, калиброванные сигналы.** BUY / SELL / WAIT с калиброванной вероятностью, пер-активными настроенными порогами и живым трек-рекордом точности, который сверяет каждое предсказание с реализованным движением следующего бара.
 - **Управление риском по замыслу.** Размер позиции по Келли, стопы по просадке, проверки секторной экспозиции и корреляций, а также индекс хвостового риска Талеба, который уменьшает размер выше мягкого порога и блокирует новые покупки выше жёсткого.
-- **Цены, а не только сигналы.** Ежедневный лист уровней превращает каждый сигнал в числа, по которым можно действовать: зона входа по ATR вокруг последнего закрытия, аварийный стоп, подтягивающийся за позицией, и размер, выведенный из расстояния до этого стопа и обрезанный лимитами риска. Исполнение остаётся ручным.
+- **Цены, а не только сигналы.** Ежедневный лист уровней превращает каждый сигнал в числа, по которым можно действовать: зона входа по ATR вокруг последнего закрытия, аварийный стоп, подтягивающийся за позицией, и размер, выведенный из расстояния до этого стопа и обрезанный лимитами риска. Те же зона входа и стоп теперь показаны и на странице самого актива, каждая выданная связка пишется в журнал и позже сверяется с реально прошедшими барами, а два ATR-множителя за ними можно подобрать на всей истории, и они принимаются только если отложенная выборка это подтвердит. Исполнение остаётся ручным.
 - **Богатый набор признаков.** Доходности и волатильностно-нормированные доходности, хвостовой риск (эксцесс / асимметрия / VaR), RSI / MACD / SMA / ATR, недельные и межактивные корреляции, межактивный lead-lag, календарная позиция и макро-режим (доходность 10-леток, VIX, доллар).
 - **Автономный исследовательский агент.** Поиск quality-diversity (MAP-Elites) по признакам, лейблам и трансформациям со строгим гейтом адопции на отложенной выборке (Wilcoxon signed-rank + Benjamini-Hochberg + межзапусковая репликация), чтобы ничего не адоптилось на шуме. Никогда не трогает прод автоматически.
 - **Мгновенный дашборд на FastAPI.** Читает готовые предсказания из БД (без TensorFlow во время обслуживания), поэтому стартует сразу - радар сигналов, детализация по активу, аналитика портфеля, интерактивный риск-менеджер и what-if-бэктестер.
@@ -840,6 +890,29 @@ $ python predict.py
 Ре-гейтинг сохранённых кандидатов (`--regate`) **устойчив к сбоям**: каждый готовый кандидат чекпойнтится в `_regate_progress.json`, а его тренировки кешируются по сигнатуре генома, поэтому прерванный многодневный прогон продолжается с места остановки (пока рыночные данные не обновились), а не начинается заново.
 
 **Он никогда не трогает прод.** Кандидаты обучаются в изолированные временные каталоги, а победитель помечается только после прохождения отдельной отложенной выборки под односторонним тестом **Wilcoxon signed-rank** (с практическим порогом размера эффекта, поправкой **Benjamini-Hochberg** по кандидатам, бюджетом итераций и гейтом **межзапусковой репликации**) - чтобы отсекать улучшения, которые лишь шум. Адопция помеченного победителя остаётся ручным полным ретрейном.
+
+**Что меряет гейт и по чему решает прод.** Это была одна константа, пока они не
+разошлись у всех на виду. Базис поиска выбран по отношению сигнал/шум: сырой
+Score не способен измерить изменение в сетях на этой машине, поэтому кампания
+ищет на `net_auc`. Это довод об измеримости, и он ничего не говорит о величине,
+по которой прод повышает чемпионов. 18.08.2026 A/B прошёл на среднем приросте
+`net_auc` +0.036 по 14 отложенным активам, тогда как те же строки и те же модели
+несли 3 повышения против 10 понижений по Score, а ранговая корреляция между двумя
+величинами составила -0.24. Ретрейн, который этот A/B санкционировал, оставил
+чемпиона на 23 активах из первых 29. Из этого вышло три вещи:
+
+- `GTRADE_AR_DECISION_BASIS` позволяет кампании назвать базис, по которому судится
+  АДОПЦИЯ, отдельно от того, что оптимизирует поиск. Пусто означает "тот же", так
+  что все прежние кампании не меняются; оба заморожены на время кампании.
+- A/B теперь сообщает и то решение, которое реально примет прод: сколько
+  отложенных активов было бы **повышено** и сколько **понижено** на том же запасе
+  `+0.2`, который использует `train_hybrid`, со знаковым тестом. Кандидат,
+  отбирающий чемпиона у большего числа активов, чем выигрывает, отклоняется, что
+  бы ни говорило среднее.
+- находка с оси предлагается A/B дважды: голой и **наложенной на работающий
+  reference** (`axis:labeling+ref`). Голая форма отвечает на вопрос "лучше ли это,
+  чем ничего"; на вопрос адопции, "лучше ли то, что работает, вместе с этим",
+  отвечает только вторая.
 
 Постоянная межзапусковая память: `_ar_tried.json` (кандидат не тестируется повторно), `_ar_eval_cache.json` (базовые тренировки переиспользуются до прихода новых данных) и `_ar_findings.json` (накопительный журнал находок), так что бюджет покупает **новые** эксперименты каждый запуск.
 
@@ -1267,6 +1340,24 @@ EURUSD, без ручной настройки под каждый актив и
 - **`past its stop`** - цена уже прошла подтянутый стоп, позицию следовало
   закрыть. Такие строки не являются новыми сетапами.
 
+**Откуда эти два множителя и работают ли они.** Они были отгружены как константы
+(`0.5 ATR` на зону, `2 ATR` на стоп), которых никто никогда не подбирал и не
+измерял. Изменилось три вещи:
+
+- те же зона входа и стоп теперь показаны на странице самого актива, рядом с
+  сигналом, и строкой указано, взяты числа из отгруженных констант или из
+  подобранной политики и на каких доказательствах она принята;
+- каждая выданная радаром связка уровней пишется в журнал `level_log`, а
+  отдельный проход позже прогоняет её вперёд по реальным барам: коснулась ли
+  цена зоны, пробит ли стоп или раньше сменился сигнал, и что сделка принесла за
+  вычетом обеих ног. До этого на вопрос "принесли ли уровни доход" нельзя было
+  ответить ни за один день;
+- пункт `[TL]` в лаунчере подбирает множители на истории всех активов сразу, при
+  замороженной timing-политике, и пишет `levels_policy.json` ТОЛЬКО если
+  отложенная выборка это подтвердит. Отчёт `_levels_report.txt` пишется в любом
+  случае, вместе с поактивной разбивкой того, кто вытянул результат, а кто был
+  против.
+
 Размеры показываются в деньгах только после объявления реального счёта: задайте
 **Account equity**, **Risk per trade** и **Fee per side** на `/risk`. До этого
 лист намеренно показывает проценты - в сохранённой книге риска лежит остаток от
@@ -1284,6 +1375,14 @@ EURUSD, без ручной настройки под каждый актив и
 TensorFlow на Windows только-CPU с версии 2.11, поэтому нейро-обучение идёт на CPU - нормально для дневных данных. Для GPU используйте WSL2 и `pip install tensorflow[and-cuda]`.
 
 TensorFlow накапливает память по многим активам в одном процессе, поэтому полный ретрейн на 208 активов на машине с ограниченной памятью лучше гонять чанками (~15 активов через `GTRADE_ASSETS`), перезапуская свежий процесс на каждый чанк; реестр чемпионов накапливается по активам, так что чанки складываются в полный прогон. Готовый оркестратор для этого - `train_chunked.py`.
+
+Запись чемпиона в реестр делается в тот же момент, что и файлы его моделей, а не
+один раз в конце прогона. До этого прерванный ретрейн оставлял активы, у которых
+`.cbm` на диске новее описывающей его записи, и сервинг подавал 12-признаковому
+чемпиону пул из 10 признаков, роняя актив с ошибкой `Feature 10 is present in
+model but not in pool`. Если такое встретится, пункт `[5R]` в лаунчере
+переобучает только названные активы и переписывает файлы и запись разом.
+
 
 Опциональные env-флаги для `train_hybrid.py`:
 
@@ -1319,6 +1418,7 @@ TensorFlow накапливает память по многим активам 
 data_engine.py        выборка дневных/недельных котировок (Yahoo + MOEX) в market.db
 train_hybrid.py       обучение пер-активного ансамбля + walk-forward отбор
 train_chunked.py      RAM-безопасный полный ретрейн (свежий процесс на чанк)
+train_levels.py       подбор и гейт политики уровней (зона входа, стоп)
 predict.py            радар сигналов в консоли
 backtest.py           оценка на отложенных данных (PnL, Sharpe, Brier, альфа)
 webapp.py             дашборд на FastAPI (app.py = Streamlit)
