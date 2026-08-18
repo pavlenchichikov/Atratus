@@ -648,6 +648,46 @@ fitted or measured. Three things changed that:
   including the per-asset breakdown of who carried the result and who argued
   against it.
 
+### Fitting the levels policy
+
+Six numbers, all multiples of one ATR: a base `k_entry` and `k_stop`, plus four
+regime deltas added on top of them (`d_entry_hi_taleb`, `d_entry_risky`,
+`d_stop_hi_taleb`, `d_stop_risky`). The deltas default to zero, so a policy that
+carries only the base pair behaves exactly like one that never heard of regimes,
+which is what makes the flat form the honest baseline for the conditioned one.
+
+The fitter is the project's own **separable evolution strategy** from
+`core/ar_rl.py` - the same search machinery the research agent's scheduler uses -
+pooled over every asset that has a CatBoost champion, on its full history. The
+history is cut 60/20/20 in time: the ES is scored on train, the returned
+parameters are the best vector seen on **validation** (not the ES's own training
+peak), and the verdict comes from a one-sided **Wilcoxon signed-rank** test on
+**test** against the policy that is currently live, not against the shipped
+constants - a conditioned fit judged against the constants would take credit for
+whatever the flat fit already earned.
+
+The reward is what the issued levels earned over the slice divided by its length,
+**not the average of a trade**. The average is gameable: a stop tight enough to
+scratch every trade raises the mean of a trade while lowering what the strategy
+makes. It is a rate, not an equity curve - levels are issued every bar, so their
+trades overlap and no single account could take all of them.
+
+The adopted **timing policy is held fixed** while these are fitted. It passed its
+own gate already, and moving both at once would leave no way to say which half
+earned the result.
+
+```bash
+python train_levels.py                        # every asset, budget 300
+python train_levels.py --assets SP500,NVDA    # a subset
+python train_levels.py --budget 400           # more ES evaluations
+python train_levels.py --seed 7               # a different search seed
+```
+
+`[TL]` in the launcher is the same thing with a prompt for the budget. Roughly 40
+minutes over 208 assets; it fits six numbers, so no GPU is involved and it can
+run beside anything else. Nothing is written unless the gate says ADOPT, and
+`_levels_report.txt` is written either way.
+
 Sizes appear in money only after the real account is declared: set **Account
 equity**, **Risk per trade** and **Fee per side** on `/risk`. Until then the
 sheet shows percentages, on purpose - the persisted risk book still holds
@@ -670,8 +710,12 @@ A champion's registry entry is written the moment its model files are, not once
 at the end of the run. Before that, an interrupted retrain left assets whose
 `.cbm` on disk was newer than the entry describing it, and serving then handed a
 10-feature pool to a 12-feature champion and dropped the asset with `Feature 10
-is present in model but not in pool`. If you ever meet that, `[5R]` in the
-launcher retrains just the named assets and rewrites both together.
+is present in model but not in pool`. `python model_health.py --mismatched`
+lists any asset left in that state, and `[5R]` in the launcher shows the same
+list and retrains the ones you name. Answer `y` to its force-promote prompt
+when repairing: without it a champion is only rewritten when the challenger
+wins, and on a loss the orphaned file and the entry that disagrees with it
+both survive.
 
 
 Optional env flags for `train_hybrid.py`:
@@ -1358,6 +1402,44 @@ EURUSD, без ручной настройки под каждый актив и
   случае, вместе с поактивной разбивкой того, кто вытянул результат, а кто был
   против.
 
+### Подбор политики уровней
+
+Шесть чисел, все кратны одному ATR: базовые `k_entry` и `k_stop` плюс четыре
+режимные дельты поверх них (`d_entry_hi_taleb`, `d_entry_risky`,
+`d_stop_hi_taleb`, `d_stop_risky`). Дельты по умолчанию нулевые, поэтому
+политика с одной базовой парой ведёт себя ровно как та, что о режимах не знает,
+и именно это делает плоскую форму честной базой для режимной.
+
+Подбирает **сепарабельная эволюционная стратегия** из `core/ar_rl.py`, та же
+поисковая машинерия, которой пользуется планировщик исследовательского агента.
+Пул по всем активам, у которых есть CatBoost-чемпион, на полной истории каждого.
+История режется по времени 60/20/20: ES считается на train, возвращаются
+параметры, лучшие на **валидации** (а не пик самого ES на обучении), а вердикт
+даёт односторонний тест **Wilcoxon signed-rank** на test против **действующей**
+политики, а не против отгруженных констант: режимный фит, померенный от констант,
+присвоил бы себе всё, что уже заработал плоский.
+
+Награда это то, что выданные уровни заработали за срез, делённое на его длину, а
+**не среднее по сделке**. Среднее поддаётся обману: стоп, достаточно узкий, чтобы
+срезать каждую сделку в царапину, поднимает среднее сделки и снижает то, что
+стратегия зарабатывает. Это скорость, а не кривая капитала: уровни выдаются
+каждый бар, сделки перекрываются, и один счёт столько взять не может.
+
+Адоптированная **timing-политика на время подбора заморожена**. Она уже прошла
+свой гейт, а движение обеих сразу не дало бы понять, чья половина дала результат.
+
+```bash
+python train_levels.py                        # все активы, бюджет 300
+python train_levels.py --assets SP500,NVDA    # подмножество
+python train_levels.py --budget 400           # больше оценок ES
+python train_levels.py --seed 7               # другое зерно поиска
+```
+
+Пункт `[TL]` в лаунчере делает то же самое, спросив бюджет. Порядка 40 минут на
+208 активов; подбираются шесть чисел, так что GPU не задействован и это можно
+гонять параллельно с чем угодно. Без вердикта ADOPT не пишется ничего, а
+`_levels_report.txt` пишется в любом случае.
+
 Размеры показываются в деньгах только после объявления реального счёта: задайте
 **Account equity**, **Risk per trade** и **Fee per side** на `/risk`. До этого
 лист намеренно показывает проценты - в сохранённой книге риска лежит остаток от
@@ -1380,8 +1462,12 @@ TensorFlow накапливает память по многим активам 
 один раз в конце прогона. До этого прерванный ретрейн оставлял активы, у которых
 `.cbm` на диске новее описывающей его записи, и сервинг подавал 12-признаковому
 чемпиону пул из 10 признаков, роняя актив с ошибкой `Feature 10 is present in
-model but not in pool`. Если такое встретится, пункт `[5R]` в лаунчере
-переобучает только названные активы и переписывает файлы и запись разом.
+model but not in pool`. Команда `python model_health.py --mismatched`
+показывает все активы, оставшиеся в таком состоянии, а пункт `[5R]` в
+лаунчере выводит тот же список и переобучает названные. На его вопрос про
+force-promote при ремонте надо отвечать `y`: без этого чемпион
+переписывается только когда челленджер побеждает, а при проигрыше и
+осиротевший файл, и расходящаяся с ним запись остаются на месте.
 
 
 Опциональные env-флаги для `train_hybrid.py`:

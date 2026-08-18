@@ -7,6 +7,7 @@ CLI usage:
   python model_health.py              -- full health report
   python model_health.py --stale 7    -- show models older than 7 days
   python model_health.py --json       -- JSON output for GUI
+  python model_health.py --mismatched -- assets whose files and registry disagree
 """
 
 import argparse
@@ -250,14 +251,67 @@ def _print_json(max_age_days=7):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def mismatched_registry(base=None):
+    """Assets whose champion FILES are newer than the registry entry describing
+    them, newest first. Empty is the healthy answer.
+
+    The two used to be written at different times: model files per asset as each
+    was promoted, the registry once at the end of the run. Any interruption in
+    between left an asset whose .cbm on disk expects one feature count while the
+    entry the serving path builds its pool from names another, and CatBoost then
+    refuses with "Feature N is present in model but not in pool" - the asset
+    silently vanishes from the signals. train_hybrid now writes the entry with
+    the files, so this can only report damage done before that.
+    """
+    base = base or BASE_DIR
+    path = os.path.join(base, "models", "champion_registry.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            registry = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    out = []
+    for asset, entry in (registry or {}).items():
+        model = os.path.join(base, "models", "%s_cb.cbm" % asset.lower())
+        stamp = (entry or {}).get("updated_at")
+        if not stamp or not os.path.exists(model):
+            continue
+        mtime = datetime.fromtimestamp(os.path.getmtime(model)).isoformat()
+        if mtime > stamp:
+            out.append({"asset": asset, "registry": stamp[:19], "model": mtime[:19]})
+    return sorted(out, key=lambda r: r["model"], reverse=True)
+
+
+def print_mismatched():
+    """One line per damaged asset, plus the list to paste into the retrain."""
+    rows = mismatched_registry()
+    if not rows:
+        print("  registry and model files agree on every asset.")
+        return []
+    print("  %-10s %-20s %s" % ("asset", "registry entry", "model file"))
+    for r in rows:
+        print("  %-10s %-20s %s" % (r["asset"], r["registry"], r["model"]))
+    print()
+    print("  retrain these with force-promote to rewrite both together:")
+    print("  " + ",".join(r["asset"] for r in rows))
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description="Model Health Monitor")
     parser.add_argument("--stale", type=int, default=7,
                         help="Flag models older than N days (default: 7)")
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON instead of formatted text")
+    parser.add_argument("--mismatched", action="store_true",
+                        help="List assets whose model files are newer than their "
+                             "champion-registry entry, which drops them from the "
+                             "signals with a feature-count error")
     args = parser.parse_args()
 
+    if args.mismatched:
+        print_mismatched()
+        return
     if args.json:
         _print_json(max_age_days=args.stale)
     else:

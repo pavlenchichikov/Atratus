@@ -172,14 +172,26 @@ echo their champion-registry entry, because the files land per asset while the
 echo registry used to land once at the end. Such an asset drops out of the
 echo signals with a feature-count error; retraining rewrites both together.
 echo.
-set /p TR_ASSETS="Assets, comma separated (QCOM,MU,EURUSD), Enter = cancel: "
+echo Assets in that state right now:
+python model_health.py --mismatched
+echo.
+set /p TR_ASSETS="Assets, comma separated, Enter = cancel: "
 if "%TR_ASSETS%"=="" goto menu
 echo.
-echo [Retrain] %TR_ASSETS%
+REM Repairing a stale entry NEEDS force-promote. Without it a champion is only
+REM rewritten when the challenger wins, and on a loss the orphaned file and the
+REM entry that disagrees with it both survive untouched - the asset stays broken.
+set /p TR_FORCE="Force promote? Required to repair the list above. y/N: "
 set "GTRADE_ASSETS=%TR_ASSETS%"
+if /i "%TR_FORCE%"=="y" set "GTRADE_FORCE_PROMOTE=1"
+echo.
+echo [Retrain] %TR_ASSETS%   force-promote: %TR_FORCE%
 cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
-REM Clear it, or the next menu item would train only these assets.
+REM Clear both, or the next menu item would train only these assets, and would
+REM replace every champion it touched regardless of score.
 set "GTRADE_ASSETS="
+set "GTRADE_FORCE_PROMOTE="
+set "TR_FORCE="
 pause
 goto menu
 
