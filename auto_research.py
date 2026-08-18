@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 
 # .env holds this run's LLM settings (GTRADE_AR_LLM_TIMEOUT above all: a local
@@ -206,7 +206,7 @@ def _objective():
     return o
 
 
-def _adopt_floor(objective="mean"):
+def _adopt_floor(objective="mean", basis=None):
     """The practical-effect floor the objective value must beat to adopt.
 
     The floor follows the UNITS of what is being reduced, so it depends on the
@@ -214,8 +214,12 @@ def _adopt_floor(objective="mean"):
     curve near 0.5, where a real move is a few thousandths; the Score floor of
     0.5 there would demand an AUC gain no model can produce and reject
     everything. Score-scale objectives use ADOPT_MEAN_SCORE_DELTA; the
-    dimensionless 'sharpe' uses GTRADE_AR_ADOPT_SHARPE (default 0.5)."""
-    if _score_basis() in ("net_auc", "net_gain", "ens_auc"):
+    dimensionless 'sharpe' uses GTRADE_AR_ADOPT_SHARPE (default 0.5).
+
+    `basis` defaults to the SEARCH basis, which is what every search-time caller
+    wants. An adoption passes decision_basis() so the floor is in the units the
+    verdict is actually read in."""
+    if (basis or _score_basis()) in ("net_auc", "net_gain", "ens_auc"):
         try:
             return float(os.getenv("GTRADE_AR_ADOPT_AUC") or "0.005")
         except ValueError:
@@ -274,6 +278,53 @@ def holdout_stats(base_rows, ext_rows, objective="mean"):
     up = sum(1 for d in deltas if d > 0)
     tag = "%s dScore %.2f, wilcoxon p=%.3f (%d/%d up)" % (objective, value, p, up, len(deltas))
     return p, value, deltas, tag
+
+
+PROMOTION_MARGIN = 0.2      # train_hybrid: score > champion + 0.2 or no change
+
+
+def promotion_stats(base_rows, var_rows, margin=PROMOTION_MARGIN, column="Score"):
+    """The champion-challenger decision, counted on a held-out set.
+
+    Every other statistic here reduces a set of assets to a mean. Production
+    never sees that mean: it walks the assets one at a time and keeps the
+    champion unless the challenger beats it by `margin`. The two can disagree
+    completely, and on 2026-08-18 they did - an A/B passed on a mean of +0.036
+    while the same rows held 3 promotions against 10 demotions, which is what
+    the ten-hour retrain then went and rediscovered asset by asset.
+
+    Deliberately on the raw Score column whatever the basis is, because Score is
+    the quantity train_hybrid compares. A basis is a way of reading a search; a
+    promotion is a fact about production.
+
+    The sign test is one-sided over promoted against demoted, and the assets
+    inside the margin are excluded rather than counted as ties, which is the
+    same shape as the promotion rule itself.
+    """
+    from scipy.stats import binomtest
+
+    base = {r.get("Asset"): r.get(column) for r in base_rows or []}
+    promoted = demoted = 0
+    for row in var_rows or []:
+        was, now = base.get(row.get("Asset")), row.get(column)
+        if was is None or now is None:
+            continue
+        if now > was + margin:
+            promoted += 1
+        elif now < was - margin:
+            demoted += 1
+    n = promoted + demoted
+    p = 1.0 if not n else float(
+        binomtest(promoted, n, 0.5, alternative="greater").pvalue)
+    return {"promoted": promoted, "demoted": demoted, "n": n, "p": p}
+
+
+def promotion_tag(st):
+    """One line for a console verdict, empty when nothing was comparable."""
+    if not st or not st["n"]:
+        return ""
+    return "would promote %d, demote %d (sign p=%.3f)" % (
+        st["promoted"], st["demoted"], st["p"])
 
 
 def is_adoptable(base_rows, ext_rows, n_experiments, budget, alpha=0.05, objective="mean"):
@@ -636,6 +687,32 @@ def _score_basis():
     return b
 
 
+def decision_basis():
+    """What an ADOPTION is judged on, which need not be what the search optimised.
+
+    The search basis is picked for signal-to-noise: raw Score cannot measure a
+    neural change on this box (the same elite gated three times read +3.90,
+    +3.89 and -2.49 against an adopt floor of 0.5), so the campaign searches on
+    net_auc. That is an argument about MEASURABILITY and it says nothing about
+    which quantity production decides on. One constant for both silently
+    promoted a search convenience into the adoption criterion, and on
+    2026-08-18 the two came apart completely: over the same 14 held-out assets
+    and the same two trainings, the mean Net_AUC delta was +0.036 while the mean
+    Score delta was -1.85, rank correlation -0.24 (p=0.40), sign agreement 7 of
+    14. The A/B passed; 10 of those 14 assets would have been demoted.
+
+    Unset means "the same basis", so every existing campaign is unchanged.
+    """
+    b = (os.getenv("GTRADE_AR_DECISION_BASIS") or "").strip().lower()
+    if not b:
+        return _score_basis()
+    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc"):
+        logger.warning("unknown GTRADE_AR_DECISION_BASIS %r, using the search "
+                       "basis", b)
+        return _score_basis()
+    return b
+
+
 def ens_auc_rows(rows):
     """Re-key quality rows onto the ensemble's own AUC (a LEVEL, not a
     difference), so a candidate that changes both learners is judged on where
@@ -701,14 +778,21 @@ def score_rows(subset, env, full_fn):
     return rekey_rows(full_fn(subset, env))
 
 
-def rekey_rows(rows):
-    """Re-key already-trained rows onto the active basis. Split out of score_rows
-    so the TIER gate can use it too: the tier stage trains its own mini rows and
-    used to compare them on the raw Score no matter which basis was selected,
-    which silently pruned candidates on the one metric measured to be unusable
-    here (2026-08-14: same config, same seed, 0.64 apart). The `neural` basis is
-    NOT here - it needs a second training run, so it stays in score_rows."""
-    basis = _score_basis()
+def rekey_rows(rows, basis=None):
+    """Re-key already-trained rows onto a basis, the active one by default.
+
+    Split out of score_rows so the TIER gate can use it too: the tier stage
+    trains its own mini rows and used to compare them on the raw Score no matter
+    which basis was selected, which silently pruned candidates on the one metric
+    measured to be unusable here (2026-08-14: same config, same seed, 0.64
+    apart). The `neural` basis is NOT here - it needs a second training run, so
+    it stays in score_rows.
+
+    The explicit `basis` argument is what lets an ADOPTION be judged on a
+    different column than the SEARCH optimised: the rows already carry every
+    column, so re-keying the same training onto another basis costs nothing.
+    """
+    basis = basis or _score_basis()
     if basis == "net_auc":
         return net_auc_rows(rows)
     if basis == "net_gain":
@@ -2173,7 +2257,7 @@ def tier_env(env):
     return {**env, **TIER_ENV}
 
 
-def _rekeyed(rows, basis_name="the active basis"):
+def _rekeyed(rows, basis_name="the active basis", basis=None):
     """rekey_rows, but None when the rows predate the column the basis needs.
 
     The mini-run cache stores RAW rows so one training run is reusable across
@@ -2182,7 +2266,7 @@ def _rekeyed(rows, basis_name="the active basis"):
     and spend a full evaluation on a candidate nobody measured. Empty-out means
     stale, not neutral: the caller must retrain.
     """
-    out = rekey_rows(rows)
+    out = rekey_rows(rows, basis)
     return out if out or not rows else None
 
 
@@ -2853,6 +2937,57 @@ def _env_without_specs(env):
     equal between two calls and says nothing about what was trained. The spec
     NAMES still ride along in GTRADE_EXTRA_FEATURES, which does compare."""
     return {k: v for k, v in env.items() if k != "GTRADE_DSL_SPECS"}
+
+
+def moved_genes(genome):
+    """The gene names this genome sets away from the production default.
+
+    Used to answer "what did the finding actually change", which is not the same
+    question as "what does the finding's genome say": a bare genome states a
+    value for all fifteen genes, and fourteen of them are just the defaults.
+
+    Sound because no axis proposes a candidate equal to its own base - the
+    labeling axis never offers `direction`, the regime axis never offers `both` -
+    so a gene sitting on its default was not moved by the axis.
+    """
+    ref = asdict(_canon_genome(Genome()))
+    got = asdict(_canon_genome(Genome(**genome))) if isinstance(genome, dict) \
+        else asdict(_canon_genome(genome))
+    return sorted(k for k in ref if got.get(k) != ref[k])
+
+
+def compose_genomes(base, overlay, genes):
+    """`base`, with only `genes` taken from `overlay`, canonicalised."""
+    names = {f.name for f in fields(Genome)}
+    merged = {k: v for k, v in dict(base).items() if k in names}
+    merged.update({g: overlay[g] for g in genes if g in overlay and g in names})
+    return _canon_genome(Genome(**merged))
+
+
+def compose_with_reference(overlay, ref_genome):
+    """The finding applied ON TOP of what is running, or None when meaningless.
+
+    The A/B measures a candidate against the adopted reference, so the candidate
+    that answers the adoption question is "the reference, with this change",
+    not "this change alone on top of nothing". The difference is not academic:
+    the 2026-08-18 adoption replaced a genome carrying four feature drops, seven
+    DSL features and a threshold margin with a bare two-gene genome, because the
+    bare form was the only one ever offered, and the A/B duly reported that the
+    bare form beat the full one on the campaign basis.
+
+    None when there is no reference, or when composing changes nothing (the
+    reference already has these genes), or when the result IS the reference.
+    """
+    if not ref_genome:
+        return None
+    genes = moved_genes(overlay)
+    if not genes:
+        return None
+    composed = compose_genomes(ref_genome, overlay, genes)
+    if genome_sig(composed) in (genome_sig(_canon_genome(Genome(**ref_genome))),
+                                genome_sig(_canon_genome(Genome(**overlay)))):
+        return None
+    return composed
 
 
 def genome_from_axis(axis, winner):

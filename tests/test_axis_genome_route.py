@@ -126,3 +126,48 @@ def test_the_archive_wins_when_a_genome_is_in_both(tmp_path):
         encoding="utf-8")
     got = adopt_genome.candidates(base)
     assert [c["label"] for c in got] == ["2_4_5"]
+
+
+# --- the change applied to what is running -----------------------------------
+
+REF = {"drops": ["vol_z"],
+       "extra": [{"op": "lag", "inputs": ["ret_5"], "params": {"k": 3},
+                  "name": "m1"}],
+       "label_mode": "rel_median", "label_window": 30, "thr_margin": 0.02}
+
+
+def test_a_finding_is_also_offered_as_the_change_applied_to_the_reference():
+    """The bare form answers "better than nothing"; only the composed form
+    answers the adoption question, "is what runs better with this"."""
+    g = ar.compose_with_reference({"label_mode": "rel_median",
+                                   "label_window": 20}, REF)
+    assert g.label_window == 20            # the finding's gene moved
+    assert g.drops == ["vol_z"]            # and nothing the reference carries was lost
+    assert g.thr_margin == 0.02
+    assert len(g.extra) == 1
+
+
+def test_only_the_genes_the_finding_moved_are_taken():
+    assert ar.moved_genes({"label_mode": "rel_median", "label_window": 20}) == [
+        "label_mode", "label_window"]
+
+
+def test_composing_a_change_the_reference_already_has_offers_nothing():
+    assert ar.compose_with_reference(
+        {"label_mode": "rel_median", "label_window": 30}, REF) is None
+
+
+def test_without_an_adoption_there_is_nothing_to_compose_onto():
+    assert ar.compose_with_reference({"label_window": 20}, None) is None
+
+
+def test_the_pool_carries_both_arms(tmp_path):
+    base = _journal(tmp_path)
+    (tmp_path / "adopted_genome.json").write_text(
+        json.dumps({"label": "A", "genome": REF}), encoding="utf-8")
+    got = {c["label"] for c in adopt_genome.candidates(base)}
+    assert got == {"axis:labeling", "axis:labeling+ref"}
+    composed = next(c for c in adopt_genome.candidates(base)
+                    if c["label"] == "axis:labeling+ref")
+    assert composed["genome"]["drops"] == ["vol_z"]
+    assert composed["genome"]["label_window"] == 20

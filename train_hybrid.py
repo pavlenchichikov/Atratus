@@ -1707,6 +1707,21 @@ def train_system():
                             registry[asset] = result['registry_update']
                             registry_updates[asset] = result['registry_update']
                             tuned_thresholds[asset] = result['tuned_threshold']
+                            # Written NOW, next to the model files this asset just
+                            # wrote, not in a single save at the end of the run.
+                            # The champion files land per asset while the registry
+                            # used to land once, so any interruption left assets
+                            # whose .cbm on disk was newer than the entry that
+                            # describes it - and serving then hands a 10-feature
+                            # pool to a 12-feature model and drops the asset with
+                            # "Feature 10 is present in model but not in pool".
+                            # Ten assets were in that state on 2026-08-18. A
+                            # merged write costs one lock per promotion and makes
+                            # a kill at any instant leave the two agreeing.
+                            _merged_map_write(REGISTRY_PATH,
+                                              {asset: result['registry_update']})
+                            _merged_map_write(THRESHOLDS_PATH,
+                                              {asset: result['tuned_threshold']})
                     ok_count += 1
                     score = result['quality_row'].get('Score', 0)
                     policy = result['quality_row'].get('Policy', '')
@@ -1764,6 +1779,9 @@ def train_system():
             print(rep_sorted.to_string(index=False))
         print("=" * W2)
 
+    # Both are already on disk, written per asset as each champion was promoted.
+    # Repeated here so a run that ends normally still ends with one consistent
+    # write, and so nothing depends on the incremental path having happened.
     _merged_map_write(THRESHOLDS_PATH, tuned_thresholds)
 
     save_registry(registry_updates)

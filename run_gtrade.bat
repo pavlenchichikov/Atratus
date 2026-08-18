@@ -36,6 +36,7 @@ echo  DATA / TRAINING           [P] Paper Trading
 echo    [4] Data Update
 echo    [5] Train Models       REPORTS
 echo    [5C] Train Chunked
+echo    [5R] Retrain chosen assets
 echo    [6] Backtest             [M] Model Health
 echo                             [E] Export Signals CSV
 echo  WHAT-IF SIMULATOR          [L] Signal Log
@@ -83,6 +84,7 @@ if /i "%choice%"=="M" goto model_health
 if /i "%choice%"=="E" goto export
 if /i "%choice%"=="SG" goto push_signals
 if /i "%choice%"=="5C" goto train_chunked
+if /i "%choice%"=="5R" goto train_assets
 if /i "%choice%"=="AG" goto adopt_genome
 if /i "%choice%"=="AS" goto adopt_show
 if /i "%choice%"=="AR" goto adopt_revert
@@ -147,6 +149,26 @@ cls
 REM Training runs in the GPU environment: it is many times faster there, and the
 REM weights it writes are only readable by that environment anyway.
 cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
+pause
+goto menu
+
+:train_assets
+cls
+echo Переобучение ВЫБРАННЫХ активов, в GPU-окружении, как и всякое обучение.
+echo.
+echo Зачем: реестр чемпионов пишется один раз в конце прогона, а файлы моделей
+echo по ходу. Прерванный прогон поэтому оставляет активы, где файл новее записи
+echo в реестре, и такой актив выпадает из сигналов с ошибкой о числе признаков.
+echo Переобучение этих активов переписывает и файлы, и запись разом.
+echo.
+set /p TR_ASSETS="Активы через запятую (QCOM,MU,EURUSD), Enter = отмена: "
+if "%TR_ASSETS%"=="" goto menu
+echo.
+echo [Retrain] %TR_ASSETS%
+set "GTRADE_ASSETS=%TR_ASSETS%"
+cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
+REM Снять переменную, иначе следующий пункт меню обучит только эти активы.
+set "GTRADE_ASSETS="
 pause
 goto menu
 

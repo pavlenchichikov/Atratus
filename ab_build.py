@@ -115,12 +115,18 @@ def build_config(candidates, assets, ref, floor, alpha, seed, objective):
     BASIS is frozen for the same reason and belongs with them: it decides the
     units the floor is even in, so a config built on net_auc and run after the
     environment fell back to raw would compare a Score against an AUC floor.
+
+    `basis` is the DECISION basis, the one this verdict is read in. The search
+    basis is recorded beside it rather than instead of it: the two are the same
+    until a campaign names both, and when they differ, which one produced the
+    candidate is part of the evidence.
     """
     import auto_research as ar
     return {
         "holdout": ",".join(assets),
         "objective": objective,
-        "basis": ar._score_basis(),
+        "basis": ar.decision_basis(),
+        "search_basis": ar._score_basis(),
         "floor": floor,
         "alpha": alpha,
         "seed": seed,
@@ -164,6 +170,7 @@ def _gate_by_sig():
     import auto_research as ar
     from core import ar_memory
 
+    ref_genome = (_adopted_record() or {}).get("genome")
     out = {}
     for rec in ar_memory.findings_all() or []:
         ts = rec.get("ts") or ""
@@ -175,11 +182,25 @@ def _gate_by_sig():
                 sig = ar.genome_sig(ar.Genome(**gd))
             except (TypeError, ValueError):
                 continue
-            prev = out.get(sig)
-            if prev is None or ts >= prev["ts"]:
-                out[sig] = {"ts": ts, "tag": w.get("tag"),
-                            "adoptable": bool(w.get("adoptable")),
-                            "clears": w.get("clears") or 0}
+            verdict_ = {"ts": ts, "tag": w.get("tag"),
+                        "adoptable": bool(w.get("adoptable")),
+                        "clears": w.get("clears") or 0}
+            sigs = [sig]
+            # The same verdict also stands for this change applied ON TOP of the
+            # reference, which is the candidate the pool offers beside the bare
+            # one. The gate measured the CHANGE, and the composed genome is that
+            # change; without this the composed arm can never be auto-picked,
+            # since auto_picks only takes what a gate has flagged.
+            try:
+                composed = ar.compose_with_reference(gd, ref_genome)
+            except (TypeError, ValueError):
+                composed = None
+            if composed is not None:
+                sigs.append(ar.genome_sig(composed))
+            for s in sigs:
+                prev = out.get(s)
+                if prev is None or ts >= prev["ts"]:
+                    out[s] = verdict_
     return out
 
 
@@ -287,7 +308,8 @@ def _configure(args):
             for p in problems:
                 print(f"  - {p}")
             return
-        cfg = build_config(chosen, assets, ref, ar._adopt_floor(args.objective),
+        cfg = build_config(chosen, assets, ref,
+                           ar._adopt_floor(args.objective, basis=ar.decision_basis()),
                            args.alpha, args.seed, args.objective)
         write_config(cfg)
         print(f"\nWrote {os.path.basename(CONFIG_PATH)}")
@@ -336,7 +358,8 @@ def _configure(args):
             print(f"  - {p}")
         return
 
-    cfg = build_config(chosen, assets, ref, ar._adopt_floor(args.objective),
+    cfg = build_config(chosen, assets, ref,
+                           ar._adopt_floor(args.objective, basis=ar.decision_basis()),
                        args.alpha, args.seed, args.objective)
     write_config(cfg)
     print(f"\nWrote {os.path.basename(CONFIG_PATH)}")
@@ -400,15 +423,36 @@ def evaluate(cand, subset, ref_full, ref_contrib, objective):
     # rekey_rows is the identity on the raw basis. _rekeyed returns None when the
     # rows predate the column: unmeasurable, which verdict() reads as FAILED
     # rather than inventing a number right before an adoption decision.
-    ref_scored, var_scored = ar._rekeyed(ref_full), ar._rekeyed(var_full)
+    # The DECISION basis, not the search basis. They are the same constant until
+    # a campaign names both, and the day they came apart the A/B was reporting a
+    # mean that had no relationship to what the retrain would then do.
+    basis = ar.decision_basis()
+    ref_scored = ar._rekeyed(ref_full, basis=basis)
+    var_scored = ar._rekeyed(var_full, basis=basis)
     if ref_scored is None or var_scored is None:
         return {"sig": sig, "p": None, "value": None, "n": 0,
-                "p_neural": None, "value_neural": None}
+                "p_neural": None, "value_neural": None,
+                "promoted": 0, "demoted": 0, "p_promotion": 1.0}
     p, value, deltas, _tag = ar.holdout_stats(ref_scored, var_scored, objective)
     p_n, value_n, _d2, _t2 = ar.holdout_stats(ref_contrib, var_contrib,
                                               objective)
+    # The decision the retrain would then make, counted on the SAME rows and on
+    # the raw Score, whatever basis the verdict above is read in. It costs
+    # nothing here and it is the only number that is about production.
+    promo = ar.promotion_stats(ref_full, var_full)
     return {"sig": sig, "p": p, "value": value, "n": len(deltas),
-            "p_neural": p_n, "value_neural": value_n}
+            "p_neural": p_n, "value_neural": value_n,
+            "promoted": promo["promoted"], "demoted": promo["demoted"],
+            "p_promotion": promo["p"]}
+
+
+def ar_promotion_tag(stats):
+    """The promotion counts as one line, or empty when nothing was comparable."""
+    import auto_research as ar
+    return ar.promotion_tag({"promoted": stats.get("promoted", 0),
+                             "demoted": stats.get("demoted", 0),
+                             "n": stats.get("promoted", 0) + stats.get("demoted", 0),
+                             "p": stats.get("p_promotion", 1.0)})
 
 
 def verdict(stats, floor, alpha):
@@ -420,6 +464,15 @@ def verdict(stats, floor, alpha):
     here and not only when the holdout was chosen: an arm that lost assets to a
     failed training leaves fewer deltas than the holdout had, and a handful of
     mildly positive ones reaches significance easily.
+
+    The promotion count is a VETO, not a fourth criterion to average in. A
+    candidate that would take a champion away from more assets than it wins is
+    not an improvement to production whatever the mean of the basis says, and
+    the mean is exactly what hid it on 2026-08-18: the passing arm carried 3
+    promotions against 10 demotions in the rows the verdict was computed from.
+    Deliberately a plain majority rather than a significant one - at fourteen
+    assets significance is a high bar, and this only has to stop a candidate
+    from being adopted while pointing the wrong way.
     """
     from core import holdout
 
@@ -428,6 +481,8 @@ def verdict(stats, floor, alpha):
     if p is None or value is None:
         return "FAILED"
     if n < holdout.MIN_N:
+        return "FAILED"
+    if stats.get("demoted", 0) > stats.get("promoted", 0):
         return "FAILED"
     return "PASSED" if (p <= alpha and value >= floor) else "FAILED"
 
@@ -447,7 +502,10 @@ def write_result(cfg, results, base=None):
         "results": {label: {"sig": st["sig"], "value_raw": st["value"],
                             "p_raw": st["p"], "n_raw": st["n"],
                             "value_neural": st["value_neural"],
-                            "p_neural": st["p_neural"], "label": label}
+                            "p_neural": st["p_neural"], "label": label,
+                            "promoted": st.get("promoted"),
+                            "demoted": st.get("demoted"),
+                            "p_promotion": st.get("p_promotion")}
                     for label, st in results.items()},
     }
     with open(path, "w", encoding="utf-8") as fh:
@@ -500,6 +558,12 @@ def run(cfg):
         print("  %-8s %s over %s   p=%s  n=%s   %s (floor %+.4g, alpha %.3f)"
               % (label, v_txt, cfg["reference"], p_txt, st["n"], v,
                  cfg["floor"], cfg["alpha"]))
+        # Printed beside the verdict, not folded into it: a PASS with more
+        # demotions than promotions is exactly the shape that cost a ten-hour
+        # retrain on 2026-08-18, and the reader has to see both numbers.
+        tag = ar_promotion_tag(st)
+        if tag:
+            print("  %-8s %s" % ("", tag))
     if ar_memory.data_fingerprint(subset) != fp_start:
         print("\nWARNING: market.db changed while this run was in progress. The "
               "arms were measured over different windows, so the comparison is "

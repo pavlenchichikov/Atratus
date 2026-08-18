@@ -798,3 +798,38 @@ def test_levels_page_renders_with_a_reason_when_there_are_no_bars(client):
     assert r.status_code == 200
     assert "BTC" in r.text
     assert "no_bars" in r.text
+
+
+def test_asset_page_shows_the_trade_levels(client, monkeypatch):
+    """The card answers "where do I enter and where do I bail", beside the
+    signal. Sizing is not here on purpose: it needs an equity figure and lives
+    on the trade-levels sheet."""
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None: {
+        "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
+        "stop": 96.0, "trailing": False, "status": "ok"})
+    r = client.get("/asset/BTC")
+    assert r.status_code == 200
+    assert "Entry zone" in r.text
+    assert "96" in r.text and "99" in r.text and "101" in r.text
+    assert "Stop" in r.text
+
+
+def test_the_card_says_why_there_are_no_levels_on_wait(client, monkeypatch):
+    """A blank panel reads as a bug. WAIT has no side, so it has no levels."""
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None: {
+        "close": None, "atr": None, "entry_low": None, "entry_high": None,
+        "stop": None, "trailing": False, "status": "no_signal"})
+    r = client.get("/asset/BTC")
+    assert r.status_code == 200
+    assert "no side while the signal is WAIT" in r.text
+
+
+def test_a_trailing_stop_says_so(client, monkeypatch):
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None: {
+        "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
+        "stop": 97.5, "trailing": True, "status": "ok"})
+    r = client.get("/asset/BTC")
+    assert "Trailing stop" in r.text

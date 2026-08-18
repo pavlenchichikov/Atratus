@@ -42,6 +42,48 @@
 </section>
 {% endif %}
 
+{# Concrete prices beside the signal, in the same stat cards the page already
+   uses. Sizing is deliberately absent: it needs an equity figure and lives on
+   the trade-levels sheet, which is where a position is actually placed from. #}
+{% if levels and levels.status == 'ok' %}
+<div class="statgrid">
+  <div class="stat fade">
+    <span class="stat-label">Entry zone</span>
+    <span class="stat-value">{{ "%.4g"|format(levels.entry_low) }}<span class="stat-sep">..</span>{{ "%.4g"|format(levels.entry_high) }}</span>
+    <span class="stat-sub">half an ATR either side of the close</span>
+  </div>
+  <div class="stat fade">
+    <span class="stat-label">{{ 'Trailing stop' if levels.trailing else 'Stop' }}</span>
+    <span class="stat-value">{{ "%.4g"|format(levels.stop) }}</span>
+    <span class="stat-sub">{% if levels.trailing %}trailed to the best level since entry{% else %}two ATR against the position{% endif %}</span>
+  </div>
+  <div class="stat fade">
+    <span class="stat-label">Last close</span>
+    <span class="stat-value">{{ "%.4g"|format(levels.close) }}</span>
+    <span class="stat-sub">ATR(14) {{ "%.4g"|format(levels.atr) }}</span>
+  </div>
+  <div class="stat fade">
+    <span class="stat-label">Take-profit</span>
+    <span class="stat-value">-</span>
+    <span class="stat-sub">none on purpose: the model predicts direction, not a payoff</span>
+  </div>
+</div>
+{% else %}
+<div class="statgrid">
+  <div class="stat fade">
+    <span class="stat-label">Trade levels</span>
+    <span class="stat-value">-</span>
+    <span class="stat-sub">
+      {%- if not levels or levels.status == 'no_signal' %}no side while the signal is WAIT, so no entry zone and no stop
+      {%- elif levels.status == 'no_bars' %}no price history loaded for this asset yet
+      {%- elif levels.status == 'short_history' %}fewer than 14 bars, not enough for an ATR
+      {%- elif levels.status == 'flat_atr' %}the ATR is zero here, every level would sit on the close
+      {%- else %}unavailable ({{ levels.status }}){% endif %}
+    </span>
+  </div>
+</div>
+{% endif %}
+
 <div class="statgrid">
   <div class="stat fade">
     <span class="stat-label">Accuracy (last {{ acc.n if acc.n else 0 }})</span>

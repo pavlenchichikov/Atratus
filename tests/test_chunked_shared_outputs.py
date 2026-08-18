@@ -64,3 +64,24 @@ def test_a_kept_champion_keeps_its_own_threshold(tmp_path):
     got = json.loads(open(path, encoding="utf-8").read())
     assert got["AAPL"] == {"buy": 0.60, "sell": 0.40}
     assert got["SBER"] == {"buy": 0.58, "sell": 0.42}
+
+
+def test_a_promotion_lands_in_the_registry_before_the_run_ends(tmp_path):
+    """Files per asset, registry once at the end, and a kill in between left the
+    two describing different models. Ten assets were in that state on
+    2026-08-18: serving handed a 10-feature pool to a 12-feature champion and
+    dropped them. The entry has to land with the files, not after all of them.
+    """
+    path = str(tmp_path / "champion_registry.json")
+    # asset one is promoted and recorded, then the run dies
+    train_hybrid._merged_map_write(path, {"AAPL": {"score": 2.0, "features": ["a", "b"]}})
+    got = json.loads(open(path, encoding="utf-8").read())
+    assert got["AAPL"]["features"] == ["a", "b"], "the entry must not wait for the run to finish"
+
+
+def test_an_incremental_write_does_not_drop_the_assets_written_before_it(tmp_path):
+    path = str(tmp_path / "champion_registry.json")
+    for asset, score in (("AAPL", 1.0), ("SBER", 2.0), ("GOLD", 3.0)):
+        train_hybrid._merged_map_write(path, {asset: {"score": score}})
+    got = json.loads(open(path, encoding="utf-8").read())
+    assert sorted(got) == ["AAPL", "GOLD", "SBER"]

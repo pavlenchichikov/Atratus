@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from config import FULL_ASSET_MAP, RADAR_GROUPS, radar_category
 from core import dashboard, timing_policy, track_record
+from core import levels as levels_mod
 from core import positions as positions_mod
 from risk_manager import RISK_CONFIG, RiskManager, save_risk_config_override
 
@@ -344,9 +345,21 @@ def asset_page(request: Request, name: str):
                     or (gated or {}).get("timing_reason"))
                 current["timing_label"] = text
 
+    # Concrete prices beside the signal: where to enter, where to bail. The same
+    # core.levels call the trade-levels sheet makes, on the same open segment, so
+    # the card and the sheet can never quote different numbers for one asset on
+    # one day. Sizing stays on the sheet: it needs an equity figure, and the card
+    # answers "where", not "how much".
+    segments = pos.get("segments") or []
+    open_segment = segments[-1] if segments and segments[-1].get("open") else None
+    asset_levels = levels_mod.levels(
+        track_record.ohlc_series(name, days=60),
+        (current or {}).get("signal"), segment=open_segment)
+
     return templates.TemplateResponse(request, "asset.html", {
         "asset": name,
         "ticker": FULL_ASSET_MAP[name],
+        "levels": asset_levels,
         "taleb": taleb,
         "taleb_regime": dashboard.taleb_regime(taleb, soft_cap, hard_cap),
         "taleb_soft_cap": soft_cap,

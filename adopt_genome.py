@@ -58,10 +58,14 @@ def _gated_axis_genomes(base):
     existed carry no basis and are therefore not this campaign's, which is also
     the honest reading - they predate the 2026-08-14 sequence-alignment fix.
     """
+    from dataclasses import asdict
+
     import auto_research as ar
 
     campaign = (_read_json(os.path.join(base, "_auto_loop.json")) or {}).get("campaign")
     basis = (campaign or {}).get("GTRADE_AR_SCORE_BASIS")
+    ref_genome = ((_read_json(os.path.join(base, "adopted_genome.json")) or {})
+                  .get("genome"))
     out = {}
     for rec in _read_json(os.path.join(base, "_ar_findings.json")) or []:
         if basis and rec.get("basis") != basis:
@@ -74,8 +78,22 @@ def _gated_axis_genomes(base):
                 sig = ar.genome_sig(ar.Genome(**genome))
             except Exception:
                 continue
-            out[sig] = {"bucket": "axis:%s" % (w.get("axis") or "?"),
+            axis = w.get("axis") or "?"
+            out[sig] = {"bucket": "axis:%s" % axis,
                         "genome": genome, "fitness": w.get("value")}
+            # The same finding applied ON TOP of what is running. The bare form
+            # answers "is this change better than nothing"; the composed form
+            # answers the adoption question, "is what runs better with it". Both
+            # are offered because they are different questions and the cap on
+            # A/B arms is three.
+            try:
+                composed = ar.compose_with_reference(genome, ref_genome)
+            except Exception:
+                composed = None
+            if composed is not None:
+                out.setdefault(ar.genome_sig(composed), {
+                    "bucket": "axis:%s+ref" % axis,
+                    "genome": asdict(composed), "fitness": w.get("value")})
     return out
 
 

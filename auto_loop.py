@@ -61,6 +61,14 @@ ARCHIVE_PATH = os.path.join(BASE, "_qd_archive.json")
 CAMPAIGN = {
     "GTRADE_AR_AXES": "qd",
     "GTRADE_AR_SCORE_BASIS": "net_auc",
+    # What an ADOPTION is judged on. Empty means "the search basis", which is the
+    # behaviour every campaign before 2026-08-18 had. It is separate because the
+    # search basis is chosen for measurability and the decision basis for
+    # relevance, and on 2026-08-18 those turned out to be different quantities:
+    # over one holdout, one pair of trainings, mean Net_AUC +0.036 while mean
+    # Score was -1.85, rank correlation -0.24. The A/B passed and the retrain it
+    # authorised then kept the champion on 23 of the first 29 assets.
+    "GTRADE_AR_DECISION_BASIS": "",
     "GTRADE_AR_OBJECTIVE": "mean",
     "GTRADE_AR_SCREEN": "0",
     "GTRADE_AR_ILLUM": "full",
@@ -172,7 +180,8 @@ TRAINING_PHASES = ("search", "ab_run")
 # Changing one of these after a verdict is what separates a measurement from a
 # search for a measurement that passes, so the campaign freezes them on the
 # first cycle and refuses to continue if they move.
-FROZEN = ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_OBJECTIVE")
+FROZEN = ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_OBJECTIVE",
+          "GTRADE_AR_DECISION_BASIS")
 
 NET_BASES = ("net_auc", "net_gain", "ens_auc")
 
@@ -239,9 +248,14 @@ def freeze_problems(frozen, env):
     """
     if not frozen:
         return []
+    # Absent and empty are the same thing here. A campaign frozen before a
+    # constant existed does not record it, and comparing None against the new
+    # key's empty default would call that a mid-campaign move and refuse to run
+    # a campaign nobody touched.
     moved = ["%s changed mid-campaign: %s -> %s"
-             % (k, frozen[k], env.get(k)) for k in FROZEN
-             if frozen.get(k) != env.get(k)]
+             % (k, frozen.get(k) or "(unset)", env.get(k) or "(unset)")
+             for k in FROZEN
+             if (frozen.get(k) or "") != (env.get(k) or "")]
     if moved:
         moved.append(
             "these decide whether a result counts, so moving them after a "
