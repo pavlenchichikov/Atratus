@@ -1,7 +1,31 @@
 """Shared fixtures. ar_memory state files are per-test isolated so no test
 pollutes (or depends on) the real project-root research memory."""
 
+import os
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    """Undo any os.environ the code under test writes for the whole process.
+
+    monkeypatch.setenv already covers what a TEST sets. This covers what the
+    code it calls sets, which nothing else does. A CLI entry point applying its
+    process defaults inside a function left GTRADE_AR_TRAIN_CHUNK and
+    GTRADE_AR_TRAIN_JOBS behind for the rest of the session, and three tests in
+    a LATER file - alphabetically later, which is why it only ever failed in CI -
+    stopped using their injected trainer and trained for real against a database
+    that is not there.
+
+    Silent restore rather than a failed test: a leak is the caller's bug to fix
+    where it happens, and this only has to stop it reaching the next test.
+    """
+    saved = dict(os.environ)
+    yield
+    if os.environ != saved:
+        os.environ.clear()
+        os.environ.update(saved)
 
 
 @pytest.fixture(autouse=True)

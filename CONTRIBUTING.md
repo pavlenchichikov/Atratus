@@ -17,6 +17,26 @@ The web UI and the test suite do **not** need TensorFlow-heavy training. Only
 
 - `pytest -q` - the test suite passes
 - `ruff check .` - lint is clean
+
+Both of those can pass here and still fail in CI, for the same reason twice: your
+checkout is not CI's. It has the git-ignored local tools, and it has whatever ruff
+you installed once.
+
+- **Lint with the pinned version.** CI installs the version named in
+  `.github/workflows/ci.yml`; the commit hook is pinned to the same one, so
+  `pre-commit install` once is the cheapest way to stop guessing. Different ruff
+  versions disagree about real code, so a green run on another version proves
+  nothing.
+- **Run the suite the way CI runs it**, which is the whole directory in
+  alphabetical order, over tracked files only:
+
+  ```bash
+  tmp=$(mktemp -d) && git checkout-index -a -f --prefix="$tmp/" && (cd "$tmp" && pytest tests/ -q)
+  ```
+
+  A hand-picked list of test files hides two things a full run finds: a committed
+  test that imports a git-ignored module (CI fails collection for the WHOLE suite),
+  and state one test file leaks into a later one.
 - **ASCII-only** source (no smart quotes, em-dashes, or arrows); match the style,
   naming and comment density of the file you are editing
 - Keep each PR focused on **one topic**; write a clear description of the problem solved

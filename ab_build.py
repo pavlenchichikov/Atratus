@@ -462,15 +462,6 @@ def run(cfg):
     come from the new adoption while reference_sig still named the old one, so
     the run would measure one thing and record another.
     """
-    # The A/B arm is the longest training this toolchain runs, and the parallel
-    # path lives entirely in env keys that a hand-started run does not set. Borrow
-    # the campaign's load profile so an arm measured by hand costs the same as the
-    # identical arm measured by the loop.
-    import auto_loop
-    took = auto_loop.apply_load_profile()
-    if took:
-        print("load profile: %s" % " ".join("%s=%s" % kv for kv in sorted(took.items())))
-
     subset = cfg["holdout"]
     live = reference()
     if live["sig"] != cfg["reference_sig"]:
@@ -532,14 +523,6 @@ def main():
                          "holdout without asking; for auto_loop.py")
     args = ap.parse_args()
 
-    # Before anything reads the basis: the floor, the re-keying and the verdict
-    # all follow it, so a hand-started A/B must judge on the same quantity the
-    # campaign froze rather than on the built-in default.
-    import auto_loop
-    frozen = auto_loop.apply_campaign_basis()
-    if frozen:
-        print("campaign: %s" % " ".join("%s=%s" % kv for kv in sorted(frozen.items())))
-
     if args.show:
         cfg = read_config()
         if not cfg:
@@ -557,5 +540,30 @@ def main():
     _configure(args)
 
 
+def _apply_process_defaults():
+    """Environment this PROCESS should run under, filled in where it is empty.
+
+    Called from the entry point only, never from main() or run(). Both of these
+    write to os.environ, which outlives the call: with the campaign basis and the
+    load profile applied inside run(), one test that exercised an A/B left
+    GTRADE_AR_TRAIN_CHUNK and GTRADE_AR_TRAIN_JOBS set for the whole pytest
+    session, and every later test file trained for real through the chunked path.
+    A process-wide default belongs to the process, not to a function an importer
+    can call.
+
+    basis first, then load: the basis decides what is measured (the floor, the
+    re-keying, the verdict), the profile only how fast.
+    """
+    import auto_loop
+
+    frozen = auto_loop.apply_campaign_basis()
+    if frozen:
+        print("campaign: %s" % " ".join("%s=%s" % kv for kv in sorted(frozen.items())))
+    took = auto_loop.apply_load_profile()
+    if took:
+        print("load profile: %s" % " ".join("%s=%s" % kv for kv in sorted(took.items())))
+
+
 if __name__ == "__main__":
+    _apply_process_defaults()
     main()
