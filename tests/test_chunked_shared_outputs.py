@@ -59,3 +59,26 @@ def test_the_chunk_environment_names_only_that_chunks_assets():
     env = train_chunked._chunk_env(["AAPL", "MSFT"], True, 2)
     assert env["GTRADE_ASSETS"] == "AAPL,MSFT"
     assert env["GTRADE_FORCE_PROMOTE"] == "1"
+
+
+def test_a_kept_champion_keeps_its_own_threshold(tmp_path, monkeypatch):
+    """A challenger that lost must not leave its buy/sell levels behind: the
+    served model is still the old champion, and the thresholds are what turn its
+    probabilities into signals."""
+    path = str(tmp_path / "tuned_thresholds.json")
+    train_hybrid._merged_map_write(path, {"AAPL": {"buy": 0.60, "sell": 0.40}})
+
+    # what the collector does for a promoted asset and for a rejected one
+    results = {"AAPL": {"registry_update": None,
+                        "tuned_threshold": {"buy": 0.51, "sell": 0.49}},
+               "SBER": {"registry_update": {"score": 2.0},
+                        "tuned_threshold": {"buy": 0.58, "sell": 0.42}}}
+    tuned = {}
+    for asset, result in results.items():
+        if result["registry_update"]:
+            tuned[asset] = result["tuned_threshold"]
+    train_hybrid._merged_map_write(path, tuned)
+
+    got = json.loads(open(path, encoding="utf-8").read())
+    assert got["AAPL"] == {"buy": 0.60, "sell": 0.40}
+    assert got["SBER"] == {"buy": 0.58, "sell": 0.42}

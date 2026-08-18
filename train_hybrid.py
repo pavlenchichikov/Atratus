@@ -1695,10 +1695,18 @@ def train_system():
                     with _results_lock:
                         quality_rows.append(result['quality_row'])
                         exp_rows.append(result['exp_row'])
-                        tuned_thresholds[asset] = result['tuned_threshold']
+                        # The threshold follows the CHAMPION, so it moves only
+                        # when the champion does. registry_update is non-None on
+                        # exactly the promoted assets. Recording it for every
+                        # asset that trained served a kept champion with the
+                        # challenger's buy/sell levels, which is a live-signal
+                        # change nobody decided - and it bites hardest right
+                        # after a genome adoption, when most assets keep their
+                        # champion and every challenger is a different model.
                         if result['registry_update']:
                             registry[asset] = result['registry_update']
                             registry_updates[asset] = result['registry_update']
+                            tuned_thresholds[asset] = result['tuned_threshold']
                     ok_count += 1
                     score = result['quality_row'].get('Score', 0)
                     policy = result['quality_row'].get('Policy', '')
