@@ -862,3 +862,51 @@ def test_the_card_labels_quote_the_multipliers_actually_used(client, monkeypatch
     r = client.get("/asset/BTC")
     assert "0.8 ATR either side" in r.text     # (101.6 - 100) / 2
     assert "3.5 ATR against" in r.text         # (100 - 93) / 2
+
+
+def test_market_page_shows_the_market_wide_tail_risk(client, monkeypatch):
+    """Per asset this was always visible; across the market it was nowhere, and
+    it is the only reading on the page that actually gates trading."""
+    import core.dashboard as dash
+    dash.cache_clear()
+    monkeypatch.setattr(dash, "taleb_index", lambda: {
+        "BTC": 9.9, "ETH": 8.1, "NVDA": 4.2, "SP500": 1.1, "GOLD": None})
+    r = client.get("/market")
+    assert r.status_code == 200
+    assert "Tail risk across the market" in r.text
+    assert "cannot be bought" in r.text          # something is over the hard cap
+    assert "/asset/BTC" in r.text                # the worst names are reachable
+
+
+def test_market_page_counts_every_band_and_says_when_nothing_is_gated(client, monkeypatch):
+    import core.dashboard as dash
+    dash.cache_clear()
+    monkeypatch.setattr(dash, "taleb_index", lambda: {"SP500": 0.5, "GOLD": 0.4})
+    r = client.get("/market")
+    assert "no asset is under a tail-risk gate" in r.text
+
+
+def test_market_page_shows_breadth_and_correlation_stress(client, monkeypatch):
+    import core.dashboard as dash
+    dash.cache_clear()
+    monkeypatch.setattr(dash, "market_breadth", lambda: {
+        "BUY": 7, "SELL": 3, "WAIT": 190, "total": 200, "actionable": 10})
+    monkeypatch.setattr(dash, "correlation_stress", lambda: {
+        "avg_corr": 0.72, "label": "everything moving together",
+        "score": 72, "zone": "g-bad"})
+    r = client.get("/market")
+    assert "Breadth and correlation" in r.text
+    assert "10 of 200 actionable" in r.text
+    assert "everything moving together" in r.text
+    assert "0.72" in r.text
+
+
+def test_market_page_survives_a_correlation_read_with_no_data(client, monkeypatch):
+    """correlation_stress degrades to a null average; the panel must still render."""
+    import core.dashboard as dash
+    dash.cache_clear()
+    monkeypatch.setattr(dash, "correlation_stress", lambda: {
+        "avg_corr": None, "label": "no data", "score": 0, "zone": ""})
+    r = client.get("/market")
+    assert r.status_code == 200
+    assert "no data" in r.text

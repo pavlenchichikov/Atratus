@@ -439,6 +439,25 @@ def _taleb_top(limit=10):
             for a, v in items[:limit]]
 
 
+def _taleb_counts():
+    """How many assets sit in each tail-risk band right now.
+
+    The bands are risk_manager's own gates, so this is not a mood reading: the
+    elevated count is how many assets are being sized down and the extreme count
+    is how many cannot be bought at all. Per-asset that has always been visible;
+    across the market it was not visible anywhere.
+    """
+    soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
+    counts = {"normal": 0, "elevated": 0, "extreme": 0, "na": 0}
+    for value in dashboard.taleb_index().values():
+        counts[dashboard.taleb_regime(value, soft_cap, hard_cap)] += 1
+    counts["total"] = counts["normal"] + counts["elevated"] + counts["extreme"]
+    counts["gated"] = counts["elevated"] + counts["extreme"]
+    counts["soft_cap"] = soft_cap
+    counts["hard_cap"] = hard_cap
+    return counts
+
+
 @app.get("/risk", response_class=HTMLResponse)
 def risk_page(request: Request):
     return templates.TemplateResponse(request, "risk.html", {
@@ -591,12 +610,18 @@ def market_page(request: Request):
     regime = dashboard.global_regime()
     score = dashboard.regime_score(regime)
     sentiment = dashboard.market_sentiment()
+    # Everything below is already computed and cached for other pages; the market
+    # page just had no view of it. Nothing here starts a fresh calculation.
     return templates.TemplateResponse(request, "market.html", {
         "regime": regime,
         "score": score,
         "zone": dashboard.gauge_zone(score),
         "sentiment": sentiment,
         "sent_zone": dashboard.gauge_zone(sentiment["score"]),
+        "breadth": dashboard.market_breadth(),
+        "taleb": _taleb_counts(),
+        "taleb_top": _taleb_top(5),
+        "stress": dashboard.correlation_stress(),
     })
 
 
