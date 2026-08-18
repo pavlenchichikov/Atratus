@@ -222,3 +222,41 @@ def test_every_candidate_carries_its_signature(tmp_path):
     got = adopt_genome.candidates(_fixtures(tmp_path))
     assert got, "fixture produced no candidates"
     assert all(c.get("sig") for c in got)
+
+
+def test_a_net_demoting_result_is_not_a_validated_candidate(tmp_path):
+    """A stored result is read long after it was written. The 2026-08-18 adoption
+    was reverted by hand while its file still said PASSED, and the next loop cycle
+    would have re-adopted it: adoptable=['axis:labeling'], next=adopt."""
+    import auto_research as ar
+    open(str(tmp_path / "_qd_archive.json"), "w", encoding="utf-8").write(
+        json.dumps(ARCHIVE))
+    sig = ar.genome_sig(ar.Genome(**ARCHIVE["3_4_5"]["genome"]))
+    body = _ab_for(sig)
+    body["results"]["A"].update({"promoted": 3, "demoted": 10, "p_promotion": 0.989})
+    open(str(tmp_path / "_ab_genomes_20260101-0000.json"), "w",
+         encoding="utf-8").write(json.dumps(body))
+    got = adopt_genome.candidates(str(tmp_path))
+    measured = next(c for c in got if c["kind"] == "measured")
+    assert measured["validated"] is False
+
+
+def test_a_result_that_promotes_more_than_it_demotes_still_passes(tmp_path):
+    import auto_research as ar
+    open(str(tmp_path / "_qd_archive.json"), "w", encoding="utf-8").write(
+        json.dumps(ARCHIVE))
+    sig = ar.genome_sig(ar.Genome(**ARCHIVE["3_4_5"]["genome"]))
+    body = _ab_for(sig)
+    body["results"]["A"].update({"promoted": 9, "demoted": 4, "p_promotion": 0.09})
+    open(str(tmp_path / "_ab_genomes_20260101-0000.json"), "w",
+         encoding="utf-8").write(json.dumps(body))
+    measured = next(c for c in adopt_genome.candidates(str(tmp_path))
+                    if c["kind"] == "measured")
+    assert measured["validated"] is True
+
+
+def test_a_file_written_before_the_counts_existed_is_judged_as_before(tmp_path):
+    """Older results carry no counts; absent must not read as a veto."""
+    measured = next(c for c in adopt_genome.candidates(_fixtures(tmp_path))
+                    if c["kind"] == "measured")
+    assert measured["validated"] is True

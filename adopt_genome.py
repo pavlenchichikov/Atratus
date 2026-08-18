@@ -147,8 +147,20 @@ def candidates(base=None):
             # Coming from an A/B file is provenance, not a pass. The run records
             # its own alpha and floor; a candidate that missed either FAILED and
             # must not be offered as a decision.
+            #
+            # The promotion counts veto in the same way ab_build.verdict does. A
+            # stored result is read long after it was written - the 2026-08-18
+            # adoption was reverted by hand while its result file still said
+            # PASSED, so the very next loop cycle would have re-adopted it. A
+            # candidate that would take a champion away from more assets than it
+            # wins is not an improvement whatever its p-value says. Absent counts
+            # (every file written before the counts existed) leave the old
+            # behaviour untouched.
+            demoted, promoted = res.get("demoted"), res.get("promoted")
+            net_negative = (demoted is not None and promoted is not None
+                            and demoted > promoted)
             passed = (p is not None and value is not None
-                      and p <= alpha and value >= floor)
+                      and p <= alpha and value >= floor and not net_negative)
             out.append({
                 "kind": "measured", "validated": passed, "label": label,
                 "genome": hit["genome"], "bucket": hit["bucket"],

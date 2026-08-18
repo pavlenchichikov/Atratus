@@ -106,6 +106,10 @@ tests/test_ab_objective.py
 tests/test_ab_noise.py
 tests/test_train_chunked_local.py
 train_chunked.py
+# Fitted levels policy and its run report: the policy is the edge, same
+# reasoning as adopted_genome.json, and the report is local run state.
+levels_policy.json
+_levels_report.txt
 _chunk_progress.txt
 _chunk_quality.json
 _auto_features.json

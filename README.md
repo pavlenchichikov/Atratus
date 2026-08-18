@@ -587,10 +587,28 @@ python data_engine.py     # pull today's bars
 python predict.py         # score every asset, write prediction_log
 ```
 
-Order matters. `predict.py` only logs an asset that has a bar dated today, so
-running it first leaves the newest assets missing from the radar. US stocks get
-a same-day bar only once the US session opens, so a pre-market run is expected
-to be short.
+Order matters. `predict.py` writes a `prediction_log` row only for an asset that
+has a bar dated today, and skips the rest rather than creating a row it could
+never reconcile against a real move.
+
+**The universe does not arrive all at once.** It spans four session families:
+
+| family | assets | when today's bar exists |
+|---|---|---|
+| MOEX (Russian equities) | 50 | after the Moscow close, earliest of the three venues |
+| European equities and indices | 36 | after the European close |
+| US equities | 60 | last, only once the US session has produced a bar |
+| forex, crypto, commodities, benchmarks | 62 | forex 24/5, crypto 24/7, the rest follow their venue |
+
+So a morning run is expected to be short, and an evening Moscow-time run still
+leaves the ~60 US names out. **A radar showing fewer than 208 assets is that, not
+a bug.** Nothing is lost either way: a second run later the same day fills in the
+assets that were missing, because a row already written for an asset today is
+skipped rather than duplicated.
+
+For one complete picture per day, run `data_engine.py` then `predict.py` after
+the US close. If you want the Russian and European names acted on earlier, run
+the pair twice - once in the Moscow evening, once after the US close.
 
 Then open the dashboard and read it in this order:
 
@@ -759,6 +777,7 @@ If `SOCKS5_PROXY` is set in `.env`, outbound requests go through it; `net.py` ch
 data_engine.py        fetch daily/weekly quotes (Yahoo + MOEX) into market.db
 train_hybrid.py       train the per-asset ensemble + walk-forward selection
 train_chunked.py      RAM-safe full retrain (fresh process per chunk)
+train_timing.py       fit + gate the entry-timing policy (when to act on a side)
 train_levels.py       fit + gate the trade-levels policy (entry zone, stop)
 predict.py            console signal radar
 backtest.py           held-out evaluation (PnL, Sharpe, Brier, alpha)
@@ -773,7 +792,7 @@ scheduler.py          daemon: data / predict / DB-check on a schedule
 run_gtrade.bat        Windows text menu over the whole pipeline
 core/                 shared library: features, ensemble, scoring, calibration,
                       backtesting, risk, live_gate, guru, dashboard, ...
-tests/                pytest suite (600+ tests)
+tests/                pytest suite (1300+ tests)
 supabase/             SQL schema for the mobile/web Supabase backend
 ```
 
@@ -1341,10 +1360,29 @@ python data_engine.py     # забрать сегодняшние бары
 python predict.py         # оценить все активы, записать prediction_log
 ```
 
-Порядок важен. `predict.py` записывает только те активы, у которых есть бар за
-сегодня, поэтому запуск наоборот оставит свежие активы вне радара. У акций США
-дневной бар появляется только после открытия сессии, так что до неё список
-закономерно короче.
+Порядок важен. `predict.py` пишет строку в `prediction_log` только по активу, у
+которого есть бар за сегодня, а остальные пропускает, а не заводит строку,
+которую потом не с чем будет сверить.
+
+**Вселенная приходит не одновременно.** В ней четыре семьи торговых сессий:
+
+| семья | активов | когда появляется сегодняшний бар |
+|---|---|---|
+| MOEX (российские акции) | 50 | после московского закрытия, раньше всех трёх площадок |
+| Европейские акции и индексы | 36 | после европейского закрытия |
+| Акции США | 60 | последними, только когда американская сессия дала бар |
+| форекс, крипта, товары, бенчмарки | 62 | форекс 24/5, крипта 24/7, остальное по своей площадке |
+
+Поэтому утренний прогон заведомо короткий, а вечерний по московскому времени всё
+ещё оставляет за бортом примерно 60 американских имён. **Радар, показывающий
+меньше 208 активов, это именно оно, а не поломка.** Ничего при этом не теряется:
+повторный прогон в тот же день добирает недостающие активы, потому что уже
+записанная сегодня строка по активу пропускается, а не дублируется.
+
+Чтобы получить одну полную картину за день, запускай `data_engine.py`, затем
+`predict.py` после закрытия США. Если хочешь действовать по российским и
+европейским бумагам раньше, гоняй пару дважды: вечером по Москве и после
+закрытия США.
 
 Дальше открывается дашборд, и читать его стоит в таком порядке:
 
@@ -1504,6 +1542,7 @@ force-promote при ремонте надо отвечать `y`: без это
 data_engine.py        выборка дневных/недельных котировок (Yahoo + MOEX) в market.db
 train_hybrid.py       обучение пер-активного ансамбля + walk-forward отбор
 train_chunked.py      RAM-безопасный полный ретрейн (свежий процесс на чанк)
+train_timing.py       подбор и гейт политики тайминга (когда действовать)
 train_levels.py       подбор и гейт политики уровней (зона входа, стоп)
 predict.py            радар сигналов в консоли
 backtest.py           оценка на отложенных данных (PnL, Sharpe, Brier, альфа)
@@ -1518,7 +1557,7 @@ scheduler.py          демон: данные / предсказание / пр
 run_gtrade.bat        текстовое меню (Windows) над всем пайплайном
 core/                 общая библиотека: признаки, ансамбль, скоринг, калибровка,
                       бэктест, риск, live_gate, guru, dashboard, ...
-tests/                pytest-набор (600+ тестов)
+tests/                pytest-набор (1300+ тестов)
 supabase/             SQL-схема для Supabase-бэкенда веба/мобильного
 ```
 
