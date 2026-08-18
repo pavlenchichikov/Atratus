@@ -65,7 +65,13 @@ def compact_findings(findings, n=12):
             "basis": rec.get("basis", "raw"),
             "axes": rec.get("axes") or ["qd"],
             "tried": len(winners),
-            "adoptable": sum(1 for w in winners if w.get("adoptable")),
+            # Named for what it IS. This counts SEARCH-GATE flags: a winner
+            # measured on the search basis against a bare base, which says
+            # "worth an A/B", not "better than production". Called "adoptable",
+            # the model read it as a result and chased the one axis that kept
+            # producing it - the labeling winner was flagged eight times, and
+            # its A/B then lost on 10 of 14 assets.
+            "gate_flagged": sum(1 for w in winners if w.get("adoptable")),
             "best": round(max(values), 4) if values else None,
         })
     return out
@@ -77,8 +83,22 @@ def _prompt(ctx):
         "trading-model configurations. Choose only WHAT to try next.\n\n"
         "Current campaign (you may NOT change these; they decide whether a "
         "result counts and were fixed before any data was seen):\n"
-        "  score_basis = %(basis)s\n  objective    = %(objective)s\n\n"
-        "Recent runs, oldest first:\n%(findings)s\n\n"
+        "  search_basis   = %(basis)s   (what the SEARCH optimises)\n"
+        "  decision_basis = %(decision)s   (what an ADOPTION is judged on)\n"
+        "  objective      = %(objective)s\n\n"
+        "There are two levels of evidence and they are not the same thing.\n\n"
+        "1. Search runs. gate_flagged counts candidates the search gate thought "
+        "were WORTH TESTING, measured on the search basis against a bare base. "
+        "It is not a result, and the same axis being flagged again and again is "
+        "one finding re-found, not accumulating proof.\n%(findings)s\n\n"
+        "2. A/B outcomes. These were trained on a fresh held-out set and measured "
+        "against what is ACTUALLY RUNNING, on the decision basis. would_promote "
+        "and would_demote count the assets whose champion the candidate would "
+        "replace or lose, which is the decision production makes. Only a PASSED "
+        "verdict here means something improved.\n%(adoptions)s\n\n"
+        "If an axis keeps being gate_flagged while its A/B outcomes FAIL, that "
+        "axis is exhausted whatever its gate values look like. Prefer an axis or "
+        "a search mode that has not been ruled out that way.\n\n"
         "Archive elites: %(archive_n)d. Cycles run in this campaign: %(cycles)d.\n\n"
         "Reply with ONE JSON object and nothing else:\n"
         '  {"axes": <one of %(axes)s>,\n'
@@ -94,7 +114,11 @@ def _prompt(ctx):
         "Starting a new campaign discards the search archive, so do not ask for "
         "one to chase a single disappointing run.\n"
         % {"basis": ctx["basis"], "objective": ctx["objective"],
+           "decision": ctx["decision"],
            "findings": json.dumps(ctx["findings"], indent=1),
+           "adoptions": (json.dumps(ctx["adoptions"], indent=1)
+                         if ctx["adoptions"] else
+                         "  (no A/B has finished in this campaign yet)"),
            "archive_n": ctx["archive_n"], "cycles": ctx["cycles"],
            "axes": list(AXES), "bases": list(BASES), "objs": list(OBJECTIVES),
            "hmin": HORIZON_MIN, "hmax": HORIZON_MAX,
@@ -189,15 +213,18 @@ def validate(obj, campaign):
     return settings, []
 
 
-def propose(findings, campaign, archive_n=0, cycles=0):
+def propose(findings, campaign, archive_n=0, cycles=0, adoptions=None):
     """Ask the director for the next search settings. None means keep the campaign.
 
     Never raises: an unavailable or unparseable model must degrade to the
     settings already in force, not stop an unattended run.
     """
     ctx = {"basis": campaign.get("GTRADE_AR_SCORE_BASIS", "raw"),
+           "decision": (campaign.get("GTRADE_AR_DECISION_BASIS")
+                        or campaign.get("GTRADE_AR_SCORE_BASIS", "raw")),
            "objective": campaign.get("GTRADE_AR_OBJECTIVE", "mean"),
            "findings": compact_findings(findings),
+           "adoptions": adoptions or [],
            "archive_n": archive_n, "cycles": cycles}
     try:
         reply = llm_proposer._backend("director")(_prompt(ctx))

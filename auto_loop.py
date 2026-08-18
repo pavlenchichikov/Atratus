@@ -539,12 +539,19 @@ def apply_director(env, state):
 
     if not ar_director.director_on():
         return env, state
+    import adopt_genome
     from core import ar_memory
 
+    # Both levels of evidence, not just the search gate's. The gate flags what is
+    # worth an A/B, on the search basis against a bare base; the A/B says whether
+    # anything beat what is running. Given only the first, the director chased
+    # the one axis that kept getting flagged - eight times for the same labeling
+    # winner - and its A/B then lost on 10 of 14 assets.
     settings = ar_director.propose(
         ar_memory.findings_all(), env,
         archive_n=len(ar_memory.blob_get("_qd_archive", {}) or {}),
-        cycles=len(state.get("history") or []))
+        cycles=len(state.get("history") or []),
+        adoptions=adopt_genome.ab_outcomes())
     if not settings:
         return env, state
     fresh = settings.pop("new_campaign", None)

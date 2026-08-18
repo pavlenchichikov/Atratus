@@ -184,6 +184,51 @@ def candidates(base=None):
     return out
 
 
+def ab_outcomes(base=None, limit=8):
+    """Every A/B verdict, newest first: what was tested, against what, how it went.
+
+    The findings journal answers "was this worth testing" - a search gate, on the
+    search basis, against a BARE base. This answers the different and harder
+    question "did it beat what is actually running". The two came apart on
+    2026-08-18: a candidate the gate flagged eight times, and whose A/B then
+    passed on the search basis, would have demoted 10 of 14 held-out assets.
+
+    Kept here because this module already owns the `_ab_genomes_*.json` format.
+    Pure: files in, dicts out, no model and no database.
+    """
+    base = base or BASE
+    out = []
+    for path in sorted(glob.glob(os.path.join(base, "_ab_genomes_*.json")),
+                       reverse=True):
+        data = _read_json(path) or {}
+        alpha = data.get("alpha") or 0.05
+        floor = data.get("floor") or 0.0
+        for label, res in (data.get("results") or {}).items():
+            if not isinstance(res, dict):
+                continue
+            p, value = res.get("p_raw"), res.get("value_raw")
+            promoted, demoted = res.get("promoted"), res.get("demoted")
+            net_negative = (demoted is not None and promoted is not None
+                            and demoted > promoted)
+            passed = (p is not None and value is not None
+                      and p <= alpha and value >= floor and not net_negative)
+            out.append({
+                "ts": os.path.basename(path)[12:20],   # _ab_genomes_YYYYMMDD-hhmm
+                "candidate": label,
+                "measured_against": data.get("reference") or "production defaults",
+                "basis": data.get("basis"),
+                "value": None if value is None else round(value, 5),
+                "p": None if p is None else round(p, 4),
+                "assets": res.get("n_raw"),
+                "would_promote": promoted,
+                "would_demote": demoted,
+                "verdict": "PASSED" if passed else "FAILED",
+            })
+            if len(out) >= limit:
+                return out
+    return out
+
+
 def best_validated(cands):
     """The candidate an unattended adopt should take, or None.
 

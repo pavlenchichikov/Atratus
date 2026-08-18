@@ -114,5 +114,5 @@ def test_compact_findings_drops_the_genome_bodies():
                      {"value": 0.01, "adoptable": False, "genome": {}}]}]
     out = ar_director.compact_findings(findings)
     assert out == [{"ts": "2026-08-16", "mode": "qd", "basis": "net_auc",
-                    "axes": ["qd"], "tried": 2, "adoptable": 1, "best": 0.02}]
+                    "axes": ["qd"], "tried": 2, "gate_flagged": 1, "best": 0.02}]
     assert "genome" not in repr(out)
