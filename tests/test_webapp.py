@@ -833,3 +833,32 @@ def test_a_trailing_stop_says_so(client, monkeypatch):
         "stop": 97.5, "trailing": True, "status": "ok"})
     r = client.get("/asset/BTC")
     assert "Trailing stop" in r.text
+
+
+def test_the_card_says_where_its_levels_came_from(client, monkeypatch):
+    """A fitted policy moves every entry zone and stop in the product. Silent is
+    the one thing it must not be."""
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
+        "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
+        "stop": 96.0, "trailing": False, "status": "ok"})
+    monkeypatch.setattr(webapp.levels_mod, "policy_evidence", lambda path=None: None)
+    r = client.get("/asset/BTC")
+    assert "shipped constants" in r.text
+
+    monkeypatch.setattr(webapp.levels_mod, "policy_evidence", lambda path=None: {
+        "adopted": "2026-08-19T10:00:00", "p": 0.0007, "n": 194, "mean_d": 0.0005})
+    r = client.get("/asset/BTC")
+    assert "fitted" in r.text and "2026-08-19" in r.text and "194 assets" in r.text
+
+
+def test_the_card_labels_quote_the_multipliers_actually_used(client, monkeypatch):
+    """They used to say "half an ATR" and "two ATR" in fixed text, which a fitted
+    policy would turn into a lie."""
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
+        "close": 100.0, "atr": 2.0, "entry_low": 98.4, "entry_high": 101.6,
+        "stop": 93.0, "trailing": False, "status": "ok"})
+    r = client.get("/asset/BTC")
+    assert "0.8 ATR either side" in r.text     # (101.6 - 100) / 2
+    assert "3.5 ATR against" in r.text         # (100 - 93) / 2

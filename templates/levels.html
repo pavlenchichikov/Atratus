@@ -15,6 +15,15 @@
   {% if not config.equity %}Equity is unset on <a href="/risk">/risk</a>, so sizes are percentages.{% endif %}
 </p>
 
+<p class="dim">
+  {% if levels_policy and levels_policy.adopted %}These come from a fitted
+  levels policy adopted {{ levels_policy.adopted[:10] }}, accepted on a held-out
+  slice at p={{ "%.4f"|format(levels_policy.p) }} over {{ levels_policy.n }} assets.
+  {% else %}These come from the shipped constants, half an ATR for the zone and
+  two ATR for the stop. No fitted policy has been adopted.{% endif %}
+</p>
+
+
 <section class="panel fade">
   <div class="panel-head">
     <h2>Today</h2>

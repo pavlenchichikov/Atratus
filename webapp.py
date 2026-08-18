@@ -362,6 +362,7 @@ def asset_page(request: Request, name: str):
         "asset": name,
         "ticker": FULL_ASSET_MAP[name],
         "levels": asset_levels,
+        "levels_policy": levels_mod.policy_evidence(),
         "taleb": taleb,
         "taleb_regime": dashboard.taleb_regime(taleb, soft_cap, hard_cap),
         "taleb_soft_cap": soft_cap,
@@ -456,6 +457,7 @@ def levels_page(request: Request):
     equity = risk["state"]["current_capital"] if RISK_CONFIG["equity"] else 0.0
     return templates.TemplateResponse(request, "levels.html", {
         "rows": dashboard.levels_sheet(equity),
+        "levels_policy": levels_mod.policy_evidence(),
         "config": RISK_CONFIG,
         "halted": risk["halted"],
         "halt_reason": risk["halt_reason"],

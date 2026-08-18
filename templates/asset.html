@@ -50,12 +50,12 @@
   <div class="stat fade">
     <span class="stat-label">Entry zone</span>
     <span class="stat-value">{{ "%.4g"|format(levels.entry_low) }}<span class="stat-sep">..</span>{{ "%.4g"|format(levels.entry_high) }}</span>
-    <span class="stat-sub">half an ATR either side of the close</span>
+    <span class="stat-sub">{{ "%.2g"|format((levels.entry_high - levels.close) / levels.atr) }} ATR either side of the close</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">{{ 'Trailing stop' if levels.trailing else 'Stop' }}</span>
     <span class="stat-value">{{ "%.4g"|format(levels.stop) }}</span>
-    <span class="stat-sub">{% if levels.trailing %}trailed to the best level since entry{% else %}two ATR against the position{% endif %}</span>
+    <span class="stat-sub">{% if levels.trailing %}trailed to the best level since entry{% else %}{{ "%.2g"|format((levels.close - levels.stop) | abs / levels.atr) }} ATR against the position{% endif %}</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Last close</span>
@@ -68,6 +68,13 @@
     <span class="stat-sub">none on purpose: the model predicts direction, not a payoff</span>
   </div>
 </div>
+<p class="dim">
+  {% if levels_policy and levels_policy.adopted %}These come from a fitted
+  levels policy adopted {{ levels_policy.adopted[:10] }}, accepted on a held-out
+  slice at p={{ "%.4f"|format(levels_policy.p) }} over {{ levels_policy.n }} assets.
+  {% else %}These come from the shipped constants, half an ATR for the zone and
+  two ATR for the stop. No fitted policy has been adopted.{% endif %}
+</p>
 {% else %}
 <div class="statgrid">
   <div class="stat fade">

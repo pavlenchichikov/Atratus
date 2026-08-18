@@ -156,6 +156,30 @@ def load_policy(path=None):
     return params
 
 
+def policy_evidence(path=None):
+    """What a reader needs to know about the levels on screen, or None.
+
+    Levels change silently otherwise: a fitted policy moves every entry zone and
+    every stop in the product with nothing saying so, which is the shape of
+    change that cannot be checked. Returns the adoption date and the held-out
+    evidence the fit was accepted on.
+    """
+    import json
+    import os
+
+    path = path or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "levels_policy.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            body = json.load(fh) or {}
+        gate = body.get("gate") or {}
+        return {"adopted": body.get("adopted"), "p": gate.get("p"),
+                "n": gate.get("n"), "mean_d": gate.get("mean_d")}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
 def levels(bars, signal, segment=None, k_entry=None, k_stop=None,
            taleb_hi=False, risky=False):
     """One sheet row for one asset.
