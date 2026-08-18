@@ -614,6 +614,16 @@ def main():
 
     problems = campaign_problems(env)
     state = _load_state()
+    # A frozen constant the CALLER did not set is filled in from the campaign
+    # itself. Without this every invocation had to reproduce the campaign's
+    # environment by hand, and `--status` - a read-only question - refused to
+    # answer at all: "GTRADE_AR_DECISION_BASIS changed mid-campaign: raw ->
+    # (unset)". A value explicitly present in the environment still wins, so the
+    # freeze guard keeps firing on a real mid-campaign move, which is its job.
+    if not args.new_campaign:
+        for key, value in (state.get("campaign") or {}).items():
+            if key not in os.environ:
+                env[key] = value
     # --new-campaign is exactly the permission to move them, so the freeze check
     # is what it overrides. campaign_problems still applies: a self-contradictory
     # campaign is wrong whether or not it is new.

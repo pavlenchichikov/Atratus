@@ -98,3 +98,25 @@ def test_moving_the_search_basis_still_sets_the_archive_aside(tmp_path, monkeypa
     auto_loop.start_campaign(state, env, "different basis")
     assert not archive.exists()
     assert (tmp_path / "_qd_archive.json.bak").exists()
+
+
+def test_a_status_call_does_not_have_to_reproduce_the_campaign(tmp_path, monkeypatch):
+    """`--status` is a read-only question. It refused to answer with
+    "GTRADE_AR_DECISION_BASIS changed mid-campaign: raw -> (unset)" purely
+    because the shell that asked did not carry the campaign's own environment."""
+    frozen = {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_OBJECTIVE": "mean",
+              "GTRADE_AR_DECISION_BASIS": "raw"}
+    env = dict(auto_loop.CAMPAIGN)
+    for k, v in frozen.items():
+        env[k] = v                      # what main() now fills in
+    assert auto_loop.freeze_problems(frozen, env) == []
+
+
+def test_an_explicit_conflicting_value_is_still_refused():
+    """Filling in a blank is not the same as forgiving a move."""
+    frozen = {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_OBJECTIVE": "mean",
+              "GTRADE_AR_DECISION_BASIS": "raw"}
+    env = dict(auto_loop.CAMPAIGN, GTRADE_AR_SCORE_BASIS="net_auc",
+               GTRADE_AR_OBJECTIVE="mean", GTRADE_AR_DECISION_BASIS="ens_auc")
+    problems = auto_loop.freeze_problems(frozen, env)
+    assert problems and "GTRADE_AR_DECISION_BASIS" in problems[0]

@@ -254,7 +254,8 @@ echo     judged, so they are frozen once a campaign starts - choosing them after
 echo     seeing a verdict is a search for a verdict that passes, not a
 echo     measurement. That is why they are asked here and nowhere else.
 echo     1 = continue the current campaign (default)
-echo     2 = start a NEW one (sets the search archive aside and re-freezes)
+echo     2 = start a NEW one (re-freezes; the archive is kept unless the
+echo         SEARCH basis itself moves)
 set "NEWC=1"
 set /p "NEWC=    choice [1]: "
 set "NEWCFLAG="
