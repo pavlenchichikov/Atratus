@@ -539,3 +539,196 @@ if __name__ == "__main__":
             acc = f"{s['accuracy']:.1%}" if s["accuracy"] is not None else "N/A"
             lift = f"{s['lift']:+.1%}" if s["lift"] is not None else "N/A"
             print(f"  {s['thr']:>5.2f} {s['kept']:>6} {s['coverage']:>8.0%} {acc:>7} {lift:>7}")
+
+
+# --- issued trade levels and what they actually did --------------------------
+#
+# The same two-step shape as prediction_log: log what was ISSUED on the day, and
+# reconcile it against later bars in a separate pass. Levels were the one thing
+# the product tells a user to act on that nothing recorded, so "did the levels
+# make money" could not be answered for a single day of history.
+#
+# What is stored is what was SHOWN, trailing stop included. A stop the user never
+# saw would make the outcome a measurement of a different strategy.
+
+def _ensure_level_table(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS level_log (
+            date TEXT,
+            asset TEXT,
+            signal TEXT,
+            close REAL,
+            atr REAL,
+            entry_low REAL,
+            entry_high REAL,
+            stop REAL,
+            trailing INTEGER,
+            entered INTEGER,
+            entry_date TEXT,
+            entry_price REAL,
+            exit_date TEXT,
+            exit_price REAL,
+            exit_reason TEXT,
+            bars_held INTEGER,
+            ret_net REAL
+        )
+    """)
+
+
+def _issued_levels(asset, signal):
+    """The levels row this asset would show right now, trailing stop included."""
+    from core import levels as levels_mod
+    from core import positions as positions_mod
+    from core import track_record
+
+    track = track_record.asset_track(asset, limit=60)
+    segment = None
+    if track:
+        segs = positions_mod.build_positions(list(reversed(track)))["segments"]
+        if segs and segs[-1]["open"]:
+            segment = segs[-1]
+    return levels_mod.levels(track_record.ohlc_series(asset, days=60), signal,
+                             segment=segment)
+
+
+def log_levels(asset, signal, date=None, row=None):
+    """Record the levels issued for `asset` today. One row per asset per day.
+
+    Same guards as log_prediction and for the same reasons: a day with no real
+    bar for this asset can never be reconciled, and a second call on one day
+    must not create a second row. Only an actionable row is stored - WAIT has no
+    side, so it has no entry zone and no stop, and a row of nulls would only
+    dilute the outcome table.
+    """
+    today = date or datetime.utcnow().strftime("%Y-%m-%d")
+    lv = row if row is not None else _issued_levels(asset, signal)
+    if not lv or lv.get("status") != "ok":
+        return False
+    with _conn() as con:
+        cur = con.cursor()
+        _ensure_level_table(cur)
+        if not _has_bar(cur, asset, today):
+            return False
+        if cur.execute("SELECT 1 FROM level_log WHERE date=? AND asset=?",
+                       (today, asset)).fetchone():
+            return False
+        cur.execute(
+            """INSERT INTO level_log
+               (date, asset, signal, close, atr, entry_low, entry_high, stop,
+                trailing, entered, entry_date, entry_price, exit_date,
+                exit_price, exit_reason, bars_held, ret_net)
+               VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)""",
+            (today, asset, signal, lv["close"], lv["atr"], lv["entry_low"],
+             lv["entry_high"], lv["stop"], 1 if lv["trailing"] else 0))
+        con.commit()
+    return True
+
+
+def _load_ohlc(asset, cache):
+    """Date-indexed OHLC for one asset, cached for one reconcile pass."""
+    if asset in cache:
+        return cache[asset]
+    try:
+        df = pd.read_sql(f'SELECT Date, Open, High, Low, Close FROM "{asset.lower()}" '
+                         f'ORDER BY Date', _engine(), index_col="Date")
+        df.columns = [c.lower() for c in df.columns]
+        df.index = pd.to_datetime(df.index).normalize()
+        df = df[~df.index.duplicated(keep="last")].sort_index()
+    except Exception:
+        df = None
+    cache[asset] = df
+    return df
+
+
+def _shown_signals(cur, asset):
+    """{date: signal the user was shown} for one asset, for the exit rule."""
+    rows = cur.execute(
+        "SELECT date, COALESCE(sig_shown, signal) FROM prediction_log WHERE asset=?",
+        (asset,)).fetchall()
+    return {d: s for d, s in rows}
+
+
+def _resolve_level_row(row, df, shown, leg_cost):
+    """What became of one issued level, or None while it is still undecided.
+
+    Fills are limit-order conventions taken at the WORSE edge of the zone, and a
+    gap through the stop fills at the gap, so nothing here flatters the result.
+    The trade ends on the stop or on the signal turning away from the side it was
+    issued for, which is the rule the product states in the asset card and the
+    one core/positions.py already uses for a segment.
+    """
+    date_str, signal, entry_low, entry_high, stop = row
+    side = 1 if signal == "BUY" else -1 if signal == "SELL" else 0
+    if not side or df is None or len(df) == 0:
+        return None
+    start = int(df.index.searchsorted(pd.Timestamp(date_str).normalize(),
+                                      side="right"))
+    entry_date = entry_price = None
+    held = 0
+    for i in range(start, len(df)):
+        bar = df.iloc[i]
+        day = df.index[i].strftime("%Y-%m-%d")
+        flipped = shown.get(day) not in (None, signal)
+        if entry_price is None:
+            touched = (bar["low"] <= entry_high) if side > 0 else (bar["high"] >= entry_low)
+            if touched:
+                entry_price = (min(bar["open"], entry_high) if side > 0
+                               else max(bar["open"], entry_low))
+                entry_date = day
+                continue          # costs and stops are judged from the next bar
+            if flipped:
+                return {"entered": 0, "exit_reason": "no_entry", "ret_net": 0.0,
+                        "bars_held": 0}
+            continue
+        held += 1
+        hit = (bar["low"] <= stop) if side > 0 else (bar["high"] >= stop)
+        if hit:
+            exit_price = (min(bar["open"], stop) if side > 0
+                          else max(bar["open"], stop))
+            reason = "stop"
+        elif flipped:
+            exit_price = bar["close"]
+            reason = "signal"
+        else:
+            continue
+        gross = side * (exit_price - entry_price) / entry_price
+        return {"entered": 1, "entry_date": entry_date, "entry_price": float(entry_price),
+                "exit_date": day, "exit_price": float(exit_price),
+                "exit_reason": reason, "bars_held": held,
+                "ret_net": float(gross - 2 * leg_cost)}
+    return None                    # still running, or not enough bars yet
+
+
+def update_level_outcomes():
+    """Score every issued level that has since resolved. Idempotent."""
+    from core.backtesting import COMMISSION, SLIPPAGE
+
+    leg_cost = COMMISSION + SLIPPAGE
+    cache, shown_cache = {}, {}
+    resolved = 0
+    with _conn() as con:
+        cur = con.cursor()
+        _ensure_level_table(cur)
+        _ensure_table(cur)
+        rows = cur.execute(
+            "SELECT rowid, date, asset, signal, entry_low, entry_high, stop "
+            "FROM level_log WHERE exit_reason IS NULL").fetchall()
+        pending = len(rows)
+        for rowid, date_str, asset, signal, lo, hi, stop in rows:
+            if asset not in shown_cache:
+                shown_cache[asset] = _shown_signals(cur, asset)
+            out = _resolve_level_row((date_str, signal, lo, hi, stop),
+                                     _load_ohlc(asset, cache), shown_cache[asset],
+                                     leg_cost)
+            if out is None:
+                continue
+            cur.execute(
+                "UPDATE level_log SET entered=?, entry_date=?, entry_price=?, "
+                "exit_date=?, exit_price=?, exit_reason=?, bars_held=?, ret_net=? "
+                "WHERE rowid=?",
+                (out.get("entered"), out.get("entry_date"), out.get("entry_price"),
+                 out.get("exit_date"), out.get("exit_price"), out["exit_reason"],
+                 out.get("bars_held"), out.get("ret_net"), rowid))
+            resolved += 1
+        con.commit()
+    return {"pending": pending, "resolved": resolved}

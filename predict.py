@@ -110,8 +110,11 @@ def run_radar():
 
     # -- Update actuals for previous predictions ------------------
     try:
-        from performance_tracker import log_prediction, update_actuals
+        from performance_tracker import log_levels, log_prediction, update_actuals, update_level_outcomes
         update_actuals()
+        # Levels resolve over several bars, so yesterday's are scored before
+        # today's are issued: one pass, same as the prediction reconcile.
+        update_level_outcomes()
         _do_log = True
     except Exception as e:
         logger.warning("Actuals update failed: %s", e)
@@ -149,6 +152,9 @@ def run_radar():
                                    timing_action=res.get("timing_action"),
                                    timing_reason=res.get("timing_reason"))
                     logged += 1
+                    # The GATED signal, because that is the one the card shows
+                    # levels for and the one a person acts on.
+                    log_levels(name, res["sig"])
                 except Exception as e:
                     logger.debug("Log prediction failed for %s: %s", name, e)
 
