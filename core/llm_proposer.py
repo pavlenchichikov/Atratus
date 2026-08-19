@@ -42,8 +42,22 @@ AVOID_BUDGET = 3000   # characters of history the prompt may spend
 # budget can afford the breadth. Twelve remembered candidates instead of three.
 
 
+def _spec_line(sig):
+    """One spec signature `[op, inputs, params]` as `+ratio(bb_pos,rsi)`; "" if unreadable."""
+    try:
+        op, inputs, params = sig
+    except Exception:
+        return ""
+    args = list(inputs) + [f"{k}={v}" for k, v in (params or [])]
+    return "+%s(%s)" % (op, ",".join(str(a) for a in args))
+
+
 def _compact_sig(entry):
     """One already-tried genome as a short line.
+
+    The features axis registers SPEC signatures, not genomes, so an entry is
+    either the genome dict or a bare `[op, inputs, params]` list; both arrive
+    here from tried_recent.
 
     The registry stores a canonical JSON signature whose `extra` field is itself
     a list of JSON strings, so the quoting costs more than the content. The model
@@ -58,17 +72,19 @@ def _compact_sig(entry):
         d = json.loads(entry)
     except Exception:
         return str(entry)[:120]
+    if not isinstance(d, dict):
+        return _spec_line(d) or str(entry)[:120]
     parts = []
     drops = d.get("drops") or []
     if drops:
         parts.append("drop " + ",".join(drops))
     for spec in d.get("extra") or []:
         try:
-            op, inputs, params = json.loads(spec)
+            line = _spec_line(json.loads(spec))
         except Exception:
             continue
-        args = list(inputs) + [f"{k}={v}" for k, v in (params or [])]
-        parts.append("+%s(%s)" % (op, ",".join(str(a) for a in args)))
+        if line:
+            parts.append(line)
     label = d.get("label")
     if label:
         parts.append("%s/%s" % (label[0], label[1]))

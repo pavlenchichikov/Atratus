@@ -359,6 +359,18 @@ def test_compact_sig_keeps_the_identity_and_drops_the_syntax():
     assert "\\" not in out                       # no re-escaped JSON
 
 
+def test_compact_sig_takes_a_spec_signature_too():
+    """The features axis registers spec signatures, not genomes, so the entry is a
+    bare list. It used to reach `.get` and kill the whole search run."""
+    out = lp._compact_sig(json.dumps(["lag", ["vol_z"], [["k", 3]]]))
+    assert out == "+lag(vol_z,k=3)"
+    assert lp._compact_sig(json.dumps(["ratio", ["bb_pos", "rsi"], []])) == "+ratio(bb_pos,rsi)"
+    assert "+lag(vol_z,k=3)" in lp._avoid_clause(
+        [json.dumps(["lag", ["vol_z"], [["k", 3]]])])
+    # a list of the wrong arity is still a hint, not a crash
+    assert lp._compact_sig(json.dumps(["lag"])).startswith('["lag"')
+
+
 def test_compact_sig_never_loses_an_unreadable_entry():
     # A hint the model cannot parse still beats pretending it was never tried.
     assert lp._compact_sig("not json at all").startswith("not json")
