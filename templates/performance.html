@@ -41,6 +41,43 @@
 
 <section class="panel fade">
   <div class="panel-head">
+    <h2>Trade levels</h2>
+    {% if levels.issued %}<span class="dim mono">{{ levels.first }} to {{ levels.last }}</span>{% endif %}
+  </div>
+  <p class="dim" style="padding: 0 16px;">What the entry zones and stops on the asset
+    card actually did. A trade fills at the worse edge of its zone and ends on the stop
+    or on the signal turning away, both legs charged. Returns are over FILLED trades:
+    an issue that never reached its zone is not a losing trade, it is no trade.</p>
+  {% if not levels.issued %}
+  <p class="empty">No levels issued yet - predict.py writes one row per actionable asset per day.</p>
+  {% elif not levels.resolved %}
+  <div class="statgrid">
+    <div class="stat"><span class="stat-label">Issued</span>
+      <span class="stat-value mono">{{ levels.issued }}</span></div>
+    <div class="stat"><span class="stat-label">Still open</span>
+      <span class="stat-value mono">{{ levels.pending }}</span></div>
+  </div>
+  <p class="empty">Nothing has resolved yet, so there is no outcome to report.</p>
+  {% else %}
+  <div class="statgrid">
+    <div class="stat"><span class="stat-label">Resolved</span>
+      <span class="stat-value mono">{{ levels.resolved }}<span class="dim"> / {{ levels.issued }}</span></span></div>
+    <div class="stat"><span class="stat-label">Filled</span>
+      <span class="stat-value mono">{{ levels.entered }}</span></div>
+    <div class="stat"><span class="stat-label">Winners</span>
+      <span class="stat-value mono {% if levels.win_pct is not none %}{{ 't-buy' if levels.win_pct >= 50 else 't-sell' }}{% endif %}">{% if levels.win_pct is not none %}{{ "%.1f%%"|format(levels.win_pct) }}{% else %}-{% endif %}</span></div>
+    <div class="stat"><span class="stat-label">Net per trade</span>
+      <span class="stat-value mono {% if levels.avg_ret is not none %}{{ 't-buy' if levels.avg_ret > 0 else 't-sell' }}{% endif %}">{% if levels.avg_ret is not none %}{{ "%+.2f%%"|format(levels.avg_ret * 100) }}{% else %}-{% endif %}</span></div>
+  </div>
+  <p class="mono" style="padding: 0 16px;">Exits: {{ levels.stopped }} on the stop
+    &middot; {{ levels.flipped }} on the signal turning
+    &middot; {{ levels.no_entry }} never filled
+    {% if levels.pending %}&middot; <span class="dim">{{ levels.pending }} still open</span>{% endif %}</p>
+  {% endif %}
+</section>
+
+<section class="panel fade">
+  <div class="panel-head">
     <h2>Meta-sizing shadow</h2>
     <span class="dim mono">observation phase</span>
   </div>

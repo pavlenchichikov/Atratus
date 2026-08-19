@@ -494,53 +494,6 @@ def meta_shadow_report(days=30, model_version=None):
     }
 
 
-if __name__ == "__main__":
-    print("Updating actuals...")
-    res = update_actuals()
-    print("Reconciled %d of %d pending." % (res["reconciled"], res["pending"]))
-    if res.get("excluded"):
-        print("Excluded %d prediction(s) on non-trading days (market closed)." % res["excluded"])
-
-    lb = get_leaderboard(days=30)
-    if lb.empty:
-        print("No leaderboard data (need >= 5 predictions per asset).")
-    else:
-        lb_display = lb.copy()
-        lb_display["Accuracy"] = lb_display["Accuracy"].map("{:.1%}".format)
-        print("\n=== LEADERBOARD (last 30 days) ===")
-        print(lb_display.to_string(index=False))
-
-    ver = current_model_version()
-    for label, mv in (("ALL GENERATIONS", None), (f"CURRENT MODEL [{ver}]", ver)):
-        overall = get_accuracy(days=30, model_version=mv)
-        print(f"\n=== OVERALL ACCURACY (last 30 days) - {label} ===")
-        if overall["accuracy"] is None:
-            print("No data yet.")
-        else:
-            print(f"Accuracy : {overall['accuracy']:.1%}")
-            print(f"Total    : {overall['total_predictions']}")
-            print(f"Correct  : {overall['correct_count']}")
-            for sig, stats in overall["by_signal"].items():
-                acc_str = f"{stats['acc']:.1%}" if stats["acc"] is not None else "N/A"
-                print(f"  {sig}: {acc_str} ({stats['count']} predictions)")
-
-    ms = meta_shadow_report(days=30)
-    print("\n=== META-SIZING SHADOW (last 30 days) ===")
-    if ms["rows"] == 0:
-        print("No shadow data yet (run predict with GTRADE_META_SIZING=shadow, then reconcile).")
-    else:
-        print(f"Signals with meta_prob : {ms['rows']}   baseline acc {ms['baseline_accuracy']:.1%}")
-        d = ms["discrimination"]
-        hi = f"{d['high_meta_acc']:.1%}" if d["high_meta_acc"] is not None else "N/A"
-        lo = f"{d['low_meta_acc']:.1%}" if d["low_meta_acc"] is not None else "N/A"
-        print(f"  meta>=0.5: {hi} ({d['high_meta_n']})   meta<0.5: {lo} ({d['low_meta_n']})")
-        print(f"  {'thr':>5} {'kept':>6} {'coverage':>9} {'acc':>7} {'lift':>7}")
-        for s in ms["sweep"]:
-            acc = f"{s['accuracy']:.1%}" if s["accuracy"] is not None else "N/A"
-            lift = f"{s['lift']:+.1%}" if s["lift"] is not None else "N/A"
-            print(f"  {s['thr']:>5.2f} {s['kept']:>6} {s['coverage']:>8.0%} {acc:>7} {lift:>7}")
-
-
 # --- issued trade levels and what they actually did --------------------------
 #
 # The same two-step shape as prediction_log: log what was ISSUED on the day, and
@@ -687,6 +640,76 @@ def _resolve_level_row(row, df, shown, leg_cost):
     return out
 
 
+def level_summary(days=None):
+    """What the issued levels actually did, or as much of it as has resolved.
+
+    The journal had no reader at all: it was written every day and scored on the
+    next run, and the only way to see either was SQL by hand. So the one number
+    the product tells a person to act on was measurable and unmeasured.
+
+    Two populations, deliberately separate. `resolved` counts issues whose fate
+    is known, and `entered` counts the subset that ever filled - a wide entry
+    zone means many issues honestly end `no_entry`, and folding those into the
+    return would report a strategy that took trades it never took. avg_ret and
+    win_pct are over ENTERED rows only, for that reason.
+
+    Everything is None when nothing has resolved yet, which is the truthful
+    answer on a young journal rather than a zero that reads as a flat result.
+    """
+    with _conn() as con:
+        cur = con.cursor()
+        _ensure_level_table(cur)
+        where, args = "", []
+        if days:
+            cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+            where, args = " WHERE date >= ?", [cutoff]
+        row = cur.execute(
+            "SELECT COUNT(*), "
+            "       SUM(exit_reason IS NOT NULL), "
+            "       SUM(entered = 1), "
+            "       SUM(exit_reason = 'stop'), "
+            "       SUM(exit_reason = 'signal'), "
+            "       SUM(exit_reason = 'no_entry'), "
+            "       AVG(CASE WHEN entered = 1 THEN ret_net END), "
+            "       SUM(CASE WHEN entered = 1 AND ret_net > 0 THEN 1 ELSE 0 END), "
+            "       MIN(date), MAX(date) "
+            "FROM level_log" + where, args).fetchone()
+        issued, resolved, entered, stopped, flipped, no_entry, avg_ret, wins, d0, d1 = row
+    entered = entered or 0
+    return {
+        "issued": issued or 0, "resolved": resolved or 0, "entered": entered,
+        "pending": (issued or 0) - (resolved or 0),
+        "stopped": stopped or 0, "flipped": flipped or 0, "no_entry": no_entry or 0,
+        "avg_ret": float(avg_ret) if avg_ret is not None else None,
+        "win_pct": (100.0 * (wins or 0) / entered) if entered else None,
+        "first": d0, "last": d1,
+    }
+
+
+def level_summary_lines(s=None):
+    """level_summary as console text, for the __main__ block and for a log."""
+    s = level_summary() if s is None else s
+    if not s["issued"]:
+        return ["=== TRADE LEVELS ===",
+                ("No levels issued yet. predict.py writes one row per actionable "
+                 "asset per day.")]
+    out = ["=== TRADE LEVELS (%s to %s) ===" % (s["first"], s["last"]),
+           "Issued   : %d  (%d resolved, %d still open)"
+           % (s["issued"], s["resolved"], s["pending"])]
+    if not s["resolved"]:
+        out.append("Nothing has resolved yet, so there is no outcome to report. "
+                   "A trade resolves when the stop is hit or the signal turns away.")
+        return out
+    out += ["Filled   : %d of %d resolved (%d never reached the entry zone)"
+            % (s["entered"], s["resolved"], s["no_entry"]),
+            "Exits    : %d on the stop, %d on the signal turning"
+            % (s["stopped"], s["flipped"])]
+    if s["entered"]:
+        out += ["Net/trade: %+.4f  (both legs charged)" % s["avg_ret"],
+                "Winners  : %.1f%% of filled trades" % s["win_pct"]]
+    return out
+
+
 def update_level_outcomes():
     """Score every issued level that has since resolved. Idempotent."""
     from core.backtesting import COMMISSION, SLIPPAGE
@@ -720,3 +743,60 @@ def update_level_outcomes():
             resolved += 1
         con.commit()
     return {"pending": pending, "resolved": resolved}
+
+
+if __name__ == "__main__":
+    print("Updating actuals...")
+    res = update_actuals()
+    print("Reconciled %d of %d pending." % (res["reconciled"], res["pending"]))
+    if res.get("excluded"):
+        print("Excluded %d prediction(s) on non-trading days (market closed)." % res["excluded"])
+
+    # Levels resolve on later bars exactly like predictions do, so they are
+    # reconciled in the same pass. Only predict.py did this, which meant running
+    # the tracker by hand reported stale level outcomes and never said so.
+    lv = update_level_outcomes()
+    print("Levels: scored %d of %d unresolved." % (lv["resolved"], lv["pending"]))
+
+    lb = get_leaderboard(days=30)
+    if lb.empty:
+        print("No leaderboard data (need >= 5 predictions per asset).")
+    else:
+        lb_display = lb.copy()
+        lb_display["Accuracy"] = lb_display["Accuracy"].map("{:.1%}".format)
+        print("\n=== LEADERBOARD (last 30 days) ===")
+        print(lb_display.to_string(index=False))
+
+    ver = current_model_version()
+    for label, mv in (("ALL GENERATIONS", None), (f"CURRENT MODEL [{ver}]", ver)):
+        overall = get_accuracy(days=30, model_version=mv)
+        print(f"\n=== OVERALL ACCURACY (last 30 days) - {label} ===")
+        if overall["accuracy"] is None:
+            print("No data yet.")
+        else:
+            print(f"Accuracy : {overall['accuracy']:.1%}")
+            print(f"Total    : {overall['total_predictions']}")
+            print(f"Correct  : {overall['correct_count']}")
+            for sig, stats in overall["by_signal"].items():
+                acc_str = f"{stats['acc']:.1%}" if stats["acc"] is not None else "N/A"
+                print(f"  {sig}: {acc_str} ({stats['count']} predictions)")
+
+    print()
+    for line in level_summary_lines():
+        print(line)
+
+    ms = meta_shadow_report(days=30)
+    print("\n=== META-SIZING SHADOW (last 30 days) ===")
+    if ms["rows"] == 0:
+        print("No shadow data yet (run predict with GTRADE_META_SIZING=shadow, then reconcile).")
+    else:
+        print(f"Signals with meta_prob : {ms['rows']}   baseline acc {ms['baseline_accuracy']:.1%}")
+        d = ms["discrimination"]
+        hi = f"{d['high_meta_acc']:.1%}" if d["high_meta_acc"] is not None else "N/A"
+        lo = f"{d['low_meta_acc']:.1%}" if d["low_meta_acc"] is not None else "N/A"
+        print(f"  meta>=0.5: {hi} ({d['high_meta_n']})   meta<0.5: {lo} ({d['low_meta_n']})")
+        print(f"  {'thr':>5} {'kept':>6} {'coverage':>9} {'acc':>7} {'lift':>7}")
+        for s in ms["sweep"]:
+            acc = f"{s['accuracy']:.1%}" if s["accuracy"] is not None else "N/A"
+            lift = f"{s['lift']:+.1%}" if s["lift"] is not None else "N/A"
+            print(f"  {s['thr']:>5.2f} {s['kept']:>6} {s['coverage']:>8.0%} {acc:>7} {lift:>7}")

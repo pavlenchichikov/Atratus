@@ -180,3 +180,55 @@ def test_a_day_with_no_bar_is_never_logged(tmp_path, monkeypatch):
     monkeypatch.setattr(pt, "_ENGINE", None)
     assert pt.log_levels("BTC", "BUY", date="2026-06-13", row=OK) is False
     assert _rows(db) == []
+
+
+# --- reading the journal back ----------------------------------------------
+
+import sqlite3
+
+
+def _journal(tmp_path, rows):
+    """A level_log with `rows` in it, as (entered, exit_reason, ret_net) triples."""
+    path = tmp_path / "j.db"
+    con = sqlite3.connect(path)
+    pt._ensure_level_table(con.cursor())
+    for i, (entered, reason, ret) in enumerate(rows):
+        con.execute(
+            "INSERT INTO level_log (date, asset, signal, close, atr, entry_low, "
+            "entry_high, stop, trailing, entered, exit_reason, ret_net) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("2026-01-%02d" % (i + 1), "SP500", "BUY", 100.0, 2.0, 99.0, 101.0,
+             96.0, 0, entered, reason, ret))
+    con.commit()
+    con.close()
+    return path
+
+
+def test_the_journal_reports_nothing_rather_than_zero_while_it_is_young(tmp_path, monkeypatch):
+    """A zero would read as a flat result. Nothing resolved is not a flat result."""
+    path = _journal(tmp_path, [(None, None, None)] * 3)
+    monkeypatch.setattr(pt, "_conn", lambda: sqlite3.connect(path))
+    s = pt.level_summary()
+    assert (s["issued"], s["resolved"], s["pending"]) == (3, 0, 3)
+    assert s["avg_ret"] is None and s["win_pct"] is None
+    assert "no outcome to report" in " ".join(pt.level_summary_lines(s))
+
+
+def test_an_issue_that_never_filled_is_not_counted_as_a_losing_trade(tmp_path, monkeypatch):
+    """A wide entry zone makes no_entry common, and folding those into the return
+    would report a strategy that took trades it never took."""
+    path = _journal(tmp_path, [
+        (1, "stop", -0.05),        # filled, lost
+        (1, "signal", +0.03),      # filled, won
+        (0, "no_entry", 0.0),      # never reached the zone
+        (None, None, None),        # still open
+    ])
+    monkeypatch.setattr(pt, "_conn", lambda: sqlite3.connect(path))
+    s = pt.level_summary()
+    assert (s["issued"], s["resolved"], s["pending"]) == (4, 3, 1)
+    assert (s["entered"], s["no_entry"]) == (2, 1)
+    assert (s["stopped"], s["flipped"]) == (1, 1)
+    assert s["avg_ret"] == pytest.approx(-0.01)     # over the two FILLED trades
+    assert s["win_pct"] == pytest.approx(50.0)      # not 33.3 over all three
+    text = " ".join(pt.level_summary_lines(s))
+    assert "-0.0100" in text and "50.0%" in text
