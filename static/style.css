@@ -396,6 +396,22 @@ table.grid { width: 100%; border-collapse: collapse; }
   font-size: 13px;
 }
 
+/* A panel section that holds more rows than a screen. The panel itself clips
+   (overflow:hidden above), so the scroll has to live on an inner box or the
+   list is simply cut off. `.grid.sticky` keeps the header readable at row 90. */
+.scrollbox {
+  max-height: 62vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #2a3442 var(--panel);
+}
+.grid.sticky thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-2);
+}
+
 .grid tbody tr { transition: background 0.1s; }
 .grid tbody tr:hover { background: rgba(227, 162, 58, 0.04); box-shadow: inset 2px 0 0 var(--amber); }
 .grid tr:last-child td { border-bottom: none; }

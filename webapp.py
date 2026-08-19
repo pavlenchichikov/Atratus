@@ -161,10 +161,16 @@ def _portfolio_snapshot():
 
 def _research_snapshot():
     """Findings-journal snapshot for the /research page: cumulative counters plus a
-    flattened newest-first list of recent winners. Read-only."""
+    flattened newest-first list of winners. Read-only.
+
+    The whole journal, not a window on it: the page is the only place the run
+    history can be read, and a cap there meant the older half of the campaign
+    was invisible while the wiki still cited it. 63 records / 94 winner rows
+    today, and the page scrolls them.
+    """
     from core import ar_memory
     summary = ar_memory.findings_summary()
-    recent = ar_memory.findings_recent(15)
+    recent = list(reversed(ar_memory.findings_all()))
     rows = []
     for rec in recent:
         for w in rec.get("winners", []):
@@ -175,8 +181,6 @@ def _research_snapshot():
                 "clears": w.get("clears") or 0, "neural_lift": w.get("neural_lift"),
                 "tag": w.get("tag", ""),
             })
-    # Two independent caps: findings_recent(15) bounds the RECORDS read; rows[:40]
-    # bounds the flattened winner-ROWS shown (one record can hold many winners).
     from core import ar_progress
     # The unattended cycle's own stage. ar_progress reports what a TRAINING run
     # is doing; this reports which phase of search / A/B / adopt that training
@@ -186,7 +190,7 @@ def _research_snapshot():
         cycle = auto_loop.read_state()
     except Exception:
         cycle = {"current": None, "campaign": None, "history": []}
-    return {"summary": summary, "rows": rows[:40], "runs": len(recent),
+    return {"summary": summary, "rows": rows, "runs": len(recent),
             "progress": ar_progress.snapshot(), "cycle": cycle}
 
 
@@ -556,7 +560,8 @@ async def api_loop_dismiss(request: Request):
 def research_page(request: Request):
     from core import ar_wiki
     snap = _research_snapshot()
-    snap["wiki"] = ar_wiki.wiki_summary() if ar_wiki.wiki_on() else ""
+    # No max_chars: the 6000 default is the prompt budget, not a reading limit.
+    snap["wiki"] = ar_wiki.wiki_summary(None) if ar_wiki.wiki_on() else ""
     return templates.TemplateResponse(request, "research.html", snap)
 
 

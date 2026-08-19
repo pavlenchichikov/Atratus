@@ -69,6 +69,133 @@ def test_the_weighting_axis_is_refused_under_a_next_bar_label():
     assert settings["GTRADE_LABEL_MODE"] == "triple_barrier"
 
 
+def test_several_axes_may_share_one_cycle():
+    settings, problems = ar_director.validate(
+        _reply(axes="hyper,nets", budget=20), CAMPAIGN)
+    assert problems == []
+    assert settings["GTRADE_AR_AXES"] == "hyper,nets"   # the runner's own format
+    # a JSON list is the other shape a model reaches for
+    settings, problems = ar_director.validate(
+        _reply(axes=["hyper", "nets", "thresholds"], budget=20), CAMPAIGN)
+    assert problems == []
+    assert settings["GTRADE_AR_AXES"] == "hyper,nets,thresholds"
+    # a repeat is one axis, not a doubled bill
+    settings, problems = ar_director.validate(
+        _reply(axes="hyper, hyper", budget=60), CAMPAIGN)
+    assert problems == []
+    assert settings["GTRADE_AR_AXES"] == "hyper"
+
+
+def test_a_mixed_cycle_is_capped_in_width_and_in_total_cost():
+    # width
+    settings, problems = ar_director.validate(
+        _reply(axes="hyper,nets,thresholds,regime", budget=10), CAMPAIGN)
+    assert settings is None
+    assert any("at most" in p for p in problems)
+    # total cost: the budget is spent per axis, so 3 x 40 is not 40
+    settings, problems = ar_director.validate(
+        _reply(axes="hyper,nets,thresholds", budget=40), CAMPAIGN)
+    assert settings is None
+    assert any("per axis" in p for p in problems)
+
+
+def test_qd_cannot_share_a_cycle_because_the_runner_would_ignore_the_rest():
+    settings, problems = ar_director.validate(
+        _reply(axes="qd,features", budget=20), CAMPAIGN)
+    assert settings is None
+    assert any("qd" in p for p in problems)
+
+
+def test_one_bad_name_refuses_the_whole_mix():
+    # Silently dropping it would run a cycle nobody chose, and the reason the
+    # director gave would describe a search that never happened.
+    settings, problems = ar_director.validate(
+        _reply(axes="hyper,vibes", budget=20), CAMPAIGN)
+    assert settings is None
+    assert any("vibes" in p for p in problems)
+    # and the no-op rule still bites inside a mix
+    settings, problems = ar_director.validate(
+        _reply(axes="hyper,weighting", label_mode="direction", budget=20), CAMPAIGN)
+    assert settings is None
+    assert any("no-op" in p for p in problems)
+
+
+def test_the_cheap_gates_and_the_search_set_are_directable():
+    settings, problems = ar_director.validate(
+        _reply(screen=False, tier=True, search_assets="fast", hours=6), CAMPAIGN)
+    assert problems == []
+    assert settings["GTRADE_AR_SCREEN"] == "0"     # the runner reads 1/0, not JSON true
+    assert settings["GTRADE_AR_TIER"] == "1"
+    assert settings["GTRADE_AR_SELECTION"] == "fast"
+    assert settings["GTRADE_AR_TIME_BUDGET_H"] == "6.0"
+    # and the enumerations are closed
+    assert ar_director.validate(_reply(search_assets="just BTC"), CAMPAIGN)[0] is None
+    assert ar_director.validate(_reply(screen="maybe"), CAMPAIGN)[0] is None
+    assert ar_director.validate(_reply(hours=99), CAMPAIGN)[0] is None
+
+
+def test_a_regate_cycle_re_tests_instead_of_searching():
+    # Not _reply(): its axes/proposer defaults are exactly what a regate cycle
+    # may not carry, so the fixture would test the refusal instead.
+    settings, problems = ar_director.validate(
+        {"mode": "regate", "regate_k": 12, "reason": "flagged runs ahead of replicated"},
+        CAMPAIGN)
+    assert problems == []
+    assert settings["GTRADE_AR_MODE"] == "regate"
+    assert settings["GTRADE_AR_REGATE_K"] == "12"
+    # k outside the range is refused, and the key is meaningless in a search
+    assert ar_director.validate({"mode": "regate", "regate_k": 99}, CAMPAIGN)[0] is None
+    settings, problems = ar_director.validate(_reply(regate_k=5), CAMPAIGN)
+    assert settings is None
+    assert any("mode=regate" in p for p in problems)
+
+
+def test_a_lever_that_lands_on_nothing_is_refused_not_ignored():
+    """A setting nobody reads still gets journalled as part of the run, so a later
+    reader would credit the result to a knob that was never applied."""
+    # qd levers on a non-qd cycle
+    settings, problems = ar_director.validate(_reply(axes="hyper", qd_llm_p=0.9), CAMPAIGN)
+    assert settings is None and any("qd search" in p for p in problems)
+    # illum on a non-qd cycle
+    settings, problems = ar_director.validate(_reply(axes="nets", illum="full"), CAMPAIGN)
+    assert settings is None and any("qd archive" in p for p in problems)
+    # a search proposer inside a regate cycle
+    settings, problems = ar_director.validate(
+        {"mode": "regate", "proposer": "llm"}, CAMPAIGN)
+    assert settings is None and any("no search" in p for p in problems)
+    # barrier settings under a next-bar label
+    settings, problems = ar_director.validate(_reply(vol_window=40), CAMPAIGN)
+    assert settings is None and any("triple_barrier" in p for p in problems)
+
+
+def test_the_qd_and_barrier_levers_pass_when_they_apply():
+    settings, problems = ar_director.validate(
+        _reply(axes="qd", proposer="llm", qd_init=12, qd_final=5, max_misses=20,
+               qd_llm_p=0.6, illum="full"), CAMPAIGN)
+    assert problems == []
+    assert settings["GTRADE_AR_QD_INIT"] == "12"
+    assert settings["GTRADE_AR_QD_FINAL"] == "5"
+    assert settings["GTRADE_AR_QD_MAX_MISSES"] == "20"
+    assert settings["GTRADE_AR_QD_LLM_P"] == "0.6"
+    assert settings["GTRADE_AR_ILLUM"] == "full"
+    settings, problems = ar_director.validate(
+        _reply(axes="labeling", label_mode="triple_barrier", label_horizon=20,
+               barrier_k=1.5, vol_window=40), CAMPAIGN)
+    assert problems == []
+    assert settings["GTRADE_LABEL_BARRIER_K"] == "1.5"
+    assert settings["GTRADE_LABEL_VOL_WINDOW"] == "40"
+
+
+def test_the_sticky_levers_are_written_on_every_reply():
+    """They are env vars on a long-lived loop. Omitting one would carry the
+    previous cycle's choice into a cycle whose reason never mentions it."""
+    settings, _ = ar_director.validate(_reply(), CAMPAIGN)
+    for key in ("GTRADE_AR_MODE", "GTRADE_AR_ILLUM", "GTRADE_AR_SELECTION"):
+        assert key in settings, key
+    assert settings["GTRADE_AR_MODE"] == "search"
+    assert settings["GTRADE_AR_SELECTION"] == "full"
+
+
 def test_a_new_campaign_needs_a_written_reason():
     settings, problems = ar_director.validate(
         _reply(new_campaign={"basis": "ens_auc", "objective": "mean",

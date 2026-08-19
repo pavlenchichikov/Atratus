@@ -88,8 +88,10 @@
 </section>
 
 <section class="panel fade">
-  <div class="panel-head"><h2>Recent winners</h2></div>
-  <table class="grid">
+  <div class="panel-head"><h2>Recent winners</h2>
+    <span class="dim mono">{{ rows | length }} winners over {{ runs }} runs</span></div>
+  <div class="scrollbox">
+  <table class="grid sticky">
     <thead>
       <tr><th>Run</th><th>Mode</th><th>Axis</th><th>Verdict</th>
         <th class="num">Neural lift</th><th>Detail</th></tr>
@@ -110,12 +112,16 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 
 {% if wiki %}
 <section class="panel fade">
-  <div class="panel-head"><h2>Research Wiki (read-only)</h2></div>
-  <pre class="dim" style="white-space:pre-wrap;word-break:break-word;padding:1rem">{{ wiki }}</pre>
+  <div class="panel-head"><h2>Research Wiki (read-only)</h2>
+    <span class="dim mono">{{ wiki | length }} chars</span></div>
+  <div class="scrollbox">
+    <pre class="dim" style="white-space:pre-wrap;word-break:break-word;padding:1rem;margin:0">{{ wiki }}</pre>
+  </div>
 </section>
 {% endif %}
 

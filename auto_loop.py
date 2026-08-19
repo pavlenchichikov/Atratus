@@ -423,9 +423,22 @@ def _banner(cycle, action, st, env, deadline):
     print("=" * 72)
     print("  CYCLE %d    PHASE: %s    (%s)" % (cycle, action.upper(), left))
     print("  reference  %s" % st["reference"])
-    print("  campaign   basis %s | objective %s | axes %s | budget %s"
+    mode = (env.get("GTRADE_AR_MODE") or "search").strip()
+    print("  campaign   basis %s | objective %s | %s | budget %s"
           % (env.get("GTRADE_AR_SCORE_BASIS"), env.get("GTRADE_AR_OBJECTIVE"),
-             env.get("GTRADE_AR_AXES"), env.get("AR_BUDGET")))
+             # A regate cycle re-tests stored genomes and never looks at the
+             # axes, so printing them there would name a search that is not run.
+             ("regate top %s" % (env.get("GTRADE_AR_REGATE_K") or 8))
+             if mode == "regate" else "axes %s" % env.get("GTRADE_AR_AXES"),
+             env.get("AR_BUDGET")))
+    extra = [x for x in (
+        "illum %s" % env["GTRADE_AR_ILLUM"] if env.get("GTRADE_AR_ILLUM") else "",
+        "assets %s" % env["GTRADE_AR_SELECTION"] if env.get("GTRADE_AR_SELECTION") else "",
+        "stop after %sh" % env["GTRADE_AR_TIME_BUDGET_H"]
+        if (env.get("GTRADE_AR_TIME_BUDGET_H") or "0") not in ("0", "0.0") else "",
+    ) if x]
+    if extra:
+        print("  levers     %s" % " | ".join(extra))
     print("  load       %s neural slots | %s CB threads | pool %s | chunk %s"
           % (env.get("GTRADE_NEURAL_SLOTS"), env.get("GTRADE_CB_THREADS"),
              env.get("GTRADE_TF_POOL_PCT"), env.get("GTRADE_AR_TRAIN_CHUNK")))

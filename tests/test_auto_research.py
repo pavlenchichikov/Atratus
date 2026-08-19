@@ -2376,3 +2376,71 @@ def test_regate_ranks_only_within_the_active_basis(monkeypatch):
     picked = ar._regate_candidates({}, findings, 8)
     assert [ar.genome_sig(g) for g, _v, _n in picked] == [ar.genome_sig(g_score)], (
         "untagged records are legacy raw Score and must still rank on the raw basis")
+
+
+# --- director-facing levers -------------------------------------------------
+
+def test_the_search_set_is_a_named_choice(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_SELECTION", raising=False)
+    assert ar.selection_assets() == ar.SELECTION_ASSETS      # default is unchanged
+    monkeypatch.setenv("GTRADE_AR_SELECTION", "fast")
+    fast = ar.selection_assets()
+    assert fast == ar.FAST_SELECTION and len(fast.split(",")) == 5
+    # every fast asset is one the full set already searched, so the two are
+    # comparable and the narrow run is a subset rather than a different universe
+    assert set(fast.split(",")) <= set(ar.SELECTION_ASSETS.split(","))
+    monkeypatch.setenv("GTRADE_AR_SELECTION", "BTC,ETH")
+    assert ar.selection_assets() == "BTC,ETH"                # verbatim escape hatch
+
+
+def test_a_narrower_search_set_gets_its_own_tried_registry(monkeypatch):
+    """A genome scored over five assets is not the evidence a ten-asset run has,
+    so it must not lock the full set out of ever revisiting it."""
+    from core import ar_memory
+    monkeypatch.delenv("GTRADE_AR_SCORE_BASIS", raising=False)
+    monkeypatch.delenv("GTRADE_AR_SELECTION", raising=False)
+    full = ar_memory._scoped("genome")
+    assert full == "genome"                                  # history stays byte-identical
+    monkeypatch.setenv("GTRADE_AR_SELECTION", "fast")
+    assert ar_memory._scoped("genome") != full
+    # and the basis scope still composes with it
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    assert ar_memory._scoped("genome") not in (full, "genome@net_auc")
+
+
+def test_the_time_budget_stops_a_run_that_the_genome_count_would_not(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_TIME_BUDGET_H", raising=False)
+    assert ar.out_of_time() is False                          # no budget, never stops
+    monkeypatch.setenv("GTRADE_AR_TIME_BUDGET_H", "0")
+    assert ar.out_of_time() is False                          # 0 means none, not "now"
+    monkeypatch.setenv("GTRADE_AR_TIME_BUDGET_H", "nonsense")
+    assert ar.out_of_time() is False                          # unreadable degrades to none
+    # positive control: a budget already spent really does stop it
+    monkeypatch.setenv("GTRADE_AR_TIME_BUDGET_H", "1")
+    monkeypatch.setattr(ar, "_RUN_STARTED", ar.time.time() - 7200)
+    assert ar.out_of_time() is True
+
+
+def test_regate_mode_is_reachable_from_the_environment_alone(monkeypatch):
+    """auto_loop runs `python auto_research.py` with no flags, so the only way it
+    can ask for a replication cycle is through the env it already passes."""
+    seen = {}
+    monkeypatch.setattr(ar, "regate", lambda k=8, screen=False: seen.update(k=k, screen=screen))
+    monkeypatch.setenv("GTRADE_AR_MODE", "regate")
+    monkeypatch.setenv("GTRADE_AR_REGATE_K", "12")
+    monkeypatch.setenv("GTRADE_AR_SCREEN", "0")
+    ar.main()
+    assert seen == {"k": 12, "screen": False}
+    monkeypatch.setenv("GTRADE_AR_SCREEN", "1")
+    ar.main()
+    assert seen["screen"] is True
+    # and an unset mode does NOT take the regate path
+    seen.clear()
+    monkeypatch.setenv("GTRADE_AR_MODE", "search")
+    monkeypatch.setattr(ar, "build_axes", lambda names, feats: [])
+    monkeypatch.setattr(ar, "score_rows", lambda *a, **k: [])
+    monkeypatch.setattr(ar, "train_base_cached", lambda *a, **k: [])
+    monkeypatch.setattr(ar, "_tier_base", lambda *a, **k: None)
+    monkeypatch.setenv("GTRADE_AR_AXES", "hyper")
+    ar.main()
+    assert seen == {}

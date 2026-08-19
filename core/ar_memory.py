@@ -81,9 +81,25 @@ def tried_scope():
     return b
 
 
+def selection_scope():
+    """The registry namespace for a non-default SEARCH SET, '' for the default one.
+
+    Same argument as tried_scope: the value a candidate was measured at belongs
+    to the set it was measured on. A genome scored over five assets is not the
+    same evidence as one scored over ten, so it must not lock the full set out
+    of ever revisiting it. The default returns '' so every signature banked
+    before this existed keeps its exact bucket.
+    """
+    v = (os.getenv("GTRADE_AR_SELECTION") or "full").strip().lower()
+    return "" if v == "full" else v
+
+
 def _scoped(kind):
     scope = tried_scope()
-    return kind if scope == "raw" else "%s@%s" % (kind, scope)
+    if scope != "raw":
+        kind = "%s@%s" % (kind, scope)
+    sel = selection_scope()
+    return "%s#%s" % (kind, sel) if sel else kind
 
 
 def tried_seen(kind, sig):

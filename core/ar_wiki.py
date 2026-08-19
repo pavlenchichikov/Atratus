@@ -45,13 +45,18 @@ def _write(path, text):
 
 def wiki_summary(max_chars=6000):
     """The distilled wiki text for the proposer prompt (concatenated pages, truncated).
-    Reads the files fresh; '' when absent/empty. Never raises."""
+    Reads the files fresh; '' when absent/empty. Never raises.
+
+    max_chars=None returns the whole thing. The cap exists to bound a PROMPT; a
+    reader wants the page it actually wrote, and a silently halved wiki reads as
+    a wiki that lost half its findings."""
     parts = []
     for page in PAGES:
         t = _read(_page_path(page)).strip()
         if t:
             parts.append(f"## {page}\n{t}")
-    return "\n\n".join(parts)[:max_chars]
+    text = "\n\n".join(parts)
+    return text[:max_chars] if max_chars else text
 
 
 def note_replicated(sig, detail):

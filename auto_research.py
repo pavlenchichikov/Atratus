@@ -49,6 +49,27 @@ logger = get_logger("auto_research")
 BASE = os.path.dirname(os.path.abspath(__file__))
 SELECTION_ASSETS = "SP500,NVDA,BTC,ETH,EURUSD,GBPJPY,GAS,AAPL,SBER,DAX"
 
+# A cheaper search set: half the assets, one per class kept, so a cycle costs
+# about half. It is NOT a free speedup - fewer assets means a noisier selection
+# signal and an objective computed over five numbers instead of ten - which is
+# why it is a named choice and not a knob with a number on it.
+FAST_SELECTION = "SP500,BTC,EURUSD,NVDA,GAS"
+
+
+def selection_assets():
+    """GTRADE_AR_SELECTION: 'full' (default), 'fast', or a verbatim comma list.
+
+    The set the SEARCH scores candidates on. Not the holdout: adoption is still
+    decided on heldout_assets(), so narrowing this trades selection precision
+    for speed and never touches what a result has to clear.
+    """
+    v = (os.getenv("GTRADE_AR_SELECTION") or "full").strip()
+    if v.lower() == "full":
+        return SELECTION_ASSETS
+    if v.lower() == "fast":
+        return FAST_SELECTION
+    return v
+
 # The production holdout: a deliberately mixed set, so an adoption decision is
 # taken on assets that look like the book as a whole.
 PROD_HELDOUT = "MSFT,GOLD,USDJPY,ADA,CAC40,XOM,GOOGL,SOL,SILVER,GBPUSD,NASDAQ,DXY,TNX,AIRBUS"
@@ -1338,7 +1359,7 @@ class _RlController:
         self.monitor = ar_rl.FallbackMonitor(state.get("monitor"))
         self.origin = dict(state.get("origin") or {})
         self.disabled = False
-        base = ar_memory.base_key(SELECTION_ASSETS, {})
+        base = ar_memory.base_key(selection_assets(), {})
         if state.get("base_key") and state["base_key"] != base:
             self.sched.halve()
         self.base_key = base
@@ -1542,7 +1563,7 @@ def run_qd(train_fn=None):
 
     # Derived, not hardcoded, so a changed SELECTION_ASSETS still finds its own
     # seeded/measured history bucket (see PROGRESS_SEED's "screen_10").
-    _illum_assets = tier_assets() if illum_full() else SELECTION_ASSETS
+    _illum_assets = tier_assets() if illum_full() else selection_assets()
     _illum_env = tier_env if illum_full() else screen_env
     if illum_full() and _score_basis() == "raw":
         logger.warning(
@@ -1598,6 +1619,10 @@ def run_qd(train_fn=None):
     for _step in range(BUDGET):
         _progress_publish("search", step={"i": _step + 1, "n": BUDGET, "kind": "screen",
                                           "unit_kind": screen_kind})
+        if out_of_time():
+            print("[qd] time budget spent after %d of %d steps; going to the final "
+                  "gate with the archive as it stands." % (_step, BUDGET))
+            break
         if not archive:
             break
         child = next_child(archive, active, base_features)
@@ -2214,7 +2239,7 @@ def _passes_screen(axis, selected, train_fn, screen_base, screen_min, objective=
     """Cheap CB-only screen of one candidate. Returns (passed, proxy_delta). A failed
     screen train (empty rows) returns (True, 0.0) - never drop a candidate on a screen
     infra failure, fall through to the full eval."""
-    srows = train_fn(SELECTION_ASSETS, screen_env(axis.to_env(selected)))
+    srows = train_fn(selection_assets(), screen_env(axis.to_env(selected)))
     if not srows:
         return True, 0.0
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in screen_base}
@@ -2233,6 +2258,31 @@ TIER_ENV = {"GTRADE_EPOCHS_LSTM": "45", "GTRADE_EPOCHS_TF": "30",
 def tier_on():
     return (os.getenv("GTRADE_AR_TIER", "1") or "1").strip() not in (
         "0", "false", "False")
+
+
+# Wall-clock stop. The budget counts GENOMES, and a genome costs anywhere from
+# 43s (screened out) to 33min (a full held-out eval), so a budget of 30 buys a
+# run somewhere between twenty minutes and sixteen hours. When what is actually
+# scarce is the night, count the night.
+_RUN_STARTED = time.time()
+
+
+def _time_budget_s():
+    try:
+        h = float(os.getenv("GTRADE_AR_TIME_BUDGET_H") or 0.0)
+    except ValueError:
+        return 0.0
+    return h * 3600.0 if h > 0 else 0.0
+
+
+def out_of_time():
+    """Whether the run has spent its wall-clock budget. False when there is none.
+
+    Checked BETWEEN candidates, never inside one: a half-trained candidate is
+    not a cheaper candidate, it is a candidate whose value nobody knows, and
+    everything already finished is journalled either way."""
+    budget = _time_budget_s()
+    return bool(budget) and (time.time() - _RUN_STARTED) >= budget
 
 
 def illum_full():
@@ -2440,6 +2490,10 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
         kept_delta = max((e.get("cand_mean_delta", 0.0) for e in axis_log if e.get("accepted")), default=0.0)
         start = len(axis_log)
         for i in range(start, start + budget):
+            if out_of_time():
+                print("[auto-research] axis %s: time budget spent after %d of %d "
+                      "candidates; gating what was found." % (axis.name, i - start, budget))
+                break
             proposed = axis.propose(log)
             new = [c for c in proposed if axis.ok(c, kept, screen_df)]
             if not new:
@@ -2466,7 +2520,7 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
                     _mark_tried(new)
                     persist(log)
                     continue
-            rows = score_rows(SELECTION_ASSETS, axis.to_env(cand), train_fn)
+            rows = score_rows(selection_assets(), axis.to_env(cand), train_fn)
             delta, _ = _objective_delta(rows, base_score, objective)
             entry = {"axis": axis.name, "iter": i, "cand": new,
                      "cand_mean_delta": delta, "score": delta - kept_delta}
@@ -2493,6 +2547,10 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
     for cand in proposed:
         if i >= stop:
             break
+        if out_of_time():
+            print("[auto-research] axis %s: time budget spent; gating what was found."
+                  % axis.name)
+            break
         if json.dumps(cand, sort_keys=True) in tried:
             continue
         if screen_base is not None and not axis.cb_blind:
@@ -2515,7 +2573,7 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
                 persist(log)
                 i += 1
                 continue
-        rows = score_rows(SELECTION_ASSETS, axis.to_env(cand), train_fn)
+        rows = score_rows(selection_assets(), axis.to_env(cand), train_fn)
         delta, _ = _objective_delta(rows, base_score, objective)
         entry = {"axis": axis.name, "iter": i, "cand": cand, "cand_mean_delta": delta}
         if delta > best_delta + 1e-9:
@@ -2842,7 +2900,7 @@ def _try_sample_frame():
         from core.features import build_features
         from core.track_record import _table_name
         engine = create_engine("sqlite:///" + os.path.join(BASE, "market.db"))
-        table = _table_name(SELECTION_ASSETS.split(",")[0])
+        table = _table_name(selection_assets().split(",")[0])
         df = pd.read_sql(f"SELECT * FROM {table}", engine)
         return build_features(df, table, engine)[0]
     except Exception:
@@ -3030,8 +3088,25 @@ def main():
     # make an un-flagged `ar.main()` call SystemExit(2). Real CLI invocations are
     # unaffected since there are no extra args to discard.
     args, _ = p.parse_known_args()
-    if args.regate:
-        regate(k=args.regate_k, screen=args.regate_screen)
+    # GTRADE_AR_MODE=regate is the same run as --regate, reachable by an unattended
+    # caller that only passes an environment. It spends the cycle re-testing what
+    # the search already flagged instead of finding something new, which is the
+    # only way a finding gets its SECOND independent clear on purpose: the
+    # replication gate needs two, and until now the search had to stumble over
+    # the same genome twice by chance. 29 flagged against 16 replicated is the
+    # size of that backlog.
+    by_env = (os.getenv("GTRADE_AR_MODE") or "").strip().lower() == "regate"
+    if args.regate or by_env:
+        k, screen = args.regate_k, args.regate_screen
+        if by_env and not args.regate:
+            # The env caller has no flags, so its two settings come from the env
+            # too. The CLI path keeps its own defaults untouched.
+            try:
+                k = int(os.getenv("GTRADE_AR_REGATE_K") or k)
+            except ValueError:
+                pass
+            screen = _screen_on()
+        regate(k=k, screen=screen)
         return
     base_features = ["ret_1", "ret_5", "ret_10", "ret_20", "vol_z", "rsi",
                      "macd_hist", "bb_pos", "trend_strength", "atr"]
@@ -3046,8 +3121,8 @@ def main():
     print("[auto-research] axes: %s | budget: %d | prescreen: %s" % (
         ",".join(a.name for a in axes), BUDGET, "on" if screen_df is not None else "off"))
 
-    base_rows = score_rows(SELECTION_ASSETS, {}, train_base_cached)  # shared base
-    screen_base = train_base_cached(SELECTION_ASSETS, {"GTRADE_SCREEN_ONLY": "1"}) if _screen_on() else None
+    base_rows = score_rows(selection_assets(), {}, train_base_cached)  # shared base
+    screen_base = train_base_cached(selection_assets(), {"GTRADE_SCREEN_ONLY": "1"}) if _screen_on() else None
     tier_base = _tier_base(train_base_cached) if tier_on() else None
     obj = _objective()
     basis = _score_basis()
