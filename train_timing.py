@@ -401,7 +401,12 @@ def main():
     args = ap.parse_args()
     import config
     assets = ([a.strip() for a in args.assets.split(",") if a.strip()]
-              or [a for grp in config.ASSET_TYPES.values() for a in grp])
+              # dict.fromkeys, not a set: six assets sit in TOP SIGNALS as well
+              # as their own group, and building a series twice costs a full
+              # feature pass and a champion load for nothing. Order is kept so
+              # the progress counter reads like the map.
+              or list(dict.fromkeys(
+                  a for grp in config.ASSET_TYPES.values() for a in grp)))
     series = {}
     for i, a in enumerate(assets, 1):
         s = build_asset_series(a)

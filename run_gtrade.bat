@@ -249,17 +249,29 @@ echo       multiplicity to correct - the only form in which Stage B reopens)
 echo.
 set /p OS_WHICH="Which, Enter = cancel: "
 if "%OS_WHICH%"=="" goto menu
-set /p OS_ASSETS="Paste the unseen list for it, Enter = cancel: "
+echo Assets: paste a list, or type ALL for every asset in the map.
+echo.
+echo   ALL is a REFIT, not a replication. It re-reads the data the current
+echo   rule was fitted on, so its verdict is not out-of-sample evidence for
+echo   anything already adopted - it is the new production fit. Use it when
+echo   you mean "refit on everything we now have", and a restricted list when
+echo   you mean "check the adopted rule against assets it never saw".
+echo.
+set /p OS_ASSETS="Assets (list or ALL), Enter = cancel: "
 if "%OS_ASSETS%"=="" goto menu
+set "OS_SEL=--assets %OS_ASSETS%"
+if /i "%OS_ASSETS%"=="all" set "OS_SEL="
+if /i "%OS_ASSETS%"=="all" echo [OS] every asset in the map; the fitters skip any without a champion.
 set /p OS_BUDGET="Search iterations (Enter = 300): "
 if "%OS_BUDGET%"=="" set OS_BUDGET=300
 echo.
-if "%OS_WHICH%"=="1" python train_timing.py --assets %OS_ASSETS% --budget %OS_BUDGET%
-if "%OS_WHICH%"=="2" python train_sizing.py --assets %OS_ASSETS% --budget %OS_BUDGET%
-if "%OS_WHICH%"=="3" python train_levels.py --assets %OS_ASSETS% --budget %OS_BUDGET%
-if "%OS_WHICH%"=="4" python train_timing.py --stage b --iters 1 --assets %OS_ASSETS%
+if "%OS_WHICH%"=="1" python train_timing.py %OS_SEL% --budget %OS_BUDGET%
+if "%OS_WHICH%"=="2" python train_sizing.py %OS_SEL% --budget %OS_BUDGET%
+if "%OS_WHICH%"=="3" python train_levels.py %OS_SEL% --budget %OS_BUDGET%
+if "%OS_WHICH%"=="4" python train_timing.py --stage b --iters 1 %OS_SEL%
 set "OS_WHICH="
 set "OS_ASSETS="
+set "OS_SEL="
 set "OS_BUDGET="
 echo.
 echo A gate line reading "N asset(s) dropped as unscorable" is not noise: those
