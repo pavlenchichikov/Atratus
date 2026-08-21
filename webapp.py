@@ -190,8 +190,27 @@ def _research_snapshot():
         cycle = auto_loop.read_state()
     except Exception:
         cycle = {"current": None, "campaign": None, "history": []}
+    # Who chose each cycle and what the bandit believes. Wrapped: the page is
+    # read-only and must render even when the director module cannot load.
+    try:
+        from core import ar_director_rl
+        arms = ar_director_rl.posteriors()
+        director = {
+            "mode": ar_director_rl.mode(),
+            "arms": sorted(({"arm": a, "mean": m,
+                             "hours": ar_director_rl.RECIPES[a]["hours"]}
+                            for a, m in arms.items()),
+                           key=lambda r: -r["mean"]),
+            "recent": [{"ts": h.get("ts"), "cycle": h.get("cycle"),
+                        "arm": ar_director_rl.arm_of(h.get("settings")),
+                        "chosen_by": h.get("chosen_by")}
+                       for h in (cycle.get("history") or [])[:10]],
+        }
+    except Exception:
+        director = {"mode": "llm", "arms": [], "recent": []}
     return {"summary": summary, "rows": rows, "runs": len(recent),
-            "progress": ar_progress.snapshot(), "cycle": cycle}
+            "progress": ar_progress.snapshot(), "cycle": cycle,
+            "director": director}
 
 
 def _spark(closes, w=110, h=26):

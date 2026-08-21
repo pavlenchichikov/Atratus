@@ -24,7 +24,12 @@ from core.calibration import apply_calibrator, apply_live_global, load_calibrato
 from core.ensemble import build_stacking_features
 from core.features import active_candidate_features
 from core.logger import get_logger
-from core.model_io import get_lookback, load_keras_native, load_lstm_model
+from core.model_io import (
+    get_lookback,
+    load_lstm_model,
+    load_tcn_model,
+    load_transformer_model,
+)
 from core.scaling import load_or_fit_scaler
 
 logger = get_logger("scoring")
@@ -137,8 +142,13 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
         tf_path = os.path.join(model_dir, f"{table}_transformer.keras")
         if os.path.exists(tf_path):
             try:
-                tf_model, _, tf_lookback = load_lstm_model(tf_path, lookback, len(features))
+                # Not load_lstm_model: its rebuild path builds an LSTM, so a
+                # transformer only ever loaded when it was a native Keras 3
+                # zip, and every champion written by the training environment
+                # (keras 2.10, HDF5 under a .keras name) served as nothing.
+                tf_model = load_transformer_model(tf_path, lookback, len(features))
                 if tf_model is not None:
+                    tf_lookback = tf_model.input_shape[1] or lookback
                     X_seq = X_all[-tf_lookback:].reshape(1, tf_lookback, len(features))
                     tf_prob = float(tf_model.predict(X_seq.astype("float32"), verbose=0).flatten()[0])
             except Exception as e:
@@ -152,8 +162,10 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
             try:
                 # load_keras_native replays the saved cast Lambda; the plain
                 # load_model call used to die at predict on every asset
-                # ("could not infer the shape of the Lambda's output").
-                tcn_model = load_keras_native(tcn_path)
+                # ("could not infer the shape of the Lambda's output"). It is
+                # now the FIRST step of load_tcn_model, which falls back to a
+                # rebuild for legacy champions it cannot open.
+                tcn_model = load_tcn_model(tcn_path, lookback, len(features))
                 if tcn_model is not None:
                     tcn_lb = tcn_model.input_shape[1] or lookback
                     X_seq = X_all[-tcn_lb:].reshape(1, tcn_lb, len(features))

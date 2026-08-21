@@ -39,18 +39,22 @@ def phase_of(occupancy):
 class Scheduler:
     """Discounted Thompson sampling over ARMS with a per-phase context."""
 
-    def __init__(self, state=None, rng=None):
+    def __init__(self, state=None, rng=None, arms=ARMS, phases=PHASES):
         self.rng = rng or random.Random()
-        self.posteriors = {p: {a: [1.0, 1.0] for a in ARMS} for p in PHASES}
+        # Instance-level so a second bandit (the campaign director) can share
+        # this math with its own arms instead of forking it.
+        self.arms, self.phases = tuple(arms), tuple(phases)
+        self.posteriors = {p: {a: [1.0, 1.0] for a in self.arms}
+                           for p in self.phases}
         if isinstance(state, dict) and state.get("version") == STATE_VERSION:
             try:
-                for p in PHASES:
-                    for a in ARMS:
+                for p in self.phases:
+                    for a in self.arms:
                         pair = state["posteriors"][p][a]
                         self.posteriors[p][a] = [float(pair[0]), float(pair[1])]
             except (KeyError, TypeError, ValueError, IndexError):
-                self.posteriors = {p: {a: [1.0, 1.0] for a in ARMS}
-                                   for p in PHASES}
+                self.posteriors = {p: {a: [1.0, 1.0] for a in self.arms}
+                                   for p in self.phases}
 
     def choose(self, available, phase):
         """Pick an arm: uniform floor draw with prob 0.03*len(available),
@@ -87,8 +91,8 @@ class Scheduler:
 
     def halve(self):
         """Halve evidence counts (base-model generation changed)."""
-        for p in PHASES:
-            for a in ARMS:
+        for p in self.phases:
+            for a in self.arms:
                 al, be = self.posteriors[p][a]
                 self.posteriors[p][a] = [1.0 + (al - 1.0) / 2.0,
                                          1.0 + (be - 1.0) / 2.0]

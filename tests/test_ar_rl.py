@@ -297,3 +297,25 @@ class TestNoveltyEmitter:
                        mutate_toward=mutate_toward)
         assert child is None
         assert len(calls) == 5
+
+
+def test_the_scheduler_can_carry_a_different_arm_set():
+    """The campaign director's arms are recipes, not emitters. One
+    implementation of the math, two arm sets."""
+    s = ar_rl.Scheduler(arms=("a", "b"), phases=("all",))
+    assert set(s.posteriors["all"]) == {"a", "b"}
+    s.update("a", "all", True)
+    assert s.posterior_mean("a", "all") > s.posterior_mean("b", "all")
+    # state round-trips through the custom arms
+    s2 = ar_rl.Scheduler(s.to_state(), arms=("a", "b"), phases=("all",))
+    assert s2.posterior_mean("a", "all") == s.posterior_mean("a", "all")
+    s2.halve()
+    assert s2.posterior_mean("a", "all") < s.posterior_mean("a", "all")
+
+
+def test_the_default_scheduler_is_unchanged():
+    # Positive control for the parameterization: the search controller's own
+    # arms must still be exactly what they were.
+    s = ar_rl.Scheduler()
+    assert tuple(s.posteriors["fill"]) == ar_rl.ARMS
+    assert set(s.posteriors) == set(ar_rl.PHASES)

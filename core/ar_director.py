@@ -235,7 +235,10 @@ def _prompt(ctx):
         % {"basis": ctx["basis"], "objective": ctx["objective"],
            "decision": ctx["decision"],
            "findings": json.dumps(ctx["findings"], indent=1),
-           "axis_yield": json.dumps(ctx["axis_yield"], indent=1),
+           # .get, not [...]: a caller that builds a partial context still
+           # renders a prompt. An unattended cycle losing its director to a
+           # KeyError over a display section is worse than an empty section.
+           "axis_yield": json.dumps(ctx.get("axis_yield") or [], indent=1),
            "adoptions": (json.dumps(ctx["adoptions"], indent=1)
                          if ctx["adoptions"] else
                          "  (no A/B has finished in this campaign yet)"),

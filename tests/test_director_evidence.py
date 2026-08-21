@@ -104,3 +104,21 @@ def test_outcomes_come_newest_first_and_are_capped(tmp_path):
 
 def test_no_ab_files_is_an_empty_list_not_an_error(tmp_path):
     assert adopt_genome.ab_outcomes(str(tmp_path)) == []
+
+
+def test_the_outcomes_can_carry_their_signature_but_not_by_default(tmp_path):
+    """The default output goes verbatim into the LLM director's prompt, where
+    eight 64-character signatures are noise in a prompt that already times the
+    local model out."""
+    (tmp_path / "_ab_genomes_20260818-2214.json").write_text(json.dumps({
+        "alpha": 0.05, "floor": 0.0, "reference": "adopted:A",
+        "basis": "raw", "results": {"axis:labeling+ref": {
+            "sig": "abc123", "p_raw": 0.01, "value_raw": 2.0, "n_raw": 14,
+            "promoted": 9, "demoted": 3}}}), encoding="utf-8")
+    plain = adopt_genome.ab_outcomes(base=str(tmp_path))
+    assert plain and "sig" not in plain[0]
+    assert plain[0]["verdict"] == "PASSED"
+    withsig = adopt_genome.ab_outcomes(base=str(tmp_path), with_sig=True)
+    assert withsig[0]["sig"] == "abc123"
+    # nothing else moved
+    assert {k: v for k, v in withsig[0].items() if k != "sig"} == plain[0]

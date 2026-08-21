@@ -74,3 +74,39 @@ def test_lambda_class_not_left_patched(tmp_path):
     model.save(path)
     assert load_keras_native(path) is not None
     assert tf.keras.layers.Lambda.call is orig_call
+
+
+def test_transformer_parameters_are_read_from_the_weights_not_guessed(tmp_path):
+    """A champion saved under different builder defaults must still rebuild.
+
+    The real files that motivated this carry num_heads=2 / ff_dim=96 against
+    today's 4 / 128, and Keras names their layers with a global counter
+    (dense_24, dense_25), so nothing can be found by layer name.
+    """
+    import h5py
+
+    from core.model_io import transformer_kwargs_from_h5
+
+    n_feat, heads, key_dim, ff_dim = 10, 2, 5, 96
+    path = tmp_path / "legacy_transformer.keras"
+    with h5py.File(path, "w") as f:
+        g = f.create_group("model_weights")
+        g.create_dataset("multi_head_attention_4/multi_head_attention_4/query/kernel:0",
+                         shape=(n_feat, heads, key_dim))
+        g.create_dataset("dense_24/dense_24/kernel:0", shape=(n_feat, ff_dim))
+        g.create_dataset("dense_25/dense_25/kernel:0", shape=(ff_dim, n_feat))
+    assert transformer_kwargs_from_h5(str(path)) == {"num_heads": heads,
+                                                     "ff_dim": ff_dim}
+
+
+def test_a_file_without_those_shapes_returns_nothing(tmp_path):
+    """Positive control: no attention kernel means no answer, because a default
+    would rebuild the wrong architecture and fill it with untrained weights."""
+    import h5py
+
+    from core.model_io import transformer_kwargs_from_h5
+
+    path = tmp_path / "not_a_transformer.keras"
+    with h5py.File(path, "w") as f:
+        f.create_group("model_weights").create_dataset("dense/kernel:0", shape=(10, 96))
+    assert transformer_kwargs_from_h5(str(path)) is None

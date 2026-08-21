@@ -142,6 +142,12 @@ def replication_add(sig, ts):
     return len(stamps)
 
 
+def replicated_sigs():
+    """Signatures that have cleared the held-out gate in two or more runs."""
+    reg = _load(REPLICATION_PATH, {})
+    return {sig for sig, stamps in reg.items() if len(stamps or []) >= 2}
+
+
 def findings_append(record):
     journal = _load(FINDINGS_PATH, [])
     journal.append(record)

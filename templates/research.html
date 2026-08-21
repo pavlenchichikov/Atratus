@@ -56,6 +56,43 @@
 </section>
 
 <section class="panel fade">
+  <div class="panel-head"><h2>Campaign director</h2>
+    <span class="dim mono">{{ director.mode }}</span></div>
+  <p class="dim" style="padding: 0 16px;">Who chooses what each cycle tries. The
+    posterior is a belief about reward per hour, not a measurement: an arm with
+    few cycles behind it sits near the prior by construction.</p>
+  {% if director.arms %}
+  <div class="scrollbox">
+    <table class="grid sticky">
+      <thead><tr><th>Recipe</th><th class="num">Posterior</th>
+        <th class="num">Hours</th></tr></thead>
+      <tbody>
+        {% for a in director.arms %}
+        <tr><td class="mono">{{ a.arm }}</td>
+          <td class="num mono">{{ "%.3f"|format(a.mean) }}</td>
+          <td class="num mono dim">{{ a.hours }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if director.recent %}
+  <table class="grid">
+    <thead><tr><th>When</th><th class="num">Cycle</th><th>Chosen by</th>
+      <th>Recipe</th></tr></thead>
+    <tbody>
+      {% for h in director.recent %}
+      <tr><td class="dim mono">{{ h.ts }}</td>
+        <td class="num mono">{{ h.cycle }}</td>
+        <td class="mono">{{ h.chosen_by or "-" }}</td>
+        <td class="mono">{{ h.arm or "-" }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<section class="panel fade">
   <div class="panel-head"><h2>Agent status</h2></div>
   {% if progress.state == "running" %}
   <div class="statgrid">

@@ -297,6 +297,77 @@ def print_mismatched():
     return rows
 
 
+def degraded_members(base=None):
+    """Assets whose neural champions do not LOAD where serving loads them.
+
+    mismatched_registry compares two timestamps, and timestamps can agree while
+    the file is unreadable: training runs under keras 2.10 in the GPU
+    environment and writes a legacy HDF5 under a .keras name, serving runs under
+    keras 3, and of the three sequence members only the LSTM path has a rebuild
+    fallback. Measured 2026-08-21: 49 assets were serving on CatBoost alone and
+    every one of the 55 legacy assets had lost its TCN, while --mismatched
+    reported a clean registry. A check that never opens a file cannot see this.
+
+    Slow on purpose - it loads what serving loads, in the environment serving
+    runs in, which is the only way the answer means anything.
+    """
+    from core.model_io import (
+        get_lookback,
+        load_lstm_model,
+        load_tcn_model,
+        load_transformer_model,
+    )
+    base = base or BASE_DIR
+    mdir = os.path.join(base, "models")
+    registry = _load_json(os.path.join(mdir, "champion_registry.json")) or {}
+    out = []
+    for asset, entry in registry.items():
+        table = _table_name(asset)
+        n_features = len((entry or {}).get("features") or [])
+        lookback = get_lookback(entry or {}, asset)
+        lost = []
+        loaders = (
+            ("lstm", lambda p: load_lstm_model(p, lookback, n_features)[0]),
+            ("transformer", lambda p: load_transformer_model(p, lookback, n_features)),
+            ("tcn", lambda p: load_tcn_model(p, lookback, n_features)),
+        )
+        for member, load in loaders:
+            path = os.path.join(mdir, "%s_%s.keras" % (table, member))
+            if not os.path.exists(path):
+                continue
+            try:
+                model = load(path)
+            except Exception:
+                model = None
+            if model is None:
+                lost.append(member)
+        if lost:
+            out.append({"asset": asset, "lost": lost})
+    return sorted(out, key=lambda r: (-len(r["lost"]), r["asset"]))
+
+
+def print_degraded():
+    """One line per asset serving without some of its neural members."""
+    rows = degraded_members()
+    if not rows:
+        print("  every champion loads in this environment.")
+        return []
+    cb_only = [r for r in rows if len(r["lost"]) == 3]
+    print("  %-10s %s" % ("asset", "members that did not load"))
+    for r in rows:
+        print("  %-10s %s" % (r["asset"], ", ".join(r["lost"])))
+    print()
+    print("  %d of %d assets are degraded; %d serve on CatBoost alone."
+          % (len(rows), len(_load_json(os.path.join(BASE_DIR, "models",
+                                                    "champion_registry.json")) or {}),
+             len(cb_only)))
+    if cb_only:
+        print("  retrain these with force-promote to rewrite files and entry "
+              "together:")
+        print("  " + ",".join(r["asset"] for r in cb_only))
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description="Model Health Monitor")
     parser.add_argument("--stale", type=int, default=7,
@@ -307,8 +378,15 @@ def main():
                         help="List assets whose model files are newer than their "
                              "champion-registry entry, which drops them from the "
                              "signals with a feature-count error")
+    parser.add_argument("--degraded", action="store_true",
+                        help="List assets whose neural champions do not load "
+                             "here, so they serve on fewer members than the "
+                             "registry claims. Slow: it opens every file.")
     args = parser.parse_args()
 
+    if args.degraded:
+        print_degraded()
+        return
     if args.mismatched:
         print_mismatched()
         return

@@ -184,7 +184,7 @@ def candidates(base=None):
     return out
 
 
-def ab_outcomes(base=None, limit=8):
+def ab_outcomes(base=None, limit=8, with_sig=False):
     """Every A/B verdict, newest first: what was tested, against what, how it went.
 
     The findings journal answers "was this worth testing" - a search gate, on the
@@ -192,6 +192,11 @@ def ab_outcomes(base=None, limit=8):
     question "did it beat what is actually running". The two came apart on
     2026-08-18: a candidate the gate flagged eight times, and whose A/B then
     passed on the search basis, would have demoted 10 of 14 held-out assets.
+
+    with_sig adds the candidate's genome signature, which is what links an
+    outcome back to the cycle that produced it. Off by default because this
+    output is dumped verbatim into the LLM director's prompt and the
+    signatures are pure noise there.
 
     Kept here because this module already owns the `_ab_genomes_*.json` format.
     Pure: files in, dicts out, no model and no database.
@@ -224,6 +229,8 @@ def ab_outcomes(base=None, limit=8):
                 "would_demote": demoted,
                 "verdict": "PASSED" if passed else "FAILED",
             })
+            if with_sig:
+                out[-1]["sig"] = res.get("sig")
             if len(out) >= limit:
                 return out
     return out

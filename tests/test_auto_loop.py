@@ -568,3 +568,44 @@ def test_no_campaign_leaves_the_basis_alone(tmp_path, monkeypatch):
     env = {}
     assert auto_loop.apply_campaign_basis(env) == {}
     assert env == {}
+
+
+# --- what a finished cycle records ------------------------------------------
+
+def test_the_history_records_what_the_director_chose(tmp_path, monkeypatch):
+    """Without the settings there is nothing to attach a reward to, and an old
+    entry that predates them must still read rather than crash."""
+    monkeypatch.setattr(auto_loop, "STATE_PATH", str(tmp_path / "s.json"))
+    state = {"campaign": None, "history": [{"ts": "old", "action": "search",
+                                            "rc": 0, "cycle": 1}]}
+    auto_loop.record_cycle(state, action="search", rc=0, cycle=2, seconds=93.5,
+                           settings={"GTRADE_AR_AXES": "hyper"}, chosen_by="rl")
+    top = state["history"][0]
+    assert top["action"] == "search" and top["cycle"] == 2
+    assert top["settings"] == {"GTRADE_AR_AXES": "hyper"}
+    assert top["chosen_by"] == "rl" and top["seconds"] == 93.5
+    # the legacy entry survives untouched
+    assert state["history"][1] == {"ts": "old", "action": "search",
+                                   "rc": 0, "cycle": 1}
+    # and a cycle with no director records that honestly, not as a guess
+    auto_loop.record_cycle(state, action="ab_run", rc=0, cycle=3, seconds=1.0,
+                           settings=None, chosen_by=None)
+    assert state["history"][0]["chosen_by"] is None
+    assert len(state["history"]) == 3
+
+
+def test_the_llm_stays_the_default_director(monkeypatch):
+    """Positive control on the routing: an unset mode must not reach the RL
+    path at all."""
+    monkeypatch.delenv("GTRADE_AR_DIRECTOR_MODE", raising=False)
+    monkeypatch.setenv("GTRADE_AR_DIRECTOR", "1")
+    seen = {}
+
+    def _propose(*_a, **_k):
+        seen["llm"] = True          # returns None: the director declined
+
+    monkeypatch.setattr("core.ar_director.propose", _propose)
+    _env, _state, chose = auto_loop.apply_director(_clean_env(),
+                                                   {"history": []})
+    assert seen == {"llm": True}
+    assert chose["by"] is None          # propose returned None, nothing applied

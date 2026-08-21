@@ -437,6 +437,11 @@ def _banner(cycle, action, st, env, deadline):
         "stop after %sh" % env["GTRADE_AR_TIME_BUDGET_H"]
         if (env.get("GTRADE_AR_TIME_BUDGET_H") or "0") not in ("0", "0.0") else "",
     ) if x]
+    # Guarded: with no director at all, naming a director mode would describe a
+    # chooser that never ran.
+    from core import ar_director_rl
+    if (env.get("GTRADE_AR_DIRECTOR") or "0") in ("1", "true", "True"):
+        extra.insert(0, "director %s" % ar_director_rl.mode())
     if extra:
         print("  levers     %s" % " | ".join(extra))
     print("  load       %s neural slots | %s CB threads | pool %s | chunk %s"
@@ -541,19 +546,66 @@ def start_campaign(state, env, reason=""):
     return state
 
 
+def record_cycle(state, action, rc, cycle, seconds, settings=None,
+                 chosen_by=None):
+    """Append one finished cycle to the history, newest first.
+
+    settings and chosen_by are what makes a cycle creditable later: an outcome
+    arrives two or three cycles after the choice that earned it, so the choice
+    has to be written down when it is made. Entries from before these fields
+    existed keep their exact shape; the replay skips them by name rather than
+    defaulting them, because a default here would invent an arm nobody ran.
+    """
+    state["history"].insert(0, {
+        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+        "action": action, "rc": rc, "cycle": cycle,
+        "seconds": round(float(seconds), 1),
+        "settings": settings, "chosen_by": chosen_by})
+    state["history"] = state["history"][:60]
+    _save_state(state)
+    return state
+
+
 def apply_director(env, state):
-    """Let the director choose the next search settings. Returns (env, state).
+    """Let the director choose the next search settings.
+
+    Returns (env, state, chose), where chose is {"settings", "by"} and is what
+    the history entry records: an outcome arrives two or three cycles after the
+    choice that earned it, so the choice has to be written down when made.
 
     Only the search levers are copied across. A new-campaign request is applied
     here because it is the one place that can also re-freeze and clear the
     archive, which is what makes it a campaign change rather than an edit.
+    Both directors leave through the same validator, so the RL one gains no
+    authority the LLM one lacks.
     """
-    from core import ar_director
+    import adopt_genome
+    from core import ar_director, ar_director_rl, ar_memory
 
     if not ar_director.director_on():
-        return env, state
-    import adopt_genome
-    from core import ar_memory
+        return env, state, {"settings": None, "by": None}
+
+    who = ar_director_rl.mode()
+    if who == "alternate":
+        who = ar_director_rl.chooser_for(len(state.get("history") or []) + 1)
+    if who == "rl":
+        import auto_research
+        mem = ar_memory.findings_summary()
+        arm, settings = ar_director_rl.choose(
+            state.get("history") or [], ar_memory.findings_all(),
+            adopt_genome.ab_outcomes(with_sig=True),
+            ar_memory.replicated_sigs(),
+            sig_of=lambda gd: (auto_research.genome_sig(
+                auto_research.Genome(**gd)) if gd else None),
+            flagged=mem["adoptable"], replicated=mem["replicated"],
+            base_key=ar_memory.base_key(auto_research.selection_assets(), {}))
+        if settings:
+            env = dict(env)
+            env.update(settings)
+            print("[director:rl] %s | %s" % (
+                arm, " ".join("%s=%s" % kv for kv in sorted(settings.items()))))
+            return env, state, {"settings": dict(settings), "by": "rl"}
+        return env, state, {"settings": None, "by": None}
 
     # Both levels of evidence, not just the search gate's. The gate flags what is
     # worth an A/B, on the search basis against a bare base; the A/B says whether
@@ -566,7 +618,7 @@ def apply_director(env, state):
         cycles=len(state.get("history") or []),
         adoptions=adopt_genome.ab_outcomes())
     if not settings:
-        return env, state
+        return env, state, {"settings": None, "by": None}
     fresh = settings.pop("new_campaign", None)
     reason = settings.pop("reason", "")
     env = dict(env)
@@ -579,7 +631,7 @@ def apply_director(env, state):
         env.update(fresh)
         state = start_campaign(state, env, why)
         print("[director] NEW CAMPAIGN: %s" % why)
-    return env, state
+    return env, state, {"settings": dict(settings), "by": "llm"}
 
 
 def _status(env):
@@ -616,6 +668,9 @@ def main():
                     help="print the phase that would run and exit")
     ap.add_argument("--status", action="store_true",
                     help="print where the cycle stands and exit")
+    ap.add_argument("--director-replay", action="store_true",
+                    help="what each cycle recipe would have earned per hour "
+                         "over the recorded history")
     ap.add_argument("--stop", action="store_true",
                     help="ask a running loop to finish its phase and exit")
     ap.add_argument("--new-campaign", action="store_true",
@@ -658,6 +713,19 @@ def main():
     if args.status:
         _status(env)
         return 0
+    if args.director_replay:
+        import adopt_genome
+        import auto_research
+        from core import ar_director_rl, ar_memory
+        rep = ar_director_rl.replay(
+            _load_state().get("history") or [], ar_memory.findings_all(),
+            adopt_genome.ab_outcomes(limit=200, with_sig=True),
+            ar_memory.replicated_sigs(),
+            sig_of=lambda gd: (auto_research.genome_sig(
+                auto_research.Genome(**gd)) if gd else None))
+        for line in ar_director_rl.replay_lines(rep):
+            print(line)
+        return 0
     if args.dry_run:
         st = probe()
         print("[loop] reference: %s" % st["reference"])
@@ -686,12 +754,13 @@ def main():
             if stop_requested():
                 print("\n[loop] stop requested; exiting between phases.")
                 return 0
-            env, state = apply_director(env, state)
+            env, state, chose = apply_director(env, state)
             st = probe()
             action = next_action(st)
             cycle += 1
             state = publish(state, action, "reference %s" % st["reference"], cycle)
             _banner(cycle, action, st, env, deadline)
+            started = time.time()
             rc = _run(action, env)
             if rc != 0 and action in TRAINING_PHASES:
                 print("[loop] %s exited with %d. Retrying once at conservative "
@@ -702,11 +771,10 @@ def main():
                                                for kv in sorted(SAFE_LOAD.items()))))
                 state = publish(state, action, "retry at conservative load", cycle)
                 rc = _run(action, dict(env, **SAFE_LOAD))
-            state["history"].insert(0, {
-                "ts": datetime.datetime.now().isoformat(timespec="seconds"),
-                "action": action, "rc": rc, "cycle": cycle})
-            state["history"] = state["history"][:60]
-            _save_state(state)
+            state = record_cycle(state, action, rc, cycle,
+                                 seconds=time.time() - started,
+                                 settings=chose.get("settings"),
+                                 chosen_by=chose.get("by"))
             if rc != 0:
                 print("[loop] %s exited with %d; stopping." % (action, rc))
                 return rc

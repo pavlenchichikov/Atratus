@@ -326,15 +326,23 @@ echo     The search archive is kept: only a move of the SEARCH basis sets it asi
 :al_director
 
 echo.
-echo [1] Campaign director: an LLM picks the axis, label and budget each cycle.
-echo     It can never touch the score basis or the objective - those are frozen
-echo     for the campaign, and only a written new-campaign request can move them.
+echo [1] Campaign director: who picks the axis, mode, budget and the rest each
+echo     cycle. None of them can touch the score basis or the objective - those
+echo     are frozen for the campaign, and only a written new-campaign request
+echo     can move them.
 echo     1 = off (default: the campaign in auto_loop.py is used as written)
-echo     2 = on
+echo     2 = LLM
+echo     3 = RL bandit over cycle recipes
+echo     4 = alternate: LLM on even cycles, RL on odd (the comparison run)
 set "DIR=1"
 set /p "DIR=    choice [1]: "
 set "GTRADE_AR_DIRECTOR=0"
+set "GTRADE_AR_DIRECTOR_MODE=llm"
+REM Parenthesised: in cmd an unparenthesised "if cond set A & set B" runs the
+REM SECOND set unconditionally, which would put every run into RL mode.
 if "%DIR%"=="2" set "GTRADE_AR_DIRECTOR=1"
+if "%DIR%"=="3" ( set "GTRADE_AR_DIRECTOR=1" & set "GTRADE_AR_DIRECTOR_MODE=rl" )
+if "%DIR%"=="4" ( set "GTRADE_AR_DIRECTOR=1" & set "GTRADE_AR_DIRECTOR_MODE=alternate" )
 
 echo.
 echo [2] Search proposer: what suggests each candidate genome INSIDE a search.
@@ -361,7 +369,9 @@ REM  asked for under the director alone, so a default run - director off, wiki o
 REM  - still called an LLM every cycle, with the provider and model coming from
 REM  .env instead of from this menu.
 set "NEEDLLM=0"
-if "%GTRADE_AR_DIRECTOR%"=="1" set "NEEDLLM=1"
+REM The RL director asks no model anything, so it does not by itself need one.
+if "%GTRADE_AR_DIRECTOR_MODE%"=="llm" if "%GTRADE_AR_DIRECTOR%"=="1" set "NEEDLLM=1"
+if "%GTRADE_AR_DIRECTOR_MODE%"=="alternate" set "NEEDLLM=1"
 if "%GTRADE_AR_PROPOSER%"=="llm" set "NEEDLLM=1"
 if "%GTRADE_AR_WIKI%"=="1" set "NEEDLLM=1"
 REM  Set unconditionally and never left blank: cmd's  set "VAR="  DELETES the
@@ -409,7 +419,7 @@ set /p "ALH=    hours [0]: "
 
 echo.
 echo ------------------------------------------------------------
-if "%GTRADE_AR_DIRECTOR%"=="1" echo   director=on   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
+if "%GTRADE_AR_DIRECTOR%"=="1" echo   director=%GTRADE_AR_DIRECTOR_MODE%   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
 if not "%GTRADE_AR_DIRECTOR%"=="1" echo   director=off   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
 if "%NEEDLLM%"=="1" echo   llm=%GTRADE_AR_LLM%   model=%GTRADE_AR_LLM_MODEL%   timeout=%GTRADE_AR_LLM_TIMEOUT%s
 if "%NEEDLLM%"=="0" echo   llm=not used by this configuration

@@ -910,3 +910,15 @@ def test_market_page_survives_a_correlation_read_with_no_data(client, monkeypatc
     r = client.get("/market")
     assert r.status_code == 200
     assert "no data" in r.text
+
+
+def test_the_research_page_says_who_chose_each_cycle():
+    from fastapi.testclient import TestClient
+
+    import webapp
+    snap = webapp._research_snapshot()
+    assert "director" in snap
+    assert snap["director"]["mode"] in ("llm", "rl", "alternate")
+    r = TestClient(webapp.app).get("/research")
+    assert r.status_code == 200
+    assert "Campaign director" in r.text

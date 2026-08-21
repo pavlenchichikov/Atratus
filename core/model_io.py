@@ -194,6 +194,115 @@ def detect_lookback_from_h5(h5_path):
     return None
 
 
+def _h5_dataset_shapes(h5_path):
+    """{dataset path: shape} for every weight in a legacy HDF5 champion."""
+    import h5py
+    out = {}
+
+    def visit(name, obj):
+        if isinstance(obj, h5py.Dataset):
+            out[name] = tuple(int(d) for d in obj.shape)
+
+    with h5py.File(h5_path, "r") as f:
+        f.visititems(visit)
+    return out
+
+
+def transformer_kwargs_from_h5(h5_path):
+    """The two build_transformer_encoder arguments the saved weights fix.
+
+    The rebuild paths assume the builder's CURRENT defaults, and a champion
+    saved under different ones then fails on a shape mismatch - which is how
+    2026-08-21 found every legacy transformer serving as nothing: the file was
+    written with num_heads=2, ff_dim=96 against today's 4 and 128. Both are
+    readable from the weights themselves: the attention query kernel is
+    (n_features, num_heads, key_dim) and the first feed-forward kernel is
+    (n_features, ff_dim). Reading them beats guessing, and a file that does not
+    carry them returns nothing rather than a default that would load a wrong
+    architecture full of freshly initialised weights.
+    """
+    try:
+        shapes = _h5_dataset_shapes(h5_path)
+    except Exception as exc:
+        logger.debug("Transformer shape probe failed for %s: %s", h5_path, exc)
+        return None
+    heads = n_feat = None
+    for name, shape in shapes.items():
+        if "query/kernel" in name and len(shape) == 3:
+            n_feat, heads = shape[0], shape[1]
+            break
+    if heads is None:
+        return None
+    # The feed-forward block is Dense(ff_dim) on a width-n_feat tensor followed
+    # by Dense(n_feat), so the pair of kernels is (n_feat, F) and (F, n_feat).
+    # Matching the PAIR rather than a layer called "dense" is what makes this
+    # work on a real champion: Keras names layers with a global counter, so the
+    # file calls them dense_24 and dense_25, and a name test finds nothing.
+    two_d = [sh for sh in shapes.values() if len(sh) == 2]
+    for a, b in ((a, b) for a in two_d for b in two_d):
+        if a[0] == n_feat and a[1] == b[0] and b[1] == n_feat and a[1] != n_feat:
+            return {"num_heads": int(heads), "ff_dim": int(a[1])}
+    return None
+
+
+def _rebuild_from_legacy(path, builder, lookback, n_features, **kwargs):
+    """Rebuild `builder`'s architecture and load a legacy HDF5 champion into it.
+
+    load_weights matches by topological order and RAISES on any shape
+    disagreement, which is what makes this safe: the alternative failure - a
+    skeleton that loads silently and serves half-initialised weights at ~0.5 -
+    cannot happen quietly here.
+    """
+    import shutil
+    if _detect_format(path) != "hdf5":
+        return None
+    h5_path = path.replace(".keras", ".tmp.h5")
+    try:
+        shutil.copy2(path, h5_path)
+        detected = detect_lookback_from_h5(h5_path)
+        shape = (int(detected or lookback), n_features)
+        model = builder(shape, **kwargs)
+        model.load_weights(h5_path)
+        return model
+    except Exception as exc:
+        logger.debug("Legacy rebuild failed for %s: %s", path, exc)
+        return None
+    finally:
+        if os.path.exists(h5_path):
+            try:
+                os.remove(h5_path)
+            except OSError:
+                pass
+
+
+def load_tcn_model(path, lookback, n_features):
+    """A TCN champion, native first and rebuilt from legacy weights after.
+
+    load_keras_native is the whole loader today, so a champion written by the
+    training environment (keras 2.10, which saves HDF5 under a .keras name) is
+    simply lost on serve. The TCN builder takes no adaptive sizes, so the
+    rebuild needs nothing the file does not already fix.
+    """
+    from core.architectures import build_tcn
+    model = load_keras_native(path)
+    if model is not None:
+        return model
+    return _rebuild_from_legacy(path, build_tcn, lookback, n_features)
+
+
+def load_transformer_model(path, lookback, n_features):
+    """A transformer champion, native first and rebuilt from legacy weights after."""
+    from core.architectures import build_transformer_encoder
+    model = load_keras_native(path)
+    if model is not None:
+        return model
+    kwargs = transformer_kwargs_from_h5(path) if _detect_format(path) == "hdf5" else None
+    if kwargs is None:
+        return None
+    return _rebuild_from_legacy(path, build_transformer_encoder,
+                                lookback, n_features, **kwargs)
+
+
 def load_lstm_model(lstm_path, lookback, n_features):
     """Load LSTM handling V49, V50, HDF5, ZIP, and Keras 3.x formats."""
     import shutil
