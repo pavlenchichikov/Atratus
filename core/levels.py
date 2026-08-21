@@ -18,9 +18,20 @@ there it is welded into a whole feature frame over a DataFrame and cannot be
 called on its own. tests/test_levels.py pins the two together on shared input.
 """
 
+import os
+
 ATR_PERIOD = 14
 K_ENTRY = 0.5
 K_STOP = 2.0
+
+# Named, not recomputed inside each reader, for the same reason
+# core/timing_policy.py names its own: the two functions below have to agree on
+# which file is the policy, and a test has to be able to point them somewhere
+# else. Without a seam here the suite reads whatever the developer last fitted,
+# which is not what the shipped constants say and not what CI sees.
+POLICY_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "levels_policy.json")
 
 # A Taleb risk above this reads as the fat-tail regime. The same number
 # train_timing.py uses to build its taleb_hi flag, so the policy is fitted on
@@ -139,11 +150,8 @@ def load_policy(path=None):
     core.timing_policy.load_policy.
     """
     import json
-    import os
 
-    path = path or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "levels_policy.json")
+    path = path or POLICY_PATH
     try:
         with open(path, encoding="utf-8") as fh:
             stored = (json.load(fh) or {}).get("params") or {}
@@ -165,11 +173,8 @@ def policy_evidence(path=None):
     evidence the fit was accepted on.
     """
     import json
-    import os
 
-    path = path or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "levels_policy.json")
+    path = path or POLICY_PATH
     try:
         with open(path, encoding="utf-8") as fh:
             body = json.load(fh) or {}

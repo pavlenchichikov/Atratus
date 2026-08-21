@@ -25,6 +25,7 @@ from core.backtesting import (
     FOREX_COMMISSION,
     FOREX_SLIPPAGE,
     SLIPPAGE,
+    UNRELIABLE_SCORE,
     evaluate_signals_v2,
     score_strategy,
 )
@@ -312,11 +313,20 @@ def gate_policy(test_by_asset, params, reference=None):
     # Any policy object passes through; only a parameter dict is wrapped.
     pol = (params if hasattr(params, "apply_series") or hasattr(params, "apply")
            else tp.RulesPolicy(params))
-    per_asset, deltas = {}, []
+    per_asset, deltas, unscorable = {}, [], []
     for asset, s in test_by_asset.items():
         base = (eval_baseline(s)["score"] if reference is None
                 else eval_policy(s, reference)["score"])
-        d = eval_policy(s, pol)["score"] - base
+        cand = eval_policy(s, pol)["score"]
+        # UNRELIABLE_SCORE is not a score, it is "this arm made too few trades
+        # to judge". Subtracting it produces a delta near -999 that the rank
+        # test cannot see and the mean cannot survive: one short asset out of
+        # twenty moved mean_d from +18.5 to -29.4 and flipped ADOPT to HOLD
+        # while p stayed at 0.0002. Drop the pair and say how many were dropped.
+        if UNRELIABLE_SCORE in (base, cand):
+            unscorable.append(asset)
+            continue
+        d = cand - base
         per_asset[asset] = round(d, 4)
         deltas.append(d)
     n = len(deltas)
@@ -330,6 +340,7 @@ def gate_policy(test_by_asset, params, reference=None):
     mean_d = float(np.mean(deltas)) if deltas else 0.0
     verdict = "ADOPT" if (n >= 8 and p < 0.05 and mean_d > 0.5) else "HOLD"
     return {"verdict": verdict, "p": p, "mean_d": mean_d, "n": n,
+            "n_unscorable": len(unscorable), "unscorable": unscorable,
             "per_asset": per_asset}
 
 
@@ -384,8 +395,11 @@ def main():
         print("[timing-b] reference stage_a | assets %d | selected on val: %s"
               % (out["assets"], out["selected_on_val"]))
         for r in out["rows"]:
-            print("[timing-b]   %-12s mean_d %+.3f  p %.4f  p_bh %.4f  %s"
-                  % (r["name"], r["mean_d"], r["p"], r["p_bh"],
+            print("[timing-b]   %-12s mean_d %+.3f  p %.4f  p_bh %.4f  "
+                  "n %d%s  %s"
+                  % (r["name"], r["mean_d"], r["p"], r["p_bh"], r["n"],
+                     ("  -%d unscorable" % r["n_unscorable"]
+                      if r.get("n_unscorable") else ""),
                      "ADOPT" if r["adopt"] else "-"))
         pr = out["proxy"]
         print("[timing-b] objective vs gate: rho %+.3f (p %.4f), sign "
@@ -406,6 +420,10 @@ def main():
     print(f"[timing] params: {params}")
     print(f"[timing] verdict: {gate['verdict']}  p={gate['p']:.4f}  "
           f"mean_d={gate['mean_d']:+.2f}  n={gate['n']}")
+    if gate["n_unscorable"]:
+        print("[timing] %d asset(s) dropped as unscorable (an arm traded fewer "
+              "than the minimum): %s"
+              % (gate["n_unscorable"], ", ".join(gate["unscorable"][:8])))
     if gate["verdict"] == "ADOPT":
         print("[timing] wrote timing_policy.json - set GTRADE_TIMING_POLICY=1 "
               "to run in shadow mode.")
@@ -447,7 +465,8 @@ def gate_challenger(test_by_asset, candidates, reference):
     for name, pol in candidates:
         g = gate_policy(test_by_asset, pol, reference=reference)
         rows.append({"name": name, "p": g["p"], "mean_d": g["mean_d"],
-                     "n": g["n"], "per_asset": g["per_asset"]})
+                     "n": g["n"], "n_unscorable": g["n_unscorable"],
+                     "per_asset": g["per_asset"]})
     rows = bh_rows(rows)
     for r in rows:
         r["adopt"] = bool(r["bh_flag"] and r["mean_d"] > MIN_EFFECT

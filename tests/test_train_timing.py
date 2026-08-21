@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import train_timing as tt
+from core import backtesting as bt
 from core import timing_policy as tp
 
 
@@ -99,3 +100,72 @@ class TestSplitFitGate:
         tt.save_policy(dict(tp.DEFAULT_PARAMS),
                        {"verdict": "ADOPT", "per_asset": {}}, path=p)
         assert os.path.exists(p)
+
+
+def _quiet_series(n, seed, spread):
+    """A short, thin slice - the shape a recently listed asset has."""
+    rng = np.random.default_rng(seed)
+    probs = np.clip(0.5 + rng.normal(0, spread, n), 0.05, 0.95)
+    nr = rng.normal(0.0015, 0.01, n)
+    nr[-1] = np.nan
+    return {"probs": probs, "next_ret": nr, "atr": np.full(n, 0.015),
+            "taleb_hi": np.zeros(n, dtype=bool), "buy_thr": 0.55,
+            "sell_thr": 0.45, "risky": False, "dates": np.arange(n)}
+
+
+class TestUnscorableAssetsAreNotAveraged:
+    """score_strategy returns -999 when an arm trades fewer than min_trades.
+
+    That marker is missing data, not a score. Averaged into mean_d - which is
+    what the ADOPT floor is compared against - one such asset out of twenty
+    moves the effect size by tens of points while the rank test, which cannot
+    see magnitude, keeps reporting the same p. Short-history assets are what
+    make this reachable, and the asset list grew by 116 of them on 2026-08-21.
+    """
+
+    def _healthy(self, k=20, n=500):
+        return {"A%d" % i: _series(n, seed=i) for i in range(k)}
+
+    def test_one_thin_asset_cannot_decide_the_verdict(self):
+        cand = tp.RulesPolicy({**tp.DEFAULT_PARAMS, "entry_margin": 0.06})
+        healthy = self._healthy()
+        clean = tt.gate_policy(healthy, cand)
+
+        thin = dict(healthy)
+        thin["NEW_SHORT"] = _quiet_series(70, seed=7, spread=0.05)
+        dirty = tt.gate_policy(thin, cand)
+
+        # the asset really is unscorable for one arm and not the other
+        assert (tt.eval_policy(thin["NEW_SHORT"], cand)["score"]
+                == pytest.approx(bt.UNRELIABLE_SCORE))
+        assert (tt.eval_baseline(thin["NEW_SHORT"])["score"]
+                != pytest.approx(bt.UNRELIABLE_SCORE))
+
+        assert dirty["mean_d"] == pytest.approx(clean["mean_d"])
+        assert dirty["verdict"] == clean["verdict"]
+        assert dirty["n"] == clean["n"], "an unscorable asset must not count"
+        assert dirty["n_unscorable"] == 1
+        assert "NEW_SHORT" not in dirty["per_asset"]
+
+    def test_both_arms_unscorable_is_dropped_not_counted_as_a_tie(self):
+        cand = tp.RulesPolicy({**tp.DEFAULT_PARAMS, "entry_margin": 0.06})
+        healthy = self._healthy()
+        clean = tt.gate_policy(healthy, cand)
+
+        both = dict(healthy)
+        both["FLAT"] = _quiet_series(60, seed=99, spread=0.002)
+        out = tt.gate_policy(both, cand)
+        assert out["n_unscorable"] == 1
+        assert out["mean_d"] == pytest.approx(clean["mean_d"])
+
+    def test_control_no_unscorable_asset_changes_nothing(self):
+        """The gate must be unchanged for every measurement already recorded."""
+        cand = tp.RulesPolicy({**tp.DEFAULT_PARAMS, "entry_margin": 0.02})
+        healthy = self._healthy()
+        out = tt.gate_policy(healthy, cand)
+        deltas = [tt.eval_policy(s, cand)["score"] - tt.eval_baseline(s)["score"]
+                  for s in healthy.values()]
+        assert all(d != pytest.approx(bt.UNRELIABLE_SCORE) for d in deltas)
+        assert out["n"] == len(healthy)
+        assert out["n_unscorable"] == 0
+        assert out["mean_d"] == pytest.approx(float(np.mean(deltas)))

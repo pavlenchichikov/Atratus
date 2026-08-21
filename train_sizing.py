@@ -21,7 +21,7 @@ import train_timing as tt
 from core import sizing_policy as sp
 from core import timing_policy as tp
 from core.ar_rl import CmaEmitter
-from core.backtesting import evaluate_signals_v2, score_strategy
+from core.backtesting import UNRELIABLE_SCORE, evaluate_signals_v2, score_strategy
 from core.sizing_policy import match_exposure
 
 REPORT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -111,10 +111,18 @@ def gate_sizing(test_by_asset, params, timing=None):
     """Sizing-vs-unit-size on TEST: one-sided Wilcoxon over per-asset deltas."""
     from scipy.stats import wilcoxon
     pol = sp.SizingPolicy(params)
-    per_asset, deltas = {}, []
+    per_asset, deltas, unscorable = {}, [], []
     for asset, s in test_by_asset.items():
-        d = (eval_sizing(s, pol, timing)["score"]
-             - eval_sizing(s, None, timing)["score"])
+        cand = eval_sizing(s, pol, timing)["score"]
+        base = eval_sizing(s, None, timing)["score"]
+        # Same reason as train_timing.gate_policy: UNRELIABLE_SCORE marks an arm
+        # that made too few trades to judge, and averaging it into mean_d - the
+        # quantity MIN_EFFECT is compared against - lets one short asset decide
+        # the verdict without moving the rank test at all.
+        if UNRELIABLE_SCORE in (cand, base):
+            unscorable.append(asset)
+            continue
+        d = cand - base
         per_asset[asset] = round(d, 4)
         deltas.append(d)
     n = len(deltas)
@@ -129,7 +137,16 @@ def gate_sizing(test_by_asset, params, timing=None):
     verdict = ("ADOPT" if (n >= 8 and p < 0.05 and mean_d > MIN_EFFECT)
                else "HOLD")
     return {"verdict": verdict, "p": p, "mean_d": mean_d, "n": n,
+            "n_unscorable": len(unscorable), "unscorable": unscorable,
             "per_asset": per_asset}
+
+
+def _dropped(gate):
+    """Never let a dropped asset be invisible: a silently smaller n is how a
+    gate stops describing the population it claims to."""
+    k = gate.get("n_unscorable") or 0
+    return "" if not k else ("  (%d asset(s) unscorable, dropped: %s)"
+                             % (k, ", ".join(gate["unscorable"][:6])))
 
 
 def main():
@@ -158,13 +175,16 @@ def main():
     gate = gate_sizing(test, params)
     report = {"params": params, "verdict": gate["verdict"], "p": gate["p"],
               "mean_d": gate["mean_d"], "n": gate["n"],
+              "n_unscorable": gate["n_unscorable"],
+              "unscorable": gate["unscorable"],
               "per_asset": gate["per_asset"],
               "fitted": datetime.utcnow().isoformat()}
     with open(REPORT_PATH, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=1, default=float)
     print("[sizing] params: %s" % params)
-    print("[sizing] VERDICT: %s  p=%.4f  mean_d=%+.3f  n=%d"
-          % (gate["verdict"], gate["p"], gate["mean_d"], gate["n"]))
+    print("[sizing] VERDICT: %s  p=%.4f  mean_d=%+.3f  n=%d%s"
+          % (gate["verdict"], gate["p"], gate["mean_d"], gate["n"],
+             _dropped(gate)))
 
 
 if __name__ == "__main__":

@@ -149,3 +149,55 @@ def test_a_shape_can_still_move_the_score():
                                                     k_margin=2.0)))
     base = ts.eval_sizing(s, None)
     assert shaped["score"] != base["score"]
+
+
+def _thin_series(n, seed):
+    """Short and quiet: the shape of a recently listed asset's test slice."""
+    rng = np.random.default_rng(seed)
+    probs = np.clip(0.5 + rng.normal(0, 0.004, n), 0.01, 0.99)
+    next_ret = rng.normal(0, 0.01, n)
+    return {"probs": probs, "next_ret": next_ret,
+            "atr": np.abs(rng.normal(1.0, 0.2, n)),
+            "taleb_hi": rng.random(n) > 0.8,
+            "close": 100.0 * np.cumprod(1.0 + next_ret),
+            "buy_thr": 0.55, "sell_thr": 0.45,
+            "risky": False, "is_forex": False}
+
+
+def test_an_unscorable_asset_is_dropped_from_the_gate_not_averaged_in():
+    """UNRELIABLE_SCORE is missing data, not a score of -999.
+
+    Averaging it into mean_d - the quantity MIN_EFFECT is compared against -
+    lets one short asset decide the verdict while the rank test, blind to
+    magnitude, reports the same p. 116 short-history assets were added to the
+    asset map on 2026-08-21, which is what makes this reachable at scale.
+    """
+    import train_sizing as ts
+    from core import sizing_policy as sp
+    healthy = {"A%d" % k: _series(300, seed=10 + k) for k in range(9)}
+    params = dict(sp.DEFAULT_PARAMS)
+    clean = ts.gate_sizing(healthy, params)
+
+    thin = dict(healthy)
+    thin["NEW_SHORT"] = _thin_series(40, seed=77)
+    assert (ts.eval_sizing(thin["NEW_SHORT"], None)["score"]
+            == bt.UNRELIABLE_SCORE), "the fixture must actually be unscorable"
+
+    out = ts.gate_sizing(thin, params)
+    assert out["n_unscorable"] == 1
+    assert out["unscorable"] == ["NEW_SHORT"]
+    assert "NEW_SHORT" not in out["per_asset"]
+    assert out["n"] == clean["n"]
+    assert out["mean_d"] == clean["mean_d"]
+    assert out["verdict"] == clean["verdict"]
+
+
+def test_the_gate_is_unchanged_when_every_asset_is_scorable():
+    """The control: every sizing number already recorded came out of this."""
+    import train_sizing as ts
+    from core import sizing_policy as sp
+    healthy = {"A%d" % k: _series(300, seed=10 + k) for k in range(9)}
+    out = ts.gate_sizing(healthy, dict(sp.DEFAULT_PARAMS))
+    assert out["n_unscorable"] == 0
+    assert out["n"] == len(healthy)
+    assert out["mean_d"] == float(np.mean(list(out["per_asset"].values())))

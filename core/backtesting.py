@@ -119,6 +119,14 @@ def sharpe_from_returns(returns, periods_per_year: int = 252) -> float:
     return float(r.mean() / r.std() * np.sqrt(periods_per_year))
 
 
+# Not a score: the marker score_strategy returns when an arm made too few
+# trades to be judged. It is missing data wearing a number, and -999 averaged
+# in with real scores destroys any mean it touches - so a gate must drop the
+# asset, not average it. Named here because more than one gate has to test
+# for it and a magic number copied into each is how they drift apart.
+UNRELIABLE_SCORE = -999.0
+
+
 def score_strategy(
     profit: float,
     max_dd: float,
@@ -136,12 +144,12 @@ def score_strategy(
     few lucky large trades. Omitting `sharpe` reproduces the original composite,
     keeping older callers unchanged.
 
-    Returns -999 if fewer than `min_trades` trades (unreliable signal); the
-    position-aware v2 objective passes 5 because positions run about half the
-    per-bar count.
+    Returns UNRELIABLE_SCORE if fewer than `min_trades` trades (unreliable
+    signal); the position-aware v2 objective passes 5 because positions run
+    about half the per-bar count.
     """
     if trades < min_trades:
-        return -999.0
+        return UNRELIABLE_SCORE
     base = profit - 0.5 * max_dd + 0.1 * winrate
     if sharpe is not None:
         base += 2.0 * sharpe

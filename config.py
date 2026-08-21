@@ -59,36 +59,71 @@ SOCKS5_PROXY = os.getenv("SOCKS5_PROXY", "")
 FULL_ASSET_MAP = {
     # GLOBAL INDICES
     'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 'TNX': '^TNX',
-    'SP500': '^GSPC', 'NASDAQ': '^IXIC', 'DOW': '^DJI',
+    'SP500': '^GSPC', 'NASDAQ': '^IXIC', 'DOW': '^DJI', 'RUSSELL': '^RUT',
+
+    # WORLD INDICES
+    'NIKKEI': '^N225', 'HANGSENG': '^HSI', 'KOSPI': '^KS11', 'ASX200': '^AXJO',
+    'TSX': '^GSPTSE', 'BOVESPA': '^BVSP', 'NIFTY': '^NSEI', 'SHANGHAI': '000001.SS',
 
     # COMMODITIES
     'GOLD': 'GC=F', 'SILVER': 'SI=F', 'OIL': 'CL=F', 'GAS': 'NG=F',
+    'BRENT': 'BZ=F', 'COPPER': 'HG=F', 'PLATINUM': 'PL=F', 'PALLADIUM': 'PA=F',
+    'WHEAT': 'ZW=F', 'CORN': 'ZC=F', 'SOYBEAN': 'ZS=F',
+    'COFFEE': 'KC=F', 'SUGAR': 'SB=F', 'COCOA': 'CC=F',
 
     # US TECH
     'NVDA': 'NVDA', 'TSLA': 'TSLA', 'AAPL': 'AAPL', 'MSFT': 'MSFT',
     'GOOGL': 'GOOGL', 'AMZN': 'AMZN', 'META': 'META', 'AMD': 'AMD',
     'PLTR': 'PLTR', 'COIN': 'COIN', 'MSTR': 'MSTR',
+    # AI INFRASTRUCTURE
+    'CRWV': 'CRWV', 'NBIS': 'NBIS', 'ARM': 'ARM', 'ANET': 'ANET', 'DELL': 'DELL',
+    # OPENAI / ANTHROPIC EXPOSURE. Both are PRIVATE companies - there is no share to
+    # quote, so these are the listed proxies: DXYZ is a closed-end fund holding an
+    # OpenAI stake, SOFTBANK is OpenAI's largest listed shareholder, ARKVX is an
+    # interval fund holding BOTH OpenAI and Anthropic (NAV-priced and thin - treat
+    # its signals with care). MSFT / AMZN / GOOGL above are the funders themselves.
+    'DXYZ': 'DXYZ', 'SOFTBANK': 'SFTBY', 'ARKVX': 'ARKVX',
+    # ASIA / LATAM TECH
+    'TENCENT': 'TCEHY', 'SAMSUNG': '005930.KS', 'BYD': 'BYDDY', 'INFOSYS': 'INFY',
+    'PDD': 'PDD', 'JD': 'JD', 'NIO': 'NIO', 'XPEV': 'XPEV', 'SE': 'SE', 'MELI': 'MELI',
 
     # US HEALTHCARE
     'JNJ': 'JNJ', 'UNH': 'UNH', 'PFE': 'PFE', 'LLY': 'LLY',
     'ABBV': 'ABBV', 'MRK': 'MRK',
+    'TMO': 'TMO', 'ABT': 'ABT', 'AMGN': 'AMGN', 'GILD': 'GILD',
+    'BMY': 'BMY', 'ISRG': 'ISRG', 'VRTX': 'VRTX',
 
     # US FINANCE
     'JPM': 'JPM', 'BAC': 'BAC', 'GS': 'GS', 'V': 'V',
     'MA': 'MA', 'WFC': 'WFC',
+    'MS': 'MS', 'CITI': 'C', 'BLK': 'BLK', 'SCHW': 'SCHW',
+    'HOOD': 'HOOD', 'SPGI': 'SPGI', 'HDFC': 'HDB',
 
     # US CONSUMER
     'WMT': 'WMT', 'KO': 'KO', 'PEP': 'PEP', 'MCD': 'MCD',
     'NKE': 'NKE', 'DIS': 'DIS', 'NFLX': 'NFLX', 'SBUX': 'SBUX',
+    'ABNB': 'ABNB', 'BKNG': 'BKNG', 'LULU': 'LULU', 'CMG': 'CMG',
+    'TGT': 'TGT', 'LOW': 'LOW', 'MO': 'MO', 'MDLZ': 'MDLZ',
 
     # US INDUSTRIAL & ENERGY
     'BA': 'BA', 'CAT': 'CAT', 'XOM': 'XOM', 'CVX': 'CVX', 'COP': 'COP',
+    'GE': 'GE', 'HON': 'HON', 'LMT': 'LMT', 'RTX': 'RTX', 'UNP': 'UNP',
+    'DE': 'DE', 'SLB': 'SLB', 'OXY': 'OXY',
+    # DATA-CENTER POWER - the electricity side of the AI build-out
+    'VRT': 'VRT', 'CEG': 'CEG', 'VST': 'VST', 'TLN': 'TLN',
+    'NEE': 'NEE', 'OKLO': 'OKLO', 'GEV': 'GEV',
 
     # US SEMICONDUCTORS
     'INTC': 'INTC', 'QCOM': 'QCOM', 'AVGO': 'AVGO', 'MU': 'MU',
+    'MRVL': 'MRVL', 'SMCI': 'SMCI', 'MPWR': 'MPWR', 'TXN': 'TXN', 'ADI': 'ADI',
+    'LRCX': 'LRCX', 'AMAT': 'AMAT', 'KLAC': 'KLAC', 'NXPI': 'NXPI',
+    'ONSEMI': 'ON', 'GFS': 'GFS',
 
     # US SOFTWARE
     'CRM': 'CRM', 'ORCL': 'ORCL', 'ADBE': 'ADBE', 'UBER': 'UBER', 'PYPL': 'PYPL',
+    'NOW': 'NOW', 'SNOW': 'SNOW', 'DDOG': 'DDOG', 'MDB': 'MDB', 'NET': 'NET',
+    'PANW': 'PANW', 'CRWD': 'CRWD', 'ZS': 'ZS', 'TEAM': 'TEAM', 'SHOP': 'SHOP',
+    'INTU': 'INTU', 'WDAY': 'WDAY',
 
     # EU INDICES (native exchange tickers on Yahoo)
     'DAX': '^GDAXI', 'CAC40': '^FCHI', 'ESTOXX50': '^STOXX50E', 'FTSE100': '^FTSE',
@@ -116,6 +151,15 @@ FULL_ASSET_MAP = {
     'XRP': 'XRP-USD', 'TON': 'TON11419-USD', 'DOGE': 'DOGE-USD', 'BNB': 'BNB-USD',
     'ADA': 'ADA-USD', 'AVAX': 'AVAX-USD', 'DOT': 'DOT-USD', 'LINK': 'LINK-USD',
     'SHIB': 'SHIB-USD', 'ATOM': 'ATOM-USD', 'UNI': 'UNI7083-USD', 'NEAR': 'NEAR-USD',  # UNI-USD is empty on Yahoo, Uniswap trades under UNI7083-USD
+    'LTC': 'LTC-USD', 'BCH': 'BCH-USD', 'TRX': 'TRX-USD', 'XLM': 'XLM-USD',
+    'ETC': 'ETC-USD', 'HBAR': 'HBAR-USD', 'ICP': 'ICP-USD', 'FIL': 'FIL-USD',
+    'AAVE': 'AAVE-USD', 'POL': 'POL-USD', 'OP': 'OP-USD',
+    # Yahoo disambiguates these with a numeric suffix, the bare symbol returns nothing
+    'APT': 'APT21794-USD', 'ARB': 'ARB11841-USD', 'SUI': 'SUI20947-USD',
+    'PEPE': 'PEPE24478-USD', 'TAO': 'TAO22974-USD',
+    # AI-themed tokens. WLD (Worldcoin, Sam Altman's project) is the one asset that
+    # reprices on OpenAI news 24/7, which the equity proxies above cannot do.
+    'FET': 'FET-USD', 'RENDER': 'RENDER-USD', 'WLD': 'WLD-USD',
 
     # RU MARKET - Blue chips
     'IMOEX': 'IMOEX', 'SBER': 'SBER', 'GAZP': 'GAZP', 'LKOH': 'LKOH',
@@ -171,16 +215,34 @@ FULL_ASSET_MAP = {
 ASSET_TYPES = {
     "TOP SIGNALS": ["ETH", "TSLA", "GOLD", "VIX", "PLTR", "IMOEX"],
     "CRYPTO": ["BTC", "ETH", "SOL", "XRP", "TON", "DOGE", "BNB",
-               "ADA", "AVAX", "DOT", "LINK", "SHIB", "ATOM", "UNI", "NEAR"],
-    "COMMODITIES": ["GOLD", "SILVER", "OIL", "GAS"],
-    "INDICES & MACRO": ["SP500", "NASDAQ", "DOW", "IMOEX", "VIX", "DXY", "TNX"],
-    "US TECH": ["NVDA", "TSLA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AMD", "PLTR", "COIN", "MSTR", "SONY", "TSMC", "ALIBABA"],
-    "US HEALTHCARE": ["JNJ", "UNH", "PFE", "LLY", "ABBV", "MRK"],
-    "US FINANCE": ["JPM", "BAC", "GS", "V", "MA", "WFC", "AMEX"],
-    "US CONSUMER": ["WMT", "KO", "PEP", "MCD", "NKE", "DIS", "NFLX", "SBUX", "COST", "HD", "PG", "COLG", "ESTEE", "FORD", "GM", "FERRARI", "STELLANTIS", "TOYOTA", "SPOTIFY"],
-    "US INDUSTRIAL": ["BA", "CAT", "XOM", "CVX", "COP"],
-    "US SEMI": ["INTC", "QCOM", "AVGO", "MU"],
-    "US SOFTWARE": ["CRM", "ORCL", "ADBE", "UBER", "PYPL", "IBM", "CISCO"],
+               "ADA", "AVAX", "DOT", "LINK", "SHIB", "ATOM", "UNI", "NEAR",
+               "LTC", "BCH", "TRX", "XLM", "ETC", "HBAR", "ICP", "FIL", "AAVE",
+               "POL", "OP", "APT", "ARB", "SUI", "PEPE",
+               "TAO", "FET", "RENDER", "WLD"],
+    "COMMODITIES": ["GOLD", "SILVER", "OIL", "GAS", "BRENT", "COPPER", "PLATINUM",
+                    "PALLADIUM", "WHEAT", "CORN", "SOYBEAN", "COFFEE", "SUGAR", "COCOA"],
+    "INDICES & MACRO": ["SP500", "NASDAQ", "DOW", "RUSSELL", "IMOEX", "VIX", "DXY", "TNX",
+                        "NIKKEI", "HANGSENG", "KOSPI", "ASX200", "TSX", "BOVESPA",
+                        "NIFTY", "SHANGHAI"],
+    "US TECH": ["NVDA", "TSLA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AMD", "PLTR", "COIN", "MSTR", "SONY", "TSMC", "ALIBABA",
+                "CRWV", "NBIS", "ARM", "ANET", "DELL",
+                "DXYZ", "SOFTBANK", "ARKVX",
+                "TENCENT", "SAMSUNG", "BYD", "INFOSYS", "PDD", "JD", "NIO", "XPEV", "SE", "MELI"],
+    "US HEALTHCARE": ["JNJ", "UNH", "PFE", "LLY", "ABBV", "MRK",
+                      "TMO", "ABT", "AMGN", "GILD", "BMY", "ISRG", "VRTX"],
+    "US FINANCE": ["JPM", "BAC", "GS", "V", "MA", "WFC", "AMEX",
+                   "MS", "CITI", "BLK", "SCHW", "HOOD", "SPGI", "HDFC"],
+    "US CONSUMER": ["WMT", "KO", "PEP", "MCD", "NKE", "DIS", "NFLX", "SBUX", "COST", "HD", "PG", "COLG", "ESTEE", "FORD", "GM", "FERRARI", "STELLANTIS", "TOYOTA", "SPOTIFY",
+                    "ABNB", "BKNG", "LULU", "CMG", "TGT", "LOW", "MO", "MDLZ"],
+    "US INDUSTRIAL": ["BA", "CAT", "XOM", "CVX", "COP",
+                      "GE", "HON", "LMT", "RTX", "UNP", "DE", "SLB", "OXY",
+                      "VRT", "CEG", "VST", "TLN", "NEE", "OKLO", "GEV"],
+    "US SEMI": ["INTC", "QCOM", "AVGO", "MU",
+                "MRVL", "SMCI", "MPWR", "TXN", "ADI", "LRCX", "AMAT", "KLAC",
+                "NXPI", "ONSEMI", "GFS"],
+    "US SOFTWARE": ["CRM", "ORCL", "ADBE", "UBER", "PYPL", "IBM", "CISCO",
+                    "NOW", "SNOW", "DDOG", "MDB", "NET", "PANW", "CRWD", "ZS",
+                    "TEAM", "SHOP", "INTU", "WDAY"],
     "EU INDICES": ["DAX", "CAC40", "ESTOXX50", "FTSE100", "IBEX35", "FTSEMIB", "AEX", "SMI"],
     "EU STOCKS": ["ASML", "LVMH", "SAP", "NESTLE", "NOVO", "AZN", "SHELL", "TOTAL",
                   "SIEMENS", "AIRBUS", "LOREAL", "ALLIANZ", "HERMES", "SCHNEIDER",
@@ -257,7 +319,8 @@ SECTOR_MAP = {
     "US Finance":    ASSET_TYPES["US FINANCE"],
     "US Consumer":   ASSET_TYPES["US CONSUMER"],
     "US Industrial": _merge_types("US INDUSTRIAL", "US SEMI", "US SOFTWARE"),
-    "Indices":       ["SP500", "NASDAQ", "DOW"] + ASSET_TYPES["EU INDICES"],
+    "Indices":       [a for a in ASSET_TYPES["INDICES & MACRO"]
+                      if a not in ("VIX", "DXY", "TNX", "IMOEX")] + ASSET_TYPES["EU INDICES"],
     "Macro":         ["VIX", "DXY", "TNX"],
     "Commodities":   ASSET_TYPES["COMMODITIES"],
     "Europe":        ASSET_TYPES["EU STOCKS"],
