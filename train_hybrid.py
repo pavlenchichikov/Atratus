@@ -1395,6 +1395,17 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             'CB_AUC': None if _cb_auc is None else float(_cb_auc),
             'Ens_AUC': None if _ens_auc is None else float(_ens_auc),
             'Score': float(best_fold['score']),
+            # Every fold's score, not only the champion's. Score is an argmax
+            # over folds, so its noise cannot be measured from the row itself,
+            # and an A/B verdict is read off exactly this row: without the folds
+            # the only way to ask how noisy an arm is was a separate experiments
+            # log the A/B never writes. Measured 2026-08-21 over 92 historical
+            # runs / 1506 paired assets: most of the retraining noise is COMMON
+            # to all folds (2.55 across retrainings vs 1.22 expected from fold
+            # sampling), so averaging folds does NOT rescue the Score - which is
+            # why this is a column to measure with, not a new basis.
+            'Fold_Scores': [float(x['score']) for x in fold_metrics
+                            if isinstance(x.get('score'), (int, float))],
             'Score_v2': float(best_fold.get('test_score_v2', 0.0)),
             'Profit': float(best_fold['test_profit']),
             'Trades': int(best_fold['test_trades']),

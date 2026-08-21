@@ -124,6 +124,36 @@ def compact_findings(findings, n=12):
     return out
 
 
+def axis_yield(findings, n=30):
+    """Per-axis totals over the recent journal: cycles spent, winners, gate flags.
+
+    compact_findings puts one record per cycle in front of the model and leaves
+    the adding up to it, which a local model does not do: on 2026-08-20 the
+    director spent five consecutive cycles on `hyper`, every one of them
+    returning zero winners, because no line said "this axis has produced
+    nothing five times running". Winners are attributed by their own `axis`
+    field, so a mixed cycle credits the axis that actually produced them.
+    """
+    tot = {}
+
+    def slot(ax):
+        return tot.setdefault(ax, {"axis": ax, "cycles": 0, "winners": 0,
+                                   "gate_flagged": 0})
+
+    for rec in list(findings or [])[-n:]:
+        axes = rec.get("axes") or ["qd"]
+        for ax in axes:
+            slot(ax)["cycles"] += 1
+        for w in rec.get("winners") or []:
+            ax = w.get("axis") or (axes[0] if len(axes) == 1 else None)
+            if ax is None:
+                continue
+            slot(ax)["winners"] += 1
+            if w.get("adoptable"):
+                slot(ax)["gate_flagged"] += 1
+    return sorted(tot.values(), key=lambda c: (-c["cycles"], c["axis"]))
+
+
 def _prompt(ctx):
     return (
         "You direct a machine-learning research agent that searches for better "
@@ -143,6 +173,11 @@ def _prompt(ctx):
         "and would_demote count the assets whose champion the candidate would "
         "replace or lose, which is the decision production makes. Only a PASSED "
         "verdict here means something improved.\n%(adoptions)s\n\n"
+        "3. Per-axis totals over the same journal: how many cycles each axis "
+        "was searched, how many winners it produced and how many of those the "
+        "gate flagged. An axis with several cycles and no winners has already "
+        "answered: under this basis the search finds nothing there, and "
+        "spending another cycle on it buys another empty run.\n%(axis_yield)s\n\n"
         "If an axis keeps being gate_flagged while its A/B outcomes FAIL, that "
         "axis is exhausted whatever its gate values look like. Prefer an axis or "
         "a search mode that has not been ruled out that way.\n\n"
@@ -200,6 +235,7 @@ def _prompt(ctx):
         % {"basis": ctx["basis"], "objective": ctx["objective"],
            "decision": ctx["decision"],
            "findings": json.dumps(ctx["findings"], indent=1),
+           "axis_yield": json.dumps(ctx["axis_yield"], indent=1),
            "adoptions": (json.dumps(ctx["adoptions"], indent=1)
                          if ctx["adoptions"] else
                          "  (no A/B has finished in this campaign yet)"),
@@ -419,6 +455,7 @@ def propose(findings, campaign, archive_n=0, cycles=0, adoptions=None):
                         or campaign.get("GTRADE_AR_SCORE_BASIS", "raw")),
            "objective": campaign.get("GTRADE_AR_OBJECTIVE", "mean"),
            "findings": compact_findings(findings),
+           "axis_yield": axis_yield(findings),
            "adoptions": adoptions or [],
            "archive_n": archive_n, "cycles": cycles}
     try:

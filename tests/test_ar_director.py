@@ -243,3 +243,28 @@ def test_compact_findings_drops_the_genome_bodies():
     assert out == [{"ts": "2026-08-16", "mode": "qd", "basis": "net_auc",
                     "axes": ["qd"], "tried": 2, "gate_flagged": 1, "best": 0.02}]
     assert "genome" not in repr(out)
+
+
+def test_axis_yield_totals_the_cycles_an_axis_produced_nothing_in():
+    """The record-per-cycle view leaves the adding up to the model, and a local
+    model does not do it: five consecutive empty `hyper` cycles read as five
+    unrelated records. The totals must say it in one line."""
+    findings = [{"axes": ["hyper"], "winners": []} for _ in range(5)]
+    findings.append({"axes": ["qd"], "winners": [{"axis": "qd", "adoptable": True}]})
+    out = {c["axis"]: c for c in ar_director.axis_yield(findings)}
+    assert out["hyper"] == {"axis": "hyper", "cycles": 5, "winners": 0,
+                            "gate_flagged": 0}
+    assert out["qd"] == {"axis": "qd", "cycles": 1, "winners": 1,
+                         "gate_flagged": 1}
+    # the busiest axis first, so the empty one cannot hide at the bottom
+    assert ar_director.axis_yield(findings)[0]["axis"] == "hyper"
+
+
+def test_a_mixed_cycle_credits_the_axis_that_produced_the_winner():
+    """Both axes spent a cycle, but only one of them found anything. Splitting
+    the winner across the pair would exonerate the axis that found nothing."""
+    findings = [{"axes": ["hyper", "features"],
+                 "winners": [{"axis": "features", "adoptable": False}]}]
+    out = {c["axis"]: c for c in ar_director.axis_yield(findings)}
+    assert out["hyper"]["cycles"] == 1 and out["hyper"]["winners"] == 0
+    assert out["features"]["cycles"] == 1 and out["features"]["winners"] == 1
