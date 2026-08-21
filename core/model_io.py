@@ -127,6 +127,69 @@ def build_lstm_legacy(input_shape):
     return Model(inputs, outputs)
 
 
+# Keys a Keras 2 layer config carries that Keras 3 refuses. `time_major` was
+# dropped from the RNN signature; `dtype` used to be a plain string and is now a
+# policy object, so the string reaches DTypePolicy and dies on .quantization_mode.
+# Dropping both leaves the layer on the default policy, which changes nothing a
+# serve-time forward pass can see: the weights are the same shapes either way.
+_KERAS2_ONLY_CONFIG_KEYS = ("time_major", "dtype")
+
+
+def _scrub_keras2_config(obj):
+    if isinstance(obj, dict):
+        return {k: _scrub_keras2_config(v) for k, v in obj.items()
+                if k not in _KERAS2_ONLY_CONFIG_KEYS}
+    if isinstance(obj, list):
+        return [_scrub_keras2_config(v) for v in obj]
+    return obj
+
+
+def _from_embedded_config(path):
+    """Rebuild a legacy HDF5 champion from the architecture IT carries.
+
+    Training runs under Keras 2 in the GPU environment and writes HDF5; serving
+    runs under Keras 3 and cannot open it. The other rebuild paths guess the
+    architecture from a builder's current defaults, so they only fit a champion
+    whose sizes happen to match - and optuna picks its own. Measured on SP500
+    2026-08-21: the file holds a 80/40-unit two-layer attention net, while V50
+    expects 192 units and V49 expects six layers, so both fail and the member is
+    dropped. But the HDF5 also carries `model_config`, the real architecture, so
+    nothing has to be guessed at all.
+
+    Returns the model, or None when this is not that kind of file. Weights are
+    loaded by name and shape, so a config that did not match would raise rather
+    than serve a half-initialised net.
+    """
+    import shutil
+
+    import h5py
+
+    if _detect_format(path) != "hdf5":
+        return None
+    h5_path = path.replace(".keras", ".cfg.tmp.h5")
+    try:
+        shutil.copy2(path, h5_path)
+        with h5py.File(h5_path, "r") as fh:
+            raw = fh.attrs.get("model_config")
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        cfg = json.loads(raw)
+        model = Model.from_config(_scrub_keras2_config(cfg["config"]))
+        model.load_weights(h5_path)
+        return model
+    except Exception as exc:
+        logger.debug("Embedded-config rebuild failed for %s: %s", path, exc)
+        return None
+    finally:
+        if os.path.exists(h5_path):
+            try:
+                os.remove(h5_path)
+            except OSError:
+                pass
+
+
 def _detect_format(path):
     """Detect if file is ZIP (.keras native) or HDF5."""
     with open(path, 'rb') as f:
@@ -256,6 +319,11 @@ def _rebuild_from_legacy(path, builder, lookback, n_features, **kwargs):
     import shutil
     if _detect_format(path) != "hdf5":
         return None
+    # The file's own architecture first; the builder below is the fallback for
+    # champions written before model_config was embedded.
+    rebuilt = _from_embedded_config(path)
+    if rebuilt is not None:
+        return rebuilt
     h5_path = path.replace(".keras", ".tmp.h5")
     try:
         shutil.copy2(path, h5_path)
@@ -335,6 +403,15 @@ def load_lstm_model(lstm_path, lookback, n_features):
             logger.debug("Lookback override for %s: %d - %d (from weights)", lstm_path, lookback, detected_lb)
             lookback = detected_lb
         input_shape = (lookback, n_features)
+
+        # Method 0b: the architecture the FILE carries, which no guess can beat.
+        # Ahead of V50/V49 on purpose: those two fit only a champion whose sizes
+        # match a builder default, and a wrong-but-loadable skeleton is the one
+        # failure that is silent.
+        rebuilt = _from_embedded_config(lstm_path)
+        if rebuilt is not None:
+            native_lb = getattr(rebuilt, "input_shape", (None, lookback))[1] or lookback
+            return rebuilt, "DUAL (AI)", int(native_lb)
 
         # Method 1: V50 architecture (192/96+ReduceSumLayer), Keras 2.x load_weights
         try:
