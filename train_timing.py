@@ -192,6 +192,18 @@ def build_asset_series(asset, engine=None):
         return None
 
     if len(probs) < MIN_PROB_ROWS:
+        # Say which of the two reasons it was. An asset that vanishes from the
+        # fit with no line against its name is a silently smaller n, and the
+        # gate then describes a population nobody chose. YNDX was dropped this
+        # way for months: 441 usable rows, but no saved scaler, so only the
+        # last 20 percent (89 rows) could be scored.
+        if _src != "saved":
+            print("[timing] skip %s: no saved scaler, so only the last 20%% of "
+                  "%d rows is scorable (%d < %d). Retrain it to write one."
+                  % (asset, len(df_feat), len(probs), MIN_PROB_ROWS))
+        else:
+            print("[timing] skip %s: %d champion-scorable rows, needs %d"
+                  % (asset, len(probs), MIN_PROB_ROWS))
         return None
 
     # Taleb risk needs the earlier history to warm up its rolling window, so
