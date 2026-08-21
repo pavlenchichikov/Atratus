@@ -137,6 +137,47 @@ def build_config(candidates, assets, ref, floor, alpha, seed, objective):
     }
 
 
+def last_spread(base=None):
+    """The per-asset spread the most recent A/B actually observed, or None.
+
+    Recorded from 2026-08-21 onward as `sd_raw`. Older runs did not keep it, so
+    a repository with only those answers None rather than a guess.
+    """
+    import glob
+    for path in sorted(glob.glob(os.path.join(base or BASE,
+                                              "_ab_genomes_*.json")),
+                       reverse=True):
+        data = _read_json(path) or {}
+        for res in (data.get("results") or {}).values():
+            if isinstance(res, dict) and res.get("sd_raw"):
+                return float(res["sd_raw"])
+    return None
+
+
+def projected_power(n, floor, base=None):
+    """What a run of `n` assets could resolve, before it is paid for.
+
+    The point of doing this at configure time: a holdout that cannot resolve
+    its own floor takes the same hours to run as one that can, and answers
+    nothing. On 2026-08-21 the spread was 3.74 in Score units, which means even
+    the whole 207-asset universe resolves only about +0.65, so the honest move
+    is to raise the floor or lower the noise rather than to spend the hours.
+    """
+    sd = last_spread(base)
+    if not sd or not n or floor <= 0:
+        return ""
+    mde = Z_SUM * sd / (n ** 0.5)
+    needed = int((Z_SUM * sd / floor) ** 2 + 0.999)
+    if mde <= floor:
+        return ("  power: at the last measured spread %.3g, %d assets resolve "
+                "%+.3g, which clears the floor %+.3g." % (sd, n, mde, floor))
+    return ("  power: at the last measured spread %.3g, %d assets resolve only "
+            "%+.3g against a floor of %+.3g. %d assets would be needed. Raise "
+            "--n, raise the floor, or reduce the noise; running it as "
+            "configured cannot answer the question."
+            % (sd, n, mde, floor, needed))
+
+
 def write_config(cfg, path=None):
     with open(path or CONFIG_PATH, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, ensure_ascii=False, indent=2)
@@ -379,6 +420,11 @@ def _print_config(cfg):
               % (c["label"], len(g.get("drops") or []),
                  len(g.get("extra") or []), g.get("label_mode", "direction"),
                  g.get("label_window", 30)))
+    # Said BEFORE the hours are spent. A holdout that cannot resolve its own
+    # floor costs exactly as much to run as one that can, and answers nothing.
+    pw = projected_power(len((cfg["holdout"] or "").split(",")), cfg["floor"])
+    if pw:
+        print(pw)
 
 
 def _heldout_eval(subset, env, fn, **kw):
@@ -440,7 +486,9 @@ def evaluate(cand, subset, ref_full, ref_contrib, objective):
     # the raw Score, whatever basis the verdict above is read in. It costs
     # nothing here and it is the only number that is about production.
     promo = ar.promotion_stats(ref_full, var_full)
-    return {"sig": sig, "p": p, "value": value, "n": len(deltas),
+    import statistics as _st
+    sd = float(_st.stdev(deltas)) if len(deltas) > 1 else 0.0
+    return {"sig": sig, "p": p, "value": value, "n": len(deltas), "sd": sd,
             "p_neural": p_n, "value_neural": value_n,
             "promoted": promo["promoted"], "demoted": promo["demoted"],
             "p_promotion": promo["p"]}
@@ -453,6 +501,49 @@ def ar_promotion_tag(stats):
                              "demoted": stats.get("demoted", 0),
                              "n": stats.get("promoted", 0) + stats.get("demoted", 0),
                              "p": stats.get("p_promotion", 1.0)})
+
+
+# One-sided alpha 0.05 plus 80 percent power, as z scores: 1.645 + 0.842.
+# Kept as one constant because both numbers are conventions, and a reader who
+# wants different ones should see where they are.
+Z_SUM = 2.487
+
+
+def power(stats, floor):
+    """What this A/B could have seen, given the spread it actually observed.
+
+    A FAILED verdict is two different results wearing one word. Either the
+    candidate was measured and did not clear the floor, or the holdout was
+    never able to resolve an effect that size and the run says nothing. On
+    2026-08-21 the second was the true state of every campaign A/B: per-asset
+    deltas carry a standard deviation of about 3.74 in Score units, so a
+    14-asset holdout can only resolve about +2.2, while the adoption floor is
+    +0.5. Reporting the verdict without this number is reporting a null result
+    that was never possible to disprove.
+
+    Returns the minimum detectable effect at the observed spread, whether the
+    run was powered for the floor it was judged against, and the holdout size
+    that floor would need.
+    """
+    n = stats.get("n") or 0
+    sd = stats.get("sd")
+    if not n or sd is None or sd <= 0.0:
+        return {"mde": None, "powered": None, "n_needed": None}
+    mde = Z_SUM * sd / (n ** 0.5)
+    needed = int((Z_SUM * sd / floor) ** 2 + 0.999) if floor > 0 else None
+    return {"mde": mde, "powered": bool(mde <= floor), "n_needed": needed}
+
+
+def power_tag(stats, floor):
+    """The power reading as one line, or empty when it cannot be computed."""
+    pw = power(stats, floor)
+    if pw["mde"] is None:
+        return ""
+    if pw["powered"]:
+        return "powered: could resolve %+.4g, floor %+.4g" % (pw["mde"], floor)
+    return ("UNDERPOWERED: could only resolve %+.4g against a floor of %+.4g; "
+            "%d assets would be needed, this run had %d"
+            % (pw["mde"], floor, pw["n_needed"], stats.get("n") or 0))
 
 
 def verdict(stats, floor, alpha):
@@ -501,6 +592,9 @@ def write_result(cfg, results, base=None):
         "reference_sig": cfg["reference_sig"],
         "results": {label: {"sig": st["sig"], "value_raw": st["value"],
                             "p_raw": st["p"], "n_raw": st["n"],
+                            "sd_raw": st.get("sd"),
+                            "mde": power(st, cfg["floor"])["mde"],
+                            "powered": power(st, cfg["floor"])["powered"],
                             "value_neural": st["value_neural"],
                             "p_neural": st["p_neural"], "label": label,
                             "promoted": st.get("promoted"),
@@ -564,6 +658,11 @@ def run(cfg):
         tag = ar_promotion_tag(st)
         if tag:
             print("  %-8s %s" % ("", tag))
+        # And what the run could have seen at all. Without it a FAILED reads as
+        # "no effect" when the honest reading is often "not measurable here".
+        pw = power_tag(st, cfg["floor"])
+        if pw:
+            print("  %-8s %s" % ("", pw))
     if ar_memory.data_fingerprint(subset) != fp_start:
         print("\nWARNING: market.db changed while this run was in progress. The "
               "arms were measured over different windows, so the comparison is "

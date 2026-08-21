@@ -43,3 +43,25 @@ class SizingPolicy:
                 - float(p["k_vol"]) * feat["atr_pct"]
                 - float(p["k_taleb"]) * feat["taleb_hi"])
         return np.clip(size, SIZE_LO, SIZE_HI)
+
+
+def match_exposure(sizes, sides):
+    """Rescale sizes so the average notional held equals the incumbent's.
+
+    Without this the gate measures LEVERAGE, not sizing. Measured 2026-08-21 on
+    ten assets: a CONSTANT size of 1.5, which carries no information at all,
+    scored +61.0 against the unit-size arm at p 0.0010, and the fitted rule at
+    an average size of 1.63 scored +148.5. score_strategy compounds profit with
+    the position while Sharpe is scale-invariant and drawdown is weighted 0.5,
+    so any candidate can buy a verdict by simply holding more.
+
+    Matched exposure leaves exactly one thing a candidate can vary: WHERE the
+    size goes, not how much of it there is.
+    """
+    held = np.asarray(sides) != 0
+    if not held.any():
+        return sizes
+    mean_held = float(np.mean(np.abs(np.asarray(sizes, dtype=float)[held])))
+    if mean_held <= 0.0:
+        return sizes
+    return np.asarray(sizes, dtype=float) / mean_held

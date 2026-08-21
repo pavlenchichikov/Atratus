@@ -65,6 +65,10 @@ echo    [RS] Auto-research agent (own menu)   [LC] Daily loop cycle
 echo    [AL] Autonomous cycle: search, A/B, adopt   [ALS] Its stage / stop it
 echo    [RC] Recalibrate live probabilities   [TP] Fit the timing policy
 echo    [TL] Fit the trade-levels policy (entry zone and stop)
+echo    [PS] Policy results and how they did on LIVE signals
+echo    [TB] Timing: fitted-Q challenger   [TO] Timing: one online tick
+echo    [SZ] Fit the position-sizing rule (at matched exposure)
+echo    [DR] Fit the direction rule on LIVE outcomes (follow / aside / invert)
 echo.
 echo =======================================================
 set /p choice="Select: "
@@ -105,6 +109,11 @@ if /i "%choice%"=="LC" goto loop_cycle
 if /i "%choice%"=="RC" goto recalibrate
 if /i "%choice%"=="TP" goto timing_policy
 if /i "%choice%"=="TL" goto levels_policy
+if /i "%choice%"=="PS" goto policy_status
+if /i "%choice%"=="TB" goto timing_stage_b
+if /i "%choice%"=="TO" goto timing_online
+if /i "%choice%"=="SZ" goto sizing_policy
+if /i "%choice%"=="DR" goto direction_policy
 if /i "%choice%"=="ABC" goto ab_configure
 if /i "%choice%"=="ABR" goto ab_run
 if /i "%choice%"=="L" goto signal_log
@@ -465,6 +474,86 @@ echo REPLACES models\live_calib_global.pkl. Weekly is enough. Delete that file
 echo to roll back to the raw model probabilities.
 echo.
 python recalibrate_live.py
+pause
+goto menu
+
+:policy_status
+cls
+echo What every policy layer concluded, and what it was worth on the signals
+echo production actually sent. Two different claims, kept apart on purpose: a
+echo backtest verdict is not a live reading.
+echo.
+echo It also writes policy_status.json, which is what the /research page shows,
+echo so the page never has to read every asset's bars on a request.
+echo.
+set /p PS_DAYS="Reconcile the last N trading days (Enter = all): "
+if "%PS_DAYS%"=="" (python policy_status.py) else (python policy_status.py --days %PS_DAYS%)
+set "PS_DAYS="
+pause
+goto menu
+
+:timing_stage_b
+cls
+echo Fits a Q challenger to the ADOPTED timing rules and gates it against them,
+echo not against the baseline: the rules already beat the baseline, so beating
+echo it again would prove nothing.
+echo.
+echo Prints the correlation between what the fit maximises and what the gate
+echo reads, beside the verdict. A verdict that arrives with a flat or negative
+echo correlation is a coincidence until it replicates.
+echo.
+set /p TB_ITERS="Q iterations, one horizon rung each (Enter = 6): "
+if "%TB_ITERS%"=="" set TB_ITERS=6
+cmd /c ""%~dp0run_in_env.bat" python train_timing.py --stage b --iters %TB_ITERS%"
+set "TB_ITERS="
+pause
+goto menu
+
+:timing_online
+cls
+echo One online tick: refit the timing Q on the newest data and accept it only
+echo if it stays near the adopted rules and beats the generation in shadow.
+echo.
+echo The anchor is the rules, permanently, never the previous generation. Two
+echo losing generations in a row halt the schedule back to the rules.
+echo.
+cmd /c ""%~dp0run_in_env.bat" python train_timing_online.py"
+pause
+goto menu
+
+:direction_policy
+cls
+echo Asks the widest question in the system: should the ensemble's direction be
+echo followed at all, above a given confidence. Fitted on the earlier live days
+echo and judged on the later ones, paired over assets. Following is in the
+echo search space, so the incumbent can win.
+echo.
+echo Fitted on LIVE outcomes, not on reconstructed history, because the two
+echo disagree about the sign of the relationship this rule conditions on.
+echo.
+echo Nothing is served. It writes direction_report.json and no serve path
+echo reads it.
+echo.
+set /p DR_DAYS="Live days to use (Enter = 120): "
+if "%DR_DAYS%"=="" set DR_DAYS=120
+python train_direction.py --days %DR_DAYS%
+set "DR_DAYS="
+pause
+goto menu
+
+:sizing_policy
+cls
+echo Fits how big a position should be, given the side something else already
+echo chose. Exposure is MATCHED before scoring, so a rule cannot win by simply
+echo holding more: a constant size scores exactly like the unit position.
+echo.
+echo Nothing here reaches serving. Production sizing is Kelly plus the Taleb
+echo cap and this does not touch it.
+echo.
+set /p SZ_BUDGET="Search iterations (Enter = 300): "
+if "%SZ_BUDGET%"=="" set SZ_BUDGET=300
+python train_sizing.py --budget %SZ_BUDGET%
+set "SZ_BUDGET="
 pause
 goto menu
 

@@ -228,6 +228,13 @@ def ab_outcomes(base=None, limit=8, with_sig=False):
                 "would_promote": promoted,
                 "would_demote": demoted,
                 "verdict": "PASSED" if passed else "FAILED",
+                # What the run could have seen. A director told only that a
+                # candidate FAILED will keep proposing around a result that was
+                # never measurable; told the run was underpowered, it can ask
+                # for a bigger holdout instead. Absent on runs that predate it.
+                "powered": res.get("powered"),
+                "mde": (None if res.get("mde") is None
+                        else round(res["mde"], 5)),
             })
             if with_sig:
                 out[-1]["sig"] = res.get("sig")

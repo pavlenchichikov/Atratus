@@ -609,3 +609,51 @@ def test_the_llm_stays_the_default_director(monkeypatch):
                                                    {"history": []})
     assert seen == {"llm": True}
     assert chose["by"] is None          # propose returned None, nothing applied
+
+
+# --- what an A/B could have seen ---------------------------------------------
+
+def test_an_underpowered_run_is_named_as_one_not_reported_as_a_null():
+    """A FAILED verdict is two results wearing one word. The campaign's own
+    holdout carries a per-asset spread near 3.74 in Score units, so 14 assets
+    can only resolve about +2.2 against a floor of +0.5, and every A/B that
+    said FAILED was saying "not measurable" without the word."""
+    st = {"n": 14, "sd": 3.74, "p": 0.6, "value": 0.1}
+    pw = ab_build.power(st, floor=0.5)
+    assert pw["powered"] is False
+    assert 2.0 < pw["mde"] < 2.6
+    assert pw["n_needed"] > 300
+    assert "UNDERPOWERED" in ab_build.power_tag(st, 0.5)
+
+
+def test_a_run_that_could_resolve_the_floor_says_so():
+    """The other end of the control: with a tight spread the same code has to
+    report the run as powered, or the label means nothing."""
+    st = {"n": 200, "sd": 1.0, "p": 0.2, "value": 0.1}
+    pw = ab_build.power(st, floor=0.5)
+    assert pw["powered"] is True and pw["mde"] < 0.5
+    assert "UNDERPOWERED" not in ab_build.power_tag(st, 0.5)
+
+
+def test_power_says_nothing_rather_than_guessing_without_a_spread():
+    assert ab_build.power({"n": 0, "sd": None}, 0.5)["mde"] is None
+    assert ab_build.power({"n": 1, "sd": 0.0}, 0.5)["mde"] is None
+    assert ab_build.power_tag({"n": 0, "sd": None}, 0.5) == ""
+
+
+def test_the_projection_refuses_to_guess_without_a_measured_spread(tmp_path):
+    """No recorded spread means no projection, not an invented one: the runs
+    before 2026-08-21 did not keep the number."""
+    assert ab_build.last_spread(str(tmp_path)) is None
+    assert ab_build.projected_power(14, 0.5, str(tmp_path)) == ""
+
+
+def test_the_projection_names_a_holdout_that_cannot_answer(tmp_path):
+    (tmp_path / "_ab_genomes_20260821-1200.json").write_text(json.dumps(
+        {"results": {"c": {"sd_raw": 3.74}}}), encoding="utf-8")
+    assert ab_build.last_spread(str(tmp_path)) == 3.74
+    small = ab_build.projected_power(14, 0.5, str(tmp_path))
+    assert "cannot answer" in small and "would be needed" in small
+    # and the other end: a floor the same holdout CAN resolve reads as clear
+    big = ab_build.projected_power(14, 5.0, str(tmp_path))
+    assert "clears the floor" in big

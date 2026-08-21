@@ -208,9 +208,13 @@ def _research_snapshot():
         }
     except Exception:
         director = {"mode": "llm", "arms": [], "recent": []}
+    # The policy layers and how they did on live signals. Read from the
+    # snapshot policy_status.py writes, never recomputed here: the live sizing
+    # arm reads every asset's bars, which is not something a page request does.
+    policies = _load_json(os.path.join(BASE_DIR, "policy_status.json"), None)
     return {"summary": summary, "rows": rows, "runs": len(recent),
             "progress": ar_progress.snapshot(), "cycle": cycle,
-            "director": director}
+            "director": director, "policies": policies}
 
 
 def _spark(closes, w=110, h=26):

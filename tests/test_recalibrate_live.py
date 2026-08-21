@@ -45,10 +45,22 @@ def test_a_constant_fit_is_refused(tmp_path, capsys):
 
 def test_a_usable_fit_is_still_written(tmp_path):
     # The positive control: the guard must not block a layer that does its job.
+    # install=True is now required, because a layer chosen on a few weeks of
+    # live history can cut how much the system trades by an order of magnitude
+    # (measured 2026-08-21: 99.6 percent of rows reach a threshold today, 6.2
+    # percent would after the fitted map), so writing it is a deliberate act.
     path = _db(tmp_path, _rows(600, informative=True))
-    out = rl.main(days=3650, model_dir=str(tmp_path), db_path=path)
+    out = rl.main(days=3650, model_dir=str(tmp_path), db_path=path,
+                  install=True)
     assert out is not None
     assert (tmp_path / "live_calib_global.pkl").exists()
+
+
+def test_a_usable_fit_is_NOT_written_without_being_asked(tmp_path):
+    """The other half of that change: the default is a report."""
+    path = _db(tmp_path, _rows(600, informative=True))
+    assert rl.main(days=3650, model_dir=str(tmp_path), db_path=path) is None
+    assert not (tmp_path / "live_calib_global.pkl").exists()
 
 
 def test_spread_helper_reports_a_flat_map_as_zero():

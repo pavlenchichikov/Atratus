@@ -56,6 +56,76 @@
 </section>
 
 <section class="panel fade">
+  <div class="panel-head"><h2>Policy layers</h2>
+    {% if policies %}<span class="dim mono">as of {{ policies.computed }}</span>
+    {% else %}<span class="dim mono">never computed</span>{% endif %}</div>
+  {% if not policies %}
+  <p class="dim" style="padding: 0 16px;">Run
+    <span class="mono">python policy_status.py</span> to fill this in. It is a
+    snapshot on purpose: the live sizing arm reads every asset's bars, which is
+    not work a page request should do.</p>
+  {% else %}
+  <p class="dim" style="padding: 0 16px;">What each fit concluded on
+    reconstructed history, and what the same layers were worth on the signals
+    production actually sent over {{ policies.days }} trading days. A backtest
+    verdict and a live reading are not the same claim.</p>
+  <table class="grid">
+    <thead><tr><th>Layer</th><th>Verdict</th><th class="num">Assets</th>
+      <th class="num">Mean</th><th class="num">Median</th>
+      <th class="num">Improved</th></tr></thead>
+    <tbody>
+      {% for r in policies.reports %}
+      <tr><td class="mono">{{ r.name }}</td>
+        <td class="mono">{{ r.verdict or "-" }}</td>
+        <td class="num mono">{{ r.n or "-" }}</td>
+        <td class="num mono">{% if r.mean_d is defined and r.mean_d is not none %}{{ "%+.3f"|format(r.mean_d) }}{% else %}-{% endif %}</td>
+        <td class="num mono">{% if r.median_d is defined and r.median_d is not none %}{{ "%+.3f"|format(r.median_d) }}{% else %}-{% endif %}</td>
+        <td class="num mono">{% if r.up is defined and r.up is not none %}{{ r.up }}/{{ r.up + r.down }}{% else %}-{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <h3 style="padding: 12px 16px 0;">On live signals</h3>
+  <table class="grid">
+    <thead><tr><th>Arm</th><th class="num">Assets</th><th class="num">Rows</th>
+      <th class="num">Profit %</th><th class="num">Win rate</th>
+      <th class="num">Sharpe</th><th class="num">Trades</th></tr></thead>
+    <tbody>
+      {% for name, a in policies.live.items() %}
+      <tr><td class="mono">{{ name }}</td>
+        {% if a.status == "measured" %}
+        <td class="num mono">{{ a.assets }}</td>
+        <td class="num mono">{{ a.rows }}</td>
+        <td class="num mono">{{ "%+.3f"|format(a.profit) }}</td>
+        <td class="num mono">{{ "%.1f"|format(a.winrate) }}</td>
+        <td class="num mono">{{ "%.3f"|format(a.sharpe) }}</td>
+        <td class="num mono">{{ a.trades }}</td>
+        {% else %}
+        <td class="dim mono" colspan="6">no live decisions logged</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <h3 style="padding: 12px 16px 0;">Live accuracy by confidence</h3>
+  <p class="dim" style="padding: 0 16px;">The reading that decides whether any
+    overlay can help: sizing up on strong signals is worth nothing if the
+    strong signals are the wrong ones.</p>
+  <table class="grid">
+    <thead><tr><th>|prob - 0.5|</th><th class="num">Rows</th>
+      <th class="num">Accuracy</th><th class="num">Mean return</th></tr></thead>
+    <tbody>
+      {% for b in policies.buckets %}
+      <tr><td class="mono">{{ b.bucket }}</td>
+        <td class="num mono">{{ b.rows }}</td>
+        <td class="num mono">{{ "%.1f"|format(b.accuracy) }}</td>
+        <td class="num mono">{{ "%+.5f"|format(b.mean_ret) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<section class="panel fade">
   <div class="panel-head"><h2>Campaign director</h2>
     <span class="dim mono">{{ director.mode }}</span></div>
   <p class="dim" style="padding: 0 16px;">Who chooses what each cycle tries. The
