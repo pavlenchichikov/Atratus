@@ -16,9 +16,14 @@ badly when it runs.
 stdlib + numpy + catboost + core.timing_policy only. Series come from
 train_timing.build_asset_series; nothing here reads a database or a model file.
 """
+import os
+
 import numpy as np
 
 from core import timing_policy as tp
+from core.logger import get_logger
+
+_logger = get_logger("timing_fqi")
 
 # The state vector of spec 4.1, plus the action as the last column so one
 # regressor carries Q(s, a) instead of one model per action.
@@ -304,3 +309,83 @@ class FqiPolicy:
                     st["seg_ret"] += st["pos"] * r
                     st["seg_peak"] = max(st["seg_peak"], st["seg_ret"])
         return sides, actions, reasons
+
+# --- Serving --------------------------------------------------------------
+# The plan's follow-up trigger, written before the verdict was known: "on an
+# ADOPT verdict, the follow-up task is a loader that returns the FQI policy and
+# a policy_step equivalent fed by the context core/scoring.py already computes."
+# It adopted on 2026-08-22 (mean_d +3.672, p_bh 0.0000, 314 assets), so here it
+# is. Default OFF, exactly as Stage A shipped: GTRADE_TIMING_STAGE=b is what
+# moves serving off the rules, and without it this file changes nothing.
+
+MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "timing_fqi.cbm")
+
+
+def stage_b_on():
+    """True when serving should read the fitted Q instead of the Stage-A rules.
+
+    Separate from GTRADE_TIMING_POLICY on purpose: that flag decides whether a
+    timing layer runs at all, this one decides WHICH. Turning Stage B on with
+    the timing layer off does nothing, which is the safe direction.
+    """
+    return (os.getenv("GTRADE_TIMING_STAGE") or "").strip().lower() == "b"
+
+
+def load_served_policy(path=None):
+    """FqiPolicy from timing_fqi.cbm, or None when nothing is adopted.
+
+    Same contract as timing_policy.load_policy: absent, unreadable or nonsense
+    all return None so the caller falls back to the rules rather than to
+    nothing. An install that never ran `--stage b` behaves as it always did.
+    """
+    from catboost import CatBoostRegressor
+
+    try:
+        model = CatBoostRegressor()
+        model.load_model(path or MODEL_PATH)
+    except Exception as exc:
+        _logger.debug("Stage-B model not loaded: %s", exc)
+        return None
+    return FqiPolicy(model)
+
+
+def serve_step(policy, prob, prev_prob, buy_thr, sell_thr, close_hist, atr_hist,
+               taleb_hi, risky, is_forex, st):
+    """One bar's Stage-B decision. Returns (label, reason, new_state).
+
+    Same shape as timing_policy.policy_step so core/scoring.py reads one or the
+    other with no special case.
+
+    Deliberately builds a short series and calls series_features / act / advance
+    rather than recomputing the state row inline: trend_up and atr_pct are
+    trailing-window features, and a second definition of them at serve time is
+    exactly how a served decision drifts from the fitted one without anybody
+    seeing it. `close_hist` and `atr_hist` must be the trailing bars ending at
+    today - TREND_WINDOW of close and VOL_WINDOW of atr are what the last index
+    actually reads, and both rollings expand while short, so a shorter tail
+    degrades quietly instead of failing. Pass the full tails.
+    """
+    close = np.asarray(close_hist, dtype=float)
+    atr = np.nan_to_num(np.asarray(atr_hist, dtype=float), nan=0.0)
+    n = min(len(close), len(atr))
+    if n < 2:
+        raise ValueError("serve_step needs at least two trailing bars")
+    close, atr = close[-n:], atr[-n:]
+
+    # Only the last two probabilities are read (prob and prob_d1 at index -1);
+    # the earlier slots exist so every array in the series has one length.
+    probs = np.full(n, float(prev_prob if prev_prob is not None else prob))
+    probs[-1] = float(prob)
+
+    feat = series_features({
+        "probs": probs, "close": close, "atr": atr,
+        "taleb_hi": np.full(n, 1.0 if taleb_hi else 0.0),
+        "buy_thr": float(buy_thr), "sell_thr": float(sell_thr),
+        "risky": bool(risky), "is_forex": bool(is_forex),
+    })
+    i = n - 1
+    action = policy.act(feat, i, st)
+    new_st, label, reason = advance(st, feat, i, action)
+    return label, reason, new_st

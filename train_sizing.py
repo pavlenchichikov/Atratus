@@ -119,7 +119,7 @@ def gate_sizing(test_by_asset, params, timing=None):
         # that made too few trades to judge, and averaging it into mean_d - the
         # quantity MIN_EFFECT is compared against - lets one short asset decide
         # the verdict without moving the rank test at all.
-        if UNRELIABLE_SCORE in (cand, base):
+        if UNRELIABLE_SCORE in (cand, base) or not (np.isfinite(base) and np.isfinite(cand)):
             unscorable.append(asset)
             continue
         d = cand - base

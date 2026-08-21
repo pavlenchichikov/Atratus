@@ -131,6 +131,28 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
         con.commit()
 
 
+def last_logged_prob(asset, db_path=None):
+    """Yesterday's champion probability for `asset`, or None.
+
+    Stage B's state carries prob_d1, the one-bar change in probability, and
+    serving has only today's number. The log already holds every prior one, so
+    it is read rather than recomputed: re-scoring the previous bar would mean
+    a second champion forward pass per asset per day for one scalar.
+    """
+    import sqlite3
+
+    path = db_path or DB_PATH
+    try:
+        with sqlite3.connect(path) as con:
+            row = con.execute(
+                "SELECT probability FROM prediction_log WHERE asset = ? "
+                "AND probability IS NOT NULL ORDER BY date DESC LIMIT 1",
+                (asset,)).fetchone()
+    except Exception:
+        return None
+    return float(row[0]) if row and row[0] is not None else None
+
+
 def timing_state(asset, cooldown_days=0):
     """Rebuild the timing policy's position state from the shadow log.
 

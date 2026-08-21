@@ -328,3 +328,73 @@ def test_stage_b_never_adopts_on_a_draw():
                      reference=incumbent,
                      challenger_factory=lambda _m: [("copy", incumbent)])
     assert out["verdict"] == "HOLD"
+
+
+class _StubQ:
+    """A Q that prefers holding whenever the probability is past the threshold."""
+
+    def predict(self, rows):
+        rows = np.asarray(rows, dtype=float)
+        prob = rows[0][fq.FEATURE_NAMES.index("prob")]
+        yes = 1.0 if prob > 0.5 else -1.0
+        return np.array([-yes, yes])
+
+
+class TestServingStageB:
+    """The serve path added when Stage B adopted on 2026-08-22.
+
+    The property that matters is not that it runs: it is that the decision
+    served from today's scalars is the decision the gate measured on the
+    series. Anything else means the adopted number describes a policy that is
+    not the one running.
+    """
+
+    def test_the_flag_is_off_unless_it_says_b(self, monkeypatch):
+        monkeypatch.delenv("GTRADE_TIMING_STAGE", raising=False)
+        assert fq.stage_b_on() is False
+        for value, expected in (("b", True), ("B", True), (" b ", True),
+                                ("a", False), ("1", False), ("", False)):
+            monkeypatch.setenv("GTRADE_TIMING_STAGE", value)
+            assert fq.stage_b_on() is expected, value
+
+    def test_an_absent_or_broken_model_falls_back_to_none(self, tmp_path):
+        assert fq.load_served_policy(str(tmp_path / "nope.cbm")) is None
+        junk = tmp_path / "junk.cbm"
+        junk.write_text("not a model", encoding="utf-8")
+        assert fq.load_served_policy(str(junk)) is None
+
+    def test_serve_step_reproduces_the_walk_the_gate_measured(self):
+        """Bar by bar, from scalars only, against the series the fit uses."""
+        series = _series(320, seed=5)
+        pol = fq.FqiPolicy(_StubQ())
+        feat = fq.series_features(series)
+        st_fit = dict(tp.FRESH_STATE)
+        st_srv = dict(tp.FRESH_STATE)
+        for i in range(1, feat["n"]):
+            action = pol.act(feat, i, st_fit)
+            st_fit, label_fit, reason_fit = fq.advance(st_fit, feat, i, action)
+            label_srv, reason_srv, st_srv = fq.serve_step(
+                pol, series["probs"][i], series["probs"][i - 1],
+                series["buy_thr"], series["sell_thr"],
+                series["close"][:i + 1], series["atr"][:i + 1],
+                bool(series["taleb_hi"][i]), series["risky"],
+                series["is_forex"], st_srv)
+            assert label_srv == label_fit, "bar %d" % i
+            assert reason_srv == reason_fit, "bar %d" % i
+
+    def test_a_missing_previous_probability_does_not_crash(self):
+        series = _series(250, seed=1)
+        pol = fq.FqiPolicy(_StubQ())
+        label, reason, _st = fq.serve_step(
+            pol, series["probs"][-1], None, series["buy_thr"],
+            series["sell_thr"], series["close"], series["atr"],
+            False, False, False, dict(tp.FRESH_STATE))
+        assert label in ("ENTER", "STAY_OUT", "HOLD", "EXIT")
+        assert reason in ("model", "forced")
+
+    def test_two_bars_is_the_floor(self):
+        pol = fq.FqiPolicy(_StubQ())
+        import pytest
+        with pytest.raises(ValueError):
+            fq.serve_step(pol, 0.6, 0.5, 0.55, 0.45, [100.0], [1.0],
+                          False, False, False, dict(tp.FRESH_STATE))

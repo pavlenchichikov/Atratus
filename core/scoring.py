@@ -257,23 +257,43 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
         # not break scoring - hence the guard clause plus its own try/except.
         timing_action = timing_reason = None
         if timing_policy.timing_on():
-            pol = timing_policy.load_policy()
+            from core import timing_fqi as _fq
+            # Stage B only when it is switched on AND a model was adopted AND
+            # the frame carries the ATR its state needs. Any of those missing
+            # falls back to the rules, never to nothing.
+            q_pol = (_fq.load_served_policy()
+                     if _fq.stage_b_on() and "atr" in df else None)
+            pol = q_pol or timing_policy.load_policy()
             if pol is not None:
                 try:
                     import config as _cfg
                     from performance_tracker import timing_state
-                    risky = any(name in _cfg.ASSET_TYPES.get(g, ())
-                                for g in ("CRYPTO", "FOREX MAJORS",
-                                          "FOREX CROSSES", "FOREX EXOTIC"))
+                    _forex = ("FOREX MAJORS", "FOREX CROSSES", "FOREX EXOTIC")
+                    is_forex = any(name in _cfg.ASSET_TYPES.get(g, ())
+                                   for g in _forex)
+                    risky = is_forex or name in _cfg.ASSET_TYPES.get("CRYPTO", ())
                     atr_now = float(df["atr"].iloc[-1]) if "atr" in df else 0.0
                     from core.features import latest_taleb_risk
                     taleb_val = latest_taleb_risk(df["close"])
                     taleb_now = taleb_val is not None and taleb_val > 0.7
-                    st = timing_state(
-                        name, cooldown_days=int(pol.params.get("cooldown_days", 0)))
-                    act, reason, st2 = timing_policy.policy_step(
-                        pol, prob, buy_thr, sell_thr, atr_now, taleb_now,
-                        risky, st)
+                    if q_pol is not None:
+                        # Stage B has no cooldown of its own: advance() only
+                        # counts an existing one down and never opens one.
+                        from performance_tracker import last_logged_prob
+                        st = timing_state(name, cooldown_days=0)
+                        act, reason, st2 = _fq.serve_step(
+                            q_pol, prob, last_logged_prob(name), buy_thr,
+                            sell_thr,
+                            df["close"].tail(_fq.TREND_WINDOW).to_numpy(),
+                            df["atr"].tail(_fq.TREND_WINDOW).to_numpy(),
+                            taleb_now, risky, is_forex, st)
+                    else:
+                        st = timing_state(
+                            name,
+                            cooldown_days=int(pol.params.get("cooldown_days", 0)))
+                        act, reason, st2 = timing_policy.policy_step(
+                            pol, prob, buy_thr, sell_thr, atr_now, taleb_now,
+                            risky, st)
                     timing_action = (
                         f"ENTER:{'+1' if st2['pos'] == 1 else '-1'}"
                         if act == "ENTER" else act)

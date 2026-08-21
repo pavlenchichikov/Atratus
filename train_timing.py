@@ -335,7 +335,7 @@ def gate_policy(test_by_asset, params, reference=None):
         # test cannot see and the mean cannot survive: one short asset out of
         # twenty moved mean_d from +18.5 to -29.4 and flipped ADOPT to HOLD
         # while p stayed at 0.0002. Drop the pair and say how many were dropped.
-        if UNRELIABLE_SCORE in (base, cand):
+        if UNRELIABLE_SCORE in (base, cand) or not (np.isfinite(base) and np.isfinite(cand)):
             unscorable.append(asset)
             continue
         d = cand - base

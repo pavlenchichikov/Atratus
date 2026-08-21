@@ -252,11 +252,19 @@ def gate_policy(test_by_asset, params):
     from scipy.stats import wilcoxon
 
     base = baseline_params()
-    per_asset, deltas = {}, []
+    per_asset, deltas, unscorable = {}, [], []
     for asset, s in test_by_asset.items():
         sides = sides_for(s)
         d = (eval_levels(s, params, sides=sides)["ret_per_bar"]
              - eval_baseline(s, sides=sides, params=base)["ret_per_bar"])
+        # A single non-finite delta takes the whole verdict with it: np.mean
+        # returns nan, every comparison against the floor is then False, and the
+        # run reports HOLD as though it had measured something. Seen 2026-08-22
+        # on a 316-asset fit - AZN alone read +nan, because one of its bars has
+        # high = low = 0 and a trade priced off it returns inf.
+        if not np.isfinite(d):
+            unscorable.append(asset)
+            continue
         per_asset[asset] = round(d, 6)
         deltas.append(d)
     n = len(deltas)
@@ -271,7 +279,8 @@ def gate_policy(test_by_asset, params):
     verdict = ("ADOPT" if (n >= 8 and p < 0.05 and mean_d > ADOPT_FLOOR)
                else "HOLD")
     return {"verdict": verdict, "p": p, "mean_d": mean_d, "n": n,
-            "floor": ADOPT_FLOOR, "per_asset": per_asset}
+            "floor": ADOPT_FLOOR, "per_asset": per_asset,
+            "n_unscorable": len(unscorable), "unscorable": unscorable}
 
 
 REPORT_PATH = os.path.join(BASE, "_levels_report.txt")
@@ -302,7 +311,13 @@ def report_lines(params, gate, meta=None):
             "  verdict    %s" % gate["verdict"],
             "  mean_d     %+.6f   (floor %+.6f)" % (gate["mean_d"], gate["floor"]),
             "  p          %.4f" % gate["p"],
-            "  assets     %d" % gate["n"], ""]
+            "  assets     %d" % gate["n"]]
+    if gate.get("n_unscorable"):
+        # Named, never just subtracted from the count: an asset whose delta is
+        # not a number is a data fault to go and look at, not a rounding detail.
+        out.append("  dropped    %d unscorable, dropped from the effect: %s"
+                   % (gate["n_unscorable"], ", ".join(gate["unscorable"][:8])))
+    out.append("")
     per = gate.get("per_asset") or {}
     if per:
         ranked = sorted(per.items(), key=lambda kv: kv[1], reverse=True)

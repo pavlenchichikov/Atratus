@@ -368,6 +368,55 @@ def fetch_yahoo_weekly(symbol, last_date):
     return df.set_index('Date')
 
 
+def scrub_ohlc(df):
+    """Repair or drop bars whose prices are not positive, before they are stored.
+
+    A provider that returns a zero is not reporting a price of nothing, it is
+    failing to report. Stored as-is, a bar with high = low = 0 gives a true
+    range the size of the whole price and an ATR spike to match, and a trade
+    priced off it returns inf - which is how the trade-levels gate came to
+    report `mean_d nan` over 316 assets on 2026-08-22 because ONE bar of AZN
+    read zero.
+
+    Two treatments, because dropping every bad bar would also throw away real
+    trading days: when the close is good but open/high/low are not, fill them
+    from what IS known (a bar we only know the close of has no intraday range,
+    and inventing one would be worse than recording none); when the close
+    itself is not positive there is no price at all, so the bar goes. A gap is
+    honest, a zero is not.
+
+    Returns (clean_df, n_repaired, n_dropped).
+    """
+    cols = [c for c in ("open", "high", "low", "close") if c in df.columns]
+    if "close" not in cols or df.empty:
+        return df, 0, 0
+    df = df.copy()
+    price = df[cols].apply(pd.to_numeric, errors="coerce")
+    bad = (price <= 0).any(axis=1) | price.isna().any(axis=1)
+    if not bad.any():
+        return df, 0, 0
+
+    no_price = bad & (~(price["close"] > 0))
+    fixable = bad & (price["close"] > 0)
+
+    if fixable.any():
+        close = price.loc[fixable, "close"]
+        for c in ("open", "high", "low"):
+            if c in cols:
+                col = price.loc[fixable, c]
+                df.loc[fixable, c] = col.where(col > 0, close)
+        # keep the bar internally consistent: the high is the top of what
+        # happened that day, the low the bottom.
+        known = df.loc[fixable, [c for c in ("open", "high", "low", "close")
+                                 if c in cols]].apply(pd.to_numeric, errors="coerce")
+        if "high" in cols:
+            df.loc[fixable, "high"] = known.max(axis=1)
+        if "low" in cols:
+            df.loc[fixable, "low"] = known.min(axis=1)
+
+    return df[~no_price], int(fixable.sum()), int(no_price.sum())
+
+
 def _save_df(df, table_name):
     """Normalize and append DataFrame to SQLite."""
     df.columns = [c.lower() for c in df.columns]
@@ -376,6 +425,14 @@ def _save_df(df, table_name):
     df.index = pd.to_datetime(df.index).normalize()
     df.index = df.index.strftime('%Y-%m-%d')
     df = df[~df.index.duplicated(keep='last')]
+    df, _fixed, _dropped = scrub_ohlc(df)
+    if _fixed or _dropped:
+        # Never silent: a repaired bar is a provider fault worth seeing, and a
+        # dropped one is a gap somebody may have to explain later.
+        print("   - [CLEAN] %s: %d bar(s) repaired, %d dropped (non-positive "
+              "prices)" % (table_name, _fixed, _dropped))
+        logger.warning("%s: %d bar(s) repaired, %d dropped (non-positive prices)",
+                       table_name, _fixed, _dropped)
     df = _drop_existing_dates(df, table_name)
     if not df.empty:
         df.to_sql(table_name, engine, if_exists='append', index=True)
