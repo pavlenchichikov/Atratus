@@ -144,6 +144,57 @@ def _scrub_keras2_config(obj):
     return obj
 
 
+def _keras2_op_layers(cfg):
+    """Rewrite Keras 2 `TFOpLambda` nodes as the Keras 3 layer they stand for.
+
+    TFOpLambda is Keras 2's wrapper around a raw TF op used inline in a
+    functional graph; Keras 3 has no such class, so a config containing one
+    cannot be deserialised at all. Every occurrence in this project's champions
+    is the residual join inside a TCN block: measured 2026-08-21 over all 35
+    affected files, 105 of 105 are `__operators__.add` with a single node. That
+    is exactly `keras.layers.Add`, which carries no weights, so swapping it in
+    changes the graph's spelling and not its arithmetic.
+
+    The second input hides in the node's KWARGS (`{"y": [...]}`) rather than
+    sitting beside the first, which is the whole reason a plain rename does not
+    work - the node has to be rebuilt as an ordinary two-input node.
+
+    Returns None for anything it cannot express, so the caller falls back
+    instead of building a model that is subtly not the champion.
+    """
+    layers = (cfg or {}).get("layers")
+    if not isinstance(layers, list):
+        return cfg
+    out = []
+    for layer in layers:
+        if layer.get("class_name") != "TFOpLambda":
+            out.append(layer)
+            continue
+        conf = layer.get("config") or {}
+        nodes = layer.get("inbound_nodes") or []
+        if conf.get("function") != "__operators__.add" or len(nodes) != 1:
+            return None
+        node = nodes[0]
+        if not (isinstance(node, list) and len(node) == 4
+                and isinstance(node[3], dict)):
+            return None
+        other = node[3].get("y")
+        if not (isinstance(other, list) and len(other) >= 3):
+            return None
+        name = layer.get("name") or conf.get("name")
+        out.append({
+            "class_name": "Add",
+            "name": name,                     # kept: the graph refers to it
+            "config": {"name": name,
+                       "trainable": conf.get("trainable", True)},
+            "inbound_nodes": [[[node[0], node[1], node[2], {}],
+                               [other[0], other[1], other[2], {}]]],
+        })
+    rewritten = dict(cfg)
+    rewritten["layers"] = out
+    return rewritten
+
+
 def _from_embedded_config(path):
     """Rebuild a legacy HDF5 champion from the architecture IT carries.
 
@@ -176,7 +227,11 @@ def _from_embedded_config(path):
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
         cfg = json.loads(raw)
-        model = Model.from_config(_scrub_keras2_config(cfg["config"]))
+        graph = _keras2_op_layers(cfg["config"])
+        if graph is None:
+            logger.debug("Unconvertible Keras 2 op in %s", path)
+            return None
+        model = Model.from_config(_scrub_keras2_config(graph))
         model.load_weights(h5_path)
         return model
     except Exception as exc:
