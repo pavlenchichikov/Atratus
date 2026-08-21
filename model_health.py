@@ -297,6 +297,31 @@ def print_mismatched():
     return rows
 
 
+# A Keras 3 champion is a zip archive; a legacy Keras 2 file is HDF5. The GPU
+# training environment (TF 2.10 / Keras 2) loads through h5py, which reports
+# "file signature not found" on a zip - so under that interpreter EVERY Keras 3
+# champion looks broken. That is the loader, not the file, and a repair pass
+# that believed it would force-replace every champion in the project.
+_KERAS3_MAGIC = b"PK"
+
+
+def _is_keras3_archive(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) == _KERAS3_MAGIC
+    except OSError:
+        return False
+
+
+class WrongInterpreter(RuntimeError):
+    """The champions cannot be judged from here, so no answer is given.
+
+    Returning "everything is degraded" would be worse than refusing: with
+    --force-promote behind it, that answer rebuilds every champion in the
+    project because the interpreter was wrong.
+    """
+
+
 def degraded_members(base=None):
     """Assets whose neural champions do not LOAD where serving loads them.
 
@@ -340,6 +365,18 @@ def degraded_members(base=None):
             except Exception:
                 model = None
             if model is None:
+                # Not readable HERE and a valid Keras 3 archive = wrong
+                # interpreter, not a damaged champion. Kept separate so a
+                # repair run cannot be aimed at a file that is perfectly fine.
+                if _is_keras3_archive(path):
+                    # Positive identification, so refuse at the first one rather
+                    # than spend minutes proving it 200 more times.
+                    raise WrongInterpreter(
+                        "%s is a Keras 3 archive and this interpreter cannot "
+                        "read it. Nothing here is degraded - the check is in "
+                        "the wrong environment. Run it where serving runs "
+                        "(plain `python`, base), not in the GPU training env."
+                        % os.path.basename(path))
                 lost.append(member)
         if lost:
             out.append({"asset": asset, "lost": lost})
@@ -348,7 +385,11 @@ def degraded_members(base=None):
 
 def print_degraded():
     """One line per asset serving without some of its neural members."""
-    rows = degraded_members()
+    try:
+        rows = degraded_members()
+    except WrongInterpreter as exc:
+        print("  %s" % exc)
+        return None
     if not rows:
         print("  every champion loads in this environment.")
         return []
@@ -397,6 +438,58 @@ def print_missing():
     return missing
 
 
+def print_list(kind, out_path=None):
+    """Just the names, one per line, so a launcher can hand them to the trainer.
+
+    The populations have to be worked out where serving loads models (base) and
+    then trained where training runs (the GPU env). Two interpreters, so the
+    list has to survive the trip as data.
+
+    model_io logs a WARNING to STDOUT for every champion it cannot load, which
+    is most of them while scanning - so the log is silenced here and the names
+    can also go straight to a file. A list a launcher has to filter is a list
+    that will one day be filtered wrong.
+    """
+    import logging as _logging
+
+    _logging.disable(_logging.WARNING)
+    try:
+        names = _collect(kind)
+    finally:
+        _logging.disable(_logging.NOTSET)
+
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.writelines(n + "\n" for n in names)
+    else:
+        for n in names:
+            print(n)
+    return names
+
+
+def _collect(kind):
+    import os as _os
+
+    from config import FULL_ASSET_MAP
+    from core.track_record import _table_name
+
+    if kind == "missing":
+        names = [a for a in FULL_ASSET_MAP
+                 if not _os.path.exists(_os.path.join(
+                     MODEL_DIR, "%s_cb.cbm" % _table_name(a)))]
+    else:
+        degraded = [r["asset"] for r in degraded_members()]
+        if kind == "degraded":
+            names = degraded
+        else:                                   # all
+            missing = [a for a in FULL_ASSET_MAP
+                       if not _os.path.exists(_os.path.join(
+                           MODEL_DIR, "%s_cb.cbm" % _table_name(a)))]
+            both = set(missing) | set(degraded)
+            names = [a for a in FULL_ASSET_MAP if a in both]
+    return names
+
+
 def main():
     parser = argparse.ArgumentParser(description="Model Health Monitor")
     parser.add_argument("--stale", type=int, default=7,
@@ -407,6 +500,14 @@ def main():
                         help="List assets whose model files are newer than their "
                              "champion-registry entry, which drops them from the "
                              "signals with a feature-count error")
+    parser.add_argument("--list", choices=("missing", "degraded", "all"),
+                        default=None,
+                        help="print ONLY the asset names, one per line, for a "
+                             "launcher to redirect into a file and hand to the "
+                             "trainer running in the other environment")
+    parser.add_argument("--out", default=None,
+                        help="with --list, write the names to this file "
+                             "instead of stdout")
     parser.add_argument("--missing", action="store_true",
                         help="List assets in the map that have no CatBoost "
                              "champion at all, so every policy fit skips them")
@@ -416,6 +517,15 @@ def main():
                              "registry claims. Slow: it opens every file.")
     args = parser.parse_args()
 
+    if args.list:
+        try:
+            names = print_list(args.list, args.out)
+            if args.out:
+                print("%d asset(s) written to %s" % (len(names), args.out))
+        except WrongInterpreter as exc:
+            print("ERROR: %s" % exc, file=sys.stderr)
+            return 1
+        return 0
     if args.missing:
         print_missing()
         return
@@ -432,4 +542,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

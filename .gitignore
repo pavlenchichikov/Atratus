@@ -123,3 +123,6 @@ _ar_wiki/
 train_adaptive.bat
 
 
+
+# Scratch list handed from the base-env health check to the GPU-env trainer.
+_repair_list.txt

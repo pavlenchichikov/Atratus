@@ -190,30 +190,44 @@ echo     fewer members than the registry claims, and no error says so. Repair
 echo     NEEDS force-promote: without it the champion is only rewritten when the
 echo     challenger wins, and on a loss the broken file survives untouched.
 echo.
-set /p FC_WHICH="[1] fill in, [2] repair degraded, Enter = cancel: "
+echo Both run through the chunked trainer: one fresh process per chunk, so RAM
+echo stays flat over a long run and an interrupted pass resumes. The asset list
+echo is worked out for you - nothing to paste.
+echo.
+echo [3] Both in ONE pass. force-promote is on, which the degraded half needs
+echo     and which decides nothing for the others: train_hybrid promotes when
+echo     there is no registry entry to compare against, so an asset that never
+echo     had a champion is promoted with the flag or without it.
+echo.
+echo The list is worked out HERE, in base, and only the training is handed to
+echo the GPU environment. Which champions are broken is a question about the
+echo loader serving uses; asked inside the training env every Keras 3 champion
+echo answers "broken" and a force-promote pass would rebuild the whole project.
+echo.
+set /p FC_WHICH="[1] fill in, [2] repair degraded, [3] both, Enter = cancel: "
 if "%FC_WHICH%"=="" goto menu
 echo.
-if "%FC_WHICH%"=="1" (
-  python model_health.py --missing
-) else (
-  python model_health.py --degraded
+if "%FC_WHICH%"=="1" set "FC_KIND=missing"
+if "%FC_WHICH%"=="2" set "FC_KIND=degraded"
+if "%FC_WHICH%"=="3" set "FC_KIND=all"
+if "%FC_KIND%"=="" goto menu
+echo Working out the %FC_KIND% list (opens every champion, takes a minute)...
+python model_health.py --list %FC_KIND% --out _repair_list.txt
+if errorlevel 1 (
+  echo.
+  echo The list could not be built, so nothing was trained.
+  set "FC_KIND="
+  pause
+  goto menu
 )
 echo.
-echo Copy the comma-separated list above. Training runs in the GPU environment.
-set /p FC_ASSETS="Assets to train, Enter = cancel: "
-if "%FC_ASSETS%"=="" goto menu
-set "GTRADE_ASSETS=%FC_ASSETS%"
-if "%FC_WHICH%"=="2" set "GTRADE_FORCE_PROMOTE=1"
-echo.
-if "%FC_WHICH%"=="2" (echo [Repair] force-promote ON - every champion touched is replaced) else (echo [Fill in] champion-challenger - nothing existing is overwritten)
-cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
-REM Clear both, or a later menu item would inherit the subset and the flag.
-set "GTRADE_ASSETS="
-set "GTRADE_FORCE_PROMOTE="
+if "%FC_WHICH%"=="1" cmd /c ""%~dp0run_in_env.bat" python train_chunked.py --assets-file _repair_list.txt"
+if not "%FC_WHICH%"=="1" cmd /c ""%~dp0run_in_env.bat" python train_chunked.py --assets-file _repair_list.txt --force-promote"
+set "FC_KIND="
 set "FC_WHICH="
-set "FC_ASSETS="
 echo.
-echo Serving reads the new weights only after this finishes. Re-check with [M].
+echo Serving reads the new weights only after this finishes. Re-check with [M],
+echo then refit the policies on the new assets with [OS].
 pause
 goto menu
 
