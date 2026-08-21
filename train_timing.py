@@ -59,11 +59,18 @@ def eval_policy(series, policy):
 
     Returns a dict with keys score, profit, sharpe, n_trades, win_rate
     (plus max_dd) from the position-aware v2 objective.
+
+    A Stage-B policy needs the whole series (its state carries the regime and
+    the volatility percentile, which .apply's argument list does not pass), so
+    a policy that offers apply_series is given the series.
     """
-    sides, _actions, _reasons = policy.apply(
-        series["probs"], series["buy_thr"], series["sell_thr"],
-        series["atr"], series["taleb_hi"], series["risky"],
-        next_ret=series["next_ret"])
+    if hasattr(policy, "apply_series"):
+        sides, _actions, _reasons = policy.apply_series(series)
+    else:
+        sides, _actions, _reasons = policy.apply(
+            series["probs"], series["buy_thr"], series["sell_thr"],
+            series["atr"], series["taleb_hi"], series["risky"],
+            next_ret=series["next_ret"])
     return _run_sides(series, sides)
 
 
@@ -292,14 +299,24 @@ def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
     return best_params
 
 
-def gate_policy(test_by_asset, params):
-    """Policy-vs-baseline verdict on TEST: one-sided Wilcoxon over per-asset
-    score deltas. ADOPT requires n >= 8 assets, p < 0.05, and mean_d > 0.5."""
+def gate_policy(test_by_asset, params, reference=None):
+    """Policy-vs-reference verdict on TEST: one-sided Wilcoxon over per-asset
+    score deltas. ADOPT requires n >= 8 assets, p < 0.05, and mean_d > 0.5.
+
+    `params` is a parameter dict for Stage A or a policy object for Stage B.
+    `reference` defaults to the production baseline, which is what Stage A is
+    measured against; Stage B passes the ADOPTED Stage-A policy, because
+    beating the baseline again would prove nothing about replacing the rules.
+    """
     from scipy.stats import wilcoxon
-    pol = tp.RulesPolicy(params)
+    # Any policy object passes through; only a parameter dict is wrapped.
+    pol = (params if hasattr(params, "apply_series") or hasattr(params, "apply")
+           else tp.RulesPolicy(params))
     per_asset, deltas = {}, []
     for asset, s in test_by_asset.items():
-        d = eval_policy(s, pol)["score"] - eval_baseline(s)["score"]
+        base = (eval_baseline(s)["score"] if reference is None
+                else eval_policy(s, reference)["score"])
+        d = eval_policy(s, pol)["score"] - base
         per_asset[asset] = round(d, 4)
         deltas.append(d)
     n = len(deltas)
@@ -338,6 +355,15 @@ def main():
     ap.add_argument("--assets", default="")
     ap.add_argument("--budget", type=int, default=300)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--stage", default="a", choices=("a", "b"),
+                    help="a = the interpretable rules fit (default), "
+                         "b = the fitted-Q challenger to the adopted rules")
+    ap.add_argument("--iters", type=int, default=6,
+                    help="stage b: fitted-Q iterations, one horizon rung each")
+    ap.add_argument("--gamma", type=float, default=0.97,
+                    help="stage b: discount per bar")
+    ap.add_argument("--epsilon", type=float, default=0.1,
+                    help="stage b: exploration rate when logging transitions")
     args = ap.parse_args()
     import config
     assets = ([a.strip() for a in args.assets.split(",") if a.strip()]
@@ -352,6 +378,24 @@ def main():
         else:
             print(f"[timing] [{i}/{len(assets)}] {a}: skipped", flush=True)
     print(f"[timing] {len(series)}/{len(assets)} assets with usable history")
+    if args.stage == "b":
+        out = stage_b(series, iters=args.iters, gamma=args.gamma,
+                      epsilon=args.epsilon, seed=args.seed)
+        print("[timing-b] reference stage_a | assets %d | selected on val: %s"
+              % (out["assets"], out["selected_on_val"]))
+        for r in out["rows"]:
+            print("[timing-b]   %-12s mean_d %+.3f  p %.4f  p_bh %.4f  %s"
+                  % (r["name"], r["mean_d"], r["p"], r["p_bh"],
+                     "ADOPT" if r["adopt"] else "-"))
+        pr = out["proxy"]
+        print("[timing-b] objective vs gate: rho %+.3f (p %.4f), sign "
+              "agreement %d/%d. A verdict that arrives with a flat or negative "
+              "correlation is a coincidence until replicated."
+              % (pr["rho"], pr["p"], pr["sign_agree"], pr["n"]))
+        print("[timing-b] VERDICT: %s" % out["verdict"])
+        save_stage_b(out)
+        return
+
     tr = {a: split_series(s)[0] for a, s in series.items()}
     va = {a: split_series(s)[1] for a, s in series.items()}
     te = {a: split_series(s)[2] for a, s in series.items()}
@@ -365,6 +409,145 @@ def main():
     if gate["verdict"] == "ADOPT":
         print("[timing] wrote timing_policy.json - set GTRADE_TIMING_POLICY=1 "
               "to run in shadow mode.")
+
+
+
+MIN_EFFECT = 0.5          # Score units, the same bar Stage A cleared
+
+
+def bh_rows(rows, alpha=0.05):
+    """Benjamini-Hochberg adjusted p-values, one per candidate.
+
+    Reuses auto_research's implementation rather than a second copy: six
+    iteration counts are six chances to look good once, and the correction for
+    that is a solved problem this repository already solved.
+    """
+    from auto_research import benjamini_hochberg
+    flags = benjamini_hochberg([r["p"] for r in rows], alpha=alpha)
+    m = len(rows)
+    order = sorted(range(m), key=lambda i: rows[i]["p"])
+    out = [dict(r) for r in rows]
+    running = 1.0
+    for rank, i in reversed(list(enumerate(order, start=1))):
+        running = min(running, out[i]["p"] * m / rank)
+        out[i]["p_bh"] = running
+        out[i]["bh_flag"] = bool(flags[i])
+    return out
+
+
+def gate_challenger(test_by_asset, candidates, reference):
+    """Gate every candidate Q against the incumbent, corrected together.
+
+    candidates is [(name, policy)]. A candidate adopts only with a BH-adjusted
+    p below alpha AND a mean delta above MIN_EFFECT. Lose or draw and the
+    rules stay, which is the spec's rule and also the safe direction: Stage A
+    is interpretable and already live.
+    """
+    rows = []
+    for name, pol in candidates:
+        g = gate_policy(test_by_asset, pol, reference=reference)
+        rows.append({"name": name, "p": g["p"], "mean_d": g["mean_d"],
+                     "n": g["n"], "per_asset": g["per_asset"]})
+    rows = bh_rows(rows)
+    for r in rows:
+        r["adopt"] = bool(r["bh_flag"] and r["mean_d"] > MIN_EFFECT
+                          and r["n"] >= 8)
+    winners = [r for r in rows if r["adopt"]]
+    best = max(winners, key=lambda r: r["mean_d"], default=None)
+    return {"rows": rows, "best": best,
+            "verdict": "ADOPT" if best else "HOLD"}
+
+
+def objective_vs_gate(test_by_asset, policy, reference):
+    """Does what the fit maximises move with what the gate decides on?
+
+    The FQI maximises discounted net return per bar; the gate reads
+    score_strategy, which also carries drawdown, win rate and Sharpe. On
+    2026-08-18 a campaign that optimised one quantity and adopted on another
+    was found to have a rank correlation of -0.24 between them, and every
+    result it produced said nothing about production. So this number is printed
+    next to the verdict, always, and a verdict that arrives with a flat or
+    negative correlation is a coincidence until it is replicated.
+    """
+    from scipy.stats import spearmanr
+    d_obj, d_gate = [], []
+    for s in test_by_asset.values():
+        a = eval_policy(s, policy)
+        b = eval_policy(s, reference)
+        d_obj.append(a["profit"] - b["profit"])
+        d_gate.append(a["score"] - b["score"])
+    if len(d_obj) < 3:
+        return {"rho": 0.0, "p": 1.0, "sign_agree": 0, "n": len(d_obj)}
+    r = spearmanr(d_obj, d_gate)
+    agree = sum(1 for x, y in zip(d_obj, d_gate) if x * y > 0)
+    return {"rho": float(r.statistic), "p": float(r.pvalue),
+            "sign_agree": agree, "n": len(d_obj)}
+
+
+def stage_b(by_asset, iters=6, gamma=0.97, epsilon=0.1, seed=0,
+            challenger_factory=None, reference=None):
+    """Fit a Q challenger on TRAIN, pick the horizon on VAL, gate on TEST.
+
+    The incumbent is the ADOPTED Stage-A policy when timing_policy.json exists,
+    and DEFAULT_PARAMS otherwise, which is the baseline. Either way the
+    challenger has to beat what is actually running. `reference` overrides that
+    lookup, which is what lets a test pin the incumbent instead of inheriting
+    whatever happens to be adopted on this machine.
+    """
+    import random as _random
+
+    from core import timing_fqi as fq
+
+    incumbent = (reference or tp.load_policy()
+                 or tp.RulesPolicy(dict(tp.DEFAULT_PARAMS)))
+    splits = {a: split_series(s) for a, s in by_asset.items()}
+    train = {a: v[0] for a, v in splits.items()}
+    val = {a: v[1] for a, v in splits.items()}
+    test = {a: v[2] for a, v in splits.items()}
+
+    rng = _random.Random(seed)
+    batches = [fq.rollout(s, incumbent, rng, epsilon=epsilon,
+                          costs=_costs(s)) for s in train.values()]
+    models = fq.fit_q(batches, iters=iters, gamma=gamma, seed=seed)
+
+    if challenger_factory is not None:
+        candidates = challenger_factory(models)
+    else:
+        candidates = [("q_iter_%d" % (k + 1), fq.FqiPolicy(m))
+                      for k, m in enumerate(models)]
+
+    # VAL picks the horizon; TEST judges it. The same discipline Stage A runs
+    # on, and the reason a candidate list is gated rather than a single fit.
+    val_scores = [(name, fitness([eval_policy(s, pol)["score"]
+                                  for s in val.values()]))
+                  for name, pol in candidates]
+    best_name = max(val_scores, key=lambda kv: kv[1])[0]
+    gate = gate_challenger(test, candidates, reference=incumbent)
+    chosen = dict(candidates)[best_name]
+    proxy = objective_vs_gate(test, chosen, incumbent)
+    return {"verdict": gate["verdict"], "rows": gate["rows"],
+            "best": gate["best"], "val": dict(val_scores),
+            "selected_on_val": best_name, "proxy": proxy,
+            "reference": "stage_a", "assets": len(by_asset),
+            # The fitted models ride along so saving does not mean fitting the
+            # whole ladder a second time. Stripped before the report is written.
+            "_models": models}
+
+
+def save_stage_b(out, models=None, path=None):
+    """Write the Stage-B report always; write the model only on ADOPT."""
+    from datetime import datetime
+    path = path or tp.POLICY_PATH
+    here = os.path.dirname(path)
+    report = {k: v for k, v in out.items() if k != "_models"}
+    report["fitted"] = datetime.utcnow().isoformat()
+    with open(os.path.join(here, "timing_fqi_report.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump(report, fh, indent=1, default=float)
+    models = models if models is not None else out.get("_models")
+    if out["verdict"] == "ADOPT" and out.get("best") and models:
+        idx = int(out["best"]["name"].rsplit("_", 1)[1]) - 1
+        models[idx].save_model(os.path.join(here, "timing_fqi.cbm"))
 
 
 if __name__ == "__main__":
