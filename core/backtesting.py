@@ -239,7 +239,7 @@ def vol_cap(next_ret, window: int = 20, k: float = 6.0,
 
 
 def simulate_positions(signals, next_ret, commission: float = COMMISSION,
-                       slippage: float = SLIPPAGE, cap=None):
+                       slippage: float = SLIPPAGE, cap=None, sizes=None):
     """Position-aware PnL under the core/positions.py convention.
 
     Returns (profit_pct, n_trades, win_rate_pct, daily_returns):
@@ -251,28 +251,42 @@ def simulate_positions(signals, next_ret, commission: float = COMMISSION,
     - n_trades = opened positions; win rate = share of segments whose chained
       return net of their legs is positive (a still-open final segment is
       judged on its to-date return, matching the display's open trade);
-    - a NaN return bar earns 0 and does not break the position."""
+    - a NaN return bar earns 0 and does not break the position.
+
+    `sizes` (optional) is a per-bar multiplier on the unit position: the side
+    still comes from the signal, and the size only scales it. Absent, every
+    number above is what it has always been, which matters because every
+    stored measurement in this repository was produced by that path. Costs are
+    charged on the NOTIONAL moved, so a resize from 1.0 to 1.5 pays half a leg,
+    and a resize is not a new trade: trades and win-rate segments key on the
+    side, not on the position."""
     sig = np.asarray(signals)
     ret = np.asarray(next_ret, dtype=float)
     leg_cost = commission + slippage
     n = len(sig)
     daily = np.zeros(n, dtype=float)
     bal = INITIAL_CAPITAL
-    pos = 0
+    pos = 0.0          # signed notional
+    side = 0           # the side, which is what a trade is counted on
     trades = wins = 0
     seg_factor = 1.0
     seg_costs = 0.0
     for i in range(n):
-        s = int(sig[i])
+        s_side = int(sig[i])
+        size = 1.0 if sizes is None else float(sizes[i])
+        s = s_side * size
         legs = abs(s - pos)
         if legs:
-            # closing (or flipping out of) the old segment at a profit
-            if pos != 0 and seg_factor - 1.0 - seg_costs - leg_cost > 0:
-                wins += 1
-            if s != 0:    # opening a new segment (its entry leg)
-                trades += 1
-                seg_factor, seg_costs = 1.0, leg_cost
-            pos = s
+            if s_side != side:
+                # closing (or flipping out of) the old segment at a profit
+                if side != 0 and seg_factor - 1.0 - seg_costs - leg_cost > 0:
+                    wins += 1
+                if s_side != 0:    # opening a new segment (its entry leg)
+                    trades += 1
+                    seg_factor, seg_costs = 1.0, leg_cost
+            else:
+                seg_costs += legs * leg_cost   # a resize inside one segment
+            pos, side = s, s_side
         r = 0.0 if np.isnan(ret[i]) else float(ret[i])
         if cap is not None and r != 0.0:
             c = float(cap[i])
@@ -280,22 +294,23 @@ def simulate_positions(signals, next_ret, commission: float = COMMISSION,
         bar_ret = pos * r - legs * leg_cost
         daily[i] = bar_ret
         bal *= (1.0 + bar_ret * POSITION_FRACTION)
-        if pos != 0:
+        if side != 0:
             seg_factor *= (1.0 + pos * r)
-    if pos != 0 and seg_factor - 1.0 - seg_costs > 0:  # open final segment
+    if side != 0 and seg_factor - 1.0 - seg_costs > 0:  # open final segment
         wins += 1
     profit = (bal / INITIAL_CAPITAL - 1.0) * 100.0
     winrate = (wins / trades * 100.0) if trades else 0.0
     return profit, trades, winrate, daily
 
 
-def evaluate_signals_v2(sig, ret, comm, slip):
+def evaluate_signals_v2(sig, ret, comm, slip, sizes=None):
     """(profit, trades, winrate, mdd, sharpe) under the v2 position-aware
     objective, regardless of the flag - used for the always-on dual-score
     emission (quality rows carry Score_v2 so A/B arms share one yardstick)."""
     ret_arr = np.asarray(ret, dtype=float)
     profit, trades, winrate, daily = simulate_positions(
-        sig, ret_arr, commission=comm, slippage=slip, cap=vol_cap(ret_arr))
+        sig, ret_arr, commission=comm, slippage=slip, cap=vol_cap(ret_arr),
+        sizes=sizes)
     return (profit, trades, winrate,
             max_drawdown_from_returns(daily), sharpe_from_returns(daily))
 
