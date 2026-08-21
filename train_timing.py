@@ -344,6 +344,29 @@ def gate_policy(test_by_asset, params, reference=None):
             "per_asset": per_asset}
 
 
+GATE_MIN_ASSETS = 8
+
+
+def require_scorable(series, what):
+    """True when enough assets were rebuilt to gate anything at all.
+
+    Without this the fitters answer a question nobody can have asked: an ES
+    over an empty set reports fitness -inf and the gate then prints
+    "verdict: HOLD  p=1.0000  mean_d=+0.00  n=0", which reads like a
+    measurement and is not one. Stage B did not even get that far - it raised
+    ValueError out of np.concatenate on an empty batch list. train_levels.py
+    already refused this case in so many words; this is the same refusal for
+    the other three entry points.
+    """
+    if len(series) >= GATE_MIN_ASSETS:
+        return True
+    print("[%s] only %d asset(s) have a champion-scorable history; the gate "
+          "needs %d. Nothing fitted." % (what, len(series), GATE_MIN_ASSETS))
+    print("[%s] assets with no champion are skipped silently - list them with "
+          "`python model_health.py --missing` and train those first." % what)
+    return False
+
+
 def save_policy(params, gate, path=None):
     """Always write timing_report.json next to `path`; write the adopted
     timing_policy.json itself only when gate["verdict"] == "ADOPT"."""
@@ -389,6 +412,8 @@ def main():
         else:
             print(f"[timing] [{i}/{len(assets)}] {a}: skipped", flush=True)
     print(f"[timing] {len(series)}/{len(assets)} assets with usable history")
+    if not require_scorable(series, "timing"):
+        return 1
     if args.stage == "b":
         out = stage_b(series, iters=args.iters, gamma=args.gamma,
                       epsilon=args.epsilon, seed=args.seed)
@@ -570,4 +595,4 @@ def save_stage_b(out, models=None, path=None):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

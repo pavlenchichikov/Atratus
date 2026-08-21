@@ -167,6 +167,8 @@ def main():
         print("[sizing] [%d/%d] %s: %s" % (
             i, len(assets), a, "%d bars" % len(s["probs"]) if s else "skipped"),
             flush=True)
+    if not tt.require_scorable(series, "sizing"):
+        return 1
     splits = {a: tt.split_series(s) for a, s in series.items()}
     train = {a: v[0] for a, v in splits.items()}
     val = {a: v[1] for a, v in splits.items()}
@@ -188,4 +190,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

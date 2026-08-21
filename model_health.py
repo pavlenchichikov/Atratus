@@ -368,6 +368,35 @@ def print_degraded():
     return rows
 
 
+def print_missing():
+    """Assets in the map with no CatBoost champion at all.
+
+    Not the same population as --mismatched or --degraded: those are assets
+    that HAVE a champion and something is wrong with it. These have never been
+    trained, so every fit that rebuilds an environment from champion
+    probabilities skips them silently and reports a smaller n without saying
+    which names are absent.
+    """
+    import os
+
+    from config import FULL_ASSET_MAP
+    from core.track_record import _table_name
+
+    missing = [a for a in FULL_ASSET_MAP
+               if not os.path.exists(os.path.join(
+                   MODEL_DIR, "%s_cb.cbm" % _table_name(a)))]
+    if not missing:
+        print("  every asset in the map has a champion.")
+        return missing
+    print("  %d of %d assets have no champion yet:"
+          % (len(missing), len(FULL_ASSET_MAP)))
+    print("  " + ",".join(missing))
+    print()
+    print("  These need a plain training run, NOT force-promote: there is no")
+    print("  incumbent to beat, so the first model is promoted on its own.")
+    return missing
+
+
 def main():
     parser = argparse.ArgumentParser(description="Model Health Monitor")
     parser.add_argument("--stale", type=int, default=7,
@@ -378,12 +407,18 @@ def main():
                         help="List assets whose model files are newer than their "
                              "champion-registry entry, which drops them from the "
                              "signals with a feature-count error")
+    parser.add_argument("--missing", action="store_true",
+                        help="List assets in the map that have no CatBoost "
+                             "champion at all, so every policy fit skips them")
     parser.add_argument("--degraded", action="store_true",
                         help="List assets whose neural champions do not load "
                              "here, so they serve on fewer members than the "
                              "registry claims. Slow: it opens every file.")
     args = parser.parse_args()
 
+    if args.missing:
+        print_missing()
+        return
     if args.degraded:
         print_degraded()
         return

@@ -46,6 +46,7 @@ echo    [4] Data Update
 echo    [5] Train Models       REPORTS
 echo    [5C] Train Chunked
 echo    [5R] Retrain chosen assets
+echo    [5F] Fill in / repair champions
 echo    [6] Backtest             [M] Model Health
 echo                             [E] Export Signals CSV
 echo  WHAT-IF SIMULATOR          [L] Signal Log
@@ -69,6 +70,7 @@ echo    [PS] Policy results and how they did on LIVE signals
 echo    [TB] Timing: fitted-Q challenger   [TO] Timing: one online tick
 echo    [SZ] Fit the position-sizing rule (at matched exposure)
 echo    [DR] Fit the direction rule on LIVE outcomes (follow / aside / invert)
+echo    [OS] Refit a policy on assets it has never been scored on
 echo.
 echo =======================================================
 set /p choice="Select: "
@@ -99,6 +101,7 @@ if /i "%choice%"=="E" goto export
 if /i "%choice%"=="SG" goto push_signals
 if /i "%choice%"=="5C" goto train_chunked
 if /i "%choice%"=="5R" goto train_assets
+if /i "%choice%"=="5F" goto fill_champions
 if /i "%choice%"=="AG" goto adopt_genome
 if /i "%choice%"=="AS" goto adopt_show
 if /i "%choice%"=="AR" goto adopt_revert
@@ -114,6 +117,7 @@ if /i "%choice%"=="TB" goto timing_stage_b
 if /i "%choice%"=="TO" goto timing_online
 if /i "%choice%"=="SZ" goto sizing_policy
 if /i "%choice%"=="DR" goto direction_policy
+if /i "%choice%"=="OS" goto out_of_sample
 if /i "%choice%"=="ABC" goto ab_configure
 if /i "%choice%"=="ABR" goto ab_run
 if /i "%choice%"=="L" goto signal_log
@@ -169,6 +173,84 @@ cls
 REM Training runs in the GPU environment: it is many times faster there, and the
 REM weights it writes are only readable by that environment anyway.
 cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
+pause
+goto menu
+
+:fill_champions
+cls
+echo Two different illnesses, two different cures. Pick one.
+echo.
+echo [1] Assets with NO champion. Nothing was ever trained for them, so every
+echo     policy fit rebuilds its environment from champion probabilities,
+echo     finds nothing, and skips them WITHOUT saying which names are gone.
+echo     A plain run: there is no incumbent, so the first model promotes itself.
+echo.
+echo [2] Assets whose neural champion does not load here. They still serve, on
+echo     fewer members than the registry claims, and no error says so. Repair
+echo     NEEDS force-promote: without it the champion is only rewritten when the
+echo     challenger wins, and on a loss the broken file survives untouched.
+echo.
+set /p FC_WHICH="[1] fill in, [2] repair degraded, Enter = cancel: "
+if "%FC_WHICH%"=="" goto menu
+echo.
+if "%FC_WHICH%"=="1" (
+  python model_health.py --missing
+) else (
+  python model_health.py --degraded
+)
+echo.
+echo Copy the comma-separated list above. Training runs in the GPU environment.
+set /p FC_ASSETS="Assets to train, Enter = cancel: "
+if "%FC_ASSETS%"=="" goto menu
+set "GTRADE_ASSETS=%FC_ASSETS%"
+if "%FC_WHICH%"=="2" set "GTRADE_FORCE_PROMOTE=1"
+echo.
+if "%FC_WHICH%"=="2" (echo [Repair] force-promote ON - every champion touched is replaced) else (echo [Fill in] champion-challenger - nothing existing is overwritten)
+cmd /c ""%~dp0run_in_env.bat" python train_hybrid.py"
+REM Clear both, or a later menu item would inherit the subset and the flag.
+set "GTRADE_ASSETS="
+set "GTRADE_FORCE_PROMOTE="
+set "FC_WHICH="
+set "FC_ASSETS="
+echo.
+echo Serving reads the new weights only after this finishes. Re-check with [M].
+pause
+goto menu
+
+:out_of_sample
+cls
+echo An adopted rule tested again on the data that adopted it proves nothing.
+echo These are the assets each policy's gate has NEVER scored, so a refit
+echo restricted to them is an independent replication, not a second reading.
+echo.
+echo Read the fitted parameters against the adopted ones. The same shape
+echo appearing on assets the first fit never saw is the evidence; a verdict on
+echo its own is not, because this refits rather than transferring the rule.
+echo.
+python policy_status.py --unseen
+echo.
+echo   [1] timing Stage A   [2] sizing   [3] trade levels
+echo   [4] timing Stage B, ONE pre-registered horizon (--iters 1, no
+echo       multiplicity to correct - the only form in which Stage B reopens)
+echo.
+set /p OS_WHICH="Which, Enter = cancel: "
+if "%OS_WHICH%"=="" goto menu
+set /p OS_ASSETS="Paste the unseen list for it, Enter = cancel: "
+if "%OS_ASSETS%"=="" goto menu
+set /p OS_BUDGET="Search iterations (Enter = 300): "
+if "%OS_BUDGET%"=="" set OS_BUDGET=300
+echo.
+if "%OS_WHICH%"=="1" python train_timing.py --assets %OS_ASSETS% --budget %OS_BUDGET%
+if "%OS_WHICH%"=="2" python train_sizing.py --assets %OS_ASSETS% --budget %OS_BUDGET%
+if "%OS_WHICH%"=="3" python train_levels.py --assets %OS_ASSETS% --budget %OS_BUDGET%
+if "%OS_WHICH%"=="4" python train_timing.py --stage b --iters 1 --assets %OS_ASSETS%
+set "OS_WHICH="
+set "OS_ASSETS="
+set "OS_BUDGET="
+echo.
+echo A gate line reading "N asset(s) dropped as unscorable" is not noise: those
+echo assets had an arm with too few trades to judge and were left out of the
+echo effect size on purpose.
 pause
 goto menu
 

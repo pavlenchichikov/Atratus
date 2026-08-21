@@ -175,11 +175,65 @@ def accuracy_by_confidence(conn):
     return out
 
 
+# Where each adopted policy recorded the assets its gate actually scored. A
+# policy cannot be validated out of sample without knowing what its sample was,
+# and all three already write it - so the unseen set is derived, never guessed.
+_FIT_SETS = {
+    "timing (Stage A)": ("timing_report.json", ("per_asset",)),
+    "sizing":           ("sizing_report.json", ("per_asset",)),
+    "levels":           ("levels_policy.json", ("gate", "per_asset")),
+}
+
+
+def print_unseen():
+    """Per adopted policy, the assets it has never been scored on.
+
+    These are the only assets on which a rule that is already adopted can be
+    checked without the check being a re-reading of the data that adopted it.
+    """
+    from config import FULL_ASSET_MAP
+
+    for name, (fname, path) in _FIT_SETS.items():
+        blob = pr._read(os.path.join(BASE, fname))
+        if not blob:
+            print("  %-18s %s is not there - nothing was fitted yet."
+                  % (name, fname))
+            continue
+        note = blob.get("per_asset_lost") if isinstance(blob, dict) else None
+        for key in path:
+            blob = (blob or {}).get(key) or {}
+        if not blob:
+            # An empty fit set is not "it saw nothing" - it is "this file no
+            # longer says". Reporting every asset as unseen would invite a
+            # replication run against a set nobody can check.
+            print("  %-18s %s records no per-asset set, so the unseen set "
+                  "cannot be derived." % (name, fname))
+            if note:
+                print("    %s" % note)
+            print()
+            continue
+        unseen = [a for a in FULL_ASSET_MAP if a not in blob]
+        print("  %-18s scored on %d, never scored on %d"
+              % (name, len(blob), len(unseen)))
+        if unseen:
+            print("    " + ",".join(unseen))
+        print()
+    print("  An asset with no champion cannot be scored at all - run")
+    print("  `python model_health.py --missing` first and train those.")
+
+
 def main():
     ap = argparse.ArgumentParser(description="policy results and live check")
     ap.add_argument("--days", type=int, default=0,
                     help="reconcile only the last N trading days (0 = all)")
+    ap.add_argument("--unseen", action="store_true",
+                    help="per adopted policy, the assets its gate never scored "
+                         "- the only honest out-of-sample set for it")
     args = ap.parse_args()
+
+    if args.unseen:
+        print_unseen()
+        return
 
     conn = sqlite3.connect(DB_PATH)
     rows = live_rows(conn, args.days or None)

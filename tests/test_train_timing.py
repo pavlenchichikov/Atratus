@@ -169,3 +169,31 @@ class TestUnscorableAssetsAreNotAveraged:
         assert out["n"] == len(healthy)
         assert out["n_unscorable"] == 0
         assert out["mean_d"] == pytest.approx(float(np.mean(deltas)))
+
+
+class TestRefusesToGateNothing:
+    """A fit over no scorable asset must say so, not answer.
+
+    Before this, train_timing and train_sizing ran a full ES over an empty set,
+    reported fitness -inf, and printed "verdict: HOLD p=1.0000 mean_d=+0.00
+    n=0" - a verdict shaped exactly like a measurement. Stage B did not get
+    that far: np.concatenate raised ValueError on the empty batch list. Both
+    are reachable by pointing --assets at names whose champions do not exist,
+    which is what the whole 116-asset backlog looks like right now.
+    """
+
+    def test_too_few_assets_is_refused(self, capsys):
+        assert tt.require_scorable({}, "timing") is False
+        out = capsys.readouterr().out
+        assert "only 0 asset" in out
+        assert "model_health.py --missing" in out, "say how to fix it"
+
+    def test_one_short_of_the_gate_minimum_is_refused(self):
+        series = {"A%d" % i: _series(120, seed=i)
+                  for i in range(tt.GATE_MIN_ASSETS - 1)}
+        assert tt.require_scorable(series, "timing") is False
+
+    def test_exactly_the_minimum_is_allowed(self):
+        series = {"A%d" % i: _series(120, seed=i)
+                  for i in range(tt.GATE_MIN_ASSETS)}
+        assert tt.require_scorable(series, "timing") is True
