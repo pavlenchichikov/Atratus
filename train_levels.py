@@ -36,7 +36,17 @@ import numpy as np
 from core import levels as levels_mod
 from core import timing_policy as tp
 from core.ar_rl import CmaEmitter
-from core.backtesting import COMMISSION, FOREX_COMMISSION, FOREX_SLIPPAGE, SLIPPAGE
+from core.backtesting import (
+    COMMISSION,
+    FOREX_COMMISSION,
+    FOREX_SLIPPAGE,
+    POSITION_FRACTION,
+    SLIPPAGE,
+    UNRELIABLE_SCORE,
+    max_drawdown_from_returns,
+    score_strategy,
+    sharpe_from_returns,
+)
 from train_timing import build_asset_series, fitness, split_series, walk_policy
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -81,6 +91,37 @@ MAX_HORIZON = 60
 # that. Copying the timing gate's 0.5 would have been the mistake of 2026-08-18
 # all over again, a floor in one unit checked against a value in another.
 ADOPT_FLOOR = 0.0002
+
+# Which environment the levels are fitted in. They are two different questions,
+# not two spellings of one:
+#
+#   rate    levels issued on EVERY bar carrying a side, exactly as predict.py
+#           issues them daily, scored as net return per bar of the slice. The
+#           trades OVERLAP, so the number is a rate and no account could have
+#           ridden it. Every measurement stored before 2026-08-22 is this one.
+#   equity  levels issued only on the bars the timing policy ENTERS. One trade
+#           per segment, so the trades do not overlap, so there is an equity
+#           curve and score_strategy's drawdown and Sharpe terms are defined.
+#
+# The reason it matters is the stop. Under `rate` a wider stop is monotonically
+# better all the way to the top of PARAM_SPECS - a stop can only truncate a
+# trade that would otherwise run to the signal flip, and the metric charges
+# nothing for the drawdown that running it costs. Under `equity` that drawdown
+# is priced, so the stop has an interior optimum to find.
+OBJECTIVES = ("equity", "rate")
+OBJECTIVE = os.getenv("GTRADE_LEVELS_OBJECTIVE", "equity")
+
+# One floor per objective, each in the units its own gate measures. Reusing the
+# rate floor for an equity delta would be the 2026-08-18 mistake exactly: a
+# number derived in return-per-bar checked against a value in score points.
+# `equity` is derived in the same style as `rate`: see ADOPT_FLOOR_EQUITY.
+ADOPT_FLOOR_EQUITY = 0.5
+
+
+def adopt_floor(objective=None):
+    """The practical-effect floor in the units `objective` measures."""
+    return (ADOPT_FLOOR_EQUITY if (objective or OBJECTIVE) == "equity"
+            else ADOPT_FLOOR)
 
 
 def price_atr(series):
@@ -129,55 +170,109 @@ def served_policy():
     return q_pol or tp.load_policy() or tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
 
 
+def walk_for(series):
+    """(sides, actions) under the served policy.
+
+    `actions` is what separates an ENTER bar from a HOLD, and that separation
+    is the whole difference between the two objectives, so both come back from
+    one walk rather than the caller walking twice.
+    """
+    sides, actions = walk_policy(series, served_policy())
+    return np.asarray(sides, dtype=int), list(actions)
+
+
 def sides_for(series):
     """The sides a person is actually acting on: the SERVED timing policy.
 
     Not the raw thresholded signal, and not Stage A once Stage B is the stage
-    being served. Levels are drawn on the side the card shows, so the fit has
-    to walk the same policy predict.py acts through; fitting against anything
-    else fits a screen nobody sees. `core.levels.acting_side` is the serving
-    half of this definition and the two have to move together.
+    being served. Levels are journalled on the side the timing layer holds, so
+    the fit has to walk the same policy predict.py acts through; fitting
+    against anything else fits trades nobody was in.
+    `core.levels.acting_side` is the serving half of this definition and the
+    two have to move together.
     """
-    sides, _actions = walk_policy(series, served_policy())
-    return np.asarray(sides, dtype=int)
+    return walk_for(series)[0]
 
 
-def eval_levels(series, params, sides=None):
-    """Replay one asset under one levels policy.
+def _issue_bars(sides, actions, objective):
+    """The bars one set of levels is issued on.
 
-    Levels are issued on EVERY bar that carries a side, exactly as predict.py
-    issues them every day, and each issue is resolved on its own. That mirrors
-    level_log row for row, so the number fitted here is the number the live
-    journal will later report.
-
-    The score is `ret_per_bar`: everything the issued levels earned over the
-    slice, divided by its length. NOT the mean per trade, which this fitter
-    demonstrated is gameable - driven at it, the ES pinned the stop to the
-    bottom of its range and made every regime delta negative, because a stop
-    tight enough to scratch every trade raises the average of a trade while
-    lowering what the strategy makes. Train and validation both improved and the
-    held-out slice fell.
-
-    Known ceiling: levels are issued every bar, so their trades overlap and this
-    sum is a RATE, not an equity curve one account could have ridden. The
-    position-persistent simulator is the honest equity model, and it needs
-    non-overlapping sides, which is what the timing policy fits on.
-
-    Returns {"ret_per_bar", "total_ret", "mean_ret", "n", "wins"}; all zero with
-    n = 0 when the policy never got a resolvable trade.
+    `rate` issues on every bar carrying a side, which is what predict.py does
+    daily and what makes the trades overlap. `equity` issues once per segment,
+    on the bar the policy ENTERS, which is what makes them not overlap and so
+    what makes an equity curve exist at all.
     """
+    if objective == "equity":
+        if actions is None:
+            raise ValueError("the equity objective needs actions, not sides alone")
+        return [i for i, a in enumerate(actions) if a == "ENTER"]
+    return [i for i, side in enumerate(sides) if int(side) != 0]
+
+
+def _equity_stats(curve, entered):
+    """(profit, trades, winrate, max_dd, sharpe) from resolved trades.
+
+    Built to land on the SAME scale train_timing reads, so the two gates can be
+    argued about in one unit: profit compounds bar by bar at POSITION_FRACTION
+    the way simulate_positions does, and drawdown and Sharpe come from the same
+    two helpers over the same daily array.
+
+    Each trade lands its whole net return on the bar it exited, because that is
+    the only bar resolve_trade reports; a trade held ten bars therefore looks
+    spikier than a marked-to-market position would, which depresses Sharpe
+    rather than flattering it.
+    """
+    bal = 1.0
+    for r in curve:
+        bal *= (1.0 + r * POSITION_FRACTION)
+    profit = (bal - 1.0) * 100.0
+    wins = sum(1 for r in entered if r > 0)
+    winrate = (wins / len(entered) * 100.0) if entered else 0.0
+    return (profit, len(entered), winrate,
+            max_drawdown_from_returns(curve), sharpe_from_returns(curve))
+
+
+def eval_levels(series, params, sides=None, actions=None, objective=None):
+    """Replay one asset under one levels policy, in the chosen environment.
+
+    `rate` (the pre-2026-08-22 reading) issues levels on EVERY bar that carries
+    a side, exactly as predict.py issues them every day, and scores everything
+    they earned divided by the length of the slice. NOT the mean per trade,
+    which this fitter demonstrated is gameable: driven at it, the ES pinned the
+    stop to the bottom of its range and made every regime delta negative,
+    because a stop tight enough to scratch every trade raises the average of a
+    trade while lowering what the strategy makes.
+
+    Its ceiling is that those trades OVERLAP, so the number is a rate and not
+    an equity curve one account could have ridden, and nothing in it charges
+    for drawdown. That is what made the stop degenerate: wider was better all
+    the way to the top of its range.
+
+    `equity` issues one set of levels per segment, on the bar the timing policy
+    ENTERS. The trades then do not overlap, an account could have ridden them,
+    and the score is score_strategy over that curve - so a wider stop now pays
+    for the drawdown it sits through.
+
+    Returns {"score", "ret_per_bar", "total_ret", "mean_ret", "n", "wins",
+    "profit", "max_dd", "sharpe", "n_entered"}. `score` is the one the fit and
+    the gate read, and it is whichever of the two the objective asked for.
+    """
+    objective = objective or OBJECTIVE
+    if objective not in OBJECTIVES:
+        raise ValueError("unknown levels objective: %r" % (objective,))
     comm, slip = _costs(series)
     leg_cost = comm + slip
-    if sides is None:
-        sides = sides_for(series)
+    if sides is None or (actions is None and objective == "equity"):
+        sides, actions = walk_for(series)
     o, h, lo_, c = (series["open"], series["high"], series["low"], series["close"])
     atr = price_atr(series)
     taleb = series.get("taleb_hi")
     risky = bool(series.get("risky"))
-    rets = []
-    for i in range(len(sides) - 1):
-        side = int(sides[i])
-        if side == 0:
+    n_bars = len(sides)
+    rets, entered = [], []
+    curve = np.zeros(max(1, n_bars), dtype=float)
+    for i in _issue_bars(sides, actions, objective):
+        if i >= n_bars - 1:
             continue
         a, close = atr[i], c[i]
         if not np.isfinite(a) or a <= 0 or not np.isfinite(close) or close <= 0:
@@ -185,21 +280,36 @@ def eval_levels(series, params, sides=None):
         k_entry, k_stop = levels_mod.effective_multipliers(
             params, taleb_hi=bool(taleb[i]) if taleb is not None else False,
             risky=risky)
-        j = min(i + 1 + MAX_HORIZON, len(sides))
+        j = min(i + 1 + MAX_HORIZON, n_bars)
         bars = list(zip(o[i + 1:j], h[i + 1:j], lo_[i + 1:j], c[i + 1:j]))
         out = levels_mod.resolve_trade(
-            side, close - k_entry * a, close + k_entry * a,
+            side := int(sides[i]), close - k_entry * a, close + k_entry * a,
             close - side * k_stop * a, bars, sides[i + 1:j], leg_cost)
-        if out is not None:
-            rets.append(out["ret_net"])
-    bars_n = max(1, len(sides))
-    if not rets:
-        return {"ret_per_bar": 0.0, "total_ret": 0.0, "mean_ret": 0.0,
-                "n": 0, "wins": 0}
-    total = float(np.sum(rets))
-    return {"ret_per_bar": total / bars_n, "total_ret": total,
-            "mean_ret": float(np.mean(rets)), "n": len(rets),
-            "wins": int(sum(1 for r in rets if r > 0))}
+        if out is None:
+            continue
+        rets.append(out["ret_net"])
+        if out.get("entered"):
+            # A trade that never filled contributes an exact zero to the curve,
+            # so it is left off it, and off the trade count and the win rate
+            # with it: an unfilled limit is not a losing trade.
+            entered.append(out["ret_net"])
+            curve[min(i + 1 + out["exit_index"], n_bars - 1)] += out["ret_net"]
+
+    total = float(np.sum(rets)) if rets else 0.0
+    res = {"ret_per_bar": total / max(1, n_bars), "total_ret": total,
+           "mean_ret": float(np.mean(rets)) if rets else 0.0,
+           "n": len(rets), "wins": int(sum(1 for r in rets if r > 0)),
+           "n_entered": len(entered)}
+    if objective == "rate":
+        res.update(score=res["ret_per_bar"], profit=0.0, max_dd=0.0, sharpe=0.0)
+        return res
+    profit, trades, winrate, max_dd, sharpe = _equity_stats(curve, entered)
+    # min_trades 5, the same allowance train_timing makes: one levels trade per
+    # entered segment runs at roughly the timing policy's own trade count.
+    res.update(score=score_strategy(profit, max_dd, winrate, trades, sharpe,
+                                    min_trades=5),
+               profit=profit, max_dd=max_dd, sharpe=sharpe, win_rate=winrate)
+    return res
 
 
 def baseline_params():
@@ -212,9 +322,10 @@ def baseline_params():
     return levels_mod.load_policy() or dict(DEFAULT_PARAMS)
 
 
-def eval_baseline(series, sides=None, params=None):
+def eval_baseline(series, sides=None, params=None, actions=None):
     """The levels production issues today."""
-    return eval_levels(series, params or baseline_params(), sides=sides)
+    return eval_levels(series, params or baseline_params(), sides=sides,
+                       actions=actions)
 
 
 def _params_of(obj):
@@ -238,17 +349,17 @@ def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
     val_by_asset = val_by_asset or train_by_asset
     # The sides are the frozen timing policy's, so they do not change with the
     # levels parameters and are computed once instead of per evaluation.
-    tr_sides = {a: sides_for(s) for a, s in train_by_asset.items()}
-    va_sides = {a: sides_for(s) for a, s in val_by_asset.items()}
+    tr_walk = {a: walk_for(s) for a, s in train_by_asset.items()}
+    va_walk = {a: walk_for(s) for a, s in val_by_asset.items()}
 
     best_params, best_val = dict(DEFAULT_PARAMS), float("-inf")
     for it in range(budget):
         cand = es.ask(_P(dict(DEFAULT_PARAMS)))
         params = _params_of(cand)
-        train_fit = fitness([eval_levels(s, params, sides=tr_sides[a])["ret_per_bar"]
+        train_fit = fitness([eval_levels(s, params, *tr_walk[a])["score"]
                              for a, s in train_by_asset.items()])
         es.tell(es.vector_of(cand), train_fit)
-        val_fit = fitness([eval_levels(s, params, sides=va_sides[a])["ret_per_bar"]
+        val_fit = fitness([eval_levels(s, params, *va_walk[a])["score"]
                            for a, s in val_by_asset.items()])
         if it % 10 == 0 or it == budget - 1:
             print("[levels]   ES %d/%d  train=%+.5f  val=%+.5f  best_val=%+.5f"
@@ -261,21 +372,35 @@ def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
 
 def gate_policy(test_by_asset, params):
     """Policy against today's constants on TEST: one-sided Wilcoxon over
-    per-asset deltas in mean net return per issued signal."""
+    per-asset deltas in whatever the active objective scores.
+
+    Both arms are walked ONCE per asset and scored on the same sides, so the
+    delta isolates the multipliers and nothing else, and both are read through
+    the same `score` key so the gate cannot be run in one unit against a floor
+    derived in another.
+    """
     from scipy.stats import wilcoxon
 
     base = baseline_params()
+    floor = adopt_floor()
     per_asset, deltas, unscorable = {}, [], []
     for asset, s in test_by_asset.items():
-        sides = sides_for(s)
-        d = (eval_levels(s, params, sides=sides)["ret_per_bar"]
-             - eval_baseline(s, sides=sides, params=base)["ret_per_bar"])
+        sides, actions = walk_for(s)
+        cand = eval_levels(s, params, sides, actions)["score"]
+        ref = eval_baseline(s, sides=sides, params=base, actions=actions)["score"]
         # A single non-finite delta takes the whole verdict with it: np.mean
         # returns nan, every comparison against the floor is then False, and the
         # run reports HOLD as though it had measured something. Seen 2026-08-22
         # on a 316-asset fit - AZN alone read +nan, because one of its bars has
         # high = low = 0 and a trade priced off it returns inf.
-        if not np.isfinite(d):
+        #
+        # UNRELIABLE_SCORE is the other way a pair says nothing: score_strategy
+        # returns it below min_trades, so an asset the policy barely trades
+        # would otherwise contribute a delta of hundreds of points in whichever
+        # direction happened to cross the threshold.
+        d = cand - ref
+        if (not np.isfinite(d) or cand == UNRELIABLE_SCORE
+                or ref == UNRELIABLE_SCORE):
             unscorable.append(asset)
             continue
         per_asset[asset] = round(d, 6)
@@ -289,10 +414,10 @@ def gate_policy(test_by_asset, params):
     else:
         p = 1.0
     mean_d = float(np.mean(deltas)) if deltas else 0.0
-    verdict = ("ADOPT" if (n >= 8 and p < 0.05 and mean_d > ADOPT_FLOOR)
+    verdict = ("ADOPT" if (n >= 8 and p < 0.05 and mean_d > floor)
                else "HOLD")
     return {"verdict": verdict, "p": p, "mean_d": mean_d, "n": n,
-            "floor": ADOPT_FLOOR, "per_asset": per_asset,
+            "floor": floor, "objective": OBJECTIVE, "per_asset": per_asset,
             "n_unscorable": len(unscorable), "unscorable": unscorable}
 
 
@@ -315,6 +440,7 @@ def report_lines(params, gate, meta=None):
            "  assets     %s fitted | %s gated" % (meta.get("n_fit", "?"), gate["n"]),
            "  budget     %s ES evaluations | horizon %d bars"
            % (meta.get("budget", "?"), MAX_HORIZON),
+           "  objective  %s" % gate.get("objective", OBJECTIVE),
            "", "PARAMETERS            baseline      fitted"]
     for name, _lo, _hi, _i in PARAM_SPECS:
         out.append("  %-18s %+9.3f   %+9.3f"
@@ -334,19 +460,37 @@ def report_lines(params, gate, meta=None):
     per = gate.get("per_asset") or {}
     if per:
         ranked = sorted(per.items(), key=lambda kv: kv[1], reverse=True)
-        out.append("PER ASSET (change in net return per bar, best first)")
+        unit = ("change in score points"
+                if gate.get("objective", OBJECTIVE) == "equity"
+                else "change in net return per bar")
+        out.append("PER ASSET (%s, best first)" % unit)
         out += ["  %-10s %+.6f" % (a, d) for a, d in ranked]
         out.append("")
-    out += ["WHAT THIS MEASURES",
-            "  Levels are issued every bar that carries a side, exactly as the",
-            "  radar issues them daily, and each is resolved on its own: filled at",
-            "  the worse edge of its zone, closed on the stop or on the signal",
-            "  turning away, charged both legs. The score is what that earned over",
-            "  the slice divided by its length, NOT the average of a trade.",
-            "",
-            "  It is a RATE, not an equity curve: issues overlap, so no single",
-            "  account could have taken all of them.",
-            ""]
+    if gate.get("objective", OBJECTIVE) == "equity":
+        out += ["WHAT THIS MEASURES",
+                "  One set of levels per segment, issued on the bar the timing",
+                "  policy ENTERS and resolved on its own: filled at the worse edge",
+                "  of its zone, closed on the stop or on the side turning away,",
+                "  charged both legs. The trades do not overlap, so one account",
+                "  could have taken all of them and an equity curve exists.",
+                "",
+                "  The score is score_strategy over that curve, so it carries",
+                "  drawdown, win rate and Sharpe, and a wider stop pays for the",
+                "  drawdown it sits through instead of being free.",
+                ""]
+    else:
+        out += ["WHAT THIS MEASURES",
+                "  Levels are issued every bar that carries a side, exactly as the",
+                "  radar issues them daily, and each is resolved on its own: filled at",
+                "  the worse edge of its zone, closed on the stop or on the signal",
+                "  turning away, charged both legs. The score is what that earned over",
+                "  the slice divided by its length, NOT the average of a trade.",
+                "",
+                "  It is a RATE, not an equity curve: issues overlap, so no single",
+                "  account could have taken all of them, and nothing in it charges",
+                "  for drawdown, which is what leaves the stop with no interior",
+                "  optimum to find.",
+                ""]
     if gate["verdict"] != "ADOPT":
         out.append("Nothing was written. Production keeps the levels it has.")
     return out
@@ -373,11 +517,18 @@ def save_policy(params, gate, path=None):
 
 
 def main():
+    global OBJECTIVE
     ap = argparse.ArgumentParser(description="fit and gate the levels policy")
     ap.add_argument("--assets", default="")
     ap.add_argument("--budget", type=int, default=300)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--objective", choices=OBJECTIVES, default=OBJECTIVE,
+                    help="equity: one trade per ENTER, scored on the curve it "
+                         "makes (default). rate: a level every bar, scored as "
+                         "return per bar, which is what every measurement "
+                         "before 2026-08-22 used")
     args = ap.parse_args()
+    OBJECTIVE = args.objective
 
     from config import FULL_ASSET_MAP
     names = ([a.strip().upper() for a in args.assets.split(",") if a.strip()]
@@ -394,7 +545,8 @@ def main():
               "8. Nothing fitted." % len(train))
         return 1
 
-    print("Fitting on %d assets, budget %d." % (len(train), args.budget))
+    print("Fitting on %d assets, budget %d, objective %s."
+          % (len(train), args.budget, OBJECTIVE))
     params = fit_policy(train, budget=args.budget, seed=args.seed,
                         val_by_asset=val)
     gate = gate_policy(test, params)
