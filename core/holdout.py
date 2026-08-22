@@ -9,6 +9,7 @@ counts from market.db once and passes them in, so this logic tests in
 milliseconds and never touches a database.
 """
 
+import os
 import random
 
 MIN_BARS = 2000   # below this an asset is too thin to carry a measurement
@@ -34,7 +35,18 @@ MIN_N = 8
 # 2026-08-13: 1997s for 14 assets), and 277 assets clear MIN_BARS, so drawing
 # 40 fresh ones is comfortable. Going further is a time decision, not a
 # statistical one: 80 buys +1.17 for ~190 minutes.
-DEFAULT_N = 40
+def _env_n(name, default):
+    try:
+        v = int(os.getenv(name) or default)
+    except ValueError:
+        return default
+    return v if v >= MIN_N else default
+
+
+# Settable so the launcher can size the gate without an edit: GTRADE_AB_HOLDOUT_N.
+# Anything below MIN_N is ignored rather than obeyed - a gate too small to resolve
+# anything is worse than the default, and a typo should not quietly shrink it.
+DEFAULT_N = _env_n("GTRADE_AB_HOLDOUT_N", 40)
 
 
 def _as_set(value):
@@ -98,6 +110,49 @@ def suggest(eligible_assets, groups, n=DEFAULT_N, seed=0):
             if buckets[g] and len(out) < n:
                 out.append(buckets[g].pop())
     return sorted(out)
+
+
+def grow(current, eligible_assets, groups, n, seed=0):
+    """`current`, extended to n assets, balanced against what it already holds.
+
+    Growing rather than redrawing on purpose: a replaced holdout makes every
+    earlier measurement incomparable, while a superset keeps them readable and
+    only sharpens what comes next. Assets already held count towards their
+    group, so the additions fill the classes the current set is thinnest in
+    rather than piling onto the ones it already covers.
+
+    Returns `current` unchanged when it is already at or above n.
+    """
+    have = list(dict.fromkeys(a for a in (current or []) if a))
+    if len(have) >= n:
+        return have
+    held = set(have)
+    counts = {}
+    for asset in have:
+        g = _first_group_of(asset, groups)
+        counts[g] = counts.get(g, 0) + 1
+
+    rng = random.Random(seed)
+    buckets = {}
+    for asset in eligible_assets:
+        if asset in held:
+            continue
+        buckets.setdefault(_first_group_of(asset, groups), []).append(asset)
+    for members in buckets.values():
+        rng.shuffle(members)
+
+    added = []
+    while len(have) + len(added) < n:
+        # The thinnest group that still has someone to give; name breaks ties so
+        # the same inputs always produce the same holdout.
+        order = sorted((g for g in buckets if buckets[g]),
+                       key=lambda g: (counts.get(g, 0), g))
+        if not order:
+            break
+        g = order[0]
+        added.append(buckets[g].pop())
+        counts[g] = counts.get(g, 0) + 1
+    return have + added
 
 
 def validate(chosen, eligible_assets, min_n=MIN_N):

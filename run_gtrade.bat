@@ -467,6 +467,34 @@ set "DEC=1"
 set /p "DEC=    choice [1]: "
 set "GTRADE_AR_DECISION_BASIS=raw"
 if "%DEC%"=="2" set "GTRADE_AR_DECISION_BASIS="
+
+echo.
+echo [0d] Gate size: how many assets a verdict is measured over. dScore has a
+echo     standard deviation near 3.74 per asset, so a gate of n resolves about
+echo     2.8 * 3.74 / sqrt(n):
+echo         14 -^> +2.80      40 -^> +1.66      80 -^> +1.17
+echo     The one genome ever adopted, A, measured +1.63 - under the resolution
+echo     of the 14 it was measured with. Both gates move together: the search's
+echo     own (GTRADE_AR_HELDOUT, which decides what is even offered) and the
+echo     final A/B's. The search gate GROWS, keeping every asset already in it,
+echo     so earlier runs stay comparable.
+echo     Cost per arm, measured 2026-08-13: 33 min at 14, so ~95 at 40.
+echo     1 = 40 (recommended)   2 = 14 (as before)   3 = 80   4 = other
+set "GS=1"
+set /p "GS=    choice [1]: "
+set "GATE_N=40"
+if "%GS%"=="2" set "GATE_N=14"
+if "%GS%"=="3" set "GATE_N=80"
+if "%GS%"=="4" set /p "GATE_N=    assets [40]: "
+if "%GATE_N%"=="" set "GATE_N=40"
+set "GTRADE_AB_HOLDOUT_N=%GATE_N%"
+echo     building the search gate list for %GATE_N% assets...
+python ab_build.py --search-gate %GATE_N% --out _search_gate.txt
+if errorlevel 1 (
+  echo     could not build it; leaving the search gate as it was.
+) else (
+  set /p GTRADE_AR_HELDOUT=<_search_gate.txt
+)
 echo.
 echo     New campaign: search basis %GTRADE_AR_SCORE_BASIS%, objective %GTRADE_AR_OBJECTIVE%,
 echo     screen %GTRADE_AR_SCREEN%, illumination %GTRADE_AR_ILLUM% (both derived from the basis).

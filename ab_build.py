@@ -309,11 +309,53 @@ def auto_picks(pool, ref, gates, tested, limit=MAX_CANDIDATES):
     return [cand for _, _, cand in ranked[:limit]]
 
 
+def search_gate(n):
+    """The search's own gate list, grown to n and printed for the launcher.
+
+    Two different holdouts exist and only one of them was ever sizeable from
+    outside. auto_research gates candidates on GTRADE_AR_HELDOUT before any of
+    them reaches an A/B, so that list decides what is even offered - and it was
+    a hardcoded fourteen. This grows it, keeping every asset already in it so
+    earlier measurements stay comparable, and excluding the search and tier
+    sets so the gate never scores an asset the search selected on.
+    """
+    import auto_research as ar
+    from config import ASSET_TYPES, FULL_ASSET_MAP
+    from core import holdout
+    from core.backtesting import price_resolution_ok
+
+    current = [a.strip() for a in ar.heldout_assets().split(",") if a.strip()]
+    ex = holdout.excluded([ar.SELECTION_ASSETS, ar.tier_assets()], [])
+    counts = bar_counts()
+    elig = holdout.eligible(list(FULL_ASSET_MAP), counts, ex)
+    # A gate is only as honest as its series: an asset whose price is quoted too
+    # coarsely to carry a one-bar sign contributes a label that is mostly ties.
+    elig = [a for a in elig if price_resolution_ok(_closes(a))[0]]
+    return holdout.grow(current, elig, ASSET_TYPES, n)
+
+
+def _closes(asset):
+    import sqlite3
+
+    from core.track_record import _table_name
+    try:
+        with sqlite3.connect(os.path.join(BASE, "market.db")) as con:
+            return [r[0] for r in con.execute(
+                'SELECT Close FROM "%s" ORDER BY Date' % _table_name(asset))]
+    except Exception:
+        return []
+
+
 def _suggest_assets(n, seed):
     import auto_research as ar
     from config import ASSET_TYPES, FULL_ASSET_MAP
     from core import holdout
-    ex = holdout.excluded([ar.SELECTION_ASSETS, ar.HELDOUT_ASSETS,
+    # heldout_assets(), not the HELDOUT_ASSETS alias: the alias is frozen to
+    # PROD_HELDOUT at import, so a run with GTRADE_AR_HELDOUT set would exclude
+    # the wrong list and hand the A/B assets the search had already gated on.
+    # auto_research says as much beside the alias - "live code calls
+    # heldout_assets()" - and this was the one live caller that did not.
+    ex = holdout.excluded([ar.SELECTION_ASSETS, ar.heldout_assets(),
                            ar.tier_assets()], previous_holdouts())
     elig = holdout.eligible(list(FULL_ASSET_MAP), bar_counts(), ex)
     return holdout.suggest(elig, ASSET_TYPES, n=n, seed=seed), elig
@@ -686,6 +728,15 @@ def run(cfg):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--search-gate", type=int, default=None,
+                    metavar="N",
+                    help="the search's own gate list grown to N assets, for "
+                         "GTRADE_AR_HELDOUT. Use --out: this module prints a "
+                         "campaign banner at import, so stdout is not clean "
+                         "enough for a launcher to read a variable from.")
+    ap.add_argument("--out", default=None, metavar="FILE",
+                    help="with --search-gate, write the list here instead of "
+                         "to stdout")
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--assets", default="")
@@ -700,6 +751,15 @@ def main():
                          "holdout without asking; for auto_loop.py")
     args = ap.parse_args()
 
+    if args.search_gate:
+        names = search_gate(args.search_gate)
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                fh.write(",".join(names))
+            print("%d asset(s) written to %s" % (len(names), args.out))
+        else:
+            print(",".join(names))
+        return
     if args.show:
         cfg = read_config()
         if not cfg:
