@@ -255,7 +255,7 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
         # Timing-policy shadow (GTRADE_TIMING_POLICY; default off = no-op). Never
         # allowed to affect sig/prob/gate_reason above, and any failure here must
         # not break scoring - hence the guard clause plus its own try/except.
-        timing_action = timing_reason = None
+        timing_action = timing_reason = timing_stage = None
         if timing_policy.timing_on():
             from core import timing_fqi as _fq
             # Stage B only when it is switched on AND a model was adopted AND
@@ -298,9 +298,10 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
                         f"ENTER:{'+1' if st2['pos'] == 1 else '-1'}"
                         if act == "ENTER" else act)
                     timing_reason = reason
+                    timing_stage = "B" if q_pol is not None else "A"
                 except Exception as e:
                     logger.debug("Timing-policy shadow skipped for %s: %s", name, e)
-                    timing_action = timing_reason = None
+                    timing_action = timing_reason = timing_stage = None
 
         return {
             "sig": sig, "prob": prob, "price": curr_price, "mode": mode,
@@ -308,6 +309,7 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
             "cb_prob": cb_prob, "lstm_prob": lstm_prob,
             "tf_prob": tf_prob, "tcn_prob": tcn_prob, "meta_prob": meta_p,
             "timing_action": timing_action, "timing_reason": timing_reason,
+            "timing_stage": timing_stage,
         }
 
     except Exception as e:

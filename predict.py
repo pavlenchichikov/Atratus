@@ -150,6 +150,7 @@ def run_radar():
                                    meta_prob=res["meta_prob"],
                                    sig_shown=res["sig"], gate_reason=res["gate_reason"],
                                    timing_action=res.get("timing_action"),
+                                   timing_stage=res.get("timing_stage"),
                                    timing_reason=res.get("timing_reason"))
                     logged += 1
                     # The GATED signal, because that is the one the card shows

@@ -43,8 +43,13 @@ def _table_name(asset):
 
 def live_rows(conn, days=None):
     """prediction_log as dicts, newest window first if `days` is given."""
+    # timing_stage arrives by migration on the first write after the upgrade, so
+    # a database that has only been READ since then does not have it yet. Absent
+    # means Stage A: it is the only policy that had ever served.
+    have = {r[1] for r in conn.execute("PRAGMA table_info(prediction_log)")}
+    stage = "timing_stage" if "timing_stage" in have else "NULL AS timing_stage"
     q = ("SELECT date, asset, signal, probability, actual_next_ret, "
-         "timing_action FROM prediction_log")
+         "timing_action, %s FROM prediction_log" % stage)
     if days:
         q += (" WHERE date >= (SELECT MAX(date) FROM prediction_log)"
               " AND 1=1")
@@ -132,7 +137,7 @@ def lines(reports, recon, days_seen):
     out += ["", "=== WHAT HAPPENED ON LIVE SIGNALS (%d trading days) ===" % days_seen,
             "  %-9s %7s %7s %9s %8s %8s %7s"
             % ("arm", "assets", "rows", "profit%", "winrate", "sharpe", "trades")]
-    for name in ("emitted", "timing", "sizing"):
+    for name in ("emitted", "timing A", "timing B", "sizing"):
         a = recon.get(name) or {}
         if a.get("status") != "measured":
             out.append("  %-9s %s" % (name, "no live decisions logged"))
@@ -141,10 +146,13 @@ def lines(reports, recon, days_seen):
                    % (name, a["assets"], a["rows"], a["profit"], a["winrate"],
                       a["sharpe"], a["trades"]))
     out += ["",
-            "  emitted = the signal production actually sent, as a position.",
-            "  timing  = the shadow decision that was logged beside it.",
-            "  sizing  = the fitted rule, at matched exposure so it cannot win",
-            "            by simply holding more."]
+            "  emitted  = the signal production actually sent, as a position.",
+            "  timing A = the adopted rules' shadow decision, logged beside it.",
+            "  timing B = the fitted Q's, when GTRADE_TIMING_STAGE=b is set.",
+            "             Separate rows on separate days: the two are NOT",
+            "             comparable until both have run over the same ones.",
+            "  sizing   = the fitted rule, at matched exposure so it cannot win",
+            "             by simply holding more."]
     return out
 
 

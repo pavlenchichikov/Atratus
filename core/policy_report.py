@@ -167,9 +167,14 @@ def reconcile(rows, forex=(), sizing=None):
             continue
         by_asset.setdefault(r["asset"], []).append(r)
 
-    arms = {"emitted": [], "timing": [], "sizing": []}
-    covered = {"emitted": 0, "timing": 0, "sizing": 0}
-    assets = {"emitted": 0, "timing": 0, "sizing": 0}
+    # Stage A and Stage B are separate arms, never one "timing" number. They ran
+    # over different date ranges, so blending them would report a policy that
+    # never existed. Rows written before the stage column arrived carry no stage
+    # and are Stage A's: it is the only one that had ever served.
+    keys = ("emitted", "timing A", "timing B", "sizing")
+    arms = {k: [] for k in keys}
+    covered = dict.fromkeys(keys, 0)
+    assets = dict.fromkeys(keys, 0)
     for asset, rs in by_asset.items():
         rs.sort(key=lambda r: r["date"])
         sig = np.asarray([_SIDE.get((r.get("signal") or "").upper(), 0)
@@ -183,12 +188,16 @@ def reconcile(rows, forex=(), sizing=None):
         covered["emitted"] += len(ret)
         assets["emitted"] += 1
 
-        actions = [r.get("timing_action") for r in rs]
-        if any(a for a in actions):
-            arms["timing"].append(_stats(_timing_sides(sig, actions), ret,
-                                         comm, slip))
-            covered["timing"] += sum(1 for a in actions if a)
-            assets["timing"] += 1
+        for arm, want in (("timing A", "A"), ("timing B", "B")):
+            actions = [r.get("timing_action")
+                       if (r.get("timing_stage") or "A") == want else None
+                       for r in rs]
+            if not any(a for a in actions):
+                continue
+            arms[arm].append(_stats(_timing_sides(sig, actions), ret,
+                                    comm, slip))
+            covered[arm] += sum(1 for a in actions if a)
+            assets[arm] += 1
 
         if sizing is not None:
             probs = np.asarray([float(r.get("probability") or 0.5)

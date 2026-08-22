@@ -46,6 +46,11 @@ def _migrate(cur):
         cur.execute("ALTER TABLE prediction_log ADD COLUMN timing_action TEXT")
     if cols and "timing_reason" not in cols:
         cur.execute("ALTER TABLE prediction_log ADD COLUMN timing_reason TEXT")
+    # Which policy decided. Without it the live timing number silently becomes a
+    # blend of two policies over two date ranges the moment Stage B is switched
+    # on, and the reason string is the wrong thing to infer it from.
+    if cols and "timing_stage" not in cols:
+        cur.execute("ALTER TABLE prediction_log ADD COLUMN timing_stage TEXT")
 
 
 def _ensure_table(cur):
@@ -64,7 +69,8 @@ def _ensure_table(cur):
             sig_shown TEXT,
             gate_reason TEXT,
             timing_action TEXT,
-            timing_reason TEXT
+            timing_reason TEXT,
+            timing_stage TEXT
         )
     """)
     _migrate(cur)
@@ -93,7 +99,8 @@ def _has_bar(cur, asset, day):
 def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                    model_version=None, meta_prob=None, date=None,
                    sig_shown=None, gate_reason=None,
-                   timing_action=None, timing_reason=None):
+                   timing_action=None, timing_reason=None,
+                   timing_stage=None):
     # Date the prediction by the wall clock (one row per asset per day). Non-trading
     # days for an asset (a stock predicted on a weekend/holiday) are not stamped onto
     # a neighbouring bar here; update_actuals() reconciles only exact trading-bar dates
@@ -122,11 +129,11 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
             """INSERT INTO prediction_log
                (date, asset, signal, probability, actual_next_ret, correct,
                 cb_prob, lstm_prob, model_version, meta_prob, sig_shown, gate_reason,
-                timing_action, timing_reason)
-               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                timing_action, timing_reason, timing_stage)
+               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (today, asset, signal, probability, cb_prob, lstm_prob,
              model_version, meta_prob, sig_shown, gate_reason,
-             timing_action, timing_reason),
+             timing_action, timing_reason, timing_stage),
         )
         con.commit()
 
