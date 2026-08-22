@@ -71,6 +71,7 @@ echo    [TB] Timing: fitted-Q challenger   [TO] Timing: one online tick
 echo    [SZ] Fit the position-sizing rule (at matched exposure)
 echo    [DR] Fit the direction rule on LIVE outcomes (follow / aside / invert)
 echo    [OS] Refit a policy on assets it has never been scored on
+echo    [TR] Timing replay: how often each layer's decision was right
 echo.
 echo =======================================================
 set /p choice="Select: "
@@ -118,6 +119,7 @@ if /i "%choice%"=="TO" goto timing_online
 if /i "%choice%"=="SZ" goto sizing_policy
 if /i "%choice%"=="DR" goto direction_policy
 if /i "%choice%"=="OS" goto out_of_sample
+if /i "%choice%"=="TR" goto timing_replay
 if /i "%choice%"=="ABC" goto ab_configure
 if /i "%choice%"=="ABR" goto ab_run
 if /i "%choice%"=="L" goto signal_log
@@ -228,6 +230,35 @@ set "FC_WHICH="
 echo.
 echo Serving reads the new weights only after this finishes. Re-check with [M],
 echo then refit the policies on the new assets with [OS].
+pause
+goto menu
+
+:timing_replay
+cls
+echo Walks the baseline, the adopted Stage-A rules and the adopted Stage-B Q
+echo over the held-out slice and asks of every decision whether it turned out
+echo right. No money, no positions taken - the same hit-or-miss reading the
+echo signal itself gets, applied to what a timing layer actually decides.
+echo.
+echo In a position, a hit is the bar going the way the position faces. Flat
+echo while the raw signal wanted in, a hit is the skipped trade not paying.
+echo Bars where nothing was chosen are not counted either way.
+echo.
+echo The last two columns are trades and net after cost, from the SAME
+echo evaluator the ADOPT verdict was read from. Accuracy and net can point
+echo different ways: holding longer pays for fewer legs.
+echo.
+echo Nothing is fitted and nothing is written. Slow - it rebuilds every
+echo asset's scorable history first.
+echo.
+set /p RP_ASSETS="Assets (list or ALL), Enter = cancel: "
+if "%RP_ASSETS%"=="" goto menu
+set "RP_SEL=--assets %RP_ASSETS%"
+if /i "%RP_ASSETS%"=="all" set "RP_SEL="
+echo.
+python train_timing.py --replay %RP_SEL%
+set "RP_ASSETS="
+set "RP_SEL="
 pause
 goto menu
 

@@ -398,3 +398,51 @@ class TestServingStageB:
         with pytest.raises(ValueError):
             fq.serve_step(pol, 0.6, 0.5, 0.55, 0.45, [100.0], [1.0],
                           False, False, False, dict(tp.FRESH_STATE))
+
+
+class TestReplayReadsDecisionsAgainstFacts:
+    """The hit-or-miss reading, so a timing layer can be judged the way the
+    signal is: not by a score, by what the next bar then did."""
+
+    def _series_with(self, sides_wanted):
+        """A series whose next_ret is +1% wherever the caller wants a hit."""
+        n = len(sides_wanted)
+        return {"probs": np.full(n, 0.60), "buy_thr": 0.55, "sell_thr": 0.45,
+                "next_ret": np.asarray(sides_wanted, dtype=float) * 0.01,
+                "atr": np.full(n, 0.01), "taleb_hi": np.zeros(n, dtype=bool),
+                "close": np.full(n, 100.0), "risky": False, "is_forex": False}
+
+    def test_a_long_that_rises_is_a_hit_and_one_that_falls_is_not(self):
+        import train_timing as tt
+        s = self._series_with([1, 1, -1, -1])       # up, up, down, down
+        st = tt.hit_stats(s, [1, 1, 1, 1])
+        assert st["held"] == 4
+        assert st["held_hits"] == 2
+        assert st["held_accuracy"] == 0.5
+
+    def test_staying_out_of_a_trade_that_would_have_lost_is_a_hit(self):
+        import train_timing as tt
+        s = self._series_with([-1, -1])             # the bar falls
+        st = tt.hit_stats(s, [0, 0])                # policy stayed flat
+        assert st["held"] == 0
+        assert st["flat_with_signal"] == 2, "the raw signal wanted long"
+        assert st["avoided_losses"] == 2
+        assert st["accuracy"] == 1.0
+
+    def test_a_bar_nobody_wanted_is_not_counted_either_way(self):
+        import train_timing as tt
+        n = 3
+        s = {"probs": np.full(n, 0.50), "buy_thr": 0.55, "sell_thr": 0.45,
+             "next_ret": np.full(n, 0.01), "atr": np.full(n, 0.01),
+             "taleb_hi": np.zeros(n, dtype=bool), "close": np.full(n, 100.0),
+             "risky": False, "is_forex": False}
+        st = tt.hit_stats(s, [0, 0, 0])
+        assert st["decided"] == 0
+        assert st["bars"] == 3, "the bars exist, they were just not a decision"
+
+    def test_an_unresolved_bar_is_left_out(self):
+        import train_timing as tt
+        s = self._series_with([1, 1])
+        s["next_ret"] = np.array([0.01, np.nan])
+        st = tt.hit_stats(s, [1, 1])
+        assert st["bars"] == 1 and st["held"] == 1 and st["held_hits"] == 1

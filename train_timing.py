@@ -65,14 +65,66 @@ def eval_policy(series, policy):
     the volatility percentile, which .apply's argument list does not pass), so
     a policy that offers apply_series is given the series.
     """
+    sides, _actions = walk_policy(series, policy)
+    return _run_sides(series, sides)
+
+
+def walk_policy(series, policy):
+    """(sides, actions) per bar. The one place either stage's walk is started.
+
+    A Stage-B policy needs the whole series; a Stage-A one takes columns. The
+    difference is here and nowhere else, so a reader and the gate can never end
+    up walking a policy two different ways.
+    """
     if hasattr(policy, "apply_series"):
-        sides, _actions, _reasons = policy.apply_series(series)
+        sides, actions, _reasons = policy.apply_series(series)
     else:
-        sides, _actions, _reasons = policy.apply(
+        sides, actions, _reasons = policy.apply(
             series["probs"], series["buy_thr"], series["sell_thr"],
             series["atr"], series["taleb_hi"], series["risky"],
             next_ret=series["next_ret"])
-    return _run_sides(series, sides)
+    return sides, actions
+
+
+def hit_stats(series, sides):
+    """Did each decision turn out right, the way accuracy is read for a signal.
+
+    A timing policy does not predict a direction, so "hit" has to be defined
+    for what it DOES decide:
+
+      in a position   the next bar moved the way the position is facing
+      flat, signal on staying out was right, because the position the raw
+                      signal wanted would not have made money
+
+    Bars where the raw signal is flat and the policy is flat are not a decision
+    either way and are left out, so the rate is over bars where something was
+    actually chosen. `ret_per_bar` is what the decisions earned before costs,
+    which is the same quantity with the sign kept.
+    """
+    next_ret = np.asarray(series["next_ret"], dtype=float)
+    probs = np.asarray(series["probs"], dtype=float)
+    buy, sell = float(series["buy_thr"]), float(series["sell_thr"])
+    raw = np.where(probs > buy, 1, np.where(probs < sell, -1, 0))
+    sides = np.asarray(sides, dtype=int)
+
+    live = np.isfinite(next_ret)
+    held = live & (sides != 0)
+    flat_with_signal = live & (sides == 0) & (raw != 0)
+
+    held_hits = int((sides[held] * next_ret[held] > 0).sum())
+    avoided = int((raw[flat_with_signal] * next_ret[flat_with_signal] <= 0).sum())
+    n_held, n_flat = int(held.sum()), int(flat_with_signal.sum())
+    decided = n_held + n_flat
+    earned = float((sides[live] * next_ret[live]).sum())
+    return {
+        "bars": int(live.sum()), "held": n_held, "held_hits": held_hits,
+        "flat_with_signal": n_flat, "avoided_losses": avoided,
+        "decided": decided, "hits": held_hits + avoided,
+        "accuracy": (held_hits + avoided) / decided if decided else float("nan"),
+        "held_accuracy": held_hits / n_held if n_held else float("nan"),
+        "avoid_accuracy": avoided / n_flat if n_flat else float("nan"),
+        "ret_per_bar": earned / int(live.sum()) if live.any() else 0.0,
+    }
 
 
 def eval_baseline(series):
@@ -401,6 +453,11 @@ def main():
     ap.add_argument("--assets", default="")
     ap.add_argument("--budget", type=int, default=300)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--replay", action="store_true",
+                    help="do not fit anything: walk the baseline, the adopted "
+                         "Stage-A rules and the adopted Stage-B Q over the "
+                         "held-out slice and report how often each decision "
+                         "turned out right")
     ap.add_argument("--stage", default="a", choices=("a", "b"),
                     help="a = the interpretable rules fit (default), "
                          "b = the fitted-Q challenger to the adopted rules")
@@ -431,6 +488,23 @@ def main():
     print(f"[timing] {len(series)}/{len(assets)} assets with usable history")
     if not require_scorable(series, "timing"):
         return 1
+
+    if args.replay:
+        from core import timing_fqi as _fq
+        te = {a: split_series(v)[2] for a, v in series.items()}
+        arms = [("baseline", tp.RulesPolicy(dict(tp.DEFAULT_PARAMS)))]
+        stage_a = tp.load_policy()
+        if stage_a is not None:
+            arms.append(("stage A (adopted)", stage_a))
+        stage_b = _fq.load_served_policy()
+        if stage_b is not None:
+            arms.append(("stage B (Q)", stage_b))
+        else:
+            print("[timing] no timing_fqi.cbm - Stage B is not in the table.")
+        for line in replay_lines(replay(te, arms), len(te)):
+            print(line)
+        return 0
+
     if args.stage == "b":
         out = stage_b(series, iters=args.iters, gamma=args.gamma,
                       epsilon=args.epsilon, seed=args.seed)
@@ -594,6 +668,107 @@ def stage_b(by_asset, iters=6, gamma=0.97, epsilon=0.1, seed=0,
             # whole ladder a second time. Stripped before the report is written.
             "_models": models}
 
+
+
+def replay(by_asset, arms):
+    """Score every arm on the same bars and pool the counts across assets.
+
+    Pooled, not averaged over assets: an asset with 1200 scorable bars and one
+    with 300 are not one vote each when the question is "how often was a
+    decision right".
+    """
+    out = {}
+    for label, policy in arms:
+        tot = {"bars": 0, "held": 0, "held_hits": 0, "flat_with_signal": 0,
+               "avoided_losses": 0, "decided": 0, "hits": 0}
+        earned = 0.0
+        trades = 0
+        net = 0.0
+        per_asset = {}
+        for _name, series in by_asset.items():
+            sides, _ = walk_policy(series, policy)
+            st = hit_stats(series, sides)
+            for k in tot:
+                tot[k] += st[k]
+            earned += st["ret_per_bar"] * st["bars"]
+            # The gate's own evaluator, not a second one: it charges the costs
+            # and it is what the ADOPT verdict was read from. Gross accuracy
+            # and net profit answer different questions, and a policy that
+            # holds longer can be right less often per bar and still keep more,
+            # because it pays for fewer legs.
+            run = _run_sides(series, sides)
+            trades += int(run["n_trades"])
+            net += float(run["profit"])
+            per_asset[_name] = float(run["profit"])
+        tot["trades"] = trades
+        tot["net_profit"] = net
+        tot["per_asset_net"] = per_asset
+        tot["accuracy"] = tot["hits"] / tot["decided"] if tot["decided"] else float("nan")
+        tot["held_accuracy"] = (tot["held_hits"] / tot["held"]
+                                if tot["held"] else float("nan"))
+        tot["avoid_accuracy"] = (tot["avoided_losses"] / tot["flat_with_signal"]
+                                 if tot["flat_with_signal"] else float("nan"))
+        tot["ret_per_bar"] = earned / tot["bars"] if tot["bars"] else 0.0
+        out[label] = tot
+    return out
+
+
+def replay_lines(res, n_assets):
+    """The comparison as text. Every column is a count or a rate over facts."""
+    out = ["ATRATUS TIMING REPLAY - decisions against what the bar then did",
+           "  assets     %d, held-out slice only (never seen by any fit)" % n_assets,
+           "",
+           "  %-16s %8s %8s %8s %8s %8s %11s %8s %10s"
+           % ("arm", "decided", "acc", "in-pos", "acc", "stayed", "ret/bar",
+              "trades", "net"),
+           "  %-16s %8s %8s %8s %8s %8s %11s %8s %10s"
+           % ("", "bars", "overall", "bars", "in-pos", "out ok", "before cost",
+              "", "after cost")]
+    for label, t in res.items():
+        out.append("  %-16s %8d %7.1f%% %8d %7.1f%% %7.1f%% %+11.6f %8d %+10.2f"
+                   % (label, t["decided"], 100 * t["accuracy"], t["held"],
+                      100 * t["held_accuracy"], 100 * t["avoid_accuracy"],
+                      t["ret_per_bar"], t["trades"], t["net_profit"]))
+    # A pooled total says nothing about whether the gain is typical. The sizing
+    # fit was +9.03 on the mean and +2.29 on the median because three assets
+    # carried it; the same question has to be asked here before anybody reads
+    # the total as what an asset does.
+    ref = res.get("baseline") or {}
+    ref_net = ref.get("per_asset_net") or {}
+    if ref_net:
+        import statistics
+        out.append("")
+        out.append("  AGAINST THE BASELINE, PER ASSET (net after cost)")
+        for label, t in res.items():
+            if label == "baseline":
+                continue
+            deltas = [t["per_asset_net"][a] - ref_net[a]
+                      for a in t.get("per_asset_net", {}) if a in ref_net]
+            if not deltas:
+                continue
+            better = sum(1 for d in deltas if d > 0)
+            out.append("    %-16s better on %d of %d   median %+.4f   "
+                       "mean %+.4f" % (label, better, len(deltas),
+                                       statistics.median(deltas),
+                                       sum(deltas) / len(deltas)))
+            worst = sorted(deltas)[:3]
+            best = sorted(deltas)[-3:]
+            out.append("    %-16s worst %s   best %s"
+                       % ("", ["%+.1f" % d for d in worst],
+                          ["%+.1f" % d for d in best]))
+    out += ["",
+            "  net after cost is the SAME quantity the ADOPT verdict was read",
+            "  from, summed over assets. Accuracy and net can disagree: holding",
+            "  longer pays for fewer legs, so being right less often per bar is",
+            "  not the same as keeping less.",
+            "",
+            "  acc overall = of the bars where something was chosen, how often it",
+            "                was right: in a position, the bar went the way the",
+            "                position faced; flat while the raw signal wanted in,",
+            "                the trade it skipped would not have paid.",
+            "  Bars where the raw signal is flat and the policy is flat are no",
+            "  decision at all and are not counted either way."]
+    return out
 
 def save_stage_b(out, models=None, path=None):
     """Write the Stage-B report always; write the model only on ADOPT."""
