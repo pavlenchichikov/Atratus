@@ -751,10 +751,28 @@ def update_level_outcomes():
         _ensure_level_table(cur)
         _ensure_table(cur)
         rows = cur.execute(
-            "SELECT rowid, date, asset, signal, entry_low, entry_high, stop "
-            "FROM level_log WHERE exit_reason IS NULL").fetchall()
+            "SELECT rowid, date, asset, signal, entry_low, entry_high, stop, "
+            "trailing FROM level_log WHERE exit_reason IS NULL").fetchall()
         pending = len(rows)
-        for rowid, date_str, asset, signal, lo, hi, stop in rows:
+        skipped = 0
+        for rowid, date_str, asset, signal, lo, hi, stop, trailing in rows:
+            # A trailing row is not a setup. Its stop belongs to a position
+            # opened days ago at a different price and has since ratcheted to
+            # sit close to today's close - that is what a trailing stop is FOR.
+            # Replaying it as "enter at the zone edge today, exit at that stop"
+            # invents a trade nobody could take, with a stop a fraction of the
+            # width the policy asks for. Measured 2026-08-22 on the first twelve
+            # resolutions: all twelve were trailing rows, median distance from
+            # entry to stop 0.56 ATR against the 2.99 the policy specifies, and
+            # all twelve "lost" on bar one. The fitter scores fresh setups, so
+            # the journal must score fresh setups, or the two numbers are not
+            # the same number.
+            if trailing:
+                cur.execute(
+                    "UPDATE level_log SET exit_reason=? WHERE rowid=?",
+                    ("not a setup: position already open", rowid))
+                skipped += 1
+                continue
             if asset not in shown_cache:
                 shown_cache[asset] = _shown_signals(cur, asset)
             out = _resolve_level_row((date_str, signal, lo, hi, stop),
@@ -771,7 +789,7 @@ def update_level_outcomes():
                  out.get("bars_held"), out.get("ret_net"), rowid))
             resolved += 1
         con.commit()
-    return {"pending": pending, "resolved": resolved}
+    return {"pending": pending, "resolved": resolved, "not_setups": skipped}
 
 
 if __name__ == "__main__":
@@ -785,7 +803,8 @@ if __name__ == "__main__":
     # reconciled in the same pass. Only predict.py did this, which meant running
     # the tracker by hand reported stale level outcomes and never said so.
     lv = update_level_outcomes()
-    print("Levels: scored %d of %d unresolved." % (lv["resolved"], lv["pending"]))
+    print("Levels: scored %d of %d unresolved (%d were trailing rows, not "
+          "setups)." % (lv["resolved"], lv["pending"], lv.get("not_setups", 0)))
 
     lb = get_leaderboard(days=30)
     if lb.empty:
