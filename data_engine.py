@@ -380,7 +380,7 @@ def scrub_ohlc(df):
 
     Two treatments, because dropping every bad bar would also throw away real
     trading days: when the close is good but open/high/low are not, fill them
-    from what IS known (a bar we only know the close of has no intraday range,
+    from what IS known (a bar with only a close has no intraday range,
     and inventing one would be worse than recording none); when the close
     itself is not positive there is no price at all, so the bar goes. A gap is
     honest, a zero is not.

@@ -319,6 +319,11 @@ def _suggest_assets(n, seed):
     return holdout.suggest(elig, ASSET_TYPES, n=n, seed=seed), elig
 
 
+def _holdout_default_n():
+    from core import holdout
+    return holdout.DEFAULT_N
+
+
 def _configure(args):
     import adopt_genome
     import auto_research as ar
@@ -377,10 +382,17 @@ def _configure(args):
         print("Cancelled.")
         return
     if len(chosen) > MAX_CANDIDATES:
+        # The old text here said 8 to 11 hours an arm. That predated the GPU
+        # environment and the 2026-08-04 miner cleanup; re-measured 2026-08-13
+        # from ar_progress.json a 14-asset holdout arm is 1997s. Quoting hours
+        # where the truth is minutes is how a run nobody could afford gets
+        # refused and one nobody checked gets waved through.
         print("At most %d per run: each arm is a full training of the holdout, "
-              "roughly 8 to 11 hours, plus the reference. A later run draws a "
-              "fresh holdout, so its reference arm is trained again from "
-              "scratch - picking fewer now does not save that." % MAX_CANDIDATES)
+              "about %d min at %d assets (measured 2026-08-13: 1997s for 14), "
+              "plus the reference. A later run draws a fresh holdout, so its "
+              "reference arm is trained again from scratch - picking fewer now "
+              "does not save that."
+              % (MAX_CANDIDATES, round(1997 * args.n / 14 / 60), args.n))
         return
 
     suggested, elig = _suggest_assets(args.n, args.seed)
@@ -677,7 +689,9 @@ def main():
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--assets", default="")
-    ap.add_argument("--n", type=int, default=14)
+    # core.holdout owns the size: a second default here silently overrode it,
+    # so raising DEFAULT_N did nothing to the path the launcher actually uses.
+    ap.add_argument("--n", type=int, default=_holdout_default_n())
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--objective", default="mean")

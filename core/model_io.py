@@ -78,13 +78,15 @@ def load_keras_native(path):
                 model = tf.keras.models.load_model(
                     path, custom_objects=_SERVE_CUSTOM_OBJECTS)
         except Exception as e:
-            # WARNING, not debug: the caller only reaches here for a file that
-            # EXISTS on disk, so a failure means a trained champion is silently
-            # dropped from the ensemble. That is exactly how the neural members
-            # died unnoticed once already; a wrong-environment load (Keras 2
-            # cannot open a Keras 3 zip .keras) must be visible in the console.
-            logger.warning("Champion exists but did not load: %s (%s: %s)",
-                           path, type(e).__name__, e)
+            # debug, not warning: this is the FIRST of several attempts, and
+            # since the embedded-config rebuild landed the later ones carry
+            # most of the book - every legacy champion fails here and loads a
+            # moment later. Warning on it printed two lines per asset for 200+
+            # assets on every predict run, which is how a real loss would go
+            # unnoticed among them. The caller warns, once, only if every path
+            # failed; see _warn_lost.
+            logger.debug("Native load failed for %s (%s: %s)",
+                         path, type(e).__name__, e)
             return None
         finally:
             lam_cls.call = orig_call
@@ -132,6 +134,12 @@ def build_lstm_legacy(input_shape):
 # policy object, so the string reaches DTypePolicy and dies on .quantization_mode.
 # Dropping both leaves the layer on the default policy, which changes nothing a
 # serve-time forward pass can see: the weights are the same shapes either way.
+# Only these two. A transformer config also carries MultiHeadAttention's
+# query/key/value_shape, which Keras 3 rejects - but stripping them only moves
+# the failure to the next incompatible key, and the transformer does not need
+# this path at all: transformer_kwargs_from_h5 reads num_heads and ff_dim from
+# the WEIGHT SHAPES, which is not a guess. Checked 2026-08-22, it loads with
+# real spread (SP500 std 0.071) without any of this.
 _KERAS2_ONLY_CONFIG_KEYS = ("time_major", "dtype")
 
 
@@ -398,6 +406,19 @@ def _rebuild_from_legacy(path, builder, lookback, n_features, **kwargs):
                 pass
 
 
+def _warn_lost(path, model):
+    """Warn only when every path failed, which is when a member is truly lost.
+
+    The old warning fired on the first attempt, so it also fired for every
+    champion that then loaded fine. A message that appears on success teaches
+    the reader to skip it, and the one time it means a trained member has
+    silently left the ensemble it is skipped too.
+    """
+    if model is None and os.path.exists(path):
+        logger.warning("Champion exists but no loader could read it: %s", path)
+    return model
+
+
 def load_tcn_model(path, lookback, n_features):
     """A TCN champion, native first and rebuilt from legacy weights after.
 
@@ -410,7 +431,8 @@ def load_tcn_model(path, lookback, n_features):
     model = load_keras_native(path)
     if model is not None:
         return model
-    return _rebuild_from_legacy(path, build_tcn, lookback, n_features)
+    return _warn_lost(path,
+                      _rebuild_from_legacy(path, build_tcn, lookback, n_features))
 
 
 def load_transformer_model(path, lookback, n_features):
@@ -421,9 +443,9 @@ def load_transformer_model(path, lookback, n_features):
         return model
     kwargs = transformer_kwargs_from_h5(path) if _detect_format(path) == "hdf5" else None
     if kwargs is None:
-        return None
-    return _rebuild_from_legacy(path, build_transformer_encoder,
-                                lookback, n_features, **kwargs)
+        return _warn_lost(path, None)
+    return _warn_lost(path, _rebuild_from_legacy(
+        path, build_transformer_encoder, lookback, n_features, **kwargs))
 
 
 def load_lstm_model(lstm_path, lookback, n_features):
@@ -514,7 +536,7 @@ def load_lstm_model(lstm_path, lookback, n_features):
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
 
-        logger.debug("All LSTM load methods failed for %s", lstm_path)
+        _warn_lost(lstm_path, None)
         return None, "CB ONLY (Err)", lookback
     finally:
         if h5_path and os.path.exists(h5_path):

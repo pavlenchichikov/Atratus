@@ -285,7 +285,7 @@ echo.
 echo   ALL is a REFIT, not a replication. It re-reads the data the current
 echo   rule was fitted on, so its verdict is not out-of-sample evidence for
 echo   anything already adopted - it is the new production fit. Use it when
-echo   you mean "refit on everything we now have", and a restricted list when
+echo   you mean "refit on everything there now is", and a restricted list when
 echo   you mean "check the adopted rule against assets it never saw".
 echo.
 set /p OS_ASSETS="Assets (list or ALL), Enter = cancel: "
