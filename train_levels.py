@@ -37,7 +37,7 @@ from core import levels as levels_mod
 from core import timing_policy as tp
 from core.ar_rl import CmaEmitter
 from core.backtesting import COMMISSION, FOREX_COMMISSION, FOREX_SLIPPAGE, SLIPPAGE
-from train_timing import build_asset_series, fitness, split_series
+from train_timing import build_asset_series, fitness, split_series, walk_policy
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 POLICY_PATH = os.path.join(BASE, "levels_policy.json")
@@ -113,19 +113,32 @@ def _costs(series):
     return COMMISSION, SLIPPAGE
 
 
-def sides_for(series):
-    """The sides a person is actually acting on: the ADOPTED timing policy.
+def served_policy():
+    """Exactly the policy serving walks: Stage B when it is on and adopted.
 
-    Not the raw thresholded signal. Levels are drawn on what the card shows,
-    and the card shows the timing policy's decision, so fitting against the raw
-    signal would fit a screen nobody sees.
+    Stage A is the fallback, and the DEFAULT_PARAMS rules - which reproduce the
+    raw call - are the fallback for that, so this returns a policy in every
+    configuration rather than making callers branch on None.
     """
+    from core import timing_fqi as fq
+    if not tp.timing_on():
+        # Nothing is annotating the card, so the side served IS the raw call.
+        return tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
+    q_pol = fq.load_served_policy() if fq.stage_b_on() else None
     # load_policy already returns a RulesPolicy, not a parameter dict.
-    policy = tp.load_policy() or tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
-    sides, _actions, _reasons = policy.apply(
-        series["probs"], series["buy_thr"], series["sell_thr"],
-        series["atr"], series["taleb_hi"], series["risky"],
-        next_ret=series["next_ret"])
+    return q_pol or tp.load_policy() or tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
+
+
+def sides_for(series):
+    """The sides a person is actually acting on: the SERVED timing policy.
+
+    Not the raw thresholded signal, and not Stage A once Stage B is the stage
+    being served. Levels are drawn on the side the card shows, so the fit has
+    to walk the same policy predict.py acts through; fitting against anything
+    else fits a screen nobody sees. `core.levels.acting_side` is the serving
+    half of this definition and the two have to move together.
+    """
+    sides, _actions = walk_policy(series, served_policy())
     return np.asarray(sides, dtype=int)
 
 

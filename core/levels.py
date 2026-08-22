@@ -185,6 +185,44 @@ def policy_evidence(path=None):
         return None
 
 
+_TIMING_SIDE = {"ENTER:+1": "BUY", "ENTER:-1": "SELL",
+                "EXIT": "WAIT", "STAY_OUT": "WAIT"}
+
+
+def acting_side(signal, asset, timing_action):
+    """The side levels belong to: the timing layer's, on any bar it decided.
+
+    Levels answer "where to get in and where to bail", which only means
+    something for the side actually being held. Once the timing layer decides,
+    that side is its position and not the raw call: the two disagree on every
+    bar the policy sits a signal out, and on every bar it holds through one
+    that went quiet. A bar the layer did not decide - timing switched off, or
+    its shadow skipped this asset - falls back to `signal`.
+
+    `train_levels.sides_for` is the fitting half of this same definition, and
+    the two have to move together: a journal recorded on one side and a policy
+    fitted on another measures levels for trades nobody was in.
+
+    Scope is the JOURNAL, not the screen. The card and the trade sheet still
+    draw the conditional levels the raw call implies and mark a disagreeing
+    policy with a badge, which answers "if this trade is taken, where", a
+    different question from "which side is being held".
+    """
+    if not timing_action:
+        return signal
+    side = _TIMING_SIDE.get(timing_action)
+    if side is not None:
+        return side
+    # HOLD names no side. The position it is holding does, and that is only
+    # in the log, so a tracker that cannot answer falls back to the signal.
+    try:
+        from performance_tracker import timing_state
+        pos = timing_state(asset)["pos"]
+    except Exception:
+        return signal
+    return {1: "BUY", -1: "SELL"}.get(pos, "WAIT")
+
+
 def levels(bars, signal, segment=None, k_entry=None, k_stop=None,
            taleb_hi=False, risky=False):
     """One sheet row for one asset.

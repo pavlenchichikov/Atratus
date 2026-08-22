@@ -110,6 +110,7 @@ def run_radar():
 
     # -- Update actuals for previous predictions ------------------
     try:
+        from core.levels import acting_side
         from performance_tracker import log_levels, log_prediction, update_actuals, update_level_outcomes
         update_actuals()
         # Levels resolve over several bars, so yesterday's are scored before
@@ -153,9 +154,13 @@ def run_radar():
                                    timing_stage=res.get("timing_stage"),
                                    timing_reason=res.get("timing_reason"))
                     logged += 1
-                    # The GATED signal, because that is the one the card shows
-                    # levels for and the one a person acts on.
-                    log_levels(name, res["sig"])
+                    # The side the TIMING LAYER is on, which is the side
+                    # train_levels fits against: the journal has to record what
+                    # the fit assumes or the levels are measured for trades
+                    # nobody was in. The gated signal is the fallback for a bar
+                    # the layer did not decide.
+                    log_levels(name, acting_side(
+                        res["sig"], name, res.get("timing_action")))
                 except Exception as e:
                     logger.debug("Log prediction failed for %s: %s", name, e)
 
