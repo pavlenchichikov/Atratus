@@ -43,8 +43,9 @@ def test_an_arm_with_nothing_logged_reads_as_no_data_not_as_neutral():
     rows = [_row("A", "2026-08-%02d" % d, "BUY", 0.01) for d in range(1, 12)]
     out = pr.reconcile(rows)
     assert out["emitted"]["status"] == "measured"
-    assert out["timing"]["status"] == "no data"
-    assert out["timing"]["rows"] == 0
+    for arm in ("timing A", "timing B"):
+        assert out[arm]["status"] == "no data"
+        assert out[arm]["rows"] == 0
 
 
 def test_the_emitted_arm_earns_what_the_signal_earned():
@@ -60,7 +61,10 @@ def test_coverage_counts_only_the_rows_an_arm_actually_had():
                  action=("HOLD" if d > 5 else None)) for d in range(1, 12)]
     out = pr.reconcile(rows)
     assert out["emitted"]["rows"] == 11
-    assert out["timing"]["rows"] == 6           # only the logged ones
+    # A row with no stage is Stage A's: it is the only policy that had ever
+    # served before the column existed.
+    assert out["timing A"]["rows"] == 6         # only the logged ones
+    assert out["timing B"]["status"] == "no data"
 
 
 def test_a_missing_report_is_reported_as_missing(tmp_path):
@@ -74,3 +78,51 @@ def test_a_missing_report_is_reported_as_missing(tmp_path):
     got = {r["name"]: r for r in pr.reports(str(tmp_path))}["sizing"]
     assert got["present"] and got["verdict"] == "ADOPT"
     assert got["median_d"] == 1.0 and got["up"] == 2 and got["down"] == 1
+
+
+def test_the_two_timing_stages_are_never_blended_into_one_number():
+    """They run over different days, so one number over both would describe a
+    policy that never existed. Added when Stage B started logging live on
+    2026-08-22 beside Stage A's 2882 existing rows."""
+    rows = []
+    for d in range(1, 8):                       # Stage A's week, winning
+        r = _row("A", "2026-08-%02d" % d, "BUY", 0.01,
+                 action=("ENTER" if d == 1 else "HOLD"))
+        r["timing_stage"] = "A"
+        rows.append(r)
+    for d in range(8, 15):                      # Stage B's week, losing
+        r = _row("A", "2026-08-%02d" % d, "BUY", -0.01,
+                 action=("ENTER" if d == 8 else "HOLD"))
+        r["timing_stage"] = "B"
+        rows.append(r)
+    out = pr.reconcile(rows)
+    assert out["timing A"]["rows"] == 7
+    assert out["timing B"]["rows"] == 7
+    assert out["timing A"]["profit"] > 0
+    assert out["timing B"]["profit"] < 0, "B's losses must not hide inside A"
+
+
+def test_a_stage_is_scored_only_on_the_days_it_decided():
+    """Filling the other stage's days with the raw signal made the answer turn
+    on where a stage's window started: a window opening on HOLD has nothing to
+    hold. Measured, before the fix: the SAME losing week read -0.72 or -0.03
+    depending only on which half of the log it sat in."""
+    winning = [dict(_row("A", "2026-08-%02d" % d, "BUY", 0.01,
+                         action=("ENTER" if d == 1 else "HOLD")),
+                    timing_stage="A") for d in range(1, 8)]
+    losing = [dict(_row("A", "2026-08-%02d" % d, "BUY", -0.01,
+                        action=("ENTER" if d == 8 else "HOLD")),
+                   timing_stage="B") for d in range(8, 15)]
+
+    both = pr.reconcile(winning + losing)
+    alone = pr.reconcile(losing)
+    assert both["timing B"]["profit"] == alone["timing B"]["profit"], (
+        "B's number must not move because A logged days beside it")
+
+
+def test_a_row_from_before_the_stage_column_counts_as_stage_a():
+    rows = [_row("A", "2026-08-%02d" % d, "BUY", 0.01, action="HOLD")
+            for d in range(1, 8)]              # no timing_stage key at all
+    out = pr.reconcile(rows)
+    assert out["timing A"]["rows"] == 7
+    assert out["timing B"]["status"] == "no data"

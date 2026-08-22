@@ -189,14 +189,24 @@ def reconcile(rows, forex=(), sizing=None):
         assets["emitted"] += 1
 
         for arm, want in (("timing A", "A"), ("timing B", "B")):
-            actions = [r.get("timing_action")
-                       if (r.get("timing_stage") or "A") == want else None
-                       for r in rs]
-            if not any(a for a in actions):
+            # Each stage is scored ONLY on the rows it actually decided, not on
+            # the whole history with the other stage's days filled in by the raw
+            # signal. Filling them made the answer depend on where the stage's
+            # window happened to start: a window opening on a HOLD has no
+            # position to hold, so the same policy read -0.72 or -0.03 purely by
+            # position in the log. Different days is a fact to state, not a hole
+            # to paper over.
+            idx = [k for k, r in enumerate(rs)
+                   if r.get("timing_action")
+                   and (r.get("timing_stage") or "A") == want]
+            if not idx:
                 continue
-            arms[arm].append(_stats(_timing_sides(sig, actions), ret,
-                                    comm, slip))
-            covered[arm] += sum(1 for a in actions if a)
+            arm_sig = sig[idx]
+            arm_ret = ret[idx]
+            arm_actions = [rs[k]["timing_action"] for k in idx]
+            arms[arm].append(_stats(_timing_sides(arm_sig, arm_actions),
+                                    arm_ret, comm, slip))
+            covered[arm] += len(idx)
             assets[arm] += 1
 
         if sizing is not None:
