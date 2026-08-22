@@ -15,6 +15,36 @@ INITIAL_CAPITAL = 1000.0
 POSITION_FRACTION = 0.10
 
 
+# A quoted price has finite precision, and for an asset trading far below one
+# cent that precision can swallow the whole signal. Measured 2026-08-22 across
+# 324 assets: PEPE holds 27 distinct close values over 1210 bars and SHIB 104
+# over 1951, so 72% and 61% of consecutive bars are IDENTICAL. A one-bar
+# direction label is undefined on a tie, so most of their history carries no
+# label at all - and read as accuracy, PEPE scored 5.0% because a tie counts as
+# a miss. That is not a weak model, it is an unmeasurable series.
+#
+# The threshold comes from the distribution, not from taste: the book runs
+# PEPE 72%, SHIB 61%, then a gap down to STELLANTIS 15% and everything else
+# below. Anything from 20% to 50% separates the same two assets.
+MAX_TIE_FRACTION = 0.25
+
+
+def price_resolution_ok(close, max_tie_fraction=MAX_TIE_FRACTION):
+    """False when the price series is too coarsely quoted to carry a 1-bar sign.
+
+    `close` is the close column, oldest-first. Returns (ok, tie_fraction) so a
+    caller can say how bad it was rather than only that it refused.
+    """
+    import numpy as np
+
+    c = np.asarray(close, dtype=float)
+    c = c[np.isfinite(c)]
+    if len(c) < 2:
+        return True, 0.0
+    ties = float((np.diff(c) == 0).mean())
+    return ties <= max_tie_fraction, ties
+
+
 def adaptive_split_params(n_rows: int) -> dict | None:
     """Determine walk-forward split sizes based on dataset length."""
     if n_rows >= 3000:

@@ -418,14 +418,12 @@ def print_missing():
     probabilities skips them silently and reports a smaller n without saying
     which names are absent.
     """
-    import os
-
     from config import FULL_ASSET_MAP
-    from core.track_record import _table_name
 
-    missing = [a for a in FULL_ASSET_MAP
-               if not os.path.exists(os.path.join(
-                   MODEL_DIR, "%s_cb.cbm" % _table_name(a)))]
+    # _collect, not a second copy of the same os.path.exists loop: two
+    # definitions of "which assets have no champion" is one too many, and the
+    # launcher reads one of them while the trainer reads the other.
+    missing = _collect("missing")
     if not missing:
         print("  every asset in the map has a champion.")
         return missing
@@ -490,6 +488,78 @@ def _collect(kind):
     return names
 
 
+def print_generations(min_bars=5):
+    """Live accuracy, split by which champion generation produced the row.
+
+    The live log needs no correction to be honest: every row was written on the
+    day, by the champion in force then, and checked against the bar that
+    followed. It is out of sample by construction, all of it.
+
+    What it cannot say on its own is WHICH model earned the number. 3364 of the
+    4717 rows scored on 2026-08-22 predate their asset's current champion, so
+    they belong to an earlier generation. Pooling them answers "how has the
+    project done", not "how is the model doing now", and after a retrain those
+    are different questions.
+
+    (An earlier version of this split the same rows into "in sample" and "out
+    of sample" against the CURRENT champion's training window. That was wrong:
+    a row written in July by July's champion is out of sample whatever August's
+    champion has since been fitted on.)
+    """
+    import sqlite3
+
+    reg = _load_json(os.path.join(MODEL_DIR, "champion_registry.json")) or {}
+    db = os.path.join(BASE_DIR, "market.db")
+    try:
+        con = sqlite3.connect(db)
+        rows = con.execute(
+            "SELECT asset, date, correct FROM prediction_log "
+            "WHERE correct IS NOT NULL").fetchall()
+        con.close()
+    except sqlite3.Error as exc:
+        print("  cannot read prediction_log: %s" % exc)
+        return None
+
+    cur_n = cur_hit = old_n = old_hit = unk_n = unk_hit = 0
+    for asset, date, correct in rows:
+        trained = ((reg.get(asset) or {}).get("updated_at") or "")[:10]
+        if not trained:
+            unk_n += 1
+            unk_hit += int(correct)
+        elif str(date)[:10] > trained:
+            cur_n += 1
+            cur_hit += int(correct)
+        else:
+            old_n += 1
+            old_hit += int(correct)
+
+    def pct(h, n):
+        return ("%.2f%%" % (100.0 * h / n)) if n >= min_bars else "n/a"
+
+    total = cur_n + old_n + unk_n
+    print("  Every row below is out of sample: it was written before the bar")
+    print("  it is scored against. The split is by model generation.")
+    print()
+    print("  %-38s %7s %10s" % ("", "rows", "accuracy"))
+    print("  %-38s %7d %10s" % ("written by the CURRENT champion", cur_n,
+                                pct(cur_hit, cur_n)))
+    print("  %-38s %7d %10s" % ("written by an earlier one", old_n,
+                                pct(old_hit, old_n)))
+    if unk_n:
+        print("  %-38s %7d %10s" % ("champion has no recorded date", unk_n,
+                                    pct(unk_hit, unk_n)))
+    print("  %-38s %7d %10s" % ("all of it", total,
+                                pct(cur_hit + old_hit + unk_hit, total)))
+    if cur_n < min_bars:
+        print()
+        print("  The current champions have not produced enough scored rows yet.")
+        print("  After a retrain that count starts at zero and fills one bar per")
+        print("  asset per day.")
+    return {"current": cur_n, "current_hit": cur_hit,
+            "earlier": old_n, "earlier_hit": old_hit,
+            "unknown": unk_n, "unknown_hit": unk_hit}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Model Health Monitor")
     parser.add_argument("--stale", type=int, default=7,
@@ -500,6 +570,10 @@ def main():
                         help="List assets whose model files are newer than their "
                              "champion-registry entry, which drops them from the "
                              "signals with a feature-count error")
+    parser.add_argument("--generations", action="store_true",
+                        help="live accuracy split by which champion generation "
+                             "wrote the row. The log is out of sample either "
+                             "way; this says which model earned the number")
     parser.add_argument("--list", choices=("missing", "degraded", "all"),
                         default=None,
                         help="print ONLY the asset names, one per line, for a "
@@ -517,6 +591,9 @@ def main():
                              "registry claims. Slow: it opens every file.")
     args = parser.parse_args()
 
+    if args.generations:
+        print_generations()
+        return 0
     if args.list:
         try:
             names = print_list(args.list, args.out)

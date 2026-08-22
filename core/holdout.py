@@ -15,7 +15,26 @@ MIN_BARS = 2000   # below this an asset is too thin to carry a measurement
 # Below MIN_N a one-sided Wilcoxon reaches significance on a handful of mildly
 # positive deltas, so a pass would mean little.
 MIN_N = 8
-DEFAULT_N = 14    # what the previous A/B used
+
+# 40, and the number comes from what this project has actually adopted.
+#
+# dScore has a standard deviation of about 3.74 per asset, so a holdout of n
+# assets resolves an effect of roughly 2.8 * 3.74 / sqrt(n):
+#
+#     n=14 -> +2.80      n=40 -> +1.66      n=80 -> +1.17     n=316 -> +0.59
+#
+# The old 14 could see nothing smaller than +2.80. The ONE genome ever adopted,
+# A on 2026-07-27, measured +1.63 - below its own instrument's resolution, so
+# that adoption sits inside the noise it was measured against. Meanwhile the
+# search's 122 recorded candidates have a median lift of +0.019 and 55% of them
+# are positive, which is what sampling noise looks like.
+#
+# 40 is the smallest holdout that can see an effect the size of the only one
+# ever acted on. It costs about 95 minutes a gate against 33 at 14 (measured
+# 2026-08-13: 1997s for 14 assets), and 277 assets clear MIN_BARS, so drawing
+# 40 fresh ones is comfortable. Going further is a time decision, not a
+# statistical one: 80 buys +1.17 for ~190 minutes.
+DEFAULT_N = 40
 
 
 def _as_set(value):

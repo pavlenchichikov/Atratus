@@ -233,6 +233,7 @@ from core.backtesting import (
     make_signals,
     make_walk_forward_splits,
     objective_v2_on,
+    price_resolution_ok,
     score_strategy,
 )
 from core.calibration import fit_calibrator, save_calibrator
@@ -266,6 +267,19 @@ def _screen_only() -> bool:
 #                            single run migrates every frozen asset to the new
 #                            pipeline (saved scaler + calibrator + live features).
 _FORCE_PROMOTE = _env_flag("GTRADE_FORCE_PROMOTE") or _env_flag("GTRADE_RETRAIN_FROZEN")
+
+# Bars at the END of history that training is not allowed to see, so an
+# out-of-sample window always exists to measure on. Default 0 = byte-identical
+# to every run before this existed.
+#
+# Why it is needed: on 2026-08-22, after a retrain of 165 assets, 163 of 317
+# champions had ZERO bars dated after their own updated_at. There was no ground
+# left anywhere in the book on which a champion had not been fitted, so the only
+# honest number was the live log and every offline accuracy was in-sample. The
+# same measurement put the reconstructed champion at 66.8% over its own history
+# and 49.1% on days it had not seen. A blanket retrain buys accuracy on paper by
+# spending the ability to check it.
+_TRAIN_EMBARGO_BARS = _env_int("GTRADE_TRAIN_EMBARGO_BARS", 0)
 _ONLY_FROZEN = _env_flag("GTRADE_RETRAIN_FROZEN")
 
 
@@ -640,6 +654,37 @@ def lookback_for(opt, profile):
     return _clamp(base + _env_signed_int("GTRADE_LOOKBACK_DELTA", 0), 5, 90)
 
 
+def apply_train_embargo(df, asset="", bars=None, say=None):
+    """Drop the last `bars` rows so nothing downstream can fit on them.
+
+    Cut here, before the splits, the scaler and the folds: an embargo applied
+    any later still lets something see the bars. Returns the frame unchanged
+    when the embargo is off, which is the default and is byte-identical to
+    every run before this existed.
+
+    Refuses to cut a frame down to nothing: an asset with barely more history
+    than the embargo keeps all of it and is caught by the row-count guard
+    instead, which says something useful.
+    """
+    n = _TRAIN_EMBARGO_BARS if bars is None else int(bars)
+    if n <= 0 or len(df) <= n:
+        return df
+    kept = len(df) - n
+    if say:
+        say(f"  [EMBARGO] {asset:<12} training stops {n} bars short of today "
+            f"({kept} of {len(df)} rows used)")
+    return df.iloc[:kept]
+
+
+def _fold_train_end(df, tr):
+    """The date of the last bar a fold trained on, or None when unknowable."""
+    try:
+        stop = tr.stop if isinstance(tr, slice) else int(tr[-1]) + 1
+        return str(df["Date"].iloc[int(stop) - 1])[:10]
+    except Exception:
+        return None
+
+
 def embargo_for(opt, profile):
     """Walk-forward embargo in bars: the larger of the sequence lookback and the
     label's forward footprint, capped at the same 90 bars lookback_for enforces.
@@ -707,8 +752,19 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         df_raw.index = pd.to_datetime(df_raw.index).normalize()
         df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
         df, _skipped = build_features(df_raw, table, engine)
+        df = apply_train_embargo(df, asset, say=_safe_print)
         if _skipped:
             _safe_print("  [DSL] {}: could not compute {}".format(asset, ", ".join(_skipped)))
+        # A quoted price too coarse for a 1-bar sign has no label to learn from,
+        # whatever the row count says. Named like every other refusal here: an
+        # asset that vanishes without a reason is a silently smaller book.
+        _res_ok, _ties = price_resolution_ok(df["close"]) if "close" in df else (True, 0.0)
+        if not _res_ok:
+            _safe_print(f"  [SKIP] {asset:<12} price too coarsely quoted: "
+                        f"{_ties:.0%} of bars repeat the previous close, so most "
+                        f"labels are ties")
+            return None
+
         sp = adaptive_split_params(len(df))
         if sp is None:
             _safe_print(f"  [SKIP] {asset:<12} insufficient rows ({len(df)})")
@@ -808,7 +864,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'X_seq_train': X_seq[:seq_tr_end], 'y_seq_train': y_seq[:seq_tr_end],
                 'X_seq_val': X_seq[seq_tr_end:seq_va_end], 'y_seq_val': y_seq[seq_tr_end:seq_va_end],
                 'X_seq_test': X_seq[seq_va_end:seq_te_end], 'y_seq_test': y_seq[seq_va_end:seq_te_end],
-                'va': va, 'te': te,
+                'tr': tr, 'va': va, 'te': te,
                 'y_mag_seq_train': y_mag_all_seq[:seq_tr_end],
                 'y_mag_seq_val':   y_mag_all_seq[seq_tr_end:seq_va_end],
                 'span_train': span_tr,
@@ -1250,6 +1306,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
 
             fold_info = {
                 'fold': k,
+                # The last bar this fold trained on. Without it nothing can say
+                # which of a champion's history it had already seen, and every
+                # offline accuracy is quietly in-sample.
+                'train_end': _fold_train_end(df, fold_data.get('tr')),
                 'features': selected,
                 'cb_acc': cb_acc,
                 'lstm_acc': lstm_acc,
@@ -1361,6 +1421,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     'features': best_fold['features'],
                     'profile': get_profile(asset),
                     'lookback': lookback,
+                    'train_end': best_fold.get('train_end'),
                     'ensemble_mode': best_fold.get('ensemble_mode', 'stacking'),
                     'policy': 'champion'
                 }

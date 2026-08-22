@@ -27,6 +27,7 @@ from core.backtesting import (
     SLIPPAGE,
     UNRELIABLE_SCORE,
     evaluate_signals_v2,
+    price_resolution_ok,
     score_strategy,
 )
 
@@ -241,6 +242,12 @@ def build_asset_series(asset, engine=None):
         probs = cb.predict_proba(X_pred_scaled)[:, 1]
     except Exception as e:
         print(f"[timing] skip {asset}: prediction failed ({e})")
+        return None
+
+    ok_res, ties = price_resolution_ok(df_feat["close"]) if "close" in df_feat         else (True, 0.0)
+    if not ok_res:
+        print("[timing] skip %s: price too coarsely quoted, %.0f%% of bars "
+              "repeat the previous close" % (asset, 100 * ties))
         return None
 
     if len(probs) < MIN_PROB_ROWS:
@@ -716,7 +723,13 @@ def replay(by_asset, arms):
 def replay_lines(res, n_assets):
     """The comparison as text. Every column is a count or a rate over facts."""
     out = ["ATRATUS TIMING REPLAY - decisions against what the bar then did",
-           "  assets     %d, held-out slice only (never seen by any fit)" % n_assets,
+           "  assets     %d, the slice held out from the POLICY fit" % n_assets,
+           "  NOT held out from the champion: build_asset_series re-scores the",
+           "  whole history and the champion trained on folds across it.",
+           "  Measured 2026-08-22 on the same assets and the same days: 66.8%",
+           "  here against 49.1% on bars the champion had not seen. Comparing",
+           "  two arms on the same bars stays fair, the optimism is common-mode,",
+           "  but no absolute number in this table is out of sample.",
            "",
            "  %-16s %8s %8s %8s %8s %8s %11s %8s %10s"
            % ("arm", "decided", "acc", "in-pos", "acc", "stayed", "ret/bar",

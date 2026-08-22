@@ -839,6 +839,13 @@ goto menu
 :model_health
 cls
 python model_health.py
+echo.
+echo === HOW WELL THE MODELS ACTUALLY DO ===
+echo The live log is the honest answer and needs no correction: every row was
+echo written before the bar it is scored against. Offline accuracy is not -
+echo the champion is re-scored over the history it was fitted across.
+echo.
+python model_health.py --generations
 pause
 goto menu
 
