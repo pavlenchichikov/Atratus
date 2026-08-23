@@ -322,6 +322,15 @@ def asset_page(request: Request, name: str):
         raise HTTPException(404, f"Unknown asset: {name}")
     track = track_record.asset_track(name, limit=60)
     acc = track_record.asset_accuracy(name)
+    # The watched challenger checked against what the bar then did, the same
+    # correct/missed a signal's row gets. Its own definition of "right": in a
+    # position, the bar went its way; flat while the signal wanted in, the trade
+    # it skipped would not have paid. Oldest first, because a position is
+    # rebuilt forward from the entries.
+    from core.policy_report import live_timing_hits
+    watched_hits = live_timing_hits(list(reversed(track)), "shadow_action")
+    for row, verdict in zip(reversed(track), watched_hits["verdicts"]):
+        row["watched_correct"] = verdict
 
     rets = [t["actual_next_ret"] for t in track if t["actual_next_ret"] is not None]
     wins = [t for t in track if t["correct"] == 1]
@@ -363,7 +372,7 @@ def asset_page(request: Request, name: str):
             current["signal_raw"] = current.get("signal")
             current["gate_reason"] = None
 
-        current["timing_label"] = None
+        current["timing_label"] = current["watched_label"] = None
         if timing_policy.timing_on() and timing_policy.load_policy() is not None:
             act = current.get("timing_action") or (gated or {}).get("timing_action")
             if act:
@@ -371,6 +380,15 @@ def asset_page(request: Request, name: str):
                     act, current.get("timing_reason")
                     or (gated or {}).get("timing_reason"))
                 current["timing_label"] = text
+            # The challenger, when it is only being watched. Shown ONLY where it
+            # disagrees with what actually served: agreement is the common case
+            # and carries nothing, and a chip on every card would be read as a
+            # second instruction rather than as a comparison.
+            from core import timing_fqi as _fq
+            watched = (current.get("shadow_action")
+                       or (gated or {}).get("shadow_action"))
+            if _fq.stage_b_shadow_on() and watched and watched != act:
+                current["watched_label"] = timing_policy.watched_label(watched)
 
     # Concrete prices beside the signal: where to enter, where to bail. The same
     # core.levels call the trade-levels sheet makes, on the same open segment, so
@@ -380,10 +398,15 @@ def asset_page(request: Request, name: str):
     segments = pos.get("segments") or []
     open_segment = segments[-1] if segments and segments[-1].get("open") else None
     taleb_hi, risky = dashboard.regime_flags(name, taleb=taleb)
+    # The side the timing layer is actually on, the same one the journal
+    # records and the fit is measured against. Showing the raw call here while
+    # the badge below reports a policy that disagrees is two instructions on one
+    # card; the badge is what says they differ, and that is its whole job.
     asset_levels = levels_mod.levels(
         track_record.ohlc_series(name, days=60),
-        (current or {}).get("signal"), segment=open_segment,
-        taleb_hi=taleb_hi, risky=risky)
+        levels_mod.acting_side((current or {}).get("signal"), name,
+                               (current or {}).get("timing_action")),
+        segment=open_segment, taleb_hi=taleb_hi, risky=risky)
 
     return templates.TemplateResponse(request, "asset.html", {
         "asset": name,
@@ -397,6 +420,10 @@ def asset_page(request: Request, name: str):
         "group": group,
         "cat": radar_category(name),
         "track": track,
+        "watched_acc": ({"n": watched_hits["decided"],
+                         "correct": watched_hits["hits"],
+                         "accuracy": watched_hits["accuracy"]}
+                        if watched_hits["decided"] else None),
         "acc": acc,
         "stats": stats,
         "current": current,

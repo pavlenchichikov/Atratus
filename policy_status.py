@@ -48,8 +48,10 @@ def live_rows(conn, days=None):
     # means Stage A: it is the only policy that had ever served.
     have = {r[1] for r in conn.execute("PRAGMA table_info(prediction_log)")}
     stage = "timing_stage" if "timing_stage" in have else "NULL AS timing_stage"
+    shadow = ("shadow_action" if "shadow_action" in have
+              else "NULL AS shadow_action")
     q = ("SELECT date, asset, signal, probability, actual_next_ret, "
-         "timing_action, %s FROM prediction_log" % stage)
+         "timing_action, %s, %s FROM prediction_log" % (stage, shadow))
     if days:
         q += (" WHERE date >= (SELECT MAX(date) FROM prediction_log)"
               " AND 1=1")
@@ -149,6 +151,9 @@ def lines(reports, recon, days_seen):
             "  emitted  = the signal production actually sent, as a position.",
             "  timing A = the adopted rules' shadow decision, logged beside it.",
             "  timing B = the fitted Q's, when GTRADE_TIMING_STAGE=b is set.",
+            "  timing B (watched) = the Q under GTRADE_TIMING_STAGE=shadow,",
+            "    recorded beside the rules on the SAME bars while the rules",
+            "    decided. The one arm here that is a like-for-like comparison.",
             "             Separate rows on separate days: the two are NOT",
             "             comparable until both have run over the same ones.",
             "  sizing   = the fitted rule, at matched exposure so it cannot win",

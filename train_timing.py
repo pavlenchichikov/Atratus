@@ -90,42 +90,17 @@ def walk_policy(series, policy):
 def hit_stats(series, sides):
     """Did each decision turn out right, the way accuracy is read for a signal.
 
-    A timing policy does not predict a direction, so "hit" has to be defined
-    for what it DOES decide:
-
-      in a position   the next bar moved the way the position is facing
-      flat, signal on staying out was right, because the position the raw
-                      signal wanted would not have made money
-
-    Bars where the raw signal is flat and the policy is flat are not a decision
-    either way and are left out, so the rate is over bars where something was
-    actually chosen. `ret_per_bar` is what the decisions earned before costs,
-    which is the same quantity with the sign kept.
+    The definition itself lives in `core.policy_report.timing_hits`, shared with
+    the live journal so a number read off the card and a number read off a fit
+    cannot mean two different things. All this adds is `raw`, the thresholded
+    call, which offline comes from the probabilities and thresholds and in the
+    journal is just the logged signal.
     """
-    next_ret = np.asarray(series["next_ret"], dtype=float)
+    from core.policy_report import timing_hits
     probs = np.asarray(series["probs"], dtype=float)
     buy, sell = float(series["buy_thr"]), float(series["sell_thr"])
     raw = np.where(probs > buy, 1, np.where(probs < sell, -1, 0))
-    sides = np.asarray(sides, dtype=int)
-
-    live = np.isfinite(next_ret)
-    held = live & (sides != 0)
-    flat_with_signal = live & (sides == 0) & (raw != 0)
-
-    held_hits = int((sides[held] * next_ret[held] > 0).sum())
-    avoided = int((raw[flat_with_signal] * next_ret[flat_with_signal] <= 0).sum())
-    n_held, n_flat = int(held.sum()), int(flat_with_signal.sum())
-    decided = n_held + n_flat
-    earned = float((sides[live] * next_ret[live]).sum())
-    return {
-        "bars": int(live.sum()), "held": n_held, "held_hits": held_hits,
-        "flat_with_signal": n_flat, "avoided_losses": avoided,
-        "decided": decided, "hits": held_hits + avoided,
-        "accuracy": (held_hits + avoided) / decided if decided else float("nan"),
-        "held_accuracy": held_hits / n_held if n_held else float("nan"),
-        "avoid_accuracy": avoided / n_flat if n_flat else float("nan"),
-        "ret_per_bar": earned / int(live.sum()) if live.any() else 0.0,
-    }
+    return timing_hits(raw, sides, series["next_ret"])
 
 
 def eval_baseline(series):

@@ -94,3 +94,44 @@ def test_fitter_walks_whatever_is_served(monkeypatch):
     # to nothing - the same rule serving follows in core.scoring.
     monkeypatch.setattr(fq, "load_served_policy", lambda *a, **k: None)
     assert tl.served_policy() is stage_a
+
+
+# --- which bars issue at all -------------------------------------------------
+#
+# The side was unified first; this is the other half. The fit scores one trade
+# per entered segment, so the journal has to record one row per entered segment
+# too, or the two measure different things again.
+
+@pytest.mark.parametrize("action", ["ENTER:+1", "ENTER:-1"])
+def test_a_bar_that_opens_a_position_issues(action):
+    assert levels_mod.issues_levels(action) is True
+
+
+@pytest.mark.parametrize("action", ["HOLD", "EXIT", "STAY_OUT"])
+def test_a_bar_inside_or_leaving_a_position_does_not(action):
+    assert levels_mod.issues_levels(action) is False
+
+
+@pytest.mark.parametrize("action", [None, ""])
+def test_no_timing_decision_keeps_issuing_as_before(action):
+    """Switching the timing layer off must not silently empty the journal."""
+    assert levels_mod.issues_levels(action) is True
+
+
+def test_the_journal_rule_matches_the_fitting_rule():
+    """The pairing itself, so the two cannot drift apart unnoticed.
+
+    train_levels._issue_bars picks the ENTER bars out of a walk; issues_levels
+    answers the same question one bar at a time. Given one walk, they have to
+    select the same bars.
+    """
+    import numpy as np
+
+    import train_levels as tl
+    actions = ["STAY_OUT", "ENTER:+1", "HOLD", "HOLD", "EXIT",
+               "STAY_OUT", "ENTER:-1", "HOLD"]
+    sides = np.array([0, 1, 1, 1, 0, 0, -1, -1])
+    # _issue_bars keys on the bare verb, which is what walk_policy emits.
+    fit = tl._issue_bars(sides, [a.split(":")[0] for a in actions], "equity")
+    served = [i for i, a in enumerate(actions) if levels_mod.issues_levels(a)]
+    assert fit == served == [1, 6]

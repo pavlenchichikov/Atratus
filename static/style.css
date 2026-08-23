@@ -446,6 +446,10 @@ th.num, td.num { text-align: right; }
 .chip-BUY { color: var(--green); border-color: rgba(0, 255, 163, 0.45); background: rgba(0, 255, 163, 0.08); }
 .chip-SELL { color: var(--red); border-color: rgba(255, 59, 92, 0.45); background: rgba(255, 59, 92, 0.08); }
 .chip-WAIT { color: var(--dim); border-color: var(--line); background: transparent; }
+/* A policy that is only being watched. Dashed and dim on purpose: it has to be
+   readable as a comparison and not as a second instruction beside the badge of
+   the one that actually decided. */
+.watched-badge { color: var(--dim); border-style: dashed; border-color: var(--line); background: transparent; opacity: 0.85; }
 .chip-lg { font-size: 15px; padding: 4px 14px; }
 
 .chip-BUY:hover { box-shadow: 0 0 8px rgba(0, 255, 163, 0.5); }

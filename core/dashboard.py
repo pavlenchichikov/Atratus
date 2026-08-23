@@ -571,7 +571,12 @@ def levels_sheet(equity=0.0):
     rows = []
     for s in track_record.latest_signals():
         asset = s["asset"]
-        if not _tradeable(asset) or s["signal"] not in ("BUY", "SELL"):
+        # The side a trade would actually be placed on, not the raw call: the
+        # sheet exists to be traded from, so a bar the policy sits out belongs
+        # off it, and a position it is still holding belongs on it even after
+        # today's signal went quiet.
+        side = levels_mod.acting_side(s["signal"], asset, s.get("timing_action"))
+        if not _tradeable(asset) or side not in ("BUY", "SELL"):
             continue
         bars = track_record.ohlc_series(asset, days=60)
         segment = None
@@ -586,7 +591,7 @@ def levels_sheet(equity=0.0):
                 segment = segs[-1]
                 held = segment["bars"]
         taleb_hi, risky = regime_flags(asset)
-        lv = levels_mod.levels(bars, s["signal"], segment=segment,
+        lv = levels_mod.levels(bars, side, segment=segment,
                                taleb_hi=taleb_hi, risky=risky)
         sz = levels_mod.size_for(lv["close"], lv["stop"], equity,
                                  RISK_CONFIG["risk_per_trade"],
@@ -599,7 +604,9 @@ def levels_sheet(equity=0.0):
             text, is_div = timing_policy.display_label(s.get("timing_action"),
                                                        s.get("timing_reason"))
             badge = text if is_div else None
-        rows.append({"asset": asset, "signal": s["signal"], "date": s["date"],
+        # `side`, not the raw call: a position held through a quiet bar would
+        # otherwise print WAIT beside a live entry and stop.
+        rows.append({"asset": asset, "signal": side, "date": s["date"],
                      "held_days": held, "timing_badge": badge, **lv, **sz})
     rows.sort(key=lambda r: (r["status"] != "ok", r["asset"]))
     return rows

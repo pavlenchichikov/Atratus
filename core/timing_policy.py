@@ -86,6 +86,29 @@ def display_label(action, reason):
     return _TIMING_LABELS.get((action, reason), (None, False))
 
 
+_WATCHED_LABELS = {
+    "HOLD": "watched Q: would hold",
+    "EXIT": "watched Q: would exit",
+    "STAY_OUT": "watched Q: would stay out",
+}
+
+
+def watched_label(action):
+    """Wording for a challenger that is RECORDED but does not decide.
+
+    Cannot go through display_label: that keys on the (action, reason) pair and
+    only the action is stored for a watched policy. Says "would" on purpose -
+    the whole point of GTRADE_TIMING_STAGE=shadow is that this did not happen,
+    and a badge that reads like an instruction would undo the separation.
+    """
+    if not action:
+        return None
+    if action.startswith("ENTER"):
+        return ("watched Q: would enter long" if action.endswith("+1")
+                else "watched Q: would enter short")
+    return _WATCHED_LABELS.get(action)
+
+
 def policy_step(policy, prob, buy_thr, sell_thr, atr_now, taleb_hi_now,
                 risky, state):
     """One-bar decision. Returns (action, reason, new_state).

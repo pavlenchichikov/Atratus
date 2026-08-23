@@ -409,3 +409,67 @@ def test_each_objective_has_a_floor_in_its_own_units():
     assert 0.0 < tl.adopt_floor("rate") < 0.01
     assert tl.adopt_floor("equity") >= 0.1
     assert tl.adopt_floor("rate") != tl.adopt_floor("equity")
+
+
+# --- the score has to be scale-free -----------------------------------------
+#
+# Position size is a free variable here: size_pct puts more on behind a tight
+# stop. score_strategy grows with size on its own, so reading it made the fit
+# pick leverage - measured 2026-08-23, the k_stop verdict inverted end for end,
+# +8.38 at 1.50 falling monotone to -36.15 at 8.00 over 145 assets.
+
+def test_score_strategy_is_not_scale_free_which_is_why_it_is_not_used():
+    """The positive control for the whole change: prove the OLD reading really
+    does prefer a bigger position at a fixed edge, or the new one is solving
+    nothing."""
+    from core.backtesting import (
+        max_drawdown_from_returns,
+        score_strategy,
+        sharpe_from_returns,
+    )
+    rng = np.random.default_rng(0)
+    base = rng.normal(0.004, 0.05, 300)
+    scores, sharpes = [], []
+    for size in (0.05, 0.10, 0.20):
+        r = base * size
+        bal = 1.0
+        for x in r:
+            bal *= (1.0 + x)
+        dd, sh = max_drawdown_from_returns(r), sharpe_from_returns(r)
+        scores.append(score_strategy((bal - 1) * 100, dd, 100 * float((r > 0).mean()),
+                                     len(r), sh, min_trades=5))
+        sharpes.append(sh)
+    assert scores[0] < scores[1] < scores[2], "same edge, more money, better score"
+    assert sharpes[0] == pytest.approx(sharpes[1]) == pytest.approx(sharpes[2])
+
+
+def test_the_levels_score_does_not_move_when_only_the_stake_does():
+    """Doubling every trade leaves the ranking untouched, which is the property
+    that lets sizing into the environment at all."""
+    rng = np.random.default_rng(1)
+    r = rng.normal(0.003, 0.04, 200)
+    a = tl._equity_stats(r, list(r))
+    b = tl._equity_stats(r * 3.0, list(r * 3.0))
+    assert tl._equity_score(a[1], a[4]) == pytest.approx(tl._equity_score(b[1], b[4]))
+    # Profit is NOT scale-free and is not meant to be: at three times the stake
+    # the volatility drag is nine times as heavy, so it moves a long way. That
+    # is exactly the quantity the score must not be allowed to read.
+    assert abs(b[0]) > abs(a[0])
+
+
+def test_a_barely_traded_asset_is_unreliable_under_the_new_score():
+    from core.backtesting import UNRELIABLE_SCORE
+    assert tl._equity_score(4, 1.5) == UNRELIABLE_SCORE
+    assert tl._equity_score(5, 1.5) == pytest.approx(1.5)
+
+
+def test_the_stop_still_changes_the_score_it_is_only_the_stake_that_cannot():
+    """Scale-free must not mean blind: a stop that truncates the left tail has
+    to register, or the objective cannot fit one."""
+    rng = np.random.default_rng(2)
+    raw = rng.normal(0.002, 0.05, 400)
+    truncated = np.clip(raw, -0.04, None)      # what a tighter stop would do
+    s_raw = tl._equity_score(len(raw), tl._equity_stats(raw, list(raw))[4])
+    s_cut = tl._equity_score(len(truncated),
+                             tl._equity_stats(truncated, list(truncated))[4])
+    assert s_cut > s_raw, "cutting the left tail improves Sharpe"

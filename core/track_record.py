@@ -128,9 +128,15 @@ def latest_gated(asset: str, db_path=None) -> dict:
     Empty dict when the asset has no rows or the table/columns are absent."""
     with _connect(db_path) as con:
         gated = "sig_shown" in _plog_cols(con)
-        has_timing = "timing_action" in _plog_cols(con)
+        cols = _plog_cols(con)
+        has_timing = "timing_action" in cols
         extra = ", sig_shown, gate_reason" if gated else ", NULL, NULL"
         extra += ", timing_action, timing_reason" if has_timing else ", NULL, NULL"
+        # The watched challenger, under GTRADE_TIMING_STAGE=shadow. NULL when
+        # the column has not been migrated in yet, which a database that has
+        # only been READ since the upgrade will not have.
+        extra += (", shadow_action" if "shadow_action" in cols
+                  else ", NULL AS shadow_action")
         try:
             row = con.execute(
                 "SELECT signal" + extra + " FROM prediction_log "
@@ -141,20 +147,28 @@ def latest_gated(asset: str, db_path=None) -> dict:
             return {}
         if not row:
             return {}
-        signal, shown, reason, t_act, t_rsn = row
+        signal, shown, reason, t_act, t_rsn, s_act = row
         return {"signal": shown or signal, "signal_raw": signal,
                 "gate_reason": reason,
-                "timing_action": t_act, "timing_reason": t_rsn}
+                "timing_action": t_act, "timing_reason": t_rsn,
+                "shadow_action": s_act}
 
 
 def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
     """Signal history for an asset, newest first."""
     with _connect(db_path) as con:
+        cols = _plog_cols(con)
+        # Both timing columns, so a row can say what each policy decided that
+        # day and be checked against what the bar then did. Guarded: a database
+        # that has only been READ since the upgrade has not migrated them in.
+        extra = "".join(
+            (", " + name) if name in cols else (", NULL AS " + name)
+            for name in ("timing_action", "shadow_action"))
         try:
             rows = con.execute(
                 "SELECT date, signal, probability, actual_next_ret, correct, "
-                "cb_prob, lstm_prob "
-                "FROM prediction_log WHERE asset=? ORDER BY date DESC LIMIT ?",
+                "cb_prob, lstm_prob" + extra +
+                " FROM prediction_log WHERE asset=? ORDER BY date DESC LIMIT ?",
                 (asset, limit),
             ).fetchall()
         except sqlite3.OperationalError:
@@ -162,8 +176,9 @@ def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
         return [
             {"date": d, "signal": s, "probability": p,
              "actual_next_ret": r, "correct": c,
-             "cb_prob": cb, "lstm_prob": lstm}
-            for d, s, p, r, c, cb, lstm in rows
+             "cb_prob": cb, "lstm_prob": lstm,
+             "timing_action": t_act, "shadow_action": s_act}
+            for d, s, p, r, c, cb, lstm, t_act, s_act in rows
         ]
 
 

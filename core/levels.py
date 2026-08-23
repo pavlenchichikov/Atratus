@@ -223,6 +223,25 @@ def acting_side(signal, asset, timing_action):
     return {1: "BUY", -1: "SELL"}.get(pos, "WAIT")
 
 
+def issues_levels(timing_action):
+    """Whether this bar OPENS a set of levels, or is only living inside one.
+
+    Levels answer where to get in and where to bail, which is a question a
+    position asks once, when it opens. Re-issuing them on every held bar writes
+    rows that can never become a trade: 117 of the journal's first 248 closed
+    as "not a setup: position already open".
+
+    `train_levels._issue_bars` is the fitting half - it takes the timing
+    policy's ENTER bars and nothing else - and the two have to move together or
+    the fit is scoring one thing while the journal records another.
+
+    A bar with no timing decision at all keeps issuing the way it always has:
+    there is no ENTER to key on, and silently emptying the journal when the
+    timing layer is switched off would be worse than an unresolvable row.
+    """
+    return not timing_action or timing_action.startswith("ENTER")
+
+
 def levels(bars, signal, segment=None, k_entry=None, k_stop=None,
            taleb_hi=False, risky=False):
     """One sheet row for one asset.

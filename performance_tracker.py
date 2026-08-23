@@ -51,6 +51,13 @@ def _migrate(cur):
     # on, and the reason string is the wrong thing to infer it from.
     if cols and "timing_stage" not in cols:
         cur.execute("ALTER TABLE prediction_log ADD COLUMN timing_stage TEXT")
+    # What the CHALLENGER would have done on the same bar, when it is only being
+    # watched (GTRADE_TIMING_STAGE=shadow). Its own column, because the served
+    # decision in timing_action is what the card shows, the levels follow and
+    # timing_state rebuilds a position from: overwriting it with a policy nobody
+    # acted on is how a watched challenger quietly becomes the live one.
+    if cols and "shadow_action" not in cols:
+        cur.execute("ALTER TABLE prediction_log ADD COLUMN shadow_action TEXT")
 
 
 def _ensure_table(cur):
@@ -70,7 +77,8 @@ def _ensure_table(cur):
             gate_reason TEXT,
             timing_action TEXT,
             timing_reason TEXT,
-            timing_stage TEXT
+            timing_stage TEXT,
+            shadow_action TEXT
         )
     """)
     _migrate(cur)
@@ -100,7 +108,7 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                    model_version=None, meta_prob=None, date=None,
                    sig_shown=None, gate_reason=None,
                    timing_action=None, timing_reason=None,
-                   timing_stage=None):
+                   timing_stage=None, shadow_action=None):
     # Date the prediction by the wall clock (one row per asset per day). Non-trading
     # days for an asset (a stock predicted on a weekend/holiday) are not stamped onto
     # a neighbouring bar here; update_actuals() reconciles only exact trading-bar dates
@@ -129,11 +137,11 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
             """INSERT INTO prediction_log
                (date, asset, signal, probability, actual_next_ret, correct,
                 cb_prob, lstm_prob, model_version, meta_prob, sig_shown, gate_reason,
-                timing_action, timing_reason, timing_stage)
-               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                timing_action, timing_reason, timing_stage, shadow_action)
+               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (today, asset, signal, probability, cb_prob, lstm_prob,
              model_version, meta_prob, sig_shown, gate_reason,
-             timing_action, timing_reason, timing_stage),
+             timing_action, timing_reason, timing_stage, shadow_action),
         )
         con.commit()
 
@@ -160,10 +168,16 @@ def last_logged_prob(asset, db_path=None):
     return float(row[0]) if row and row[0] is not None else None
 
 
-def timing_state(asset, cooldown_days=0):
+def timing_state(asset, cooldown_days=0, column="timing_action"):
     """Rebuild the timing policy's position state from the shadow log.
 
-    Scans the asset's logged `timing_action` history oldest-first: an
+    `column` picks WHOSE history to rebuild: the served decisions in
+    `timing_action`, or a watched challenger's in `shadow_action`. A challenger
+    holds its own position - it enters and exits on different bars - so reading
+    the served column for it would feed it someone else's state and make every
+    comparison meaningless.
+
+    Scans the asset's logged history oldest-first: an
     ``ENTER:+1``/``ENTER:-1`` row sets the position and resets the segment,
     an ``EXIT`` row flattens it, and any other row (HOLD/STAY_OUT) just
     ages the open position by one bar. `actual_next_ret` (filled in later by
@@ -188,9 +202,11 @@ def timing_state(asset, cooldown_days=0):
     _prepare()
     st = dict(FRESH_STATE)
     with _conn() as con:
+        if column not in ("timing_action", "shadow_action"):
+            raise ValueError("unknown timing column: %r" % (column,))
         rows = con.execute(
-            "SELECT date, timing_action, actual_next_ret, signal FROM prediction_log "
-            "WHERE asset=? AND timing_action IS NOT NULL ORDER BY date",
+            f"SELECT date, {column}, actual_next_ret, signal FROM prediction_log "
+            f"WHERE asset=? AND {column} IS NOT NULL ORDER BY date",
             (asset,)).fetchall()
     for _day, action, ret, _signal in rows:
         if action.startswith("ENTER"):

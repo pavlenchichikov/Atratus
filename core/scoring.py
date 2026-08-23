@@ -86,8 +86,11 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
             "tf_prob":     float | None,
             "tcn_prob":    float | None,
             "meta_prob":   float | None,   # None unless GTRADE_META_SIZING is on
-            "timing_action": str | None,   # shadow-only; None unless GTRADE_TIMING_POLICY=1
-            "timing_reason": str | None,   # and timing_policy.json exists
+            "timing_action": str | None,   # the SERVED decision; None unless
+            "timing_reason": str | None,   # GTRADE_TIMING_POLICY=1 and a policy exists
+            "timing_stage":  str | None,   # "A" or "B", whichever served it
+            "shadow_action": str | None,   # the WATCHED challenger, only under
+                                           # GTRADE_TIMING_STAGE=shadow
         }
     """
     cb_path = os.path.join(model_dir, f"{table}_cb.cbm")
@@ -255,15 +258,22 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
         # Timing-policy shadow (GTRADE_TIMING_POLICY; default off = no-op). Never
         # allowed to affect sig/prob/gate_reason above, and any failure here must
         # not break scoring - hence the guard clause plus its own try/except.
-        timing_action = timing_reason = timing_stage = None
+        timing_action = timing_reason = timing_stage = shadow_action = None
         if timing_policy.timing_on():
             from core import timing_fqi as _fq
-            # Stage B only when it is switched on AND a model was adopted AND
-            # the frame carries the ATR its state needs. Any of those missing
-            # falls back to the rules, never to nothing.
+            # Two separate questions: which policy DECIDES, and which policy is
+            # merely recorded beside it. GTRADE_TIMING_STAGE=b answers the first
+            # with the Q, =shadow answers only the second and leaves the rules
+            # deciding. Before they were split, setting the flag to watch the Q
+            # also handed it the card, the journal and the levels.
+            #
+            # Either way the Q needs an adopted model AND the ATR its state
+            # reads; missing either falls back to the rules, never to nothing.
+            want_q = _fq.stage_b_on() or _fq.stage_b_shadow_on()
             q_pol = (_fq.load_served_policy()
-                     if _fq.stage_b_on() and "atr" in df else None)
-            pol = q_pol or timing_policy.load_policy()
+                     if want_q and "atr" in df else None)
+            serve_q = q_pol if _fq.stage_b_on() else None
+            pol = serve_q or timing_policy.load_policy()
             if pol is not None:
                 try:
                     import config as _cfg
@@ -276,32 +286,50 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
                     from core.features import latest_taleb_risk
                     taleb_val = latest_taleb_risk(df["close"])
                     taleb_now = taleb_val is not None and taleb_val > 0.7
-                    if q_pol is not None:
-                        # Stage B has no cooldown of its own: advance() only
-                        # counts an existing one down and never opens one.
-                        from performance_tracker import last_logged_prob
-                        st = timing_state(name, cooldown_days=0)
-                        act, reason, st2 = _fq.serve_step(
-                            q_pol, prob, last_logged_prob(name), buy_thr,
-                            sell_thr,
-                            df["close"].tail(_fq.TREND_WINDOW).to_numpy(),
-                            df["atr"].tail(_fq.TREND_WINDOW).to_numpy(),
-                            taleb_now, risky, is_forex, st)
-                    else:
+
+                    def _step(policy, is_q, column):
+                        """One bar under one policy, rebuilt from ITS own past.
+
+                        `column` matters: a watched challenger enters and exits
+                        on different bars from the served policy, so reading the
+                        served history would hand it a position it never took.
+                        """
+                        if is_q:
+                            # Stage B has no cooldown of its own: advance() only
+                            # counts an existing one down and never opens one.
+                            from performance_tracker import last_logged_prob
+                            st = timing_state(name, cooldown_days=0, column=column)
+                            return _fq.serve_step(
+                                policy, prob, last_logged_prob(name), buy_thr,
+                                sell_thr,
+                                df["close"].tail(_fq.TREND_WINDOW).to_numpy(),
+                                df["atr"].tail(_fq.TREND_WINDOW).to_numpy(),
+                                taleb_now, risky, is_forex, st)
                         st = timing_state(
                             name,
-                            cooldown_days=int(pol.params.get("cooldown_days", 0)))
-                        act, reason, st2 = timing_policy.policy_step(
-                            pol, prob, buy_thr, sell_thr, atr_now, taleb_now,
+                            cooldown_days=int(policy.params.get("cooldown_days", 0)),
+                            column=column)
+                        return timing_policy.policy_step(
+                            policy, prob, buy_thr, sell_thr, atr_now, taleb_now,
                             risky, st)
-                    timing_action = (
-                        f"ENTER:{'+1' if st2['pos'] == 1 else '-1'}"
-                        if act == "ENTER" else act)
+
+                    def _label(act, st2):
+                        return (f"ENTER:{'+1' if st2['pos'] == 1 else '-1'}"
+                                if act == "ENTER" else act)
+
+                    act, reason, st2 = _step(pol, serve_q is not None,
+                                             "timing_action")
+                    timing_action = _label(act, st2)
                     timing_reason = reason
-                    timing_stage = "B" if q_pol is not None else "A"
+                    timing_stage = "B" if serve_q is not None else "A"
+                    if q_pol is not None and serve_q is None:
+                        b_act, _b_reason, b_st = _step(q_pol, True,
+                                                       "shadow_action")
+                        shadow_action = _label(b_act, b_st)
                 except Exception as e:
                     logger.debug("Timing-policy shadow skipped for %s: %s", name, e)
                     timing_action = timing_reason = timing_stage = None
+                    shadow_action = None
 
         return {
             "sig": sig, "prob": prob, "price": curr_price, "mode": mode,
@@ -309,7 +337,7 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
             "cb_prob": cb_prob, "lstm_prob": lstm_prob,
             "tf_prob": tf_prob, "tcn_prob": tcn_prob, "meta_prob": meta_p,
             "timing_action": timing_action, "timing_reason": timing_reason,
-            "timing_stage": timing_stage,
+            "timing_stage": timing_stage, "shadow_action": shadow_action,
         }
 
     except Exception as e:

@@ -14,7 +14,7 @@
 
 <br>
 
-**Multi-asset machine-learning trading-signal engine.** A per-asset ensemble (CatBoost + LSTM + Transformer + TCN) over ~208 markets - crypto, US / European / Russian equities, indices, forex and commodities - with walk-forward selection, calibrated probabilities, Kelly sizing, tail-risk controls, a FastAPI dashboard, and an autonomous, statistically-gated research agent. Signals only, human-in-the-loop - no auto-execution.
+**Multi-asset machine-learning trading-signal engine.** A per-asset ensemble (CatBoost + LSTM + Transformer + TCN) over ~324 markets - crypto, US / European / Russian equities, indices, forex and commodities - with walk-forward selection, calibrated probabilities, Kelly sizing, tail-risk controls, a FastAPI dashboard, and an autonomous, statistically-gated research agent. Signals only, human-in-the-loop - no auto-execution.
 
 > **Disclaimer.** Atratus is a research and educational project. Its output is a set of model predictions - **not financial advice and not a recommendation to buy or sell any security**. Markets carry risk and you can lose money. The software is provided "as is", without warranty of any kind. Use it at your own risk; do your own research and consult a licensed professional before making any financial decision. See [Disclaimer](#disclaimer) in full.
 
@@ -47,7 +47,7 @@
 
 ## Features
 
-- **~208 assets, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
+- **~324 assets in the map, 317 with a trained champion, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
 - **Risk-managed by design.** Kelly-based position sizing, drawdown stops, sector-exposure and correlation checks, and a Taleb tail-risk index that shrinks size above a soft cap and blocks new buys above a hard cap.
 - **Prices, not just calls.** A daily trade-level sheet turns each signal into numbers you can act on: an ATR entry zone around the last close, an emergency stop that trails the position, and a size derived from the distance to that stop and clipped by the risk limits. The same entry zone and stop appear on each asset's own page, every issued set is journalled and later scored against the bars that followed, and the two ATR multipliers behind them can be fitted over the whole history and are adopted only if a held-out slice agrees. Execution stays manual.
@@ -169,6 +169,13 @@ of the first 29 assets. Three things came out of it:
   onto the running reference** (`axis:labeling+ref`). The bare form answers "is
   this better than nothing"; only the composed one answers the adoption question,
   "is what runs better with it".
+- the **gate size is asked in the launcher**, `[0d]` inside `[AL]`, and one answer
+  moves both gates: the search's own held-out set and the final A/B. It is a
+  resolution choice, not a preference. The smallest gain a gate can separate from
+  noise is `14 -> +2.80`, `40 -> +1.66`, `80 -> +1.17`; the one genome ever
+  adopted measured **+1.63**, under the resolution of the 14 it was measured with.
+  The list is grown rather than redrawn, so every asset already in it stays and
+  earlier measurements remain comparable.
 
 Permanent cross-run memory: `_ar_tried.json` (no candidate is re-tested), `_ar_eval_cache.json` (base trainings reused until new data arrives) and `_ar_findings.json` (the cumulative findings journal), so the budget buys **new** experiments every run.
 
@@ -489,7 +496,7 @@ notification when signals change, opening the Today screen. The Supabase schema 
 
 - **Python 3.12** (3.11+ likely works; 3.12 is what CI runs).
 - **OS:** Linux, macOS or Windows. On Windows a GPU needs the pinned environment described in [Environment and GPU](#environment-and-gpu): TensorFlow ships CPU-only Windows wheels from 2.11 on, so a default install never sees the card.
-- **Disk:** ~5 GB free - trained models (~4 GB for all 208 assets) plus `market.db` (~70 MB). Serving alone needs far less.
+- **Disk:** ~5 GB free - trained models (~4.5 GB for 317 assets) plus `market.db` (~70 MB). Serving alone needs far less.
 - **RAM:** 8 GB is enough to run the dashboard and `predict.py` (no TensorFlow at serve time). Training the full universe wants ~16 GB, or train in chunks of ~15 assets (`GTRADE_ASSETS`) on a smaller box.
 - **GPU:** optional but worth having. On one RTX 2050 a single asset trains in 158 s against 2850 to 10480 s for the same asset on a 12-thread CPU. Everything still runs without a GPU, just slower. CatBoost can also use a GPU (`GTRADE_CB_DEVICE=GPU`) but is often slower on the small per-asset datasets.
 - **Network:** outbound access to Yahoo Finance and MOEX for data (`SOCKS5_PROXY` supported).
@@ -549,7 +556,7 @@ This is the sharp edge. Keras 3 writes `.keras` as a zip archive, Keras 2 writes
 Consequences:
 
 - Switching an existing installation to this environment requires retraining every asset. There is no converter.
-- Back up `models/` before that retrain. Roughly 4 GB for 208 assets.
+- Back up `models/` before that retrain. Roughly 4.5 GB for 317 assets.
 - Do not mix: train in one environment and serve in the other, and the neural members silently disappear from the ensemble.
 - A champion that exists on disk but does not load now logs a `WARNING` naming the file and the reason. Grep the log for `Champion exists but did not load` after any environment change.
 
@@ -601,7 +608,7 @@ never reconcile against a real move.
 | forex, crypto, commodities, benchmarks | 62 | forex 24/5, crypto 24/7, the rest follow their venue |
 
 So a morning run is expected to be short, and an evening Moscow-time run still
-leaves the ~60 US names out. **A radar showing fewer than 208 assets is that, not
+leaves the ~60 US names out. **A radar showing fewer than 324 assets is that, not
 a bug.** Nothing is lost either way: a second run later the same day fills in the
 assets that were missing, because a row already written for an asset today is
 skipped rather than duplicated.
@@ -659,12 +666,48 @@ fitted or measured. Three things changed that:
   later pass walks each one forward over real bars: was the zone touched, did the
   stop get hit or did the signal turn first, and what did the trade make net of
   both legs. Until this existed, "did the levels make money" could not be
-  answered for a single day;
+  answered for a single day. One row per position OPENED, not one per day held:
+  re-issuing on every held bar wrote rows that could never resolve into a trade,
+  and 117 of the journal's first 248 closed as "not a setup: position already
+  open". The fit scores one trade per entered segment, so the journal records
+  one too;
 - `[TL]` in the launcher fits the multipliers over the history of every asset at
   once, with the timing policy held fixed, and writes `levels_policy.json` ONLY
   if a held-out slice agrees. Every run writes `_levels_report.txt` either way,
   including the per-asset breakdown of who carried the result and who argued
   against it.
+
+### The timing layer, and watching a challenger
+
+The signal says which side; the timing layer says whether to act on it, hold
+through it, or sit it out. It is off unless `GTRADE_TIMING_POLICY=1`.
+
+Which policy runs is a second, separate question, `GTRADE_TIMING_STAGE`:
+
+| value | what serves | what is recorded |
+| --- | --- | --- |
+| unset / `a` | the fitted rules (Stage A) | nothing else |
+| `b` | the fitted Q (Stage B, `timing_fqi.cbm`) | nothing else |
+| `shadow` | the rules | the Q, beside them, on the same bars |
+
+The two are exclusive, and the split matters: before it existed, `b` was the only
+way to get the Q into the live log, and setting it also handed the Q the card's
+badge, the journal's timing column and the side the levels are drawn and fitted
+on. A policy meant to be watched was deciding everything a person reads.
+
+Under `shadow` the challenger's decision goes to its own `shadow_action` column
+and each policy's position is rebuilt from its own history, because a challenger
+enters and exits on different bars. It is then checked against what the bar did,
+on the same terms a signal's row is: **in a position, the bar went its way; flat
+while the signal wanted in, the trade it skipped would not have paid**. The asset
+page shows a `Watched Q` stat and a per-row correct/missed column, and
+`policy_status.py` scores a `timing B (watched)` arm. The badge is dashed, dim
+and worded "would", and it appears only where the challenger DISAGREES with what
+actually served.
+
+Stage B is fitted by `[TB]` in the launcher, or
+`python train_timing.py --stage b --iters N`. Nothing needs to be run to serve
+it: the Q is evaluated inside every radar pass.
 
 ### Fitting the levels policy
 
@@ -684,11 +727,33 @@ peak), and the verdict comes from a one-sided **Wilcoxon signed-rank** test on
 constants - a conditioned fit judged against the constants would take credit for
 whatever the flat fit already earned.
 
-The reward is what the issued levels earned over the slice divided by its length,
-**not the average of a trade**. The average is gameable: a stop tight enough to
-scratch every trade raises the mean of a trade while lowering what the strategy
-makes. It is a rate, not an equity curve - levels are issued every bar, so their
-trades overlap and no single account could take all of them.
+There are two environments, `--objective`:
+
+- **`equity`** (default). One set of levels per position, issued on the bar the
+  timing policy ENTERS, each trade sized the way production sizes it, off the
+  distance to its own stop. The trades do not overlap, so an account could have
+  ridden them. The score is **Sharpe and nothing else**: profit and drawdown both
+  grow with position size on their own, so a score carrying them picks leverage
+  rather than a stop. Measured on 300 synthetic trades at one fixed edge, the
+  composite score reads +8.28 at size 0.05 and +13.19 at 0.20; Sharpe reads
+  +0.689 at both.
+- **`rate`**. A set of levels on every bar carrying a side, exactly as the radar
+  issues them daily, scored as net return per bar. Every measurement stored
+  before 2026-08-23 is this one. Its ceiling is that those trades overlap, so it
+  is a rate and not an equity curve.
+
+Neither reward is the **average of a trade**, which is gameable: a stop tight
+enough to scratch every trade raises the mean of a trade while lowering what the
+strategy makes.
+
+**What the fit can and cannot answer.** `k_entry` is identifiable and the live
+0.94 already sits at the top of its plateau. `k_stop` is **not**: gated against
+the live policy over 143 assets, the Sharpe delta rises and then saturates, +0.138
+at 8 ATR and +0.163 at both 20 and 40. A 40-ATR stop can never be hit, so the
+plateau is the no-stop limit and the data prefers it. Corroborated live: the stop
+binds 5.5% of trades at the live 2.05, and 0 of the first 10 resolved journal
+trades exited on it - the timing layer's exit already does the work. Keep a stop
+for gap and ruin protection, set it from a risk rule, and do not fit it.
 
 The adopted **timing policy is held fixed** while these are fitted. It passed its
 own gate already, and moving both at once would leave no way to say which half
@@ -702,7 +767,7 @@ python train_levels.py --seed 7               # a different search seed
 ```
 
 `[TL]` in the launcher is the same thing with a prompt for the budget. Roughly 40
-minutes over 208 assets; it fits six numbers, so no GPU is involved and it can
+minutes over 317 assets; it fits six numbers, so no GPU is involved and it can
 run beside anything else. Nothing is written unless the gate says ADOPT, and
 `_levels_report.txt` is written either way.
 
@@ -722,7 +787,7 @@ mobile app).
 
 TensorFlow on Windows is CPU-only since 2.11, so neural training runs on CPU - fine for daily data. For a GPU, use WSL2 and `pip install tensorflow[and-cuda]`.
 
-TensorFlow accumulates memory across many assets in one process, so a full 208-asset retrain on a memory-constrained box is best run in chunks (~15 assets via `GTRADE_ASSETS`), restarting a fresh process per chunk; the champion registry accumulates per asset, so chunks add up to a full run.
+TensorFlow accumulates memory across many assets in one process, so a full 324-asset retrain on a memory-constrained box is best run in chunks (~15 assets via `GTRADE_ASSETS`), restarting a fresh process per chunk; the champion registry accumulates per asset, so chunks add up to a full run.
 
 A champion's registry entry is written the moment its model files are, not once
 at the end of the run. Before that, an interrupted retrain left assets whose
@@ -771,6 +836,16 @@ If `SOCKS5_PROXY` is set in `.env`, outbound requests go through it; `net.py` ch
 - `auto_trader_config.json` - paper-trading settings
 - `pyproject.toml` - Ruff and pytest configuration
 
+The switches that change what is served, all default to off:
+
+| variable | effect |
+| --- | --- |
+| `GTRADE_TIMING_POLICY=1` | run a timing layer at all |
+| `GTRADE_TIMING_STAGE` | which one: unset/`a` rules, `b` the Q, `shadow` rules served and the Q watched |
+| `GTRADE_LEVELS_OBJECTIVE` | `equity` (default) or `rate` for the levels fit |
+| `GTRADE_AB_HOLDOUT_N` | how many assets a verdict is measured over |
+| `GTRADE_TRAIN_EMBARGO_BARS` | bars dropped from the end of each training fold |
+
 ## Project layout
 
 ```text
@@ -792,7 +867,7 @@ scheduler.py          daemon: data / predict / DB-check on a schedule
 run_gtrade.bat        Windows text menu over the whole pipeline
 core/                 shared library: features, ensemble, scoring, calibration,
                       backtesting, risk, live_gate, guru, dashboard, ...
-tests/                pytest suite (1300+ tests)
+tests/                pytest suite (1500+ tests)
 supabase/             SQL schema for the mobile/web Supabase backend
 ```
 
@@ -822,7 +897,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 
 <br>
 
-**Мультиактивный движок торговых сигналов на машинном обучении.** Пер-активный ансамбль (CatBoost + LSTM + Transformer + TCN) по ~208 рынкам - крипта, акции США / Европы / России, индексы, форекс и товары - с walk-forward-отбором чемпионов, калиброванными вероятностями, размером позиции по Келли, контролем хвостового риска, дашбордом на FastAPI и автономным, статистически-гейтованным исследовательским агентом. Только сигналы, человек в контуре - без автоисполнения.
+**Мультиактивный движок торговых сигналов на машинном обучении.** Пер-активный ансамбль (CatBoost + LSTM + Transformer + TCN) по ~324 рынкам - крипта, акции США / Европы / России, индексы, форекс и товары - с walk-forward-отбором чемпионов, калиброванными вероятностями, размером позиции по Келли, контролем хвостового риска, дашбордом на FastAPI и автономным, статистически-гейтованным исследовательским агентом. Только сигналы, человек в контуре - без автоисполнения.
 
 > **Дисклеймер.** Atratus - исследовательский и учебный проект. Его вывод - набор модельных предсказаний, **а не финансовый совет и не рекомендация покупать или продавать какую-либо ценную бумагу**. Рынки несут риск, вы можете потерять деньги. ПО предоставляется "как есть", без каких-либо гарантий. Используйте на свой риск; проводите собственный анализ и консультируйтесь с лицензированным специалистом перед любым финансовым решением. Полный текст - в разделе [Дисклеймер](#дисклеймер). Юридически приоритетна английская версия и файл [`LICENSE`](LICENSE).
 
@@ -855,7 +930,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 
 ## Возможности
 
-- **~208 активов, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
+- **~324 актива в карте, 317 с обученным чемпионом, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
 - **Честные, калиброванные сигналы.** BUY / SELL / WAIT с калиброванной вероятностью, пер-активными настроенными порогами и живым трек-рекордом точности, который сверяет каждое предсказание с реализованным движением следующего бара.
 - **Управление риском по замыслу.** Размер позиции по Келли, стопы по просадке, проверки секторной экспозиции и корреляций, а также индекс хвостового риска Талеба, который уменьшает размер выше мягкого порога и блокирует новые покупки выше жёсткого.
 - **Цены, а не только сигналы.** Ежедневный лист уровней превращает каждый сигнал в числа, по которым можно действовать: зона входа по ATR вокруг последнего закрытия, аварийный стоп, подтягивающийся за позицией, и размер, выведенный из расстояния до этого стопа и обрезанный лимитами риска. Те же зона входа и стоп теперь показаны и на странице самого актива, каждая выданная связка пишется в журнал и позже сверяется с реально прошедшими барами, а два ATR-множителя за ними можно подобрать на всей истории, и они принимаются только если отложенная выборка это подтвердит. Исполнение остаётся ручным.
@@ -976,6 +1051,14 @@ Score не способен измерить изменение в сетях н
   reference** (`axis:labeling+ref`). Голая форма отвечает на вопрос "лучше ли это,
   чем ничего"; на вопрос адопции, "лучше ли то, что работает, вместе с этим",
   отвечает только вторая.
+- **размер гейта спрашивается в лаунчере**, пункт `[0d]` внутри `[AL]`, и один
+  ответ двигает оба гейта: собственный отложенный набор поиска и финальный A/B.
+  Это выбор разрешающей способности, а не предпочтение. Наименьший прирост,
+  который гейт способен отличить от шума: `14 -> +2.80`, `40 -> +1.66`,
+  `80 -> +1.17`; единственный принятый геном показал **+1.63**, то есть был ниже
+  разрешения тех 14, на которых его мерили. Список наращивается, а не
+  перерисовывается, поэтому все уже входящие в него активы остаются и прежние
+  измерения сопоставимы.
 
 Постоянная межзапусковая память: `_ar_tried.json` (кандидат не тестируется повторно), `_ar_eval_cache.json` (базовые тренировки переиспользуются до прихода новых данных) и `_ar_findings.json` (накопительный журнал находок), так что бюджет покупает **новые** эксперименты каждый запуск.
 
@@ -1262,7 +1345,7 @@ python push_signals.py          # или пункт [SG] в run_gtrade.bat
 
 - **Python 3.12** (3.11+ вероятно подойдёт; CI гоняет на 3.12).
 - **ОС:** Linux, macOS или Windows. На Windows для GPU нужно закреплённое окружение из раздела [Окружение и GPU](#окружение-и-gpu): начиная с 2.11 TensorFlow собирает под Windows только CPU-колёса, поэтому обычная установка карту не увидит.
-- **Диск:** ~5 ГБ свободно - обученные модели (~4 ГБ на все 208 активов) плюс `market.db` (~70 МБ). Только для обслуживания нужно куда меньше.
+- **Диск:** ~5 ГБ свободно - обученные модели (~4.5 ГБ на 317 активов) плюс `market.db` (~70 МБ). Только для обслуживания нужно куда меньше.
 - **RAM:** 8 ГБ хватает для дашборда и `predict.py` (без TensorFlow во время обслуживания). Обучение всей вселенной хочет ~16 ГБ, либо обучайте чанками по ~15 активов (`GTRADE_ASSETS`) на слабой машине.
 - **GPU:** опционально, но заметно окупается. На RTX 2050 один актив обучается за 158 с против 2850-10480 с на том же активе на 12-поточном CPU. Без карты всё работает, просто дольше. CatBoost тоже умеет GPU (`GTRADE_CB_DEVICE=GPU`), но на маленьких пер-активных датасетах часто медленнее.
 - **Сеть:** исходящий доступ к Yahoo Finance и MOEX для данных (`SOCKS5_PROXY` поддерживается).
@@ -1322,7 +1405,7 @@ call activate_env.bat    :: только окружение, для ручной
 Следствия:
 
 - Перевод существующей установки на это окружение требует переобучения всех активов. Конвертера нет.
-- Перед переобучением сделайте копию `models/`. Это примерно 4 ГБ на 208 активов.
+- Перед переобучением сделайте копию `models/`. Это примерно 4.5 ГБ на 317 активов.
 - Не смешивайте: обучение в одном окружении и обслуживание в другом молча выкидывает нейронки из ансамбля.
 - Чемпион, который лежит на диске, но не загрузился, теперь пишет `WARNING` с именем файла и причиной. После любой смены окружения ищите в логе `Champion exists but did not load`.
 
@@ -1375,7 +1458,7 @@ python predict.py         # оценить все активы, записать
 
 Поэтому утренний прогон заведомо короткий, а вечерний по московскому времени всё
 ещё оставляет за бортом примерно 60 американских имён. **Радар, показывающий
-меньше 208 активов, это именно оно, а не поломка.** Ничего при этом не теряется:
+меньше 324 активов, это именно оно, а не поломка.** Ничего при этом не теряется:
 повторный прогон в тот же день добирает недостающие активы, потому что уже
 записанная сегодня строка по активу пропускается, а не дублируется.
 
@@ -1433,12 +1516,49 @@ EURUSD, без ручной настройки под каждый актив и
   отдельный проход позже прогоняет её вперёд по реальным барам: коснулась ли
   цена зоны, пробит ли стоп или раньше сменился сигнал, и что сделка принесла за
   вычетом обеих ног. До этого на вопрос "принесли ли уровни доход" нельзя было
-  ответить ни за один день;
+  ответить ни за один день. Одна строка на ОТКРЫТУЮ позицию, а не на каждый день
+  удержания: перевыдача на каждом баре писала строки, которые не могли стать
+  сделкой, и 117 из первых 248 закрывались как "not a setup: position already
+  open". Подбор считает одну сделку на вошедший сегмент, значит и журнал пишет
+  одну;
 - пункт `[TL]` в лаунчере подбирает множители на истории всех активов сразу, при
   замороженной timing-политике, и пишет `levels_policy.json` ТОЛЬКО если
   отложенная выборка это подтвердит. Отчёт `_levels_report.txt` пишется в любом
   случае, вместе с поактивной разбивкой того, кто вытянул результат, а кто был
   против.
+
+### Слой тайминга и наблюдение за претендентом
+
+Сигнал говорит, какая сторона; слой тайминга говорит, действовать ли по ней,
+держать её или пересидеть. Он выключен, пока не стоит `GTRADE_TIMING_POLICY=1`.
+
+Какая именно политика работает - второй, отдельный вопрос, `GTRADE_TIMING_STAGE`:
+
+| значение | что обслуживает | что записывается |
+| --- | --- | --- |
+| не задано / `a` | подобранные правила (Stage A) | ничего больше |
+| `b` | подобранный Q (Stage B, `timing_fqi.cbm`) | ничего больше |
+| `shadow` | правила | Q, рядом с ними, на тех же барах |
+
+Значения взаимоисключающи, и разделение здесь существенно: до него `b` был
+единственным способом завести Q в живой журнал, и его установка заодно отдавала Q
+бейдж на карточке, колонку тайминга в журнале и ту сторону, на которой рисуются и
+подбираются уровни. Политика, которую собирались только наблюдать, решала всё, что
+человек читает.
+
+Под `shadow` решение претендента идёт в собственную колонку `shadow_action`, и
+позиция каждой политики восстанавливается из её же истории, потому что претендент
+входит и выходит на других барах. Дальше оно сверяется с тем, что бар сделал, на
+тех же условиях, что и строка сигнала: **в позиции - бар пошёл в её сторону; вне
+позиции, когда сигнал звал - пропущенная сделка всё равно не заплатила бы**. На
+странице актива появляется показатель `Watched Q` и колонка correct/missed по
+строкам, а `policy_status.py` считает руку `timing B (watched)`. Бейдж пунктирный,
+приглушённый и сформулирован через «would», и показывается только там, где
+претендент РАСХОДИТСЯ с тем, что реально сработало.
+
+Stage B подбирается пунктом `[TB]` в лаунчере или командой
+`python train_timing.py --stage b --iters N`. Запускать что-либо для обслуживания
+не нужно: Q считается внутри каждого прогона радара.
 
 ### Подбор политики уровней
 
@@ -1457,11 +1577,33 @@ EURUSD, без ручной настройки под каждый актив и
 политики, а не против отгруженных констант: режимный фит, померенный от констант,
 присвоил бы себе всё, что уже заработал плоский.
 
-Награда это то, что выданные уровни заработали за срез, делённое на его длину, а
-**не среднее по сделке**. Среднее поддаётся обману: стоп, достаточно узкий, чтобы
-срезать каждую сделку в царапину, поднимает среднее сделки и снижает то, что
-стратегия зарабатывает. Это скорость, а не кривая капитала: уровни выдаются
-каждый бар, сделки перекрываются, и один счёт столько взять не может.
+Сред две, флаг `--objective`:
+
+- **`equity`** (по умолчанию). Один набор уровней на позицию, выданный на баре
+  входа timing-политики, и каждая сделка взвешена тем размером, каким её взял бы
+  продакшен: от расстояния до её собственного стопа. Сделки не перекрываются,
+  значит один счёт мог бы их пройти. Счёт это **Sharpe и ничего больше**: и
+  прибыль, и просадка сами по себе растут вместе с размером позиции, поэтому счёт,
+  который их несёт, выбирает плечо, а не стоп. Замерено на 300 синтетических
+  сделках с одним и тем же краем: составной счёт даёт +8.28 при размере 0.05 и
+  +13.19 при 0.20, Sharpe при этом +0.689 в обоих случаях.
+- **`rate`**. Набор уровней на каждом баре со стороной, ровно как их выдаёт радар
+  ежедневно, счёт это чистый доход на бар. Все измерения до 23 августа 2026 -
+  именно это. Его потолок в том, что такие сделки перекрываются, то есть это
+  скорость, а не кривая капитала.
+
+Ни одна из наград не является **средним по сделке**, которое поддаётся обману:
+стоп, достаточно узкий, чтобы срезать каждую сделку в царапину, поднимает среднее
+сделки и снижает то, что стратегия зарабатывает.
+
+**На что подбор отвечает, а на что нет.** `k_entry` определяется, и живые 0.94 уже
+стоят на вершине своего плато. `k_stop` - **нет**: в гейте против живой политики на
+143 активах дельта Sharpe растёт и выходит на плато, +0.138 при 8 ATR и +0.163 при
+20 и при 40 одинаково. Стоп в 40 ATR недостижим, значит плато это предел «стопа
+нет», и данные предпочитают именно его. Сходится с живым: стоп связывает 5.5%
+сделок на живых 2.05, и 0 из первых 10 разрешённых сделок журнала вышли по нему -
+выход по развороту, который делает слой тайминга, уже выполняет эту работу. Держите
+стоп ради гэпа и риска разорения, задавайте его правилом риска и не подбирайте.
 
 Адоптированная **timing-политика на время подбора заморожена**. Она уже прошла
 свой гейт, а движение обеих сразу не дало бы понять, чья половина дала результат.
@@ -1474,7 +1616,7 @@ python train_levels.py --seed 7               # другое зерно поис
 ```
 
 Пункт `[TL]` в лаунчере делает то же самое, спросив бюджет. Порядка 40 минут на
-208 активов; подбираются шесть чисел, так что GPU не задействован и это можно
+317 активов; подбираются шесть чисел, так что GPU не задействован и это можно
 гонять параллельно с чем угодно. Без вердикта ADOPT не пишется ничего, а
 `_levels_report.txt` пишется в любом случае.
 
@@ -1494,7 +1636,7 @@ python train_levels.py --seed 7               # другое зерно поис
 
 TensorFlow на Windows только-CPU с версии 2.11, поэтому нейро-обучение идёт на CPU - нормально для дневных данных. Для GPU используйте WSL2 и `pip install tensorflow[and-cuda]`.
 
-TensorFlow накапливает память по многим активам в одном процессе, поэтому полный ретрейн на 208 активов на машине с ограниченной памятью лучше гонять чанками (~15 активов через `GTRADE_ASSETS`), перезапуская свежий процесс на каждый чанк; реестр чемпионов накапливается по активам, так что чанки складываются в полный прогон. Готовый оркестратор для этого - `train_chunked.py`.
+TensorFlow накапливает память по многим активам в одном процессе, поэтому полный ретрейн на 324 актива на машине с ограниченной памятью лучше гонять чанками (~15 активов через `GTRADE_ASSETS`), перезапуская свежий процесс на каждый чанк; реестр чемпионов накапливается по активам, так что чанки складываются в полный прогон. Готовый оркестратор для этого - `train_chunked.py`.
 
 Запись чемпиона в реестр делается в тот же момент, что и файлы его моделей, а не
 один раз в конце прогона. До этого прерванный ретрейн оставлял активы, у которых
@@ -1536,6 +1678,16 @@ force-promote при ремонте надо отвечать `y`: без это
 - `auto_trader_config.json` - настройки бумажной торговли
 - `pyproject.toml` - конфигурация Ruff и pytest
 
+Переключатели, меняющие то, что обслуживается; все по умолчанию выключены:
+
+| переменная | что делает |
+| --- | --- |
+| `GTRADE_TIMING_POLICY=1` | включает слой тайминга вообще |
+| `GTRADE_TIMING_STAGE` | какой именно: не задано/`a` правила, `b` Q, `shadow` обслуживают правила, а Q наблюдается |
+| `GTRADE_LEVELS_OBJECTIVE` | `equity` (по умолчанию) или `rate` для подбора уровней |
+| `GTRADE_AB_HOLDOUT_N` | на скольких активах меряется вердикт |
+| `GTRADE_TRAIN_EMBARGO_BARS` | сколько баров отрезается с конца каждого обучающего фолда |
+
 ## Структура проекта
 
 ```text
@@ -1557,7 +1709,7 @@ scheduler.py          демон: данные / предсказание / пр
 run_gtrade.bat        текстовое меню (Windows) над всем пайплайном
 core/                 общая библиотека: признаки, ансамбль, скоринг, калибровка,
                       бэктест, риск, live_gate, guru, dashboard, ...
-tests/                pytest-набор (1300+ тестов)
+tests/                pytest-набор (1500+ тестов)
 supabase/             SQL-схема для Supabase-бэкенда веба/мобильного
 ```
 

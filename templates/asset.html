@@ -13,6 +13,7 @@
   <div class="asset-signal">
     <span class="chip chip-{{ current.signal }} chip-lg">{{ current.signal }}</span>{% if current.gate_reason %} <span class="chip taleb-elevated" title="{{ current.gate_reason }}">gated</span>{% endif %}
     {% if current.timing_label %}<span class="chip timing-badge" title="{{ current.timing_label }}">{{ current.timing_label }}</span>{% endif %}
+    {% if current.watched_label %}<span class="chip watched-badge" title="Recorded for comparison only. This policy did not decide anything.">{{ current.watched_label }}</span>{% endif %}
     <span class="mono asset-prob">p = {{ "%.2f"|format(current.probability) }}</span>
     <span class="dim mono">{{ current.date }}</span>
   </div>
@@ -97,6 +98,13 @@
     <span class="stat-value">{% if acc.n %}{{ "%.0f"|format(acc.acc * 100) }}<small>%</small>{% else %}-{% endif %}</span>
     <span class="stat-sub">{% if acc.n %}{{ acc.correct }} correct of {{ acc.n }}{% if acc.all_versions %} (all model versions){% endif %}{% else %}no verified signals{% endif %}</span>
   </div>
+  {% if watched_acc %}
+  <div class="stat fade">
+    <span class="stat-label">Watched Q ({{ watched_acc.n }} decided)</span>
+    <span class="stat-value">{{ "%.0f"|format(watched_acc.accuracy * 100) }}<small>%</small></span>
+    <span class="stat-sub">{{ watched_acc.correct }} right of {{ watched_acc.n }}, decided nothing</span>
+  </div>
+  {% endif %}
   <div class="stat fade">
     <span class="stat-label">Correct / missed</span>
     <span class="stat-value"><em class="t-buy">{{ stats.wins }}</em><span class="stat-sep">/</span><em class="t-sell">{{ stats.losses }}</em></span>
@@ -275,7 +283,7 @@ fetch("/api/ohlc/{{ asset }}?days=120")
   {% if track %}
   <table class="grid">
     <thead>
-      <tr><th>Date</th><th>Signal</th><th class="num">p</th><th class="num">CB</th><th class="num">LSTM</th><th class="num">Actual (next bar)</th><th>Result</th></tr>
+      <tr><th>Date</th><th>Signal</th><th class="num">p</th><th class="num">CB</th><th class="num">LSTM</th><th class="num">Actual (next bar)</th><th>Result</th><th>Watched Q</th></tr>
     </thead>
     <tbody>
       {% for t in track %}
@@ -292,6 +300,14 @@ fetch("/api/ohlc/{{ asset }}?days=120")
           {% if t.correct is none %}<span class="dim">awaiting check</span>
           {% elif t.correct %}<span class="acc good">correct</span>
           {% else %}<span class="acc bad">missed</span>{% endif %}
+        </td>
+        <td>
+          {% if t.shadow_action %}<span class="chip watched-badge">{{ t.shadow_action }}</span>
+            {% if t.watched_correct is not none %}
+              {% if t.watched_correct %}<span class="acc good">correct</span>
+              {% else %}<span class="acc bad">missed</span>{% endif %}
+            {% endif %}
+          {% else %}<span class="dim">-</span>{% endif %}
         </td>
       </tr>
       {% endfor %}

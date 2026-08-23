@@ -110,7 +110,7 @@ def run_radar():
 
     # -- Update actuals for previous predictions ------------------
     try:
-        from core.levels import acting_side
+        from core.levels import acting_side, issues_levels
         from performance_tracker import log_levels, log_prediction, update_actuals, update_level_outcomes
         update_actuals()
         # Levels resolve over several bars, so yesterday's are scored before
@@ -152,15 +152,25 @@ def run_radar():
                                    sig_shown=res["sig"], gate_reason=res["gate_reason"],
                                    timing_action=res.get("timing_action"),
                                    timing_stage=res.get("timing_stage"),
-                                   timing_reason=res.get("timing_reason"))
+                                   timing_reason=res.get("timing_reason"),
+                                   shadow_action=res.get("shadow_action"))
                     logged += 1
                     # The side the TIMING LAYER is on, which is the side
                     # train_levels fits against: the journal has to record what
                     # the fit assumes or the levels are measured for trades
                     # nobody was in. The gated signal is the fallback for a bar
                     # the layer did not decide.
-                    log_levels(name, acting_side(
-                        res["sig"], name, res.get("timing_action")))
+                    #
+                    # And only on the bar that OPENS a position. Re-issuing a
+                    # set every held day writes rows that can never resolve into
+                    # a trade: 117 of the journal's first 248 closed as "not a
+                    # setup: position already open". The fit scores one trade
+                    # per entered segment, so a daily re-issue is not what it
+                    # measures either. With no timing decision there is no ENTER
+                    # to key on, so that case keeps issuing as it always did.
+                    act = res.get("timing_action")
+                    if issues_levels(act):
+                        log_levels(name, acting_side(res["sig"], name, act))
                 except Exception as e:
                     logger.debug("Log prediction failed for %s: %s", name, e)
 

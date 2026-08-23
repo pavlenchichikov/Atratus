@@ -40,11 +40,9 @@ from core.backtesting import (
     COMMISSION,
     FOREX_COMMISSION,
     FOREX_SLIPPAGE,
-    POSITION_FRACTION,
     SLIPPAGE,
     UNRELIABLE_SCORE,
     max_drawdown_from_returns,
-    score_strategy,
     sharpe_from_returns,
 )
 from train_timing import build_asset_series, fitness, split_series, walk_policy
@@ -114,8 +112,12 @@ OBJECTIVE = os.getenv("GTRADE_LEVELS_OBJECTIVE", "equity")
 # One floor per objective, each in the units its own gate measures. Reusing the
 # rate floor for an equity delta would be the 2026-08-18 mistake exactly: a
 # number derived in return-per-bar checked against a value in score points.
-# `equity` is derived in the same style as `rate`: see ADOPT_FLOOR_EQUITY.
-ADOPT_FLOOR_EQUITY = 0.5
+#
+# `equity` scores Sharpe, so its floor is derived the same way `rate`'s was, as
+# a 5% relative gain on what the live policy already earns. Measured 2026-08-23
+# over the 143 gateable assets: baseline Sharpe median +2.71, mean +2.59,
+# sd 0.81, so 5% of the median is 0.135.
+ADOPT_FLOOR_EQUITY = 0.135
 
 
 def adopt_floor(objective=None):
@@ -209,13 +211,53 @@ def _issue_bars(sides, actions, objective):
     return [i for i, side in enumerate(sides) if int(side) != 0]
 
 
+def size_pct(close, stop):
+    """The fraction of equity production would actually put on this trade.
+
+    `core.levels.size_for` sizes off the distance to the stop -
+    `risk_per_trade * close / distance`, capped by max_single_position - so a
+    wider stop mechanically buys a smaller position. Evaluating every trade at
+    unit size hides that, and a stop is largely a decision about how much to
+    put on, so the environment has to carry it.
+    """
+    from risk_manager import RISK_CONFIG
+    return levels_mod.size_for(close, stop, 0.0,
+                               RISK_CONFIG["risk_per_trade"],
+                               RISK_CONFIG["max_single_position"])["pct"]
+
+
+def _equity_score(trades, sharpe, min_trades=5):
+    """The scale-free reading, which `score_strategy` is NOT.
+
+    Position size is a free variable in this environment: `size_pct` puts more
+    on behind a tight stop and less behind a wide one. `profit - 0.5*maxDD +
+    0.1*winrate` grows with position size all by itself - on 300 synthetic
+    trades with ONE fixed edge it reads +8.28 at size 0.05 and +13.19 at 0.20 -
+    so a fit reading it picks leverage rather than a stop.
+
+    Measured the expensive way on 2026-08-23: with sizing and score_strategy the
+    k_stop verdict inverted end for end, mean_d +8.38 at 1.50 falling monotone
+    to -36.15 at 8.00 over 145 assets. That is the shape of "more money on
+    wins", not of a stop being judged on its merits.
+
+    Sharpe survives a uniform rescale untouched, so what it still responds to is
+    what actually matters here: sizing is PER TRADE, so it reweights trades
+    against each other, and a stop reshapes the return distribution by cutting
+    its left tail. Both move Sharpe; neither moves it by simply betting more.
+    """
+    return UNRELIABLE_SCORE if trades < min_trades else float(sharpe)
+
+
 def _equity_stats(curve, entered):
     """(profit, trades, winrate, max_dd, sharpe) from resolved trades.
 
-    Built to land on the SAME scale train_timing reads, so the two gates can be
-    argued about in one unit: profit compounds bar by bar at POSITION_FRACTION
-    the way simulate_positions does, and drawdown and Sharpe come from the same
-    two helpers over the same daily array.
+    `curve` and `entered` already carry EQUITY returns, the trade's own return
+    times the fraction of equity size_pct put on it, so nothing here applies a
+    position fraction of its own: the size is per trade, not a constant.
+
+    profit and max_dd are reported but do NOT enter the score, for the reason
+    _equity_score gives. Drawdown and Sharpe come from the same two helpers
+    train_timing reads, over the same daily array.
 
     Each trade lands its whole net return on the bar it exited, because that is
     the only bar resolve_trade reports; a trade held ten bars therefore looks
@@ -224,7 +266,7 @@ def _equity_stats(curve, entered):
     """
     bal = 1.0
     for r in curve:
-        bal *= (1.0 + r * POSITION_FRACTION)
+        bal *= (1.0 + r)
     profit = (bal - 1.0) * 100.0
     wins = sum(1 for r in entered if r > 0)
     winrate = (wins / len(entered) * 100.0) if entered else 0.0
@@ -292,8 +334,12 @@ def eval_levels(series, params, sides=None, actions=None, objective=None):
             # A trade that never filled contributes an exact zero to the curve,
             # so it is left off it, and off the trade count and the win rate
             # with it: an unfilled limit is not a losing trade.
-            entered.append(out["ret_net"])
-            curve[min(i + 1 + out["exit_index"], n_bars - 1)] += out["ret_net"]
+            # Scaled by the size the STOP bought it. Safe to do only because
+            # the score below is scale-free; under score_strategy this same
+            # line made the fit chase leverage.
+            eq_ret = out["ret_net"] * size_pct(close, close - side * k_stop * a)
+            entered.append(eq_ret)
+            curve[min(i + 1 + out["exit_index"], n_bars - 1)] += eq_ret
 
     total = float(np.sum(rets)) if rets else 0.0
     res = {"ret_per_bar": total / max(1, n_bars), "total_ret": total,
@@ -306,8 +352,7 @@ def eval_levels(series, params, sides=None, actions=None, objective=None):
     profit, trades, winrate, max_dd, sharpe = _equity_stats(curve, entered)
     # min_trades 5, the same allowance train_timing makes: one levels trade per
     # entered segment runs at roughly the timing policy's own trade count.
-    res.update(score=score_strategy(profit, max_dd, winrate, trades, sharpe,
-                                    min_trades=5),
+    res.update(score=_equity_score(trades, sharpe, min_trades=5),
                profit=profit, max_dd=max_dd, sharpe=sharpe, win_rate=winrate)
     return res
 
@@ -460,7 +505,7 @@ def report_lines(params, gate, meta=None):
     per = gate.get("per_asset") or {}
     if per:
         ranked = sorted(per.items(), key=lambda kv: kv[1], reverse=True)
-        unit = ("change in score points"
+        unit = ("change in Sharpe"
                 if gate.get("objective", OBJECTIVE) == "equity"
                 else "change in net return per bar")
         out.append("PER ASSET (%s, best first)" % unit)
@@ -474,9 +519,15 @@ def report_lines(params, gate, meta=None):
                 "  charged both legs. The trades do not overlap, so one account",
                 "  could have taken all of them and an equity curve exists.",
                 "",
-                "  The score is score_strategy over that curve, so it carries",
-                "  drawdown, win rate and Sharpe, and a wider stop pays for the",
-                "  drawdown it sits through instead of being free.",
+                "  Each trade is sized the way production sizes it, off the",
+                "  distance to its own stop, so a wider stop puts less on.",
+                "",
+                "  The score is SHARPE over that curve and nothing else. Profit",
+                "  and drawdown are printed but do not enter it: both grow with",
+                "  position size on their own, so a score carrying them picks",
+                "  leverage rather than a stop. Sharpe survives a rescale, and",
+                "  still answers to what a stop actually changes, the shape of",
+                "  the return distribution.",
                 ""]
     else:
         out += ["WHAT THIS MEASURES",

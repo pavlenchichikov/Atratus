@@ -323,14 +323,34 @@ MODEL_PATH = os.path.join(
     "timing_fqi.cbm")
 
 
+def _stage():
+    return (os.getenv("GTRADE_TIMING_STAGE") or "").strip().lower()
+
+
 def stage_b_on():
-    """True when serving should read the fitted Q instead of the Stage-A rules.
+    """True when SERVING should read the fitted Q instead of the Stage-A rules.
 
     Separate from GTRADE_TIMING_POLICY on purpose: that flag decides whether a
     timing layer runs at all, this one decides WHICH. Turning Stage B on with
     the timing layer off does nothing, which is the safe direction.
     """
-    return (os.getenv("GTRADE_TIMING_STAGE") or "").strip().lower() == "b"
+    return _stage() == "b"
+
+
+def stage_b_shadow_on():
+    """True when Stage B is only WATCHED, beside a served Stage A.
+
+    Split out on 2026-08-23 because one setting was doing two jobs. Turning it
+    on to collect a live comparison also, silently, made the Q the served
+    decision: the card's badge, the timing column in the journal, the side the
+    levels are drawn and fitted on. A policy meant to be watched was driving
+    everything a person reads.
+
+    `GTRADE_TIMING_STAGE=shadow` serves the rules and records the Q beside them
+    in `shadow_action`, so the two can be compared on identical bars without
+    either of them being decided by the other.
+    """
+    return _stage() == "shadow"
 
 
 def load_served_policy(path=None):
