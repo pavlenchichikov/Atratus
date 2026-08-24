@@ -153,9 +153,14 @@ FULL_ASSET_MAP = {
     'SHIB': 'SHIB-USD', 'ATOM': 'ATOM-USD', 'UNI': 'UNI7083-USD', 'NEAR': 'NEAR-USD',  # UNI-USD is empty on Yahoo, Uniswap trades under UNI7083-USD
     'LTC': 'LTC-USD', 'BCH': 'BCH-USD', 'TRX': 'TRX-USD', 'XLM': 'XLM-USD',
     'ETC': 'ETC-USD', 'HBAR': 'HBAR-USD', 'ICP': 'ICP-USD', 'FIL': 'FIL-USD',
-    'AAVE': 'AAVE-USD', 'POL': 'POL-USD', 'OP': 'OP-USD',
+    'AAVE': 'AAVE-USD', 'OP': 'OP-USD',
     # Yahoo disambiguates these with a numeric suffix, the bare symbol returns nothing
+    # POL joined them at the MATIC rename: bare POL-USD is a different token that
+    # stopped in 2023, and MATIC-USD was retired after 2025-03-24. POL28321-USD
+    # starts 2023-10-30, one day inside the history already stored, so it appends
+    # without a gap.
     'APT': 'APT21794-USD', 'ARB': 'ARB11841-USD', 'SUI': 'SUI20947-USD',
+    'POL': 'POL28321-USD',
     'PEPE': 'PEPE24478-USD', 'TAO': 'TAO22974-USD',
     # AI-themed tokens. WLD (Worldcoin, Sam Altman's project) is the one asset that
     # reprices on OpenAI news 24/7, which the equity proxies above cannot do.
@@ -209,7 +214,192 @@ FULL_ASSET_MAP = {
     'USDTRY': 'TRY=X', 'USDMXN': 'MXN=X', 'USDZAR': 'ZAR=X',
     'USDSGD': 'SGD=X', 'USDNOK': 'NOK=X', 'USDSEK': 'SEK=X',
     'USDPLN': 'PLN=X', 'USDCNH': 'CNY=X',  # CNH=X is empty on Yahoo (1 bar), CNY=X returns full history; offshore/onshore yuan differ by pips
+
+    # US TREASURY YIELDS - the rest of the curve beside TNX
+    'FVX': '^FVX', 'IRX': '^IRX', 'TYX': '^TYX',
+
+    # VOLATILITY INDICES - equity, oil and gold implied vol
+    'GVZ': '^GVZ', 'OVX': '^OVX', 'VVIX': '^VVIX', 'VXD': '^VXD',
+    'VXN': '^VXN',
+
+    # WORLD INDICES (extra)
+    'ATX': '^ATX', 'BEL20': '^BFX', 'DJT': '^DJT', 'DJU': '^DJU',
+    'EGX30': '^CASE30', 'EURONEXT100': '^N100', 'JAKARTA': '^JKSE',
+    'KLCI': '^KLSE', 'MERVAL': '^MERV', 'MEXBOL': '^MXX',
+    'MSCIWORLD': '^990100-USD-STRD', 'NASDAQ100': '^NDX', 'NYSE': '^NYA',
+    'NZ50': '^NZ50', 'OMXS30': '^OMX', 'PSI20': 'PSI20.LS', 'SENSEX': '^BSESN',
+    'SP400': '^MID', 'STI': '^STI', 'STOXX600': '^STOXX', 'TA125': '^TA125.TA',
+    'TAIEX': '^TWII', 'WIG20': 'WIG20.WA', 'WILSHIRE': '^W5000',
+
+    # BONDS AND CREDIT, through the liquid ETFs
+    'AGG': 'AGG', 'BND': 'BND', 'BNDX': 'BNDX', 'EMB': 'EMB', 'HYG': 'HYG',
+    'IEF': 'IEF', 'JNK': 'JNK', 'LQD': 'LQD', 'MUB': 'MUB', 'SHV': 'SHV',
+    'SHY': 'SHY', 'TIP': 'TIP', 'TLH': 'TLH', 'TLT': 'TLT', 'VCIT': 'VCIT',
+
+    # US SECTORS - the eleven SPDRs
+    'XLB': 'XLB', 'XLC': 'XLC', 'XLE': 'XLE', 'XLF': 'XLF', 'XLI': 'XLI',
+    'XLK': 'XLK', 'XLP': 'XLP', 'XLRE': 'XLRE', 'XLU': 'XLU', 'XLV': 'XLV',
+    'XLY': 'XLY',
+
+    # BROAD AND COUNTRY ETFS
+    'DIA': 'DIA', 'EEM': 'EEM', 'EFA': 'EFA', 'EWA': 'EWA', 'EWC': 'EWC',
+    'EWG': 'EWG', 'EWH': 'EWH', 'EWJ': 'EWJ', 'EWT': 'EWT', 'EWU': 'EWU',
+    'EWW': 'EWW', 'EWY': 'EWY', 'EWZ': 'EWZ', 'EZA': 'EZA', 'FXI': 'FXI',
+    'INDA': 'INDA', 'IWM': 'IWM', 'KWEB': 'KWEB', 'QQQ': 'QQQ', 'SPY': 'SPY',
+    'TUR': 'TUR', 'VEA': 'VEA', 'VTI': 'VTI', 'VWO': 'VWO',
+
+    # THEMATIC ETFS
+    'ARKK': 'ARKK', 'GDX': 'GDX', 'GDXJ': 'GDXJ', 'IBB': 'IBB', 'IBIT': 'IBIT',
+    'ICLN': 'ICLN', 'ITB': 'ITB', 'IYR': 'IYR', 'JETS': 'JETS', 'LIT': 'LIT',
+    'MOAT': 'MOAT', 'PAVE': 'PAVE', 'SCHD': 'SCHD', 'SMH': 'SMH',
+    'SOXX': 'SOXX', 'TAN': 'TAN', 'URA': 'URA', 'VNQ': 'VNQ', 'XAR': 'XAR',
+    'XBI': 'XBI',
+
+    # COMMODITY AND CURRENCY ETFS
+    'CORN_ETF': 'CORN', 'CPER': 'CPER', 'DBA': 'DBA', 'DBC': 'DBC',
+    'FXE': 'FXE', 'FXY': 'FXY', 'GLD': 'GLD', 'PDBC': 'PDBC', 'PPLT': 'PPLT',
+    'SLV': 'SLV', 'UNG': 'UNG', 'USO': 'USO', 'UUP': 'UUP', 'WEAT': 'WEAT',
+
+    # COMMODITIES (extra)
+    'ALUMINIUM': 'ALI=F', 'CATTLE': 'LE=F', 'COTTON': 'CT=F', 'FEEDER': 'GF=F',
+    'GASOLINE': 'RB=F', 'HEATOIL': 'HO=F', 'HOGS': 'HE=F', 'KCWHEAT': 'KE=F',
+    'LUMBER': 'LBR=F', 'MICROGOLD': 'MGC=F', 'OATS': 'ZO=F',
+    'ORANGEJUICE': 'OJ=F', 'RICE': 'ZR=F', 'SOYMEAL': 'ZM=F', 'SOYOIL': 'ZL=F',
+
+    # US STOCKS (extra)
+    'AA': 'AA', 'AAL': 'AAL', 'ADM': 'ADM', 'AEE': 'AEE', 'AEP': 'AEP',
+    'AFL': 'AFL', 'AFRM': 'AFRM', 'AIG': 'AIG', 'ALL': 'ALL', 'ALLY': 'ALLY',
+    'AMT': 'AMT', 'AON': 'AON', 'APD': 'APD', 'APH': 'APH', 'AVB': 'AVB',
+    'AZO': 'AZO', 'BE': 'BE', 'BEN': 'BEN', 'BG': 'BG', 'BIIB': 'BIIB',
+    'BRK-B': 'BRK-B', 'BSX': 'BSX', 'CB': 'CB', 'CCI': 'CCI', 'CCL': 'CCL',
+    'CF': 'CF', 'CFG': 'CFG', 'CHPT': 'CHPT', 'CI': 'CI', 'CLF': 'CLF',
+    'CME': 'CME', 'CMI': 'CMI', 'CMS': 'CMS', 'COF': 'COF', 'CSX': 'CSX',
+    'CVS': 'CVS', 'D': 'D', 'DAL': 'DAL', 'DASH': 'DASH', 'DD': 'DD',
+    'DG': 'DG', 'DHR': 'DHR', 'DLR': 'DLR', 'DLTR': 'DLTR', 'DOWINC': 'DOW',
+    'DPZ': 'DPZ', 'DTE': 'DTE', 'DUK': 'DUK', 'ECL': 'ECL', 'ED': 'ED',
+    'ELV': 'ELV', 'EMR': 'EMR', 'ENPH': 'ENPH', 'EQIX': 'EQIX', 'EQR': 'EQR',
+    'ES': 'ES', 'ETN': 'ETN', 'ETR': 'ETR', 'EVRG': 'EVRG', 'EXC': 'EXC',
+    'FAST': 'FAST', 'FCX': 'FCX', 'FDX': 'FDX', 'FE': 'FE', 'FITB': 'FITB',
+    'FSLR': 'FSLR', 'GD': 'GD', 'GIS': 'GIS', 'GLW': 'GLW', 'GWW': 'GWW',
+    'HBAN': 'HBAN', 'HLT': 'HLT', 'HOG': 'HOG', 'HSY': 'HSY', 'HUM': 'HUM',
+    'HWM': 'HWM', 'ICE': 'ICE', 'ITW': 'ITW', 'IVZ': 'IVZ', 'KEY': 'KEY',
+    'KEYS': 'KEYS', 'KHC': 'KHC', 'KMB': 'KMB', 'KR': 'KR', 'LCID': 'LCID',
+    'LHX': 'LHX', 'LIN': 'LIN', 'LNT': 'LNT', 'LUV': 'LUV', 'LYFT': 'LYFT',
+    'LYV': 'LYV', 'MAR': 'MAR', 'MCK': 'MCK', 'MCO': 'MCO', 'MDT': 'MDT',
+    'MET': 'MET', 'MLM': 'MLM', 'MMM': 'MMM', 'MOS': 'MOS', 'MRNA': 'MRNA',
+    'MSCI': 'MSCI', 'NCLH': 'NCLH', 'NDAQ': 'NDAQ', 'NEM': 'NEM', 'NI': 'NI',
+    'NOC': 'NOC', 'NSC': 'NSC', 'NTRS': 'NTRS', 'NUE': 'NUE', 'O': 'O',
+    'ORLY': 'ORLY', 'PARA': 'PARA', 'PCAR': 'PCAR', 'PCG': 'PCG', 'PEG': 'PEG',
+    'PGR': 'PGR', 'PH': 'PH', 'PINS': 'PINS', 'PLD': 'PLD', 'PLUG': 'PLUG',
+    'PNC': 'PNC', 'PPG': 'PPG', 'PPL': 'PPL', 'PRU': 'PRU', 'PSA': 'PSA',
+    'RBLX': 'RBLX', 'RCL': 'RCL', 'REGN': 'REGN', 'RF': 'RF', 'RIVN': 'RIVN',
+    # ROSS is Ross Stores on Yahoo; the MOEX ROST further down is a different
+    # company. Routing is by KEY through MOEX_ASSETS, so the shared symbol
+    # string is not a collision.
+    'ROK': 'ROK', 'ROSS': 'ROST', 'RSG': 'RSG', 'SBAC': 'SBAC',
+    'SEDG': 'SEDG',
+    'SHW': 'SHW', 'SNAP': 'SNAP', 'SO': 'SO', 'SOFI': 'SOFI', 'SPG': 'SPG',
+    'SRE': 'SRE', 'STT': 'STT', 'SYK': 'SYK', 'SYY': 'SYY', 'TDG': 'TDG',
+    'TEL': 'TEL', 'TER': 'TER', 'TFC': 'TFC', 'TJX': 'TJX', 'TROW': 'TROW',
+    'TRV': 'TRV', 'TSN': 'TSN', 'TTWO': 'TTWO', 'U': 'U', 'UAL': 'UAL',
+    'UPS': 'UPS', 'URI': 'URI', 'USB': 'USB', 'VMC': 'VMC', 'VTR': 'VTR',
+    'WBD': 'WBD', 'WBS': 'WBS', 'WEC': 'WEC', 'WELL': 'WELL', 'WM': 'WM',
+    'XEL': 'XEL', 'YUM': 'YUM', 'ZION': 'ZION', 'ZTS': 'ZTS',
+
+    # EU STOCKS (extra) - key is the native listing on Yahoo
+    'ABB': 'ABBN.SW', 'ADYEN': 'ADYEN.AS', 'AENA': 'AENA.MC', 'AHOLD': 'AD.AS',
+    'AIRLIQUIDE': 'AI.PA', 'ANGLO': 'AAL.L', 'ASSAABLOY': 'ASSA-B.ST',
+    'ATLASCOPCO': 'ATCO-A.ST', 'BARCLAYS': 'BARC.L', 'BASF': 'BAS.DE',
+    'BAT': 'BATS.L', 'BAYER': 'BAYN.DE', 'BBVA': 'BBVA.MC', 'BP': 'BP.L',
+    'CAPGEMINI': 'CAP.PA', 'CARREFOUR': 'CA.PA', 'CONTI': 'CON.DE',
+    'CREDITAG': 'ACA.PA', 'DANONE': 'BN.PA', 'DEUTSCHEBANK': 'DBK.DE',
+    'DHL': 'DHL.DE', 'DNB': 'DNB.OL', 'DSM': 'DSFIR.AS', 'DSV': 'DSV.CO',
+    'DTELEKOM': 'DTE.DE', 'ENGIE': 'ENGI.PA', 'ENI': 'ENI.MI',
+    'EON': 'EOAN.DE', 'EQUINOR': 'EQNR.OL', 'ERICSSON': 'ERIC-B.ST',
+    'ERSTE': 'EBS.VI', 'ESSILOR': 'EL.PA', 'FORTUM': 'FORTUM.HE',
+    'GENERALI': 'G.MI', 'GIVAUDAN': 'GIVN.SW', 'GLENCORE': 'GLEN.L',
+    'GSK': 'GSK.L', 'HEINEKEN': 'HEIA.AS', 'HM': 'HM-B.ST', 'HSBC': 'HSBA.L',
+    'INDITEX': 'ITX.MC', 'INFINEON': 'IFX.DE', 'ING': 'INGA.AS',
+    'INTESA': 'ISP.MI', 'INVESTOR': 'INVE-B.ST', 'KBC': 'KBC.BR',
+    'KPN': 'KPN.AS', 'LLOYDS': 'LLOY.L', 'LSEG': 'LSEG.L',
+    'MAERSK': 'MAERSK-B.CO', 'MERCKDE': 'MRK.DE', 'MICHELIN': 'ML.PA',
+    'MUNICHRE': 'MUV2.DE', 'NATGRID': 'NG.L', 'NOKIA': 'NOKIA.HE',
+    'NORDEA': 'NDA-FI.HE', 'NORSKHYDRO': 'NHY.OL', 'NOVARTIS': 'NOVN.SW',
+    'OMV': 'OMV.VI', 'ORANGE': 'ORA.PA', 'ORSTED': 'ORSTED.CO',
+    'PERNOD': 'RI.PA', 'PHILIPS': 'PHIA.AS', 'PROSUS': 'PRX.AS',
+    'RANDSTAD': 'RAND.AS', 'RELX': 'REL.L', 'REPSOL': 'REP.MC', 'RIO': 'RIO.L',
+    'ROLLSROYCE': 'RR.L', 'RWE': 'RWE.DE', 'SAINTGOBAIN': 'SGO.PA',
+    'SAMPO': 'SAMPO.HE', 'SANDVIK': 'SAND.ST', 'SANOFI': 'SAN.PA',
+    'SEB': 'SEB-A.ST', 'SIKA': 'SIKA.SW', 'SOCGEN': 'GLE.PA',
+    'SOLVAY': 'SOLB.BR', 'SWISSRE': 'SREN.SW', 'TELECOMIT': 'TIT.MI',
+    'TELEFONICA': 'TEF.MC', 'TELENOR': 'TEL.OL', 'TESCO': 'TSCO.L',
+    'UBS': 'UBSG.SW', 'UCB': 'UCB.BR', 'UNICREDIT': 'UCG.MI', 'UPM': 'UPM.HE',
+    'VEOLIA': 'VIE.PA', 'VESTAS': 'VWS.CO', 'VINCI': 'DG.PA',
+    'VODAFONE': 'VOD.L', 'VOLVO': 'VOLV-B.ST', 'WOLTERS': 'WKL.AS',
+    'ZALANDO': 'ZAL.DE', 'ZURICH': 'ZURN.SW',
+
+    # RU MARKET (extra) - preferred shares, mid and small caps
+    'ABIO': 'ABIO', 'ABRD': 'ABRD', 'AFKS': 'AFKS', 'AKRN': 'AKRN',
+    'APTK': 'APTK', 'AQUA': 'AQUA', 'ARSA': 'ARSA', 'ASSB': 'ASSB',
+    'AVAN': 'AVAN', 'BANE': 'BANE', 'BANEP': 'BANEP', 'BELU': 'BELU',
+    'BRZL': 'BRZL', 'BSPBP': 'BSPBP', 'CARM': 'CARM', 'CHMK': 'CHMK',
+    'CNTL': 'CNTL', 'CNTLP': 'CNTLP', 'DIAS': 'DIAS', 'DVEC': 'DVEC',
+    'DZRD': 'DZRD', 'ELFV': 'ELFV', 'ENPG': 'ENPG', 'ETLN': 'ETLN',
+    'EUTR': 'EUTR', 'GAZA': 'GAZA', 'GAZAP': 'GAZAP', 'GCHE': 'GCHE',
+    'GEMA': 'GEMA', 'GEMC': 'GEMC', 'GTRK': 'GTRK', 'HNFG': 'HNFG',
+    'IGST': 'IGST', 'IRKT': 'IRKT', 'IVAT': 'IVAT', 'KAZT': 'KAZT',
+    'KAZTP': 'KAZTP', 'KCHE': 'KCHE', 'KGKC': 'KGKC', 'KLVZ': 'KLVZ',
+    'KMAZ': 'KMAZ', 'KRKNP': 'KRKNP', 'KROT': 'KROT', 'KRSB': 'KRSB',
+    'KUZB': 'KUZB', 'KZOS': 'KZOS', 'KZOSP': 'KZOSP', 'LEAS': 'LEAS',
+    'LIFE': 'LIFE', 'LSNG': 'LSNG', 'LSNGP': 'LSNGP', 'MAGE': 'MAGE',
+    'MBNK': 'MBNK', 'MDMG': 'MDMG', 'MFGS': 'MFGS', 'MGKL': 'MGKL',
+    'MGTS': 'MGTS', 'MGTSP': 'MGTSP', 'MISB': 'MISB', 'MRKC': 'MRKC',
+    'MRKK': 'MRKK', 'MRKP': 'MRKP', 'MRKS': 'MRKS', 'MRKU': 'MRKU',
+    'MRKV': 'MRKV', 'MRKY': 'MRKY', 'MRKZ': 'MRKZ', 'MSRS': 'MSRS',
+    'MTLRP': 'MTLRP', 'NAUK': 'NAUK', 'NFAZ': 'NFAZ', 'NKHP': 'NKHP',
+    'NKNC': 'NKNC', 'NKNCP': 'NKNCP', 'NSVZ': 'NSVZ', 'OGKB': 'OGKB',
+    'OKEY': 'OKEY', 'PAZA': 'PAZA', 'PMSB': 'PMSB', 'PRFN': 'PRFN',
+    'PRMD': 'PRMD', 'RBCM': 'RBCM', 'RENI': 'RENI', 'RKKE': 'RKKE',
+    'RNFT': 'RNFT', 'ROLO': 'ROLO', 'ROST': 'ROST', 'RTGZ': 'RTGZ',
+    'RTKMP': 'RTKMP', 'RTSB': 'RTSB', 'RUSI': 'RUSI', 'RZSB': 'RZSB',
+    'SARE': 'SARE', 'SBERP': 'SBERP', 'SELG': 'SELG', 'SFIN': 'SFIN',
+    'SLEN': 'SLEN', 'SNGSP': 'SNGSP', 'SPBE': 'SPBE', 'STSB': 'STSB',
+    'SVAV': 'SVAV', 'SVCB': 'SVCB', 'SVET': 'SVET', 'TASB': 'TASB',
+    'TATNP': 'TATNP', 'TGKA': 'TGKA', 'TGKB': 'TGKB', 'TGKN': 'TGKN',
+    'TNSE': 'TNSE', 'TORS': 'TORS', 'TRNFP': 'TRNFP', 'TTLK': 'TTLK',
+    'UGLD': 'UGLD', 'UKUZ': 'UKUZ', 'UNAC': 'UNAC', 'URKZ': 'URKZ',
+    'USBN': 'USBN', 'UWGN': 'UWGN', 'VGSB': 'VGSB', 'VJGZ': 'VJGZ',
+    'VLHZ': 'VLHZ', 'VRSB': 'VRSB', 'VSEH': 'VSEH', 'VSMO': 'VSMO',
+    'YAKG': 'YAKG', 'YKEN': 'YKEN', 'YRSB': 'YRSB', 'ZAYM': 'ZAYM',
+    'ZILL': 'ZILL', 'ZVEZ': 'ZVEZ',
 }
+
+# Keys fetched from MOEX rather than Yahoo. data_engine reads this; it used to
+# keep a second copy of the list, and a ticker added to FULL_ASSET_MAP but not
+# to that copy was fetched from Yahoo, returned nothing and stayed stale.
+MOEX_ASSETS = [
+    "IMOEX", "SBER", "GAZP", "LKOH", "ROSN", "NVTK", "TATN", "SNGS", "PLZL",
+    "SIBN", "MGNT", "TCSG", "VTBR", "BSPB", "MOEX_EX", "CBOM", "YNDX", "OZON",
+    "VKCO", "POSI", "MTSS", "RTKM", "HHRU", "SOFL", "ASTR", "WUSH", "CHMF",
+    "NLMK", "MAGN", "RUAL", "ALRS", "TRMK", "MTLR", "RASP", "IRAO", "HYDR",
+    "FLOT", "AFLT", "PIKK", "FEES", "UPRO", "MSNG", "NMTP", "PHOR", "SGZH",
+    "FIVE", "FIXP", "LENT", "MVID", "SMLT", "LSRG", "ABIO", "ABRD", "AFKS",
+    "AKRN", "APTK", "AQUA", "ARSA", "ASSB", "AVAN", "BANE", "BANEP", "BELU",
+    "BRZL", "BSPBP", "CARM", "CHMK", "CNTL", "CNTLP", "DIAS", "DVEC", "DZRD",
+    "ELFV", "ENPG", "ETLN", "EUTR", "GAZA", "GAZAP", "GCHE", "GEMA", "GEMC",
+    "GTRK", "HNFG", "IGST", "IRKT", "IVAT", "KAZT", "KAZTP", "KCHE", "KGKC",
+    "KLVZ", "KMAZ", "KRKNP", "KROT", "KRSB", "KUZB", "KZOS", "KZOSP", "LEAS",
+    "LIFE", "LSNG", "LSNGP", "MAGE", "MBNK", "MDMG", "MFGS", "MGKL", "MGTS",
+    "MGTSP", "MISB", "MRKC", "MRKK", "MRKP", "MRKS", "MRKU", "MRKV", "MRKY",
+    "MRKZ", "MSRS", "MTLRP", "NAUK", "NFAZ", "NKHP", "NKNC", "NKNCP", "NSVZ",
+    "OGKB", "OKEY", "PAZA", "PMSB", "PRFN", "PRMD", "RBCM", "RENI", "RKKE",
+    "RNFT", "ROLO", "ROST", "RTGZ", "RTKMP", "RTSB", "RUSI", "RZSB", "SARE",
+    "SBERP", "SELG", "SFIN", "SLEN", "SNGSP", "SPBE", "STSB", "SVAV", "SVCB",
+    "SVET", "TASB", "TATNP", "TGKA", "TGKB", "TGKN", "TNSE", "TORS", "TRNFP",
+    "TTLK", "UGLD", "UKUZ", "UNAC", "URKZ", "USBN", "UWGN", "VGSB", "VJGZ",
+    "VLHZ", "VRSB", "VSEH", "VSMO", "YAKG", "YKEN", "YRSB", "ZAYM", "ZILL",
+    "ZVEZ",
+]
 
 # --- 3. GROUPING ---
 ASSET_TYPES = {
@@ -261,6 +451,93 @@ ASSET_TYPES = {
                       "AUDCAD", "AUDCHF", "AUDJPY", "AUDNZD",
                       "CADJPY", "CHFJPY", "NZDJPY"],
     "FOREX EXOTIC": ["USDTRY", "USDMXN", "USDZAR", "USDSGD", "USDNOK", "USDSEK", "USDPLN", "USDCNH"],
+    # Classes for the 2026-08-25 additions. Every asset needs one: the holdout
+    # is grown balanced across these, and an asset outside every class falls
+    # into a single unnamed bucket that then dominates the draw.
+    "RATES": [
+        "FVX", "IRX", "TYX"],
+    "VOLATILITY": [
+        "GVZ", "OVX", "VVIX", "VXD", "VXN"],
+    "WORLD INDICES": [
+        "ATX", "BEL20", "DJT", "DJU", "EGX30", "EURONEXT100", "JAKARTA",
+        "KLCI", "MERVAL", "MEXBOL", "MSCIWORLD", "NASDAQ100", "NYSE", "NZ50",
+        "OMXS30", "PSI20", "SENSEX", "SP400", "STI", "STOXX600", "TA125",
+        "TAIEX", "WIG20", "WILSHIRE"],
+    "BOND ETFS": [
+        "AGG", "BND", "BNDX", "EMB", "HYG", "IEF", "JNK", "LQD", "MUB",
+        "SHV", "SHY", "TIP", "TLH", "TLT", "VCIT"],
+    "SECTOR ETFS": [
+        "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU",
+        "XLV", "XLY"],
+    "BROAD ETFS": [
+        "DIA", "EEM", "EFA", "EWA", "EWC", "EWG", "EWH", "EWJ", "EWT", "EWU",
+        "EWW", "EWY", "EWZ", "EZA", "FXI", "INDA", "IWM", "KWEB", "QQQ",
+        "SPY", "TUR", "VEA", "VTI", "VWO"],
+    "THEME ETFS": [
+        "ARKK", "GDX", "GDXJ", "IBB", "IBIT", "ICLN", "ITB", "IYR", "JETS",
+        "LIT", "MOAT", "PAVE", "SCHD", "SMH", "SOXX", "TAN", "URA", "VNQ",
+        "XAR", "XBI"],
+    "COMMODITY ETFS": [
+        "CORN_ETF", "CPER", "DBA", "DBC", "FXE", "FXY", "GLD", "PDBC",
+        "PPLT", "SLV", "UNG", "USO", "UUP", "WEAT"],
+    "COMMODITIES EXTRA": [
+        "ALUMINIUM", "CATTLE", "COTTON", "FEEDER", "GASOLINE", "HEATOIL",
+        "HOGS", "KCWHEAT", "LUMBER", "MICROGOLD", "OATS", "ORANGEJUICE",
+        "RICE", "SOYMEAL", "SOYOIL"],
+    "US EXTRA": [
+        "AA", "AAL", "ADM", "AEE", "AEP", "AFL", "AFRM", "AIG", "ALL",
+        "ALLY", "AMT", "AON", "APD", "APH", "AVB", "AZO", "BE", "BEN", "BG",
+        "BIIB", "BRK-B", "BSX", "CB", "CCI", "CCL", "CF", "CFG", "CHPT",
+        "CI", "CLF", "CME", "CMI", "CMS", "COF", "CSX", "CVS", "D", "DAL",
+        "DASH", "DD", "DG", "DHR", "DLR", "DLTR", "DOWINC", "DPZ", "DTE",
+        "DUK", "ECL", "ED", "ELV", "EMR", "ENPH", "EQIX", "EQR", "ES", "ETN",
+        "ETR", "EVRG", "EXC", "FAST", "FCX", "FDX", "FE", "FITB", "FSLR",
+        "GD", "GIS", "GLW", "GWW", "HBAN", "HLT", "HOG", "HSY", "HUM", "HWM",
+        "ICE", "ITW", "IVZ", "KEY", "KEYS", "KHC", "KMB", "KR", "LCID",
+        "LHX", "LIN", "LNT", "LUV", "LYFT", "LYV", "MAR", "MCK", "MCO",
+        "MDT", "MET", "MLM", "MMM", "MOS", "MRNA", "MSCI", "NCLH", "NDAQ",
+        "NEM", "NI", "NOC", "NSC", "NTRS", "NUE", "O", "ORLY", "PARA",
+        "PCAR", "PCG", "PEG", "PGR", "PH", "PINS", "PLD", "PLUG", "PNC",
+        "PPG", "PPL", "PRU", "PSA", "RBLX", "RCL", "REGN", "RF", "RIVN",
+        "ROK", "ROSS", "RSG", "SBAC", "SEDG", "SHW", "SNAP", "SO", "SOFI",
+        "SPG", "SRE", "STT", "SYK", "SYY", "TDG", "TEL", "TER", "TFC", "TJX",
+        "TROW", "TRV", "TSN", "TTWO", "U", "UAL", "UPS", "URI", "USB", "VMC",
+        "VTR", "WBD", "WBS", "WEC", "WELL", "WM", "XEL", "YUM", "ZION",
+        "ZTS"],
+    "EU EXTRA": [
+        "ABB", "ADYEN", "AENA", "AHOLD", "AIRLIQUIDE", "ANGLO", "ASSAABLOY",
+        "ATLASCOPCO", "BARCLAYS", "BASF", "BAT", "BAYER", "BBVA", "BP",
+        "CAPGEMINI", "CARREFOUR", "CONTI", "CREDITAG", "DANONE",
+        "DEUTSCHEBANK", "DHL", "DNB", "DSM", "DSV", "DTELEKOM", "ENGIE",
+        "ENI", "EON", "EQUINOR", "ERICSSON", "ERSTE", "ESSILOR", "FORTUM",
+        "GENERALI", "GIVAUDAN", "GLENCORE", "GSK", "HEINEKEN", "HM", "HSBC",
+        "INDITEX", "INFINEON", "ING", "INTESA", "INVESTOR", "KBC", "KPN",
+        "LLOYDS", "LSEG", "MAERSK", "MERCKDE", "MICHELIN", "MUNICHRE",
+        "NATGRID", "NOKIA", "NORDEA", "NORSKHYDRO", "NOVARTIS", "OMV",
+        "ORANGE", "ORSTED", "PERNOD", "PHILIPS", "PROSUS", "RANDSTAD",
+        "RELX", "REPSOL", "RIO", "ROLLSROYCE", "RWE", "SAINTGOBAIN", "SAMPO",
+        "SANDVIK", "SANOFI", "SEB", "SIKA", "SOCGEN", "SOLVAY", "SWISSRE",
+        "TELECOMIT", "TELEFONICA", "TELENOR", "TESCO", "UBS", "UCB",
+        "UNICREDIT", "UPM", "VEOLIA", "VESTAS", "VINCI", "VODAFONE", "VOLVO",
+        "WOLTERS", "ZALANDO", "ZURICH"],
+    "RUS EXTRA": [
+        "ABIO", "ABRD", "AFKS", "AKRN", "APTK", "AQUA", "ARSA", "ASSB",
+        "AVAN", "BANE", "BANEP", "BELU", "BRZL", "BSPBP", "CARM", "CHMK",
+        "CNTL", "CNTLP", "DIAS", "DVEC", "DZRD", "ELFV", "ENPG", "ETLN",
+        "EUTR", "GAZA", "GAZAP", "GCHE", "GEMA", "GEMC", "GTRK", "HNFG",
+        "IGST", "IRKT", "IVAT", "KAZT", "KAZTP", "KCHE", "KGKC", "KLVZ",
+        "KMAZ", "KRKNP", "KROT", "KRSB", "KUZB", "KZOS", "KZOSP", "LEAS",
+        "LIFE", "LSNG", "LSNGP", "MAGE", "MBNK", "MDMG", "MFGS", "MGKL",
+        "MGTS", "MGTSP", "MISB", "MRKC", "MRKK", "MRKP", "MRKS", "MRKU",
+        "MRKV", "MRKY", "MRKZ", "MSRS", "MTLRP", "NAUK", "NFAZ", "NKHP",
+        "NKNC", "NKNCP", "NSVZ", "OGKB", "OKEY", "PAZA", "PMSB", "PRFN",
+        "PRMD", "RBCM", "RENI", "RKKE", "RNFT", "ROLO", "ROST", "RTGZ",
+        "RTKMP", "RTSB", "RUSI", "RZSB", "SARE", "SBERP", "SELG", "SFIN",
+        "SLEN", "SNGSP", "SPBE", "STSB", "SVAV", "SVCB", "SVET", "TASB",
+        "TATNP", "TGKA", "TGKB", "TGKN", "TNSE", "TORS", "TRNFP", "TTLK",
+        "UGLD", "UKUZ", "UNAC", "URKZ", "USBN", "UWGN", "VGSB", "VJGZ",
+        "VLHZ", "VRSB", "VSEH", "VSMO", "YAKG", "YKEN", "YRSB", "ZAYM",
+        "ZILL", "ZVEZ"],
 }
 
 

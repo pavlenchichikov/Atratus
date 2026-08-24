@@ -2,6 +2,10 @@
 {% block title %}Accuracy | Atratus{% endblock %}
 {% block content %}
 
+{% if panel_errors %}
+<p class="dim">Could not read: {{ panel_errors | join(", ") }}. Those panels are empty.</p>
+{% endif %}
+
 <h1 class="fade">Accuracy
   <button class="fbtn" id="reconcile-btn" type="button">Reconcile</button>
   <span id="reconcile-msg" class="dim mono"></span>
@@ -73,6 +77,22 @@
     &middot; {{ levels.flipped }} on the signal turning
     &middot; {{ levels.no_entry }} never filled
     {% if levels.pending %}&middot; <span class="dim">{{ levels.pending }} still open</span>{% endif %}</p>
+  <div class="scrollbox">
+  <table class="grid sticky">
+    <thead><tr><th>Date</th><th>Asset</th><th>Signal</th><th>Exit</th>
+      <th class="num">Bars</th><th class="num">Net return</th></tr></thead>
+    <tbody>
+      {% for r in level_outcomes.rows %}
+      <tr><td class="mono">{{ r.date }}</td><td class="mono">{{ r.asset }}</td>
+        <td>{{ r.signal }}</td><td>{{ r.exit_reason }}</td>
+        <td class="num">{{ r.bars_held }}</td>
+        <td class="num">{{ "%+.2f"|format(r.ret_net * 100) }}<small>%</small></td></tr>
+      {% else %}
+      <tr><td colspan="6" class="dim">No level has resolved yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
   {% endif %}
 </section>
 
@@ -113,6 +133,68 @@
   <p class="empty">No shadow data yet - runs accrue once predict.py logs meta_prob (shadow on) and those predictions reconcile.</p>
   {% endif %}
 </section>
+
+<section class="panel fade">
+  <div class="panel-head"><h2>Calibration</h2>
+    <span class="dim mono">reconciled predictions by stated confidence</span></div>
+  <table class="grid">
+    <thead><tr><th>Confidence</th><th class="num">n</th><th class="num">Accuracy</th></tr></thead>
+    <tbody>
+      {% for b in calibration %}
+      <tr><td class="mono">{{ "%.2f"|format(b.lo) }} to {{ "%.2f"|format(b.hi) }}</td>
+        <td class="num">{{ b.n }}</td>
+        <td class="num">{% if b.accuracy is not none %}{{ "%.1f"|format(b.accuracy * 100) }}<small>%</small>{% else %}-{% endif %}</td></tr>
+      {% else %}
+      <tr><td colspan="3" class="dim">No reconciled predictions yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="dim">Confidence is MAX(P(up), P(down)); for a SELL that is 1 minus
+    the stated probability, not the probability itself, so bucketing on raw
+    probability would read the SELL book backwards. A rising accuracy down
+    this table would mean confidence carries information. On the sample
+    measured so far it does not: the most confident bucket scores at or below
+    the one beneath it, so a high stated confidence is not a reason to size
+    up.</p>
+</section>
+
+<section class="panel fade">
+  <div class="panel-head"><h2>Accuracy by asset</h2>
+    <span class="dim mono">{{ by_asset | length }} assets, worst first</span></div>
+  <div class="scrollbox">
+  <table class="grid sticky">
+    <thead><tr><th>Asset</th><th class="num">n</th><th class="num">Accuracy</th></tr></thead>
+    <tbody>
+      {% for a in by_asset %}
+      <tr><td class="mono">{{ a.asset }}</td><td class="num">{{ a.n }}</td>
+        <td class="num">{% if a.accuracy is not none %}{{ "%.1f"|format(a.accuracy * 100) }}<small>%</small>{% else %}-{% endif %}</td></tr>
+      {% else %}
+      <tr><td colspan="3" class="dim">Nothing reconciled yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="panel fade">
+  <div class="panel-head"><h2>Generations</h2></div>
+  <table class="grid">
+    <thead><tr><th>Version</th><th class="num">Predictions</th>
+      <th class="num">Reconciled</th><th class="num">Accuracy</th>
+      <th>From</th><th>To</th></tr></thead>
+    <tbody>
+      {% for g in generations %}
+      <tr><td class="mono">{{ g.model_version }}</td><td class="num">{{ g.n }}</td>
+        <td class="num">{{ g.reconciled }}</td>
+        <td class="num">{% if g.accuracy is not none %}{{ "%.1f"|format(g.accuracy * 100) }}<small>%</small>{% else %}-{% endif %}</td>
+        <td class="mono">{{ g.first }}</td><td class="mono">{{ g.last }}</td></tr>
+      {% else %}
+      <tr><td colspan="6" class="dim">No generations recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
 
 <script id="perf-data" type="application/json">{{ series | tojson }}</script>
 <script src="/static/echarts.min.js"></script>

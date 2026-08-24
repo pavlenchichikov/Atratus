@@ -808,6 +808,90 @@ def update_level_outcomes():
     return {"pending": pending, "resolved": resolved, "not_setups": skipped}
 
 
+# `probability` is P(up), so a SELL's confidence is 1 - probability, not
+# probability itself: bucketing on raw probability puts every SELL below
+# 0.50 regardless of how confident it was, and a bucket floor of 0.50 then
+# silently drops the whole SELL book (2769 of 4961 reconciled rows measured
+# 2026-08-24, 56 percent of the sample). Buckets are over
+# MAX(probability, 1 - probability), the axis that covers both books. The
+# (0.50, 0.55) band is dropped: on the same measurement only 10 of 4961 rows
+# land there, too few to read.
+CALIBRATION_BUCKETS = ((0.55, 0.60), (0.60, 0.70), (0.70, 1.01))
+
+
+def calibration(buckets=None, db_path=None):
+    """Accuracy per confidence bucket over reconciled predictions.
+
+    Confidence is MAX(probability, 1 - probability): the same axis for a BUY
+    and a SELL. Bucketing on raw `probability` instead reads the SELL half of
+    the table backwards, since a low `probability` is a CONFIDENT sell, not
+    an unconfident one.
+    """
+    out = []
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % (db_path or DB_PATH), uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        for lo, hi in (buckets or CALIBRATION_BUCKETS):
+            row = con.execute(
+                "SELECT COUNT(*), AVG(correct) FROM prediction_log "
+                "WHERE correct IS NOT NULL "
+                "AND MAX(probability, 1 - probability) >= ? "
+                "AND MAX(probability, 1 - probability) < ?", (lo, hi)).fetchone()
+            out.append({"lo": lo, "hi": hi, "n": row[0], "accuracy": row[1]})
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+    return out
+
+
+def accuracy_by_asset(db_path=None):
+    """Per-asset accuracy over reconciled predictions, worst first."""
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % (db_path or DB_PATH), uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        rows = con.execute(
+            "SELECT asset, COUNT(*), AVG(correct) FROM prediction_log "
+            "WHERE correct IS NOT NULL GROUP BY asset "
+            "ORDER BY AVG(correct) ASC").fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+    return [{"asset": r[0], "n": r[1], "accuracy": r[2]} for r in rows]
+
+
+def level_outcomes(db_path=None):
+    """The per-trade rows behind the resolved levels, newest first.
+
+    Counts belong to level_summary, the one place "resolved" (exit_reason IS
+    NOT NULL) and "entered" are defined. This returns only what
+    level_summary does not carry: the row list itself. An aggregate here
+    under the same names but a different WHERE clause (ret_net IS NOT NULL)
+    is a second, disagreeing definition of "resolved" on the same page.
+    """
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % (db_path or DB_PATH), uri=True)
+    except sqlite3.Error:
+        return {"rows": []}
+    try:
+        rows = con.execute(
+            "SELECT date, asset, signal, exit_reason, bars_held, ret_net "
+            "FROM level_log WHERE ret_net IS NOT NULL "
+            "ORDER BY date DESC").fetchall()
+    except sqlite3.Error:
+        return {"rows": []}
+    finally:
+        con.close()
+    return {"rows": [{"date": r[0], "asset": r[1], "signal": r[2],
+                      "exit_reason": r[3], "bars_held": r[4], "ret_net": r[5]}
+                     for r in rows]}
+
+
 if __name__ == "__main__":
     print("Updating actuals...")
     res = update_actuals()

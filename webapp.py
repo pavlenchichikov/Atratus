@@ -217,6 +217,70 @@ def _research_snapshot():
             "director": director, "policies": policies}
 
 
+def _experience_snapshot(sig=None):
+    """What the research has learned, joined for the page. Read-only.
+
+    Each section is wrapped on its own: the journals are written by a
+    long-running agent while this page is read, and one unreadable file must
+    cost its own panel, not the whole screen.
+    """
+    from core import experience
+
+    out = {"funnel": None, "levers": [], "genomes": [], "generations": [],
+           "selected": None, "similar": [], "errors": []}
+    for key, call in (("funnel", experience.funnel),
+                      ("levers", experience.levers),
+                      ("genomes", experience.genomes)):
+        try:
+            out[key] = call()
+        except Exception:
+            out["errors"].append(key)
+    try:
+        out["generations"] = experience.generations()
+    except Exception:
+        out["errors"].append("generations")
+    if sig:
+        # Split so a broken similar() cannot be reported as a broken genome():
+        # the page promises to name the source it could not read.
+        try:
+            out["selected"] = experience.genome(sig)
+        except Exception:
+            out["errors"].append("genome")
+        try:
+            out["similar"] = experience.similar(sig)
+        except Exception:
+            out["errors"].append("similar")
+    return out
+
+
+def _accuracy_panels():
+    """The four evidence panels on the accuracy page. Read-only.
+
+    Wrapped per panel for the same reason /experience is: one unreadable
+    source must cost its own panel, not the page.
+
+    The level-outcomes panel is exposed as "level_outcomes", not "levels":
+    the /performance context already has a "levels" key from
+    performance_tracker.level_summary() for the existing Trade levels panel,
+    and a shared key would silently overwrite it.
+    """
+    import performance_tracker as pt
+    from core import experience
+
+    out = {"calibration": [], "by_asset": [], "generations": [],
+           "level_outcomes": {"rows": []},
+           "panel_errors": []}
+    for key, call in (("calibration", pt.calibration),
+                      ("by_asset", pt.accuracy_by_asset),
+                      ("level_outcomes", pt.level_outcomes),
+                      ("generations", experience.generations)):
+        try:
+            out[key] = call()
+        except Exception:
+            out["panel_errors"].append(key)
+    return out
+
+
 def _spark(closes, w=110, h=26):
     """Points for an svg sparkline from a list of closes."""
     if len(closes) < 2:
@@ -568,7 +632,7 @@ def api_palette():
         ["Correlations", "/correlations"], ["Accuracy", "/performance"],
         ["News", "/news"], ["Guru", "/guru"], ["Models", "/models"],
         ["Risk", "/risk"], ["Portfolio", "/portfolio"], ["What-If", "/whatif"],
-        ["Research", "/research"],
+        ["Research", "/research"], ["Experience", "/experience"],
     ]
     return {"pages": pages, "assets": sorted(FULL_ASSET_MAP)}
 
@@ -618,6 +682,17 @@ def research_page(request: Request):
 @app.get("/api/research")
 def api_research():
     return _research_snapshot()
+
+
+@app.get("/experience", response_class=HTMLResponse)
+def experience_page(request: Request, sig: str = ""):
+    return templates.TemplateResponse(request, "experience.html",
+                                      _experience_snapshot(sig or None))
+
+
+@app.get("/api/experience")
+def api_experience(sig: str = ""):
+    return _experience_snapshot(sig or None)
 
 
 @app.get("/whatif", response_class=HTMLResponse)
@@ -715,13 +790,15 @@ def performance_page(request: Request):
         levels = performance_tracker.level_summary()
     except Exception:
         levels = {"issued": 0}
-    return templates.TemplateResponse(request, "performance.html", {
+    context = {
         "series": dashboard.accuracy_timeseries(),
         "leaderboard": dashboard.top_leaderboard(limit=20),
         "version": dashboard.current_model_version(),
         "meta_shadow": meta_shadow,
         "levels": levels,
-    })
+    }
+    context.update(_accuracy_panels())
+    return templates.TemplateResponse(request, "performance.html", context)
 
 
 @app.get("/guru", response_class=HTMLResponse)

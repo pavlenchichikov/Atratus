@@ -14,7 +14,7 @@
 
 <br>
 
-**Multi-asset machine-learning trading-signal engine.** A per-asset ensemble (CatBoost + LSTM + Transformer + TCN) over ~324 markets - crypto, US / European / Russian equities, indices, forex and commodities - with walk-forward selection, calibrated probabilities, Kelly sizing, tail-risk controls, a FastAPI dashboard, and an autonomous, statistically-gated research agent. Signals only, human-in-the-loop - no auto-execution.
+**Multi-asset machine-learning trading-signal engine.** A per-asset ensemble (CatBoost + LSTM + Transformer + TCN) over ~849 markets - crypto, US / European / Russian equities, indices, rates, volatility, bond and sector ETFs, forex and commodities - with walk-forward selection, calibrated probabilities, Kelly sizing, tail-risk controls, a FastAPI dashboard, and an autonomous, statistically-gated research agent. Signals only, human-in-the-loop - no auto-execution.
 
 > **Disclaimer.** Atratus is a research and educational project. Its output is a set of model predictions - **not financial advice and not a recommendation to buy or sell any security**. Markets carry risk and you can lose money. The software is provided "as is", without warranty of any kind. Use it at your own risk; do your own research and consult a licensed professional before making any financial decision. See [Disclaimer](#disclaimer) in full.
 
@@ -47,7 +47,7 @@
 
 ## Features
 
-- **~324 assets in the map, 317 with a trained champion, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
+- **~849 assets in the map, 317 with a trained champion, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
 - **Risk-managed by design.** Kelly-based position sizing, drawdown stops, sector-exposure and correlation checks, and a Taleb tail-risk index that shrinks size above a soft cap and blocks new buys above a hard cap.
 - **Prices, not just calls.** A daily trade-level sheet turns each signal into numbers you can act on: an ATR entry zone around the last close, an emergency stop that trails the position, and a size derived from the distance to that stop and clipped by the risk limits. The same entry zone and stop appear on each asset's own page, every issued set is journalled and later scored against the bars that followed, and the two ATR multipliers behind them can be fitted over the whole history and are adopted only if a held-out slice agrees. Execution stays manual.
@@ -84,6 +84,11 @@ Lightweight web interface - no TensorFlow needed, reads predictions from the dat
 - `/risk` - interactive risk manager: open / close positions, edit and persist risk limits, halt / resume trading, plus a Taleb tail-risk watchlist
 - `/loop` - self-maintaining loop: daily cycle status and drift proposals, with one-click approve of a champion-challenger retrain
 - `/guru` - value overlay: the council verdict next to the ML signal, with a 60-day accuracy track record and a one-click **Recalculate all** that re-scores every stock in the background
+- `/experience` - what the search has learned: the funnel from every genome ever
+  tried down to the one adopted, per-lever yield, one genome's full record with its
+  A/B verdicts and its nearest neighbours by shared genes, and live accuracy per
+  model generation. Read-only and derived: it joins the research journals on each
+  request and stores nothing
 - `/market`, `/sectors`, `/correlations`, `/performance`, `/news`, `/models` - analytics pages
 
 Same data as JSON under `/api/...`. Pages auto-refresh; a Cmd-K palette jumps to any asset or page; a ticker tape of top movers runs along the bottom. Works from a phone on the same network.
@@ -496,7 +501,7 @@ notification when signals change, opening the Today screen. The Supabase schema 
 
 - **Python 3.12** (3.11+ likely works; 3.12 is what CI runs).
 - **OS:** Linux, macOS or Windows. On Windows a GPU needs the pinned environment described in [Environment and GPU](#environment-and-gpu): TensorFlow ships CPU-only Windows wheels from 2.11 on, so a default install never sees the card.
-- **Disk:** ~5 GB free - trained models (~4.5 GB for 317 assets) plus `market.db` (~70 MB). Serving alone needs far less.
+- **Disk:** ~5 GB free - trained models (~4.5 GB for 317 assets) plus `market.db` (~270 MB). Serving alone needs far less.
 - **RAM:** 8 GB is enough to run the dashboard and `predict.py` (no TensorFlow at serve time). Training the full universe wants ~16 GB, or train in chunks of ~15 assets (`GTRADE_ASSETS`) on a smaller box.
 - **GPU:** optional but worth having. On one RTX 2050 a single asset trains in 158 s against 2850 to 10480 s for the same asset on a 12-thread CPU. Everything still runs without a GPU, just slower. CatBoost can also use a GPU (`GTRADE_CB_DEVICE=GPU`) but is often slower on the small per-asset datasets.
 - **Network:** outbound access to Yahoo Finance and MOEX for data (`SOCKS5_PROXY` supported).
@@ -608,7 +613,7 @@ never reconcile against a real move.
 | forex, crypto, commodities, benchmarks | 62 | forex 24/5, crypto 24/7, the rest follow their venue |
 
 So a morning run is expected to be short, and an evening Moscow-time run still
-leaves the ~60 US names out. **A radar showing fewer than 324 assets is that, not
+leaves the ~60 US names out. **A radar showing fewer than 849 assets is that, not
 a bug.** Nothing is lost either way: a second run later the same day fills in the
 assets that were missing, because a row already written for an asset today is
 skipped rather than duplicated.
@@ -630,9 +635,10 @@ uvicorn webapp:app --port 8000     # http://127.0.0.1:8000
 | `/asset/NAME` | Why this asset: probability history, positions, Guru verdict, news, events |
 | `/risk` | How much am I allowed to risk, and is trading halted |
 | `/portfolio` | What is open now, and how correlated is it |
-| `/performance` | Is the model actually right lately (verified outcomes only) |
+| `/performance` | Is the model actually right lately (verified outcomes only), including calibration by stated confidence, accuracy per asset, and a comparison of model generations |
 | `/loop` | Which models have drifted and want a retrain |
 | `/research` | What the research agent has learned so far |
+| `/experience` | Which levers ever paid, and why a given genome was not adopted |
 
 Signals alone do not tell you where to enter or where to get out. `/levels`
 does, and it is the page to trade from.
@@ -787,7 +793,7 @@ mobile app).
 
 TensorFlow on Windows is CPU-only since 2.11, so neural training runs on CPU - fine for daily data. For a GPU, use WSL2 and `pip install tensorflow[and-cuda]`.
 
-TensorFlow accumulates memory across many assets in one process, so a full 324-asset retrain on a memory-constrained box is best run in chunks (~15 assets via `GTRADE_ASSETS`), restarting a fresh process per chunk; the champion registry accumulates per asset, so chunks add up to a full run.
+TensorFlow accumulates memory across many assets in one process, so a full 849-asset retrain on a memory-constrained box is best run in chunks (~15 assets via `GTRADE_ASSETS`), restarting a fresh process per chunk; the champion registry accumulates per asset, so chunks add up to a full run.
 
 A champion's registry entry is written the moment its model files are, not once
 at the end of the run. Before that, an interrupted retrain left assets whose
@@ -897,7 +903,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 
 <br>
 
-**Мультиактивный движок торговых сигналов на машинном обучении.** Пер-активный ансамбль (CatBoost + LSTM + Transformer + TCN) по ~324 рынкам - крипта, акции США / Европы / России, индексы, форекс и товары - с walk-forward-отбором чемпионов, калиброванными вероятностями, размером позиции по Келли, контролем хвостового риска, дашбордом на FastAPI и автономным, статистически-гейтованным исследовательским агентом. Только сигналы, человек в контуре - без автоисполнения.
+**Мультиактивный движок торговых сигналов на машинном обучении.** Пер-активный ансамбль (CatBoost + LSTM + Transformer + TCN) по ~849 рынкам - крипта, акции США / Европы / России, индексы, ставки, волатильность, облигационные и секторные ETF, форекс и товары - с walk-forward-отбором чемпионов, калиброванными вероятностями, размером позиции по Келли, контролем хвостового риска, дашбордом на FastAPI и автономным, статистически-гейтованным исследовательским агентом. Только сигналы, человек в контуре - без автоисполнения.
 
 > **Дисклеймер.** Atratus - исследовательский и учебный проект. Его вывод - набор модельных предсказаний, **а не финансовый совет и не рекомендация покупать или продавать какую-либо ценную бумагу**. Рынки несут риск, вы можете потерять деньги. ПО предоставляется "как есть", без каких-либо гарантий. Используйте на свой риск; проводите собственный анализ и консультируйтесь с лицензированным специалистом перед любым финансовым решением. Полный текст - в разделе [Дисклеймер](#дисклеймер). Юридически приоритетна английская версия и файл [`LICENSE`](LICENSE).
 
@@ -930,7 +936,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 
 ## Возможности
 
-- **~324 актива в карте, 317 с обученным чемпионом, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
+- **~849 активов в карте, 317 с обученным чемпионом, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
 - **Честные, калиброванные сигналы.** BUY / SELL / WAIT с калиброванной вероятностью, пер-активными настроенными порогами и живым трек-рекордом точности, который сверяет каждое предсказание с реализованным движением следующего бара.
 - **Управление риском по замыслу.** Размер позиции по Келли, стопы по просадке, проверки секторной экспозиции и корреляций, а также индекс хвостового риска Талеба, который уменьшает размер выше мягкого порога и блокирует новые покупки выше жёсткого.
 - **Цены, а не только сигналы.** Ежедневный лист уровней превращает каждый сигнал в числа, по которым можно действовать: зона входа по ATR вокруг последнего закрытия, аварийный стоп, подтягивающийся за позицией, и размер, выведенный из расстояния до этого стопа и обрезанный лимитами риска. Те же зона входа и стоп теперь показаны и на странице самого актива, каждая выданная связка пишется в журнал и позже сверяется с реально прошедшими барами, а два ATR-множителя за ними можно подобрать на всей истории, и они принимаются только если отложенная выборка это подтвердит. Исполнение остаётся ручным.
@@ -967,6 +973,11 @@ uvicorn webapp:app --host 0.0.0.0 --port 8000
 - `/risk` - интерактивный риск-менеджер: открыть / закрыть позиции, править и сохранять лимиты риска, останавливать / возобновлять торговлю, плюс watchlist хвостового риска Талеба
 - `/loop` - самоподдерживающийся цикл: статус дневного цикла и предложения по дрейфу, с одним кликом на подтверждение переобучения "чемпион-претендент"
 - `/guru` - value-оверлей: вердикт совета рядом с ML-сигналом, трек-рекорд точности за 60 дней и кнопка **"Пересчитать всё"** в один клик, которая фоново переоценивает все акции
+- `/experience` - что накопил поиск: воронка от всех когда-либо испробованных
+  геномов до единственного принятого, выхлоп по каждому рычагу, полная карточка
+  генома с вердиктами A/B и соседями по общим генам, и живая точность по каждому
+  поколению модели. Только чтение, всё считается из журналов на каждый запрос и
+  нигде не хранится
 - `/market`, `/sectors`, `/correlations`, `/performance`, `/news`, `/models` - аналитические страницы
 
 Те же данные в JSON под `/api/...`. Страницы обновляются сами; палитра Cmd-K переходит к любому активу или странице; внизу бежит лента топ-движений. Работает с телефона в той же сети.
@@ -1345,7 +1356,7 @@ python push_signals.py          # или пункт [SG] в run_gtrade.bat
 
 - **Python 3.12** (3.11+ вероятно подойдёт; CI гоняет на 3.12).
 - **ОС:** Linux, macOS или Windows. На Windows для GPU нужно закреплённое окружение из раздела [Окружение и GPU](#окружение-и-gpu): начиная с 2.11 TensorFlow собирает под Windows только CPU-колёса, поэтому обычная установка карту не увидит.
-- **Диск:** ~5 ГБ свободно - обученные модели (~4.5 ГБ на 317 активов) плюс `market.db` (~70 МБ). Только для обслуживания нужно куда меньше.
+- **Диск:** ~5 ГБ свободно - обученные модели (~4.5 ГБ на 317 активов) плюс `market.db` (~270 МБ). Только для обслуживания нужно куда меньше.
 - **RAM:** 8 ГБ хватает для дашборда и `predict.py` (без TensorFlow во время обслуживания). Обучение всей вселенной хочет ~16 ГБ, либо обучайте чанками по ~15 активов (`GTRADE_ASSETS`) на слабой машине.
 - **GPU:** опционально, но заметно окупается. На RTX 2050 один актив обучается за 158 с против 2850-10480 с на том же активе на 12-поточном CPU. Без карты всё работает, просто дольше. CatBoost тоже умеет GPU (`GTRADE_CB_DEVICE=GPU`), но на маленьких пер-активных датасетах часто медленнее.
 - **Сеть:** исходящий доступ к Yahoo Finance и MOEX для данных (`SOCKS5_PROXY` поддерживается).
@@ -1458,7 +1469,7 @@ python predict.py         # оценить все активы, записать
 
 Поэтому утренний прогон заведомо короткий, а вечерний по московскому времени всё
 ещё оставляет за бортом примерно 60 американских имён. **Радар, показывающий
-меньше 324 активов, это именно оно, а не поломка.** Ничего при этом не теряется:
+меньше 849 активов, это именно оно, а не поломка.** Ничего при этом не теряется:
 повторный прогон в тот же день добирает недостающие активы, потому что уже
 записанная сегодня строка по активу пропускается, а не дублируется.
 
@@ -1636,7 +1647,7 @@ python train_levels.py --seed 7               # другое зерно поис
 
 TensorFlow на Windows только-CPU с версии 2.11, поэтому нейро-обучение идёт на CPU - нормально для дневных данных. Для GPU используйте WSL2 и `pip install tensorflow[and-cuda]`.
 
-TensorFlow накапливает память по многим активам в одном процессе, поэтому полный ретрейн на 324 актива на машине с ограниченной памятью лучше гонять чанками (~15 активов через `GTRADE_ASSETS`), перезапуская свежий процесс на каждый чанк; реестр чемпионов накапливается по активам, так что чанки складываются в полный прогон. Готовый оркестратор для этого - `train_chunked.py`.
+TensorFlow накапливает память по многим активам в одном процессе, поэтому полный ретрейн на 849 активов на машине с ограниченной памятью лучше гонять чанками (~15 активов через `GTRADE_ASSETS`), перезапуская свежий процесс на каждый чанк; реестр чемпионов накапливается по активам, так что чанки складываются в полный прогон. Готовый оркестратор для этого - `train_chunked.py`.
 
 Запись чемпиона в реестр делается в тот же момент, что и файлы его моделей, а не
 один раз в конце прогона. До этого прерванный ретрейн оставлял активы, у которых

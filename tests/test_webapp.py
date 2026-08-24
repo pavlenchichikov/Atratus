@@ -26,6 +26,15 @@ def client(tmp_path, monkeypatch):
     con.commit()
     con.close()
     monkeypatch.setattr(track_record, "DB_PATH", path)
+    # performance_tracker and core.experience read the same market.db in
+    # production; without this a /performance request reads the real 133 MB
+    # file for calibration, accuracy-by-asset, level outcomes and
+    # generations, and the trade-levels panel besides.
+    import performance_tracker
+    from core import experience
+    monkeypatch.setattr(performance_tracker, "DB_PATH", path)
+    monkeypatch.setattr(performance_tracker, "_ENGINE", None)
+    monkeypatch.setattr(experience, "DB_PATH", path)
     return TestClient(webapp.app)
 
 
@@ -922,3 +931,227 @@ def test_the_research_page_says_who_chose_each_cycle():
     r = TestClient(webapp.app).get("/research")
     assert r.status_code == 200
     assert "Campaign director" in r.text
+
+
+def _patch_experience_base(monkeypatch, funnel=None, levers=None, genomes=None,
+                           generations=None):
+    from core import experience
+    monkeypatch.setattr(experience, "funnel", lambda base=None: funnel or {
+        "tried": 0, "journalled": 0, "cleared_once": 0,
+        "cleared_twice": 0, "adopted": 0})
+    monkeypatch.setattr(experience, "levers", lambda base=None: levers or [])
+    monkeypatch.setattr(experience, "genomes", lambda base=None: genomes or [])
+    monkeypatch.setattr(experience, "generations",
+                        lambda db_path=None: generations or [])
+
+
+def test_experience_page_renders_the_funnel(client, monkeypatch):
+    _patch_experience_base(monkeypatch, funnel={
+        "tried": 1955, "journalled": 49, "cleared_once": 18,
+        "cleared_twice": 11, "adopted": 1})
+    r = client.get("/experience")
+    assert r.status_code == 200
+    assert "1955" in r.text and "49" in r.text
+
+
+def test_experience_page_lists_levers(client, monkeypatch):
+    _patch_experience_base(monkeypatch, levers=[
+        {"lever": "drop:vol_z", "genomes": 7, "flagged": 2, "replicated": 1,
+         "adopted": 0, "neural_lift": -0.5}])
+    r = client.get("/experience")
+    assert "drop:vol_z" in r.text
+
+
+def test_experience_page_lists_genomes_with_a_link_to_each(client, monkeypatch):
+    _patch_experience_base(monkeypatch, genomes=[
+        {"sig": "abc123def456", "levers": ["drop:vol_z"]}])
+    r = client.get("/experience")
+    assert r.status_code == 200
+    assert "abc123def456"[:12] in r.text
+    assert '/experience?sig=abc123def456"' in r.text
+
+
+def test_experience_page_survives_a_broken_source(client, monkeypatch):
+    from core import experience
+
+    def boom(base=None):
+        raise ValueError("unreadable")
+
+    _patch_experience_base(monkeypatch)
+    monkeypatch.setattr(experience, "levers", boom)
+    r = client.get("/experience")
+    assert r.status_code == 200
+    assert "levers" in r.text.lower()
+
+
+def test_experience_api_returns_json(client, monkeypatch):
+    _patch_experience_base(monkeypatch, funnel={
+        "tried": 3, "journalled": 2, "cleared_once": 1,
+        "cleared_twice": 0, "adopted": 0})
+    assert client.get("/api/experience").json()["funnel"]["tried"] == 3
+
+
+def test_experience_is_in_the_palette(client):
+    assert ["Experience", "/experience"] in client.get("/api/palette").json()["pages"]
+
+
+def test_experience_page_lists_neighbours(client, monkeypatch):
+    from core import experience
+    _patch_experience_base(monkeypatch)
+    monkeypatch.setattr(experience, "genome", lambda sig, base=None: {
+        "sig": sig, "genome": {}, "levers": [], "findings": [],
+        "verdicts": [], "clears": 0})
+    monkeypatch.setattr(experience, "similar", lambda sig, k=10, base=None: [
+        {"sig": "def456", "shared": ["drop:vol_z"], "overlap": 0.5}])
+    r = client.get("/experience?sig=abc")
+    assert r.status_code == 200
+    assert "drop:vol_z" in r.text
+
+
+def test_experience_page_renders_verdicts_for_the_selected_genome(client, monkeypatch):
+    from core import experience
+    _patch_experience_base(monkeypatch)
+    monkeypatch.setattr(experience, "genome", lambda sig, base=None: {
+        "sig": sig, "genome": {}, "levers": [], "findings": [],
+        "verdicts": [{"file": "_ab_genomes_20260801-0000.json",
+                      "value_raw": 1.2, "p_raw": 0.02, "n_raw": 14,
+                      "sd_raw": 3.0, "mde": 2.4, "powered": False,
+                      "promoted": 3, "demoted": 10}],
+        "clears": 0})
+    monkeypatch.setattr(experience, "similar", lambda sig, k=10, base=None: [])
+    r = client.get("/experience?sig=abc")
+    assert r.status_code == 200
+    assert "_ab_genomes_20260801-0000.json" in r.text
+    assert "2.4" in r.text  # mde
+    assert "no" in r.text.lower()  # powered False
+
+
+def test_experience_page_renames_findings_verdict_column_to_tag(client, monkeypatch):
+    from core import experience
+    _patch_experience_base(monkeypatch)
+    monkeypatch.setattr(experience, "genome", lambda sig, base=None: {
+        "sig": sig, "genome": {}, "levers": [],
+        "findings": [{"ts": "2026-08-01T00:00:00", "axis": "pruning",
+                      "p": 0.01, "value": 1.5, "tag": "ok"}],
+        "verdicts": [], "clears": 0})
+    monkeypatch.setattr(experience, "similar", lambda sig, k=10, base=None: [])
+    r = client.get("/experience?sig=abc")
+    assert r.status_code == 200
+    assert "<th>Tag</th>" in r.text
+    assert "<th>Verdict</th>" not in r.text
+
+
+def test_experience_page_findings_table_has_an_empty_state(client, monkeypatch):
+    from core import experience
+    _patch_experience_base(monkeypatch)
+    monkeypatch.setattr(experience, "genome", lambda sig, base=None: {
+        "sig": sig, "genome": {}, "levers": [], "findings": [],
+        "verdicts": [], "clears": 0})
+    monkeypatch.setattr(experience, "similar", lambda sig, k=10, base=None: [])
+    r = client.get("/experience?sig=abc")
+    assert r.status_code == 200
+    assert "No findings recorded" in r.text
+
+
+def test_experience_page_names_similar_when_similar_fails(client, monkeypatch):
+    from core import experience
+    _patch_experience_base(monkeypatch)
+    monkeypatch.setattr(experience, "genome", lambda sig, base=None: {
+        "sig": sig, "genome": {}, "levers": [], "findings": [],
+        "verdicts": [], "clears": 0})
+
+    def boom(sig, k=10, base=None):
+        raise ValueError("unreadable")
+
+    monkeypatch.setattr(experience, "similar", boom)
+    r = client.get("/api/experience?sig=abc")
+    assert r.status_code == 200
+    assert r.json()["errors"] == ["similar"]
+
+
+def test_experience_page_names_genome_when_genome_fails(client, monkeypatch):
+    from core import experience
+    _patch_experience_base(monkeypatch)
+
+    def boom(sig, base=None):
+        raise ValueError("unreadable")
+
+    monkeypatch.setattr(experience, "genome", boom)
+    monkeypatch.setattr(experience, "similar", lambda sig, k=10, base=None: [])
+    r = client.get("/api/experience?sig=abc")
+    assert r.status_code == 200
+    assert r.json()["errors"] == ["genome"]
+
+
+def _patch_accuracy_panels(monkeypatch, calibration=None, by_asset=None,
+                           level_outcomes=None, generations=None):
+    import performance_tracker as pt
+    from core import experience
+    monkeypatch.setattr(pt, "calibration", lambda **k: calibration or [])
+    monkeypatch.setattr(pt, "accuracy_by_asset", lambda **k: by_asset or [])
+    monkeypatch.setattr(pt, "level_outcomes", lambda **k: level_outcomes or {"rows": []})
+    monkeypatch.setattr(experience, "generations", lambda **k: generations or [])
+
+
+def test_performance_page_renders_calibration_panel(client, monkeypatch):
+    _patch_accuracy_panels(monkeypatch, calibration=[
+        {"lo": 0.55, "hi": 0.60, "n": 2, "accuracy": 0.5},
+        {"lo": 0.70, "hi": 1.01, "n": 1, "accuracy": 0.0},
+    ])
+    r = client.get("/performance")
+    assert r.status_code == 200
+    assert "Calibration" in r.text and "0.55 to 0.60" in r.text
+
+
+def test_performance_page_renders_accuracy_by_asset_panel(client, monkeypatch):
+    _patch_accuracy_panels(monkeypatch, by_asset=[
+        {"asset": "ETH", "n": 2, "accuracy": 0.0},
+        {"asset": "BTC", "n": 2, "accuracy": 1.0},
+    ])
+    r = client.get("/performance")
+    assert r.status_code == 200
+    assert "Accuracy by asset" in r.text and "ETH" in r.text
+
+
+def test_performance_page_folds_resolved_level_rows_into_trade_levels(client, monkeypatch):
+    import performance_tracker as pt
+    monkeypatch.setattr(pt, "level_summary", lambda **k: {
+        "issued": 5, "resolved": 2, "entered": 2, "pending": 3,
+        "stopped": 1, "flipped": 1, "no_entry": 0, "avg_ret": 0.01,
+        "win_pct": 50.0, "first": "2026-06-01", "last": "2026-06-02"})
+    _patch_accuracy_panels(monkeypatch, level_outcomes={
+        "rows": [{"date": "2026-06-02", "asset": "ETH", "signal": "SELL",
+                  "exit_reason": "signal", "bars_held": 5, "ret_net": 0.04}]})
+    r = client.get("/performance")
+    assert r.status_code == 200
+    assert "Trade levels" in r.text and "+4.00" in r.text
+    # only one panel, and one definition of "resolved", is on the page
+    assert "Issued levels" not in r.text
+
+
+def test_performance_page_renders_generations_panel(client, monkeypatch):
+    _patch_accuracy_panels(monkeypatch, generations=[
+        {"model_version": "v3", "n": 10, "reconciled": 8, "accuracy": 0.6,
+         "first": "2026-06-01", "last": "2026-06-10"}])
+    r = client.get("/performance")
+    assert r.status_code == 200
+    assert "Generations" in r.text and "v3" in r.text
+
+
+def test_performance_page_survives_a_broken_accuracy_panel(client, monkeypatch):
+    import performance_tracker as pt
+    from core import experience
+
+    def boom(**k):
+        raise ValueError("unreadable")
+
+    monkeypatch.setattr(pt, "calibration", boom)
+    monkeypatch.setattr(pt, "accuracy_by_asset", lambda **k: [])
+    monkeypatch.setattr(pt, "level_outcomes", lambda **k: {"rows": []})
+    monkeypatch.setattr(experience, "generations", lambda **k: [])
+    r = client.get("/performance")
+    assert r.status_code == 200
+    assert "Calibration" in r.text
+    # the broken panel names itself, rather than reading as no data
+    assert "calibration" in r.text.lower()
+    assert "Could not read" in r.text

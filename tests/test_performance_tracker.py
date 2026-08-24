@@ -352,3 +352,103 @@ def test_migration_adds_gate_columns(tmp_path, monkeypatch):
     cols = [r[1] for r in con.execute("PRAGMA table_info(prediction_log)").fetchall()]
     con.close()
     assert "sig_shown" in cols and "gate_reason" in cols
+
+
+def test_calibration_buckets_predictions_by_confidence(tmp_path):
+    import performance_tracker as pt
+    path = str(tmp_path / "market.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE prediction_log (date TEXT, asset TEXT, "
+                "probability REAL, correct INTEGER)")
+    con.executemany("INSERT INTO prediction_log VALUES (?,?,?,?)", [
+        ("2026-06-01", "BTC", 0.56, 1), ("2026-06-02", "BTC", 0.58, 0),
+        ("2026-06-03", "ETH", 0.75, 0),
+    ])
+    con.commit()
+    con.close()
+    rows = {(r["lo"], r["hi"]): r for r in pt.calibration(db_path=path)}
+    assert rows[(0.55, 0.60)]["n"] == 2
+    assert rows[(0.55, 0.60)]["accuracy"] == pytest.approx(0.5)
+    assert rows[(0.70, 1.01)]["n"] == 1
+    assert rows[(0.70, 1.01)]["accuracy"] == pytest.approx(0.0)
+
+
+def test_calibration_reads_a_sell_by_its_own_confidence_not_raw_probability(tmp_path):
+    """probability is P(up); a SELL's confidence is 1 - probability. A SELL
+    logged at probability 0.10 is a confident SELL (confidence 0.90) and must
+    land in the top bucket, not be excluded for sitting under 0.55 raw."""
+    import performance_tracker as pt
+    path = str(tmp_path / "market.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE prediction_log (date TEXT, asset TEXT, "
+                "probability REAL, correct INTEGER)")
+    con.executemany("INSERT INTO prediction_log VALUES (?,?,?,?)", [
+        ("2026-06-01", "BTC", 0.10, 1),   # confident SELL, confidence 0.90
+        ("2026-06-02", "ETH", 0.90, 1),   # confident BUY, confidence 0.90
+    ])
+    con.commit()
+    con.close()
+    rows = {(r["lo"], r["hi"]): r for r in pt.calibration(db_path=path)}
+    assert rows[(0.70, 1.01)]["n"] == 2
+    assert rows[(0.70, 1.01)]["accuracy"] == pytest.approx(1.0)
+
+
+def test_calibration_is_empty_without_a_database(tmp_path):
+    import performance_tracker as pt
+    assert pt.calibration(db_path=str(tmp_path / "none.db")) == []
+
+
+def test_accuracy_by_asset_orders_worst_first(tmp_path):
+    import performance_tracker as pt
+    path = str(tmp_path / "market.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE prediction_log (date TEXT, asset TEXT, "
+                "probability REAL, correct INTEGER)")
+    con.executemany("INSERT INTO prediction_log VALUES (?,?,?,?)", [
+        ("2026-06-01", "BTC", 0.56, 1), ("2026-06-02", "BTC", 0.58, 1),
+        ("2026-06-03", "ETH", 0.60, 0), ("2026-06-04", "ETH", 0.60, 0),
+    ])
+    con.commit()
+    con.close()
+    rows = pt.accuracy_by_asset(db_path=path)
+    assert [r["asset"] for r in rows] == ["ETH", "BTC"]
+    assert rows[0]["n"] == 2
+    assert rows[0]["accuracy"] == pytest.approx(0.0)
+    assert rows[1]["accuracy"] == pytest.approx(1.0)
+
+
+def test_accuracy_by_asset_is_empty_without_a_database(tmp_path):
+    import performance_tracker as pt
+    assert pt.accuracy_by_asset(db_path=str(tmp_path / "none.db")) == []
+
+
+def test_level_outcomes_summarises_resolved_rows(tmp_path):
+    import performance_tracker as pt
+    path = str(tmp_path / "market.db")
+    con = sqlite3.connect(path)
+    con.execute("""
+        CREATE TABLE level_log (
+            date TEXT, asset TEXT, signal TEXT, close REAL, atr REAL,
+            entry_low REAL, entry_high REAL, stop REAL, trailing INTEGER,
+            entered INTEGER, entry_date TEXT, entry_price REAL,
+            exit_date TEXT, exit_price REAL, exit_reason TEXT,
+            bars_held INTEGER, ret_net REAL
+        )
+    """)
+    con.executemany(
+        "INSERT INTO level_log (date, asset, signal, entered, exit_reason, "
+        "bars_held, ret_net) VALUES (?,?,?,?,?,?,?)", [
+            ("2026-06-01", "BTC", "BUY", 1, "stop", 3, -0.02),
+            ("2026-06-02", "ETH", "SELL", 1, "signal", 5, 0.04),
+            ("2026-06-03", "SOL", "BUY", 0, "no_entry", None, None),
+        ])
+    con.commit()
+    con.close()
+    out = pt.level_outcomes(db_path=path)
+    assert [r["asset"] for r in out["rows"]] == ["ETH", "BTC"]
+    assert out["rows"][0]["ret_net"] == pytest.approx(0.04)
+
+
+def test_level_outcomes_is_empty_without_a_database(tmp_path):
+    import performance_tracker as pt
+    assert pt.level_outcomes(db_path=str(tmp_path / "none.db")) == {"rows": []}

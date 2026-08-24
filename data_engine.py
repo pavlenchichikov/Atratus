@@ -23,7 +23,7 @@ from core.logger import get_logger
 logger = get_logger("data_engine")
 
 try:
-    from config import FULL_ASSET_MAP
+    from config import FULL_ASSET_MAP, MOEX_ASSETS
 except ImportError:
     sys.exit(f"[ERR] config.py not found in {BASE_DIR}")
 
@@ -57,19 +57,10 @@ BACKFILL = (os.getenv("GTRADE_BACKFILL") or "").strip() in ("1", "true", "True")
 # MOEX history start used on a first/backfill pull (ISS returns only what exists,
 # so requesting earlier than a ticker's listing is harmless).
 MOEX_START_STR = (datetime.now() - timedelta(days=HISTORY_DAYS)).strftime('%Y-%m-%d')
-MOEX_TARGETS = [
-    "IMOEX", "SBER", "GAZP", "LKOH", "ROSN", "NVTK", "TATN", "SNGS",
-    "PLZL", "SIBN", "MGNT",
-    "TCSG", "VTBR", "BSPB", "MOEX_EX", "CBOM",
-    "YNDX", "OZON", "VKCO", "POSI", "MTSS", "RTKM",
-    "HHRU", "SOFL", "ASTR", "WUSH",
-    "CHMF", "NLMK", "MAGN", "RUAL", "ALRS", "TRMK", "MTLR", "RASP",
-    "IRAO", "HYDR", "FLOT", "AFLT", "PIKK",
-    "FEES", "UPRO", "MSNG", "NMTP",
-    "PHOR", "SGZH",
-    "FIVE", "FIXP", "LENT", "MVID",
-    "SMLT", "LSRG",
-]
+# Which keys come from MOEX rather than Yahoo. The list lives in config beside
+# the asset map: kept here as a second copy, a ticker added to the map and
+# forgotten here was fetched from Yahoo, returned nothing and stayed stale.
+MOEX_TARGETS = list(MOEX_ASSETS)
 
 def get_last_date(table_name):
     """Find the date of the most recent bar in the database."""
