@@ -268,3 +268,30 @@ def test_a_mixed_cycle_credits_the_axis_that_produced_the_winner():
     out = {c["axis"]: c for c in ar_director.axis_yield(findings)}
     assert out["hyper"]["cycles"] == 1 and out["hyper"]["winners"] == 0
     assert out["features"]["cycles"] == 1 and out["features"]["winners"] == 1
+
+
+def test_illum_full_is_refused_on_a_basis_that_cannot_read_the_nets():
+    """It pays about 12x per genome to train real nets during illumination, and
+    the raw Score cannot resolve them (retraining noise 0.45-1.52 Score), so the
+    archive would rank the noise it just bought."""
+    raw = dict(CAMPAIGN, GTRADE_AR_SCORE_BASIS="raw")
+    settings, problems = ar_director.validate(_reply(axes="qd", illum="full"), raw)
+    assert settings is None and any("raw Score basis" in p for p in problems)
+    # Positive control: the same reply is legal wherever the nets are readable.
+    for basis in ("net_gain", "net_auc", "ens_auc"):
+        camp = dict(CAMPAIGN, GTRADE_AR_SCORE_BASIS=basis)
+        settings, problems = ar_director.validate(
+            _reply(axes="qd", illum="full"), camp)
+        assert problems == [], basis
+        assert settings["GTRADE_AR_ILLUM"] == "full"
+    # And the cheap illumination is legal on raw, which is what it is for.
+    _s, problems = ar_director.validate(_reply(axes="qd", illum="cb"), raw)
+    assert problems == []
+
+
+def test_a_campaign_that_names_no_basis_is_not_second_guessed():
+    """The recipe shape-check validates against a fixture with no basis; making
+    that fail would take the whole loop down over one arm."""
+    bare = {k: v for k, v in CAMPAIGN.items() if k != "GTRADE_AR_SCORE_BASIS"}
+    _s, problems = ar_director.validate(_reply(axes="qd", illum="full"), bare)
+    assert problems == []

@@ -90,18 +90,42 @@ def recipe_reply(name):
     return dict(RECIPES[name]["reply"])
 
 
+# What validate() fills in for anything a recipe does not name. Pinned on
+# purpose: these five are what makes settings_of stable, so arm_of can still
+# recognise a cycle recorded weeks ago. The BASIS is deliberately absent - see
+# _campaign().
+FIXTURE = {"GTRADE_AR_AXES": "qd", "GTRADE_LABEL_MODE": "direction",
+           "GTRADE_LABEL_HORIZON": "1", "AR_BUDGET": "15",
+           "GTRADE_AR_PROPOSER": "evolutionary"}
+
+
+def _campaign():
+    """The campaign a recipe is validated against.
+
+    FIXTURE plus the LIVE score basis. The basis is frozen for the whole
+    campaign and it decides whether a recipe is legal at all: illum=full pays
+    about 12x per genome to train real nets during illumination, and on the raw
+    Score basis nothing can read them, so validate refuses it there. Reading it
+    live is what lets that refusal reach the RL director, which otherwise
+    validates against a fixture that names no basis.
+    """
+    basis = (os.getenv("GTRADE_AR_SCORE_BASIS") or "").strip().lower()
+    return dict(FIXTURE, GTRADE_AR_SCORE_BASIS=basis) if basis else dict(FIXTURE)
+
+
 def _check_recipes():
     """Every recipe must be a cycle the runner can execute.
 
     Checked at import so an illegal recipe fails the module load rather than
     the fourth hour of a search. validate() already refuses levers that land on
     nothing, so this is a free control over the whole set.
+
+    Against FIXTURE, not _campaign(): a recipe that only some campaigns can run
+    is legal, and failing the import on a raw campaign would take the whole
+    loop down over one arm. legal_arms() is where a campaign narrows the set.
     """
-    campaign = {"GTRADE_AR_AXES": "qd", "GTRADE_LABEL_MODE": "direction",
-                "GTRADE_LABEL_HORIZON": "1", "AR_BUDGET": "15",
-                "GTRADE_AR_PROPOSER": "evolutionary"}
     for name in ARMS:
-        _settings, problems = ar_director.validate(recipe_reply(name), campaign)
+        _settings, problems = ar_director.validate(recipe_reply(name), FIXTURE)
         if problems:
             raise ValueError("recipe %r is not a legal cycle: %s"
                              % (name, "; ".join(problems)))
@@ -146,14 +170,24 @@ def settings_of(name):
     Goes through the same validator the loop uses, so what is stored in the
     history for an RL cycle is the same shape as for an LLM one.
     """
-    campaign = {"GTRADE_AR_AXES": "qd", "GTRADE_LABEL_MODE": "direction",
-                "GTRADE_LABEL_HORIZON": "1", "AR_BUDGET": "15",
-                "GTRADE_AR_PROPOSER": "evolutionary"}
-    settings, problems = ar_director.validate(recipe_reply(name), campaign)
+    settings, problems = ar_director.validate(recipe_reply(name), _campaign())
     if problems:
         return None
     settings.pop("reason", None)
     return settings
+
+
+def legal_arms():
+    """The arms this campaign can actually run, never empty.
+
+    Choosing an arm the campaign refuses would run the cycle with no settings
+    applied at all, and the bandit would then credit the result to a recipe
+    that was never used. The one arm this narrows today is qd_neural under the
+    raw basis; if a campaign somehow refused everything, the full set is
+    returned rather than nothing, because a loop that cannot choose is worse
+    than a loop that chooses badly.
+    """
+    return [a for a in ARMS if settings_of(a) is not None] or list(ARMS)
 
 
 def arm_of(settings):
@@ -246,14 +280,46 @@ def chooser_for(cycle):
     return "rl" if int(cycle) % 2 else "llm"
 
 
-def forced_arm(flagged, replicated):
+def replication_debt(findings, replicated_sigs, sig_of):
+    """Distinct flagged genomes still owed a second independent clear.
+
+    Counted per GENOME. findings_summary's counters, which this used to read,
+    are cumulative EVENT totals: a regate cycle appends one adoptable event and
+    one replicated event for the same already-replicated genome, so both
+    counters rise together and their difference is a constant no regate cycle
+    can pay down.
+    """
+    owed = set()
+    seen = replicated_sigs or set()
+    for rec in findings or []:
+        for w in rec.get("winners") or []:
+            if not w.get("adoptable"):
+                continue
+            sig = sig_of(w.get("genome") or {})
+            if sig and sig not in seen:
+                owed.add(sig)
+    return len(owed)
+
+
+def forced_arm(debt, history=None):
     """regate when the replication debt is large enough, else None.
 
     A flagged finding that never replicates is worth nothing, and the gap is
     arithmetic. Teaching a bandit to rediscover arithmetic costs weeks of GPU
     time and buys nothing.
+
+    Never twice in a row. regate re-gates the top-k stored candidates, so a
+    genome owed a clear that never ranks in that k is unreachable and the debt
+    stands however often the arm is forced. Forcing on a number the forced arm
+    could not move latched the loop into 1400 consecutive 6-second regate
+    cycles on 2026-08-24, and the bandit never chose again.
     """
-    return "regate" if (flagged or 0) - (replicated or 0) >= REGATE_GAP else None
+    if (debt or 0) < REGATE_GAP:
+        return None
+    for e in history or []:                # newest-first, as auto_loop stores it
+        if e.get("action") == "search":
+            return None if arm_of(e.get("settings")) == "regate" else "regate"
+    return "regate"
 
 
 def _load(base_key=None):
@@ -304,7 +370,7 @@ def measured_hours(history, hours):
 
 
 def choose(history, findings, outcomes, replicated_sigs, sig_of, rng=None,
-           flagged=0, replicated=0, base_key=None):
+           base_key=None):
     """(arm, settings) for the next cycle, after paying out what has settled.
 
     A Beta posterior wants a 0/1 outcome and the reward is continuous, so the
@@ -319,9 +385,10 @@ def choose(history, findings, outcomes, replicated_sigs, sig_of, rng=None,
         sched.update(rec["arm"], PHASE, (rng or _RNG).random() < p)
         credited.add(rec["key"])
     hours = measured_hours(history, hours)
-    arm = forced_arm(flagged, replicated)
+    arm = forced_arm(replication_debt(findings, replicated_sigs, sig_of),
+                     history)
     if arm is None:
-        arm, _floor = sched.choose(list(ARMS), PHASE)
+        arm, _floor = sched.choose(legal_arms(), PHASE)
     _save(sched, credited, hours, base_key)
     return arm, settings_of(arm)
 

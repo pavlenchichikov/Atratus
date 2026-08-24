@@ -400,6 +400,19 @@ def validate(obj, campaign):
     if illum == "full" and "qd" not in names:
         problems.append("illum only shapes the qd archive; this cycle runs %s"
                         % (",".join(names) or "nothing"))
+    # illum=full costs about 12x per genome to train real nets during
+    # illumination. On the raw Score basis that buys nothing: net training does
+    # not reproduce on this GPU (same seed, same config, 0.45-1.52 Score apart),
+    # so the archive would rank the noise it just paid for. run_qd already warns
+    # about it and then does it anyway; a lever that lands on nothing is refused
+    # here like every other one. A campaign that names no basis is left alone,
+    # so a caller that does not carry one is not second-guessed.
+    if (illum == "full" and campaign.get("GTRADE_AR_SCORE_BASIS")
+            and campaign["GTRADE_AR_SCORE_BASIS"] == "raw"):
+        problems.append("illum=full trains real nets during illumination, but "
+                        "the raw Score basis cannot resolve them (retraining "
+                        "noise 0.45-1.52 Score); search on net_gain, net_auc or "
+                        "ens_auc to spend that 12x on something readable")
 
     fresh = obj.get("new_campaign")
     new_campaign = None

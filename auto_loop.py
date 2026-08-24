@@ -590,14 +590,12 @@ def apply_director(env, state):
         who = ar_director_rl.chooser_for(len(state.get("history") or []) + 1)
     if who == "rl":
         import auto_research
-        mem = ar_memory.findings_summary()
         arm, settings = ar_director_rl.choose(
             state.get("history") or [], ar_memory.findings_all(),
             adopt_genome.ab_outcomes(with_sig=True),
             ar_memory.replicated_sigs(),
             sig_of=lambda gd: (auto_research.genome_sig(
                 auto_research.Genome(**gd)) if gd else None),
-            flagged=mem["adoptable"], replicated=mem["replicated"],
             base_key=ar_memory.base_key(auto_research.selection_assets(), {}))
         if settings:
             env = dict(env)

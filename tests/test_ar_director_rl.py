@@ -159,9 +159,29 @@ def test_a_history_entry_from_before_the_settings_existed_is_skipped():
 
 def test_the_replication_debt_forces_the_regate_arm():
     """Arithmetic, not something worth spending weeks of GPU time learning."""
-    flagged, replicated = 29, 16
-    assert rl.forced_arm(flagged, replicated) == "regate"
-    assert rl.forced_arm(17, 16) is None
+    assert rl.forced_arm(13) == "regate"
+    assert rl.forced_arm(1) is None
+
+
+def test_the_debt_counts_genomes_not_journal_events():
+    """A regate cycle re-flags a genome it already replicated. Counted as
+    events that reads as fresh debt; counted as genomes it reads as nothing."""
+    rec = {"winners": [{"adoptable": True, "genome": {"sig": "a"},
+                        "replicated": True}]}
+    sig_of = lambda g: g.get("sig")
+    assert rl.replication_debt([rec] * 50, {"a"}, sig_of) == 0
+    assert rl.replication_debt([rec] * 50, set(), sig_of) == 1
+
+
+def test_the_forced_regate_never_runs_twice_in_a_row():
+    """The 2026-08-24 latch: regate cannot reach a candidate outside its top-k,
+    so forcing on an unmoved debt ran 1400 consecutive no-op cycles."""
+    hist = [{"action": "search", "rc": 0,
+             "settings": rl.settings_of("regate")}]
+    assert rl.forced_arm(13, hist) is None
+    assert rl.forced_arm(13, [{"action": "search", "rc": 0,
+                               "settings": rl.settings_of("pruning")}]) == "regate"
+    assert rl.forced_arm(13, []) == "regate"
 
 
 def test_the_mode_defaults_to_the_llm_so_an_unset_variable_changes_nothing(monkeypatch):
@@ -258,3 +278,45 @@ def test_the_replay_says_how_much_history_it_could_not_read():
                     set(), sig_of=lambda g: None)
     assert rep["skipped"] == 1 and rep["read"] == 1
     assert "1 of 2" in " ".join(rl.replay_lines(rep))
+
+
+# --- which arms a campaign may run -------------------------------------------
+
+def test_the_neural_arm_drops_out_on_a_basis_that_cannot_read_the_nets(monkeypatch):
+    """qd_neural is the only arm that trains real nets during illumination. On
+    raw it would spend twelve hours ranking retraining noise."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert rl.settings_of("qd_neural") is None
+    assert "qd_neural" not in rl.legal_arms()
+    assert len(rl.legal_arms()) == len(rl.ARMS) - 1
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_gain")
+    assert rl.settings_of("qd_neural")["GTRADE_AR_ILLUM"] == "full"
+    assert sorted(rl.legal_arms()) == sorted(rl.ARMS)
+
+
+def test_an_unset_basis_leaves_every_arm_available(monkeypatch):
+    monkeypatch.delenv("GTRADE_AR_SCORE_BASIS", raising=False)
+    assert sorted(rl.legal_arms()) == sorted(rl.ARMS)
+
+
+def test_the_bandit_never_draws_an_arm_the_campaign_refuses(monkeypatch):
+    """Drawing one would run the cycle with no settings applied and then credit
+    the outcome to a recipe that was never used."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    # choose() persists the scheduler. Unpatched, this test writes the LIVE
+    # campaign's rl_director_v1.json in the checkout it runs from.
+    from core import ar_memory
+    monkeypatch.setattr(ar_memory, "blob_get", lambda *a, **k: {})
+    monkeypatch.setattr(ar_memory, "blob_put", lambda *a, **k: None)
+    drawn = []
+    for _ in range(60):
+        arm, settings = rl.choose([], [], [], set(), sig_of=lambda g: None)
+        drawn.append(arm)
+        assert settings is not None
+    assert "qd_neural" not in drawn
+
+
+def test_the_import_time_recipe_check_ignores_the_live_basis(monkeypatch):
+    """It runs at import, so a raw campaign must not make the module unloadable."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    rl._check_recipes()                       # raises if it read the live basis

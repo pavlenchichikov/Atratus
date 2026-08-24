@@ -28,6 +28,9 @@ sys.path.insert(0, BASE)
 CONFIG_PATH = os.path.join(BASE, "_ab_config.json")
 DB_PATH = os.path.join(BASE, "market.db")
 MAX_CANDIDATES = 3
+# Far apart so two rolls never share a derived per-model seed. ab_noise.py has
+# used 1000/2000/3000 by hand since the determinism work; this keeps that shape.
+SEED_STRIDE = 1000
 
 
 def _read_json(path):
@@ -144,10 +147,15 @@ def last_spread(base=None):
     a repository with only those answers None rather than a guess.
     """
     import glob
+    want = len(seed_roll())
     for path in sorted(glob.glob(os.path.join(base or BASE,
                                               "_ab_genomes_*.json")),
                        reverse=True):
         data = _read_json(path) or {}
+        # Only runs averaged the same number of times. Projecting an r=1 run
+        # from an r=4 spread promises power the run will not have.
+        if int(data.get("ab_seeds") or 1) != want:
+            continue
         for res in (data.get("results") or {}).values():
             if isinstance(res, dict) and res.get("sd_raw"):
                 return float(res["sd_raw"])
@@ -481,10 +489,82 @@ def _print_config(cfg):
         print(pw)
 
 
+def seed_roll():
+    """The GTRADE_SEED values one A/B arm is trained under.
+
+    Reseeding is the only lever measured to cut this gate's noise. A per-asset
+    dScore has sd 3.74 against an adoption floor of 0.5, and that noise is
+    per-TRAINING: a retrain moves every fold of an asset together, which is why
+    fold-averaging bought 10 percent and reseeding falls as sqrt(r). At r=4 the
+    holdout needed to resolve +0.5 drops from 347 assets to about 87, which the
+    208-asset universe can actually supply.
+
+    It also costs r times the wall clock of a run already measured in tens of
+    hours, so the default is 1 and nothing changes until a run asks for more.
+    """
+    from core.net_hygiene import seed_base
+    try:
+        r = int(os.getenv("GTRADE_AB_SEEDS") or 1)
+    except ValueError:
+        r = 1
+    return [seed_base() + i * SEED_STRIDE for i in range(max(1, r))]
+
+
+def _mean_rows(rolls):
+    """Average per-asset rows across rolls, numeric columns only.
+
+    Only assets EVERY roll scored. A training that dropped one would otherwise
+    leave that asset averaged over fewer seeds than its neighbours, so the arm
+    would carry a different amount of noise per row with nothing on the row to
+    say so. Non-numeric columns (Fold_Scores) are taken from the first roll
+    unchanged, so nothing downstream loses a column it reads.
+    """
+    per = [{r["Asset"]: r for r in roll} for roll in rolls]
+    common = set(per[0]).intersection(*[set(p) for p in per[1:]])
+    out = []
+    for row in rolls[0]:
+        asset = row["Asset"]
+        if asset not in common:
+            continue
+        merged = dict(row)
+        for key in row:
+            vals = [p[asset].get(key) for p in per]
+            if all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for v in vals):
+                merged[key] = sum(vals) / len(vals)
+        out.append(merged)
+    return out
+
+
 def _heldout_eval(subset, env, fn, **kw):
-    """Indirected so the tests can see which trainer the reference chose."""
+    """Indirected so the tests can see which trainer the reference chose.
+
+    Also where r-seed averaging happens, and it happens for BOTH arms because
+    both come through this one function. Averaging the candidate but not the
+    reference would put a quiet number against a noisy one and read the
+    difference as an effect.
+    """
     import auto_research as ar
-    return ar._heldout_eval(subset, env, fn, **kw)
+    seeds = seed_roll()
+    if len(seeds) == 1:
+        return ar._heldout_eval(subset, env, fn, **kw)
+    was = os.environ.get("GTRADE_SEED")
+    fulls, contribs = [], []
+    try:
+        for seed in seeds:
+            os.environ["GTRADE_SEED"] = str(seed)
+            full, contrib = ar._heldout_eval(subset, env, fn, **kw)
+            if full:
+                fulls.append(full)
+                contribs.append(contrib)
+    finally:
+        if was is None:
+            os.environ.pop("GTRADE_SEED", None)
+        else:
+            os.environ["GTRADE_SEED"] = was
+    if not fulls:
+        return [], []
+    return _mean_rows(fulls), _mean_rows(contribs)
 
 
 def train_reference(subset, ref):
@@ -640,6 +720,11 @@ def write_result(cfg, results, base=None):
     payload = {
         "holdout": cfg["holdout"],
         "objective": cfg["objective"],
+        # How many trainings each arm was averaged over. Recorded because sd_raw
+        # is in different units without it: an r=4 spread is half an r=1 spread
+        # on the same genome, and a reader comparing the two across files would
+        # read the reseeding as an effect.
+        "ab_seeds": len(seed_roll()),
         "floor": cfg["floor"],
         "alpha": cfg["alpha"],
         "reference": cfg["reference"],
@@ -686,6 +771,12 @@ def run(cfg):
         return
     fp_start = ar_memory.data_fingerprint(subset)
     print("Reference: {}   holdout: {}   data {}".format(ref["label"], subset, fp_start))
+    seeds = seed_roll()
+    if len(seeds) > 1:
+        print("Averaging each arm over %d seeds (%s): %dx the trainings, the "
+              "per-asset spread falls as sqrt(%d)."
+              % (len(seeds), ",".join(str(s) for s in seeds), len(seeds),
+                 len(seeds)))
     ref_full, ref_contrib = train_reference(subset, ref)
     if not ref_full:
         print("The reference arm produced no rows; stopping.")

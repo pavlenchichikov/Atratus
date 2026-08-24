@@ -310,3 +310,95 @@ def test_verdict_is_measured_in_the_floors_units(monkeypatch):
     assert abs(st["value"] - 0.06) < 1e-9, (
         "measured %r; the Score delta is 0.0 and the Net_AUC delta is 0.06" % st["value"])
     assert st["value"] > ar._adopt_floor("mean")
+
+
+# --- r-seed averaging --------------------------------------------------------
+
+def _fake_ar_eval(monkeypatch, rows_for):
+    """Route ab_build._heldout_eval's inner call to a fake keyed on the seed."""
+    import auto_research as ar
+    seen = []
+
+    def fake(subset, env, fn, **kw):
+        seed = os.environ.get("GTRADE_SEED")
+        seen.append(seed)
+        return rows_for(seed), []
+
+    monkeypatch.setattr(ar, "_heldout_eval", fake)
+    return seen
+
+
+def test_one_seed_is_the_untouched_path(monkeypatch):
+    """The default must not so much as set GTRADE_SEED, or every cached row
+    from before this change lands in a different namespace."""
+    monkeypatch.delenv("GTRADE_AB_SEEDS", raising=False)
+    monkeypatch.delenv("GTRADE_SEED", raising=False)
+    seen = _fake_ar_eval(monkeypatch, lambda s: [{"Asset": "A", "Score": 1.0}])
+    full, _contrib = ab_build._heldout_eval("A", {}, None)
+    assert seen == [None]                     # not set, not even to the default
+    assert full == [{"Asset": "A", "Score": 1.0}]
+
+
+def test_each_arm_is_trained_once_per_distinct_seed(monkeypatch):
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "3")
+    monkeypatch.setenv("GTRADE_SEED", "1000")
+    seen = _fake_ar_eval(monkeypatch, lambda s: [{"Asset": "A", "Score": 1.0}])
+    ab_build._heldout_eval("A", {}, None)
+    assert seen == ["1000", "2000", "3000"]
+    assert len(set(seen)) == 3                # distinct, or it is one training
+
+
+def test_the_averaged_arm_is_quieter_than_a_single_roll(monkeypatch):
+    """The whole point: the mean of r rolls must move less than one roll."""
+    monkeypatch.setenv("GTRADE_SEED", "1000")
+    noise = {"1000": +3.0, "2000": -3.0, "3000": +0.6, "4000": -0.6}
+    _fake_ar_eval(monkeypatch, lambda s: [{"Asset": "A",
+                                           "Score": 5.0 + noise[s]}])
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "1")
+    single, _ = ab_build._heldout_eval("A", {}, None)
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "4")
+    averaged, _ = ab_build._heldout_eval("A", {}, None)
+    assert single[0]["Score"] == 8.0                       # one roll, off by 3
+    assert abs(averaged[0]["Score"] - 5.0) < 0.01          # four rolls, ~exact
+
+
+def test_the_original_seed_survives_the_roll(monkeypatch):
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "2")
+    monkeypatch.setenv("GTRADE_SEED", "7")
+    _fake_ar_eval(monkeypatch, lambda s: [{"Asset": "A", "Score": 1.0}])
+    ab_build._heldout_eval("A", {}, None)
+    assert os.environ["GTRADE_SEED"] == "7"
+
+
+def test_an_asset_one_roll_dropped_is_dropped_from_the_arm(monkeypatch):
+    """Averaging it over fewer seeds would leave one row noisier than its
+    neighbours with nothing on the row to say so."""
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "2")
+    monkeypatch.setenv("GTRADE_SEED", "1000")
+    rows = {"1000": [{"Asset": "A", "Score": 1.0}, {"Asset": "B", "Score": 9.0}],
+            "2000": [{"Asset": "A", "Score": 3.0}]}
+    _fake_ar_eval(monkeypatch, lambda s: rows[s])
+    full, _ = ab_build._heldout_eval("A,B", {}, None)
+    assert full == [{"Asset": "A", "Score": 2.0}]
+
+
+def test_a_non_numeric_column_survives_the_average(monkeypatch):
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "2")
+    monkeypatch.setenv("GTRADE_SEED", "1000")
+    _fake_ar_eval(monkeypatch, lambda s: [{"Asset": "A", "Score": 2.0,
+                                           "Fold_Scores": [1, 2]}])
+    full, _ = ab_build._heldout_eval("A", {}, None)
+    assert full[0]["Fold_Scores"] == [1, 2]
+
+
+def test_a_spread_measured_at_another_r_is_not_projected_onto_this_run(
+        tmp_path, monkeypatch):
+    """sd_raw is in different units at a different r, and projected_power would
+    promise this run power it does not have."""
+    (tmp_path / "_ab_genomes_20260824-1200.json").write_text(json.dumps(
+        {"ab_seeds": 4, "results": {"c": {"sd_raw": 1.87}}}), encoding="utf-8")
+    monkeypatch.setenv("GTRADE_SEED", "1000")
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "1")
+    assert ab_build.last_spread(base=str(tmp_path)) is None
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "4")
+    assert ab_build.last_spread(base=str(tmp_path)) == 1.87
