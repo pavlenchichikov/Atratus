@@ -24,17 +24,17 @@ from core import ar_director, ar_memory, ar_rl
 # The hours are priors, replaced by the measured median once the history holds
 # three finished cycles for that arm (see measured_hours).
 RECIPES = {
-    # Neither names illum: they FOLLOW the campaign's illumination, so a
-    # campaign that illuminates on real nets is not quietly downgraded to the
-    # CatBoost-only screen by the arm that happened to be drawn. What separates
-    # them is the proposer and the budget, which is what their names say.
+    # Neither names illum or budget: they FOLLOW the campaign on both. What
+    # separates them is the proposer. The 20 they used to carry was written for
+    # the CatBoost-only screen at 43 s a genome; under a campaign illuminating
+    # on real nets the same 20 is 12x that, which made the arm named "cheap"
+    # the most expensive one in the set.
     "qd_cheap": {
         "hours": 4.0,
-        "reply": {"axes": "qd", "proposer": "evolutionary", "budget": 20}},
+        "reply": {"axes": "qd", "proposer": "evolutionary"}},
     "qd_llm": {
         "hours": 5.0,
-        "reply": {"axes": "qd", "proposer": "llm", "budget": 20,
-                  "qd_llm_p": 0.5}},
+        "reply": {"axes": "qd", "proposer": "llm", "qd_llm_p": 0.5}},
     "qd_neural": {
         # illum=full trains real nets during illumination instead of stubbing
         # them to a constant. About 12x the cost per genome, and the only arm
@@ -102,27 +102,32 @@ FIXTURE = {"GTRADE_AR_AXES": "qd", "GTRADE_LABEL_MODE": "direction",
            "GTRADE_AR_PROPOSER": "evolutionary"}
 
 
+# Everything validate() fills in for a lever a recipe does not name. Read LIVE,
+# so a cycle inherits the campaign that was actually configured.
+_INHERITED = ("GTRADE_AR_AXES", "GTRADE_LABEL_MODE", "GTRADE_LABEL_HORIZON",
+              "AR_BUDGET", "GTRADE_AR_PROPOSER", "GTRADE_AR_SCORE_BASIS",
+              "GTRADE_AR_ILLUM")
+_LOWER = ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_ILLUM")
+
+
 def _campaign():
-    """The campaign a recipe is validated against.
+    """The campaign a recipe is validated against: the live environment, with
+    FIXTURE only as the fallback for a lever nobody set.
 
-    FIXTURE plus the two levers the CAMPAIGN owns rather than the cycle.
+    A recipe names the levers that define its arm and inherits the rest. Taken
+    from FIXTURE instead of the environment, that inheritance silently replaced
+    the campaign: a run configured for a budget of 8 and a triple_barrier label
+    had every arm apply 20 and direction instead, and a campaign illuminating
+    on real nets was reset to the CatBoost-only screen on eleven arms of twelve.
 
-    The basis is frozen for the whole campaign and decides whether a recipe is
-    legal at all: illum=full pays about 12x per genome to train real nets during
-    illumination, and on the raw Score basis nothing can read them.
-
-    The illumination is derived from that basis when the campaign starts
-    (run_gtrade.bat [0a]), and it has to be read live for the same reason.
-    validate() writes GTRADE_AR_ILLUM on every reply so a stale value cannot
-    leak, so a fixture that does not name it silently reset a campaign
-    illuminating on real nets back to the CatBoost-only screen on every arm but
-    one - which is what happened for the whole 2026-08-22 campaign.
+    FIXTURE still backs _check_recipes, which runs at import with no
+    environment set at all and must pass there.
     """
     camp = dict(FIXTURE)
-    for env_key in ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_ILLUM"):
-        live = (os.getenv(env_key) or "").strip().lower()
+    for key in _INHERITED:
+        live = (os.getenv(key) or "").strip()
         if live:
-            camp[env_key] = live
+            camp[key] = live.lower() if key in _LOWER else live
     return camp
 
 

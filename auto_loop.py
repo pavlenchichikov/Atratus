@@ -118,10 +118,14 @@ CAMPAIGN = {
     # 27% faster, both runs returning all four rows. Each process is 43% SLOWER
     # than it was alone; the gain comes purely from overlap, which is what a
     # host-bound workload looks like.
-    # The cost is headroom: 3956 of 4096 MiB leaves 140 MiB. If a unit ever dies
-    # out of memory, the retry drops to one process (SAFE_LOAD) and the honest
-    # fix is to lower GTRADE_TF_POOL_PCT here, not to raise it.
-    "GTRADE_AR_TRAIN_JOBS": "2",
+    # The cost is headroom: 3956 of 4096 MiB leaves 140 MiB, and at that margin
+    # the failure is not an exception, it is a stall. Measured 2026-08-24 on the
+    # illumination unit: one process finished the four tier assets in 1039 and
+    # 1299 s across two seeds; two processes did not finish a SINGLE asset in
+    # 15000 s, with no OOM line, the GPU pinned at 100 percent utilisation and
+    # 3 percent memory traffic. So the default is one, and the honest way back
+    # to two is to lower GTRADE_TF_POOL_PCT, not to raise this.
+    "GTRADE_AR_TRAIN_JOBS": "1",
 }
 
 # The load half of CAMPAIGN: what a phase runs the box at, as opposed to what it

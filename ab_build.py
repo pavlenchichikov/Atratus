@@ -499,14 +499,18 @@ def seed_roll():
     holdout needed to resolve +0.5 drops from 347 assets to about 87, which the
     208-asset universe can actually supply.
 
-    It also costs r times the wall clock of a run already measured in tens of
-    hours, so the default is 1 and nothing changes until a run asks for more.
+    Four by default, because one cannot decide anything here. Measured
+    2026-08-24 with ab_noise on the tier unit: reseeding ALONE, same config and
+    same data, moves the objective by 1.917 against an adoption floor of 0.5.
+    Over the 40-asset gate at the observed per-asset spread of 3.03, the mean
+    carries a noise of 0.48 at r=1, which is the floor itself, and 0.24 at r=4.
+    Set GTRADE_AB_SEEDS=1 to opt out and pay one training instead of four.
     """
     from core.net_hygiene import seed_base
     try:
-        r = int(os.getenv("GTRADE_AB_SEEDS") or 1)
+        r = int(os.getenv("GTRADE_AB_SEEDS") or 4)
     except ValueError:
-        r = 1
+        r = 4
     return [seed_base() + i * SEED_STRIDE for i in range(max(1, r))]
 
 

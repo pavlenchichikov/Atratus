@@ -329,14 +329,22 @@ def _fake_ar_eval(monkeypatch, rows_for):
 
 
 def test_one_seed_is_the_untouched_path(monkeypatch):
-    """The default must not so much as set GTRADE_SEED, or every cached row
-    from before this change lands in a different namespace."""
-    monkeypatch.delenv("GTRADE_AB_SEEDS", raising=False)
+    """Opting out must not so much as set GTRADE_SEED, or every row cached
+    before r-seed averaging existed lands in a different namespace."""
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "1")
     monkeypatch.delenv("GTRADE_SEED", raising=False)
     seen = _fake_ar_eval(monkeypatch, lambda s: [{"Asset": "A", "Score": 1.0}])
     full, _contrib = ab_build._heldout_eval("A", {}, None)
     assert seen == [None]                     # not set, not even to the default
     assert full == [{"Asset": "A", "Score": 1.0}]
+
+
+def test_averaging_is_the_default_because_one_seed_cannot_decide(monkeypatch):
+    """Reseeding alone moves the objective by 1.917 against an adoption floor
+    of 0.5, so a single training is not a measurement."""
+    monkeypatch.delenv("GTRADE_AB_SEEDS", raising=False)
+    monkeypatch.setenv("GTRADE_SEED", "1000")
+    assert ab_build.seed_roll() == [1000, 2000, 3000, 4000]
 
 
 def test_each_arm_is_trained_once_per_distinct_seed(monkeypatch):

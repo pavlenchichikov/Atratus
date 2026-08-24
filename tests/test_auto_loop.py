@@ -471,11 +471,14 @@ def test_one_job_keeps_the_sequential_path_byte_identical(monkeypatch):
 
 
 def test_the_safe_retry_also_drops_back_to_one_training_process():
-    """Two processes peak at 3956 MiB of a 4096 MiB card, so running out of
-    memory is now the likeliest way a phase dies. Retrying at the same width
-    would just fail again."""
-    assert auto_loop.CAMPAIGN["GTRADE_AR_TRAIN_JOBS"] == "2"
-    assert auto_loop.SAFE_LOAD["GTRADE_AR_TRAIN_JOBS"] == "1"
+    """Two processes peak at 3956 MiB of a 4096 MiB card. Measured 2026-08-24,
+    that margin does not fail cleanly: two processes did not finish a single
+    asset in 15000 s where one finished four in 1039. So one is the campaign
+    default now, and the retry can only ever narrow, never widen."""
+    campaign = int(auto_loop.CAMPAIGN["GTRADE_AR_TRAIN_JOBS"])
+    safe = int(auto_loop.SAFE_LOAD["GTRADE_AR_TRAIN_JOBS"])
+    assert campaign == 1
+    assert safe <= campaign
 
 
 def test_the_chunk_cap_still_splits_a_small_unit_across_the_jobs():
@@ -648,7 +651,10 @@ def test_the_projection_refuses_to_guess_without_a_measured_spread(tmp_path):
     assert ab_build.projected_power(14, 0.5, str(tmp_path)) == ""
 
 
-def test_the_projection_names_a_holdout_that_cannot_answer(tmp_path):
+def test_the_projection_names_a_holdout_that_cannot_answer(tmp_path, monkeypatch):
+    # The spread was recorded by a single-training run, so the projection may
+    # only be read back by one. last_spread refuses to mix the two.
+    monkeypatch.setenv("GTRADE_AB_SEEDS", "1")
     (tmp_path / "_ab_genomes_20260821-1200.json").write_text(json.dumps(
         {"results": {"c": {"sd_raw": 3.74}}}), encoding="utf-8")
     assert ab_build.last_spread(str(tmp_path)) == 3.74
