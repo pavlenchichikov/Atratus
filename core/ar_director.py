@@ -397,7 +397,12 @@ def validate(obj, campaign):
                         "search, so axes, proposer and the qd levers do nothing")
     if mode != "regate" and "regate_k" in obj:
         problems.append("regate_k only applies to mode=regate")
-    if illum == "full" and "qd" not in names:
+    # Both illum rules apply to an illum the director ASKED for, not to one it
+    # inherited. The campaign's own value is written into every cycle so it
+    # cannot go stale, and refusing a non-qd cycle for carrying it would refuse
+    # most of the recipe set on a campaign that illuminates on real nets.
+    asked_illum = "illum" in obj
+    if illum == "full" and "qd" not in names and asked_illum:
         problems.append("illum only shapes the qd archive; this cycle runs %s"
                         % (",".join(names) or "nothing"))
     # illum=full costs about 12x per genome to train real nets during
@@ -407,8 +412,8 @@ def validate(obj, campaign):
     # about it and then does it anyway; a lever that lands on nothing is refused
     # here like every other one. A campaign that names no basis is left alone,
     # so a caller that does not carry one is not second-guessed.
-    if (illum == "full" and campaign.get("GTRADE_AR_SCORE_BASIS")
-            and campaign["GTRADE_AR_SCORE_BASIS"] == "raw"):
+    if (illum == "full" and asked_illum
+            and campaign.get("GTRADE_AR_SCORE_BASIS") == "raw"):
         problems.append("illum=full trains real nets during illumination, but "
                         "the raw Score basis cannot resolve them (retraining "
                         "noise 0.45-1.52 Score); search on net_gain, net_auc or "

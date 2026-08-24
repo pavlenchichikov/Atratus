@@ -2145,10 +2145,27 @@ def test_neural_floor_is_off_on_the_net_auc_basis(monkeypatch):
     monkeypatch.delenv("GTRADE_AR_NEURAL_FLOOR", raising=False)
     monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
     assert ar.adopt_ok(True, 5.0, "mean", -2.38) is False      # vetoed, as designed
-    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
-    # same noisy Score-scale neural_lift must NOT veto here: the basis already
-    # measures the nets, and neural_lift carries the instability we escaped
-    assert ar.adopt_ok(True, 0.012, "mean", -2.38) is True
+    for basis in ("net_auc", "net_gain"):
+        monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", basis)
+        # same noisy Score-scale neural_lift must NOT veto here: the basis
+        # already measures the nets, and neural_lift carries the instability we
+        # escaped
+        assert ar.adopt_ok(True, 0.012, "mean", -2.38) is True, basis
+
+
+def test_the_neural_floor_stays_armed_on_ens_auc(monkeypatch):
+    """ens_auc reads like a net basis and is not one: over 160 champions it
+    tracks CB_AUC at 0.869 and the nets at 0.680, so a genome can raise it by
+    starving the sequence members. Disabled here, an ens_auc campaign flagged
+    17 genomes and every one of them carried a negative neural_lift."""
+    monkeypatch.delenv("GTRADE_AR_NEURAL_FLOOR", raising=False)
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_auc")
+    assert ar.neural_floor() == -ar.ADOPT_MEAN_SCORE_DELTA
+    assert ar.adopt_ok(True, 0.012, "mean", -2.38) is False
+    # A candidate that leaves the nets alone still passes, so the clause vetoes
+    # the trade-off and not the basis.
+    assert ar.adopt_ok(True, 0.012, "mean", -0.1) is True
+    assert ar.adopt_ok(True, 0.012, "mean", None) is True     # unmeasured never blocks
 
 
 def test_qd_scheduler_does_not_offer_the_nets_arm(monkeypatch):

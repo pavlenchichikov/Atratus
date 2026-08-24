@@ -261,11 +261,18 @@ def neural_floor():
     computed with the "mean" reduction whatever GTRADE_AR_OBJECTIVE is, so the
     dimensionless 'sharpe' floor would be comparing two different units.
 
-    Switched OFF entirely on the net_auc basis. There the objective already IS
-    the neural read-out, so the clause would be redundant - and worse, harmful:
+    Switched OFF on net_auc and net_gain. There the objective already IS the
+    neural read-out, so the clause would be redundant - and worse, harmful:
     neural_lift is a Score difference and carries the Score's instability, so it
-    would veto good candidates on noise the basis was chosen to escape."""
-    if _score_basis() in ("net_auc", "net_gain", "ens_auc"):
+    would veto good candidates on noise the basis was chosen to escape.
+
+    NOT switched off on ens_auc, which reads like a net basis and is not one.
+    Measured over 160 champions, Ens_AUC tracks CB_AUC at rho 0.869 and the nets
+    at 0.680: the ensemble is mostly CatBoost, so a genome can raise it while
+    starving the sequence members - exactly what this clause exists to catch.
+    With it disabled there, every one of the 17 genomes an ens_auc campaign
+    flagged carried a NEGATIVE neural_lift, down to -2.38."""
+    if _score_basis() in ("net_auc", "net_gain"):
         return float("-inf")
     try:
         return float(os.getenv("GTRADE_AR_NEURAL_FLOOR")

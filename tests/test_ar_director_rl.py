@@ -320,3 +320,24 @@ def test_the_import_time_recipe_check_ignores_the_live_basis(monkeypatch):
     """It runs at import, so a raw campaign must not make the module unloadable."""
     monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
     rl._check_recipes()                       # raises if it read the live basis
+
+
+def test_every_arm_keeps_the_campaigns_illumination(monkeypatch):
+    """The 2026-08-22 bug: the campaign started on full illumination and every
+    arm but one wrote cb back over it, so the search only ever illuminated on
+    the CatBoost-only screen."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_gain")
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "full")
+    assert sorted(rl.legal_arms()) == sorted(rl.ARMS)
+    for arm in rl.ARMS:
+        assert rl.settings_of(arm)["GTRADE_AR_ILLUM"] == "full", arm
+
+
+def test_a_cheap_campaign_stays_cheap(monkeypatch):
+    """Positive control: the inheritance carries whatever the campaign chose,
+    it does not force full on everything."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    for arm in rl.legal_arms():
+        assert rl.settings_of(arm)["GTRADE_AR_ILLUM"] == "cb", arm
+    assert "qd_neural" not in rl.legal_arms()

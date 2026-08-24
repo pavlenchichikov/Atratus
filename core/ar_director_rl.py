@@ -24,14 +24,17 @@ from core import ar_director, ar_memory, ar_rl
 # The hours are priors, replaced by the measured median once the history holds
 # three finished cycles for that arm (see measured_hours).
 RECIPES = {
+    # Neither names illum: they FOLLOW the campaign's illumination, so a
+    # campaign that illuminates on real nets is not quietly downgraded to the
+    # CatBoost-only screen by the arm that happened to be drawn. What separates
+    # them is the proposer and the budget, which is what their names say.
     "qd_cheap": {
         "hours": 4.0,
-        "reply": {"axes": "qd", "proposer": "evolutionary", "budget": 20,
-                  "illum": "cb"}},
+        "reply": {"axes": "qd", "proposer": "evolutionary", "budget": 20}},
     "qd_llm": {
         "hours": 5.0,
         "reply": {"axes": "qd", "proposer": "llm", "budget": 20,
-                  "illum": "cb", "qd_llm_p": 0.5}},
+                  "qd_llm_p": 0.5}},
     "qd_neural": {
         # illum=full trains real nets during illumination instead of stubbing
         # them to a constant. About 12x the cost per genome, and the only arm
@@ -102,15 +105,25 @@ FIXTURE = {"GTRADE_AR_AXES": "qd", "GTRADE_LABEL_MODE": "direction",
 def _campaign():
     """The campaign a recipe is validated against.
 
-    FIXTURE plus the LIVE score basis. The basis is frozen for the whole
-    campaign and it decides whether a recipe is legal at all: illum=full pays
-    about 12x per genome to train real nets during illumination, and on the raw
-    Score basis nothing can read them, so validate refuses it there. Reading it
-    live is what lets that refusal reach the RL director, which otherwise
-    validates against a fixture that names no basis.
+    FIXTURE plus the two levers the CAMPAIGN owns rather than the cycle.
+
+    The basis is frozen for the whole campaign and decides whether a recipe is
+    legal at all: illum=full pays about 12x per genome to train real nets during
+    illumination, and on the raw Score basis nothing can read them.
+
+    The illumination is derived from that basis when the campaign starts
+    (run_gtrade.bat [0a]), and it has to be read live for the same reason.
+    validate() writes GTRADE_AR_ILLUM on every reply so a stale value cannot
+    leak, so a fixture that does not name it silently reset a campaign
+    illuminating on real nets back to the CatBoost-only screen on every arm but
+    one - which is what happened for the whole 2026-08-22 campaign.
     """
-    basis = (os.getenv("GTRADE_AR_SCORE_BASIS") or "").strip().lower()
-    return dict(FIXTURE, GTRADE_AR_SCORE_BASIS=basis) if basis else dict(FIXTURE)
+    camp = dict(FIXTURE)
+    for env_key in ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_ILLUM"):
+        live = (os.getenv(env_key) or "").strip().lower()
+        if live:
+            camp[env_key] = live
+    return camp
 
 
 def _check_recipes():

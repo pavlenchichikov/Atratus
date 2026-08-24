@@ -295,3 +295,24 @@ def test_a_campaign_that_names_no_basis_is_not_second_guessed():
     bare = {k: v for k, v in CAMPAIGN.items() if k != "GTRADE_AR_SCORE_BASIS"}
     _s, problems = ar_director.validate(_reply(axes="qd", illum="full"), bare)
     assert problems == []
+
+
+def test_an_inherited_illumination_is_carried_not_refused():
+    """The campaign owns the illumination; a cycle that never mentions it must
+    carry it through. Refusing a non-qd cycle for inheriting it would refuse
+    most of the recipe set on a campaign that illuminates on real nets."""
+    full = dict(CAMPAIGN, GTRADE_AR_ILLUM="full")
+    settings, problems = ar_director.validate(
+        {"axes": "hyper,nets", "reason": "hyper is unexplored"}, full)
+    assert problems == []
+    assert settings["GTRADE_AR_ILLUM"] == "full"
+    # Asking for it on a non-qd cycle is still refused: that is the director
+    # setting a knob nothing will read, which is a different mistake.
+    _s, problems = ar_director.validate(_reply(axes="nets", illum="full"), full)
+    assert any("qd archive" in p for p in problems)
+
+
+def test_an_inherited_illumination_does_not_trip_the_basis_rule():
+    raw = dict(CAMPAIGN, GTRADE_AR_SCORE_BASIS="raw", GTRADE_AR_ILLUM="cb")
+    settings, problems = ar_director.validate({"axes": "qd", "reason": "x"}, raw)
+    assert problems == [] and settings["GTRADE_AR_ILLUM"] == "cb"
