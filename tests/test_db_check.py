@@ -121,3 +121,25 @@ class TestSparseHeads:
         self._mk(cur, "twoblock", old_dense + gap_then_recent)
         # one big hole between two DENSE blocks - nothing is sparse
         assert dbc.fix_sparse_heads(cur, ["twoblock"]) == 0
+
+
+def test_no_asset_key_produces_an_unusable_table_name():
+    """The table name is the key lowercased, and this project interpolates it
+    unquoted in dozens of queries. `ALL` for Allstate made every one of them a
+    syntax error: get_last_date returned None, which reads as "no table", so
+    the full history was refetched and appended on every run until the table
+    held three copies of itself."""
+    import sqlite3
+
+    from config import FULL_ASSET_MAP
+
+    con = sqlite3.connect(":memory:")
+    bad = []
+    for key in FULL_ASSET_MAP:
+        table = key.lower().replace("^", "").replace(".", "").replace("-", "")
+        try:
+            con.execute("CREATE TABLE %s (d TEXT)" % table)
+        except sqlite3.Error:
+            bad.append(key)
+    con.close()
+    assert bad == [], "these keys cannot be table names unquoted: %s" % bad

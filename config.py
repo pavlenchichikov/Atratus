@@ -268,7 +268,11 @@ FULL_ASSET_MAP = {
 
     # US STOCKS (extra)
     'AA': 'AA', 'AAL': 'AAL', 'ADM': 'ADM', 'AEE': 'AEE', 'AEP': 'AEP',
-    'AFL': 'AFL', 'AFRM': 'AFRM', 'AIG': 'AIG', 'ALL': 'ALL', 'ALLY': 'ALLY',
+    # ALLSTATE, not ALL: the table name is the key lowercased, `all` is a SQL
+    # keyword, and this project interpolates table names unquoted in dozens of
+    # queries. A test refuses any key that cannot be a table name.
+    'AFL': 'AFL', 'AFRM': 'AFRM', 'AIG': 'AIG', 'ALLSTATE': 'ALL',
+    'ALLY': 'ALLY',
     'AMT': 'AMT', 'AON': 'AON', 'APD': 'APD', 'APH': 'APH', 'AVB': 'AVB',
     'AZO': 'AZO', 'BE': 'BE', 'BEN': 'BEN', 'BG': 'BG', 'BIIB': 'BIIB',
     'BRK-B': 'BRK-B', 'BSX': 'BSX', 'CB': 'CB', 'CCI': 'CCI', 'CCL': 'CCL',
@@ -485,7 +489,7 @@ ASSET_TYPES = {
         "HOGS", "KCWHEAT", "LUMBER", "MICROGOLD", "OATS", "ORANGEJUICE",
         "RICE", "SOYMEAL", "SOYOIL"],
     "US EXTRA": [
-        "AA", "AAL", "ADM", "AEE", "AEP", "AFL", "AFRM", "AIG", "ALL",
+        "AA", "AAL", "ADM", "AEE", "AEP", "AFL", "AFRM", "AIG", "ALLSTATE",
         "ALLY", "AMT", "AON", "APD", "APH", "AVB", "AZO", "BE", "BEN", "BG",
         "BIIB", "BRK-B", "BSX", "CB", "CCI", "CCL", "CF", "CFG", "CHPT",
         "CI", "CLF", "CME", "CMI", "CMS", "COF", "CSX", "CVS", "D", "DAL",

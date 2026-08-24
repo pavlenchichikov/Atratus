@@ -71,7 +71,11 @@ def get_last_date(table_name):
             if not check.fetchone(): return None
 
             # Get the most recent date
-            res = conn.execute(text(f"SELECT MAX(Date) FROM {table_name}"))
+            # Quoted: a ticker whose table name is a SQL keyword, ALL for
+            # Allstate, made this a syntax error. The except below then
+            # returned None, which reads as "no table", so the whole history
+            # was refetched and appended on every run.
+            res = conn.execute(text(f'SELECT MAX(Date) FROM "{table_name}"'))
             last_date_str = res.fetchone()[0]
             if last_date_str:
                 return pd.to_datetime(last_date_str)
@@ -87,7 +91,7 @@ def _drop_existing_dates(df, table_name):
             check = conn.execute(text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'"))
             if not check.fetchone():
                 return df  # table doesn't exist - everything is new
-            existing = pd.read_sql(f"SELECT DISTINCT Date FROM {table_name}", conn)
+            existing = pd.read_sql(f'SELECT DISTINCT Date FROM "{table_name}"', conn)
             if existing.empty:
                 return df
             existing_set = set(existing['Date'].astype(str).str[:10])
