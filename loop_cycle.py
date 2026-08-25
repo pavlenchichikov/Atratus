@@ -17,6 +17,7 @@ sys.path.insert(0, BASE)
 
 from config import FULL_ASSET_MAP
 from core import drift, loop_state, runlock
+from core.analyst import store
 
 STATE_PATH = os.path.join(BASE, "loop_state.json")
 LOCK_PATH = os.path.join(BASE, "_loop.lock")
@@ -24,11 +25,17 @@ REGISTRY_PATH = os.path.join(BASE, "models", "champion_registry.json")
 QUALITY_PATH = os.path.join(BASE, "models", "quality_report.json")
 
 
-def run_step(name, fn):
-    """Run one pipeline step, capturing any failure so the cycle continues."""
+def run_step(name, fn, fmt=None):
+    """Run one pipeline step, capturing any failure so the cycle continues.
+
+    `fmt`, when given, turns fn()'s return value into the "ok" message - so a
+    step that silently did nothing (an empty backfill, filling 0 of 500
+    pending outcomes) reads differently in the report from one that did the
+    work, instead of both looking like the same blank "ok".
+    """
     try:
-        fn()
-        return {"step": name, "status": "ok", "msg": ""}
+        result = fn()
+        return {"step": name, "status": "ok", "msg": fmt(result) if fmt else ""}
     except Exception as exc:
         return {"step": name, "status": "failed", "msg": str(exc)[:200]}
 
@@ -105,6 +112,8 @@ def main():
         steps.append(run_step("data_engine", lambda: _run_script("data_engine.py")))
         steps.append(run_step("predict", lambda: _run_script("predict.py")))
         steps.append(run_step("reconcile", lambda: _run_script("performance_tracker.py")))
+        steps.append(run_step("analyst_backfill", store.backfill_outcomes,
+                              fmt=lambda n: f"filled {n} outcomes"))
 
         assets = []
         drift_step = run_step("drift", lambda: assets.extend(scan_assets(_build_rows())))

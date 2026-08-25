@@ -64,9 +64,21 @@
     <span class="stat-sub">ATR(14) {{ "%.4g"|format(levels.atr) }}</span>
   </div>
   <div class="stat fade">
-    <span class="stat-label">Take-profit</span>
+    <span class="stat-label">Expected payoff (1 bar)</span>
+    {% if payoff.long %}
+    <span class="stat-value">
+      <b class="{{ 't-buy' if payoff.long.pct >= 0 else 't-sell' }}">{{ "%+.2f"|format(payoff.long.pct * 100) }}%</b>
+      <span class="stat-sep">/</span>
+      <b class="{{ 't-buy' if payoff.short.pct >= 0 else 't-sell' }}">{{ "%+.2f"|format(payoff.short.pct * 100) }}%</b>
+    </span>
+    <span class="stat-sub">
+      long / short, 80% band {{ "%+.1f"|format(payoff.long.lo * 100) }}% to {{ "%+.1f"|format(payoff.long.hi * 100) }}%
+      &middot; {{ payoff.long.source }} &middot; {{ payoff.long.evidence }}
+    </span>
+    {% else %}
     <span class="stat-value">-</span>
-    <span class="stat-sub">none on purpose: the model predicts direction, not a payoff</span>
+    <span class="stat-sub">no payoff table fitted yet</span>
+    {% endif %}
   </div>
 </div>
 <p class="dim">

@@ -28,6 +28,9 @@ MODEL_DIR = os.path.join(BASE_DIR, "models")
 REGISTRY_PATH = os.path.join(MODEL_DIR, "champion_registry.json")
 QUALITY_PATH = os.path.join(MODEL_DIR, "quality_report.json")
 THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
+# train_payoff.py writes to the repo root beside levels_policy.json, not to
+# MODEL_DIR like the two paths above.
+PAYOFF_STATS_PATH = os.path.join(BASE_DIR, "payoff_stats.json")
 
 app = FastAPI(title="Atratus")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -64,6 +67,56 @@ def _load_json(path, default):
         except (OSError, json.JSONDecodeError):
             return default
     return default
+
+
+_MISSING = object()
+
+
+def _payoff_evidence(table, asset, asset_class, side):
+    """Text naming what backs one side's number, for the card's sub-line.
+
+    calibrate.forecast is always called here with cells={} (there is no
+    analyst_log judgment history to shrink toward yet on this page), so its
+    own "n" is always 0 and cannot tell the reader anything. The payoff
+    table's own cells can: the asset's own cell for this side when the table
+    has one, plus the class cell either way - the design's "the panel states
+    its own sample size so the reader can discount it" promise, kept.
+    """
+    own = table.get("asset", {}).get(asset, {}).get(side)
+    cls = table.get("class", {}).get(asset_class, {}).get(side)
+    cls_n = cls["n"] if cls else 0
+    if own:
+        return f"{own['n']} on this asset + {cls_n} on class {asset_class}"
+    return f"{cls_n} on class {asset_class}"
+
+
+def _payoff_context(name, atr, close, table=_MISSING, analyst=None):
+    """Both sides of the expected payoff for one asset, plus the analyst's read.
+
+    `table` defaults to a sentinel rather than None so a caller can pass
+    table=None to mean "no table" explicitly, without that also being the
+    default that reads the real (gitignored) payoff_stats.json from disk. A
+    missing table degrades the panel to None rather than raising: an install
+    that never ran train_payoff.py must still serve the asset page.
+    """
+    from core.analyst import calibrate
+
+    if table is _MISSING:
+        table = _load_json(PAYOFF_STATS_PATH, None)
+    if not table:
+        return {"long": None, "short": None, "analyst": analyst,
+                "coverage": None}
+
+    cls = radar_category(name)
+    sides = {}
+    for label, direction, side in (("long", "up", "BUY"), ("short", "down", "SELL")):
+        fc = calibrate.forecast(
+            {"direction": direction, "conviction": 3, "vol_regime": "normal"},
+            {}, name, cls, atr, close, table)
+        fc["evidence"] = _payoff_evidence(table, name, cls, side)
+        sides[label] = fc
+    return {"long": sides["long"], "short": sides["short"],
+            "analyst": analyst, "coverage": None}
 
 
 def _risk_snapshot():
@@ -499,6 +552,8 @@ def asset_page(request: Request, name: str):
         "quality": quality,
         "markers_json": json.dumps(markers),
         "guru": dashboard.guru_for_asset(name),
+        "payoff": _payoff_context(name, asset_levels.get("atr"),
+                                  asset_levels.get("close")),
     })
 
 

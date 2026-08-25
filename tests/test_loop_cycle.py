@@ -17,6 +17,19 @@ def test_run_step_isolates_failure():
     assert "data feed down" in r["msg"]
 
 
+def test_run_step_fmt_reports_a_return_value_that_did_nothing():
+    # A step that "ran" but filled nothing must not read the same as one
+    # that filled 500 - the whole point of Finding 5b.
+    r = run_step("analyst_backfill", lambda: 0, fmt=lambda n: f"filled {n} outcomes")
+    assert r == {"step": "analyst_backfill", "status": "ok",
+                "msg": "filled 0 outcomes"}
+
+
+def test_run_step_fmt_reports_a_nonzero_return_value():
+    r = run_step("analyst_backfill", lambda: 37, fmt=lambda n: f"filled {n} outcomes")
+    assert r["msg"] == "filled 37 outcomes"
+
+
 def test_scan_assets_flags_proposed_and_ok():
     rows = [
         {"asset": "AAPL", "acc": 0.40, "n": 20, "baseline_acc": 0.62,

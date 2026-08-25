@@ -1,5 +1,6 @@
 """Web UI tests via TestClient (no TensorFlow, no real DB)."""
 
+import json
 import sqlite3
 
 import pytest
@@ -7,6 +8,18 @@ from fastapi.testclient import TestClient
 
 import webapp
 from core import track_record
+
+
+@pytest.fixture(autouse=True)
+def _no_real_payoff_stats(tmp_path, monkeypatch):
+    """payoff_stats.json is gitignored: it exists on some machines and not
+    others (never in CI), and webapp._payoff_context reads it straight off
+    disk whenever a caller doesn't pass table= explicitly. Point every test
+    at a path that provably does not exist so the suite's outcome cannot
+    depend on which machine it runs on. The tests that need a specific table
+    override this afterward with their own monkeypatch.setattr."""
+    monkeypatch.setattr(webapp, "PAYOFF_STATS_PATH",
+                        str(tmp_path / "no_such_payoff_stats.json"))
 
 
 @pytest.fixture
@@ -1155,3 +1168,72 @@ def test_performance_page_survives_a_broken_accuracy_panel(client, monkeypatch):
     # the broken panel names itself, rather than reading as no data
     assert "calibration" in r.text.lower()
     assert "Could not read" in r.text
+
+
+def test_asset_card_falls_back_to_no_table_message_when_stats_file_absent(client, monkeypatch, tmp_path):
+    # Same pattern as test_asset_page_shows_the_trade_levels: force the levels
+    # panel to status "ok" so the statgrid (and the payoff stat inside it)
+    # renders. PAYOFF_STATS_PATH points at a file that doesn't exist, so this
+    # exercises the {% else %} (no-table) branch specifically, and is
+    # identical on any machine regardless of whether the real (gitignored)
+    # payoff_stats.json happens to exist there.
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
+        "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
+        "stop": 96.0, "trailing": False, "status": "ok"})
+    monkeypatch.setattr(webapp, "PAYOFF_STATS_PATH",
+                        str(tmp_path / "no_such_payoff_stats.json"))
+    body = client.get("/asset/SBER").text
+    assert "Expected payoff" in body
+    assert "no payoff table fitted yet" in body
+    # The slot used to read "none on purpose". Filling it is the whole point.
+    assert "none on purpose" not in body
+
+
+def test_asset_card_renders_a_negative_long_and_positive_short_payoff_through_jinja(client, monkeypatch, tmp_path):
+    # test_a_negative_expectation_is_not_softened below proves the arithmetic
+    # in isolation, but never touches the template. This test writes the same
+    # shape of fixture table to a real file on disk (never the repo's real
+    # payoff_stats.json) and renders the actual asset page through Jinja, so a
+    # typo in the populated branch - wrong field name, a broken %+.2f filter
+    # argument, a missing payoff.short reference, or the t-buy/t-sell colour
+    # conditions swapped - would fail this test.
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
+        "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
+        "stop": 96.0, "trailing": False, "status": "ok"})
+    stats_path = tmp_path / "fixture_payoff_stats.json"
+    stats_path.write_text(json.dumps({"asset": {}, "class": {"ru": {
+        "BUY": {"n": 900, "mean": -0.5, "q10": -2.0, "q90": 1.0},
+        "SELL": {"n": 900, "mean": 0.2, "q10": -1.5, "q90": 1.6}}}}))
+    monkeypatch.setattr(webapp, "PAYOFF_STATS_PATH", str(stats_path))
+
+    body = client.get("/asset/SBER").text
+
+    # long: BUY prior mean -0.5 ATR * (atr/close 0.02) = -1.00%, in t-sell.
+    assert '<b class="t-sell">-1.00%</b>' in body
+    # short: SELL prior mean +0.2 ATR * 0.02 = +0.40%, in t-buy.
+    assert '<b class="t-buy">+0.40%</b>' in body
+    assert "80% band -4.0% to +2.0%" in body
+    assert "&middot; prior" in body
+    # No asset-level cell in the fixture table, so the evidence line falls
+    # back to the class cell's own n - the reader can tell a 900-observation
+    # number from a thin one.
+    assert "900 on class ru" in body
+    assert "none on purpose" not in body
+
+
+def test_a_negative_expectation_is_not_softened():
+    # BUY class-level mean is negative for ru in the real fitted table. A panel
+    # that rounds that to a dash, or hides it, defeats its own purpose.
+    ctx = webapp._payoff_context(
+        "SBER", atr=2.0, close=100.0,
+        table={"asset": {}, "class": {"ru": {
+            "BUY": {"n": 900, "mean": -0.5, "q10": -2.0, "q90": 1.0},
+            "SELL": {"n": 900, "mean": 0.2, "q10": -1.5, "q90": 1.6}}}})
+    assert ctx["long"]["pct"] < 0
+    assert ctx["short"]["pct"] > 0
+
+
+def test_a_missing_payoff_table_degrades_rather_than_raises():
+    ctx = webapp._payoff_context("SBER", atr=2.0, close=100.0, table=None)
+    assert ctx["long"] is None and ctx["short"] is None
