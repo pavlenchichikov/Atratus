@@ -478,9 +478,13 @@ def main():
         stage_a = tp.load_policy()
         if stage_a is not None:
             arms.append(("stage A (adopted)", stage_a))
-        stage_b = _fq.load_served_policy()
-        if stage_b is not None:
-            arms.append(("stage B (Q)", stage_b))
+        # NOT named stage_b: that is the module-level fitter at the bottom of
+        # this file, and assigning the name anywhere in main() makes it local
+        # for the WHOLE function, so `--stage b` raised UnboundLocalError on
+        # the call below without ever reaching this branch.
+        served_q = _fq.load_served_policy()
+        if served_q is not None:
+            arms.append(("stage B (Q)", served_q))
         else:
             print("[timing] no timing_fqi.cbm - Stage B is not in the table.")
         for line in replay_lines(replay(te, arms), len(te)):
