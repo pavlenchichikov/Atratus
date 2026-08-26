@@ -1311,3 +1311,16 @@ def test_analyst_run_starts_again_once_the_previous_pass_exited(client, monkeypa
     monkeypatch.setattr(webapp, "_ANALYST_PROC", _Done())
     monkeypatch.setattr(webapp.subprocess, "Popen", lambda *a, **k: _New())
     assert client.post("/api/analyst/run").json() == {"started": True, "pid": 2}
+
+
+def test_every_page_carries_the_analyst_link_in_the_nav(client):
+    # The nav is hardcoded in base.html; the /api/palette list is a separate
+    # thing. Adding a page to one and not the other is how /analyst shipped
+    # reachable by URL but invisible on every page.
+    for path in ("/", "/analyst"):
+        assert 'href="/analyst"' in client.get(path).text, path
+
+
+def test_the_command_palette_also_offers_the_analyst_page(client):
+    pages = client.get("/api/palette").json()["pages"]
+    assert ["Analyst", "/analyst"] in pages

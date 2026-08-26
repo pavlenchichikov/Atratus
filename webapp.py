@@ -26,6 +26,20 @@ from core import positions as positions_mod
 from risk_manager import RISK_CONFIG, RiskManager, save_risk_config_override
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# The web process reads the same .env every other entry point does. Without
+# this it ran with GTRADE_TIMING_POLICY and GTRADE_TIMING_STAGE unset while
+# predict.py had them set, so the served timing label and the watched-Q badge
+# could never appear on a card no matter what the database held - the page was
+# reporting the absence of a flag as the absence of a decision. load_dotenv
+# does not override a variable already in the environment, so an explicit
+# setting on the command line still wins.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(BASE_DIR, ".env"))
+except Exception:
+    pass
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 REGISTRY_PATH = os.path.join(MODEL_DIR, "champion_registry.json")
 QUALITY_PATH = os.path.join(MODEL_DIR, "quality_report.json")
