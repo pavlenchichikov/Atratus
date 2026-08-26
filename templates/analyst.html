@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Analyst | Atratus{% endblock %}
+{% block content %}
+
+<h1 class="fade">Analyst Agent</h1>
+<p class="lead fade">A second opinion on each asset, formed without ever seeing the
+  ensemble's probability or its signal. It emits a discrete judgment, never a
+  percentage; the number on the asset card comes from what that judgment cell has
+  historically been worth. Until the log reaches {{ floor }} scored judgments,
+  nothing here is evidence of anything.</p>
+
+<div class="statgrid">
+  <div class="stat fade"><span class="stat-label">Scored judgments</span>
+    <span class="stat-value mono">{{ scored }}</span>
+    <span class="stat-sub">{{ floor }} needed before the verdict means anything</span></div>
+  <div class="stat fade"><span class="stat-label">Awaiting outcome</span>
+    <span class="stat-value mono">{{ pending }}</span>
+    <span class="stat-sub">filled by the daily cycle, not by hand</span></div>
+  <div class="stat fade"><span class="stat-label">Interval coverage</span>
+    <span class="stat-value mono">{% if coverage.rate is not none %}{{ "%.0f"|format(coverage.rate * 100) }}<small>%</small>{% else %}-{% endif %}</span>
+    <span class="stat-sub">{% if coverage.rate is not none %}{{ coverage.inside }} of {{ coverage.n }}, target 80%{% else %}nothing scored yet{% endif %}</span></div>
+</div>
+
+<section class="panel fade">
+  <div class="panel-head"><h2>Run a pass</h2></div>
+  <p class="dim">One judgment per eligible asset: the watchlist plus anything
+    reporting earnings today. This spends money, one model call per asset, and it
+    skips any asset whose dossier is unchanged since it was last judged.</p>
+  {% if disabled %}
+    <p class="dim"><b>GTRADE_ANALYST=0</b> - the agent is switched off. Unset it to run.</p>
+  {% else %}
+    <button id="analyst-run" class="btn"{% if running %} disabled{% endif %}>
+      {% if running %}a pass is already running{% else %}Run now{% endif %}
+    </button>
+    <span id="analyst-msg" class="dim mono"></span>
+  {% endif %}
+</section>
+
+<section class="panel fade">
+  <div class="panel-head"><h2>Latest scored judgments</h2></div>
+  {% if recent %}
+  <div style="overflow-x:auto">
+  <table class="table">
+    <thead><tr><th>Date</th><th>Asset</th><th>Call</th><th>Conv</th><th>Regime</th>
+      <th>Forecast</th><th>Realized</th><th>Error (ATR)</th><th>In band</th></tr></thead>
+    <tbody>
+      {% for r in recent %}
+      <tr>
+        <td class="mono">{{ r.date }}</td>
+        <td class="mono">{{ r.asset }}</td>
+        <td>{{ r.direction }}</td>
+        <td class="mono">{{ r.conviction }}</td>
+        <td class="dim">{{ r.vol_regime }}</td>
+        <td class="mono">{% if r.forecast_pct is not none %}{{ "%+.2f"|format(r.forecast_pct * 100) }}%{% else %}-{% endif %}</td>
+        <td class="mono">{% if r.realized_ret is not none %}{{ "%+.2f"|format(r.realized_ret * 100) }}%{% else %}-{% endif %}</td>
+        <td class="mono">{% if r.abs_err_atr is not none %}{{ "%.2f"|format(r.abs_err_atr) }}{% else %}-{% endif %}</td>
+        <td>{% if r.inside_interval == 1 %}yes{% elif r.inside_interval == 0 %}no{% else %}-{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="dim">No scored judgments yet. Run a pass, then let the daily cycle fill
+    the outcomes; a judgment is only scorable once its horizon has elapsed.</p>
+  {% endif %}
+</section>
+
+<script>
+document.getElementById('analyst-run')?.addEventListener('click', async (e) => {
+  const btn = e.currentTarget, msg = document.getElementById('analyst-msg');
+  btn.disabled = true; msg.textContent = 'starting...';
+  try {
+    const r = await fetch('/api/analyst/run', {method: 'POST'});
+    const d = await r.json();
+    msg.textContent = d.started ? ('started, pid ' + d.pid) : ('not started: ' + d.reason);
+    if (!d.started) btn.disabled = false;
+  } catch (err) {
+    msg.textContent = 'request failed: ' + err;
+    btn.disabled = false;
+  }
+});
+</script>
+{% endblock %}

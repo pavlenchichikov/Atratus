@@ -9,6 +9,8 @@ Run:
 
 import json
 import os
+import subprocess
+import sys
 import threading
 from datetime import datetime
 
@@ -406,8 +408,10 @@ def radar(request: Request):
     signals = track_record.latest_signals()
     taleb = dashboard.taleb_index()
     soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
+    spark_series = track_record.price_series_many(
+        [s["asset"] for s in signals], days=30)
     for s in signals:
-        closes = [p["close"] for p in track_record.price_series(s["asset"], days=30)]
+        closes = [p["close"] for p in spark_series.get(s["asset"], [])]
         s["spark"] = _spark(closes)
         s["taleb"] = taleb.get(s["asset"])
         s["taleb_regime"] = dashboard.taleb_regime(s["taleb"], soft_cap, hard_cap)
@@ -687,7 +691,8 @@ def api_palette():
         ["Correlations", "/correlations"], ["Accuracy", "/performance"],
         ["News", "/news"], ["Guru", "/guru"], ["Models", "/models"],
         ["Risk", "/risk"], ["Portfolio", "/portfolio"], ["What-If", "/whatif"],
-        ["Research", "/research"], ["Experience", "/experience"],
+        ["Research", "/research"], ["Analyst", "/analyst"],
+        ["Experience", "/experience"],
     ]
     return {"pages": pages, "assets": sorted(FULL_ASSET_MAP)}
 
@@ -732,6 +737,74 @@ def research_page(request: Request):
     # No max_chars: the 6000 default is the prompt budget, not a reading limit.
     snap["wiki"] = ar_wiki.wiki_summary(None) if ar_wiki.wiki_on() else ""
     return templates.TemplateResponse(request, "research.html", snap)
+
+
+# One analyst pass at a time. A module global is the right size for the single
+# uvicorn worker run_gtrade.bat starts; several workers would each keep their
+# own and need a file lock instead.
+# ponytail: per-process guard, swap for core.runlock if webapp ever runs multi-worker
+_ANALYST_PROC = None
+
+
+def _analyst_running():
+    return _ANALYST_PROC is not None and _ANALYST_PROC.poll() is None
+
+
+@app.get("/analyst", response_class=HTMLResponse)
+def analyst_page(request: Request):
+    """What the analyst has said, and whether it is worth believing yet.
+
+    Deliberately shows the sample size next to every figure: until the log
+    reaches the decision floor, nothing here is evidence of anything.
+    """
+    from core.analyst import score as analyst_score
+    from core.analyst import store
+    try:
+        rows = store.scored_rows()
+        pending = store.pending_count()
+    except Exception:
+        rows, pending = [], 0
+    return templates.TemplateResponse(request, "analyst.html", {
+        "scored": len(rows),
+        "pending": pending,
+        "coverage": analyst_score.coverage(rows),
+        "recent": list(reversed(rows))[:15],
+        "running": _analyst_running(),
+        "floor": 500,
+        "disabled": (os.getenv("GTRADE_ANALYST") or "1").strip() == "0",
+    })
+
+
+@app.post("/api/analyst/run")
+def api_analyst_run():
+    """Start one analyst pass in the background.
+
+    Spends money: one LLM call per eligible asset. Refuses while a pass is
+    already running rather than starting a second, and refuses outright when
+    GTRADE_ANALYST=0, so the kill switch means the same thing here as on the
+    command line.
+    """
+    global _ANALYST_PROC
+    if (os.getenv("GTRADE_ANALYST") or "1").strip() == "0":
+        return {"started": False, "reason": "GTRADE_ANALYST=0 disables the agent"}
+    if _analyst_running():
+        return {"started": False, "reason": "a pass is already running",
+                "pid": _ANALYST_PROC.pid}
+    _ANALYST_PROC = subprocess.Popen(
+        [sys.executable, "analyst.py", "run"], cwd=BASE_DIR,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"started": True, "pid": _ANALYST_PROC.pid}
+
+
+@app.get("/api/analyst/status")
+def api_analyst_status():
+    from core.analyst import store
+    try:
+        return {"running": _analyst_running(),
+                "scored": len(store.scored_rows()),
+                "pending": store.pending_count()}
+    except Exception as exc:
+        return {"running": _analyst_running(), "error": str(exc)[:140]}
 
 
 @app.get("/api/research")

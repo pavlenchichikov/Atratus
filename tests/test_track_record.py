@@ -290,3 +290,70 @@ def test_latest_gated_includes_timing(tmp_path):
     g = track_record.latest_gated("BTC", db_path=db)
     assert g["timing_action"] == "STAY_OUT"
     assert g["timing_reason"] == "confirm"
+
+
+def _price_db(tmp_path, assets=("BTC", "SBER", "GOLD")):
+    """One bars table per asset, the shape price_series reads."""
+    path = str(tmp_path / "prices.db")
+    con = sqlite3.connect(path)
+    for a in assets:
+        con.execute(f'CREATE TABLE {a.lower()} (Date TEXT, Close REAL)')
+        con.executemany(
+            f'INSERT INTO {a.lower()} VALUES (?,?)',
+            [(f"2026-01-{i + 1:02d}", 100.0 + i) for i in range(5)])
+    con.commit()
+    con.close()
+    return path
+
+
+def test_price_series_many_matches_the_single_asset_reader(tmp_path):
+    db = _price_db(tmp_path)
+    many = track_record.price_series_many(["BTC", "SBER"], days=3, db_path=db)
+    for asset in ("BTC", "SBER"):
+        assert many[asset] == track_record.price_series(asset, days=3, db_path=db)
+    assert many["BTC"][-1]["close"] == 104.0
+
+
+def test_price_series_many_opens_exactly_one_connection(monkeypatch, tmp_path):
+    # The point of the batch reader. The radar draws 822 sparklines, and one
+    # connection per asset cost eleven seconds against 0.15s of actual query
+    # time. A future edit that reverts to per-asset connections passes every
+    # correctness test and silently puts those eleven seconds back, so the
+    # connection count is what has to be pinned, not the wall clock.
+    db = _price_db(tmp_path)
+    opened = []
+    real = track_record._connect
+
+    def counting(db_path=None):
+        opened.append(db_path)
+        return real(db_path)
+
+    monkeypatch.setattr(track_record, "_connect", counting)
+    track_record.price_series_many(["BTC", "SBER", "GOLD"], days=3, db_path=db)
+    assert len(opened) == 1
+
+
+def test_an_asset_with_no_table_maps_to_an_empty_list(tmp_path):
+    db = _price_db(tmp_path)
+    many = track_record.price_series_many(["BTC", "NOSUCH"], days=3, db_path=db)
+    assert many["NOSUCH"] == []
+    assert many["BTC"]
+
+
+def test_price_series_closes_the_connection_it_opened(monkeypatch, tmp_path):
+    # sqlite3's context manager commits, it does not close: the previous form
+    # leaked one connection per call, 822 of them per radar render.
+    db = _price_db(tmp_path)
+    made = []
+    real = track_record._connect
+
+    def tracking(db_path=None):
+        con = real(db_path)
+        made.append(con)
+        return con
+
+    monkeypatch.setattr(track_record, "_connect", tracking)
+    track_record.price_series("BTC", days=3, db_path=db)
+    assert len(made) == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        made[0].execute("SELECT 1")

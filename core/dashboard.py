@@ -449,10 +449,11 @@ def taleb_index():
     except Exception:
         return {}
     out = {}
+    series = track_record.price_series_many(list(FULL_ASSET_MAP), days=120)
     for asset in FULL_ASSET_MAP:
         try:
-            closes = [r["close"] for r in track_record.price_series(asset, days=120)]
-            out[asset] = features.latest_taleb_risk(closes)
+            out[asset] = features.latest_taleb_risk(
+                [r["close"] for r in series.get(asset, [])])
         except Exception:
             out[asset] = None
     return out
@@ -487,9 +488,11 @@ def top_movers(n=24):
     except Exception:
         return []
     out = []
-    for s in track_record.latest_signals():
+    sigs = track_record.latest_signals()
+    series = track_record.price_series_many([s["asset"] for s in sigs], days=4)
+    for s in sigs:
         try:
-            ps = track_record.price_series(s["asset"], days=4)
+            ps = series.get(s["asset"], [])
             if len(ps) >= 2 and ps[-2]["close"]:
                 chg = (ps[-1]["close"] - ps[-2]["close"]) / ps[-2]["close"]
                 out.append({"asset": s["asset"], "signal": s.get("signal", "WAIT"),

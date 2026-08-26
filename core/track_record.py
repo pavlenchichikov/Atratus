@@ -182,19 +182,46 @@ def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
         ]
 
 
-def price_series(asset: str, days: int = 60, db_path=None) -> list:
-    """An asset's last closes ascending by date: [{'date','close'}, ...]."""
+def price_series(asset: str, days: int = 60, db_path=None, con=None) -> list:
+    """An asset's last closes ascending by date: [{'date','close'}, ...].
+
+    `con` lets a caller looping over many assets reuse one connection. That is
+    not a micro-optimisation: the radar draws 822 sparklines, and measured on
+    the live database the queries cost 0.15s while opening a connection per
+    asset cost the other 11. Callers that pass nothing behave exactly as
+    before, with one repair - the connection is now closed. sqlite3's context
+    manager commits a transaction, it does not close, so the old `with` form
+    leaked a connection per call until the collector caught up.
+    """
     table = _table_name(asset)
-    with _connect(db_path) as con:
-        try:
-            rows = con.execute(
-                f'SELECT Date, Close FROM "{table}" ORDER BY Date DESC LIMIT ?',
-                (days,),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            return []
+    own = con is None
+    if own:
+        con = _connect(db_path)
+    try:
+        rows = con.execute(
+            f'SELECT Date, Close FROM "{table}" ORDER BY Date DESC LIMIT ?',
+            (days,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        if own:
+            con.close()
     rows.reverse()
     return [{"date": str(d)[:10], "close": c} for d, c in rows if c is not None]
+
+
+def price_series_many(assets, days: int = 60, db_path=None) -> dict:
+    """{asset: closes} for many assets over ONE connection.
+
+    Every per-asset price loop in the web layer goes through here. An asset
+    with no table maps to an empty list, exactly as price_series returns one.
+    """
+    con = _connect(db_path)
+    try:
+        return {a: price_series(a, days, con=con) for a in assets}
+    finally:
+        con.close()
 
 
 def ohlc_series(asset: str, days: int = 120, db_path=None) -> list:

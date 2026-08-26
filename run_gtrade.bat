@@ -63,6 +63,7 @@ echo    [AG] Adopt a genome   [AS] What is adopted   [AR] Revert adoption
 echo    [ABC] Configure a genome A/B     [ABR] Run the configured A/B
 echo  RESEARCH / MAINTENANCE
 echo    [RS] Auto-research agent (own menu)   [LC] Daily loop cycle
+echo    [AN] Analyst agent (payoff forecasts)
 echo    [AL] Autonomous cycle: search, A/B, adopt   [ALS] Its stage / stop it
 echo    [RC] Recalibrate live probabilities   [TP] Fit the timing policy
 echo    [TL] Fit the trade-levels policy (entry zone and stop)
@@ -107,6 +108,7 @@ if /i "%choice%"=="AG" goto adopt_genome
 if /i "%choice%"=="AS" goto adopt_show
 if /i "%choice%"=="AR" goto adopt_revert
 if /i "%choice%"=="RS" goto auto_research
+if /i "%choice%"=="AN" goto analyst
 if /i "%choice%"=="ALS" goto auto_loop_status
 if /i "%choice%"=="AL" goto auto_loop
 if /i "%choice%"=="LC" goto loop_cycle
@@ -153,7 +155,10 @@ goto menu
 :webui
 cls
 echo [Web UI] FastAPI on http://127.0.0.1:8000  (Ctrl+C to stop)
-start "" http://127.0.0.1:8000
+REM  The browser used to open on the line BEFORE uvicorn started, so the first
+REM  paint was always "connection refused" and the UI read as broken. Hand the
+REM  open to a detached shell that waits for the server to come up.
+start "" /b cmd /c "timeout /t 4 /nobreak >nul&start http://127.0.0.1:8000"
 python -m uvicorn webapp:app --port 8000
 pause
 goto menu
@@ -357,6 +362,60 @@ REM inherits the interpreter this line picks.
 cmd /c ""%~dp0run_in_env.bat" python train_chunked.py"
 pause
 goto menu
+
+:analyst
+cls
+echo  ANALYST AGENT - an opinion formed without seeing the ensemble's.
+echo.
+echo    [S] Score      standings against the three baselines, and the verdict
+echo    [B] Backfill   fill outcomes whose horizon has elapsed
+echo    [F] Fit table  refit payoff_stats.json from prediction_log
+echo    [R] Run        one judgment per eligible asset  (COSTS MONEY: one LLM
+echo                   call per asset, plus an earnings scan over the map)
+echo    [W] Watch      start the Web UI on the analyst page
+echo.
+set "an_choice="
+set /p an_choice="Choose, Enter = back: "
+if /i "%an_choice%"=="S" goto analyst_score
+if /i "%an_choice%"=="B" goto analyst_backfill
+if /i "%an_choice%"=="R" goto analyst_run
+if /i "%an_choice%"=="F" goto analyst_fit
+if /i "%an_choice%"=="W" goto webui
+goto menu
+
+:analyst_score
+python analyst.py score
+pause
+goto analyst
+
+:analyst_backfill
+python analyst.py backfill
+pause
+goto analyst
+
+:analyst_run
+echo.
+echo This spends money: one LLM call per eligible asset. GTRADE_ANALYST=0
+echo disables the agent entirely if you would rather it never ran.
+echo.
+set "an_ok="
+set /p an_ok="Type YES to run: "
+if /i not "%an_ok%"=="YES" goto analyst
+python analyst.py run
+pause
+goto analyst
+
+:analyst_fit
+echo.
+echo train_payoff.py OVERWRITES payoff_stats.json on every run. If this fit
+echo covers fewer assets than the last one, the fuller table is gone.
+echo.
+set "fit_ok="
+set /p fit_ok="Type YES to refit: "
+if /i not "%fit_ok%"=="YES" goto analyst
+python train_payoff.py
+pause
+goto analyst
 
 :auto_research
 cls

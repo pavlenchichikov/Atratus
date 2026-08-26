@@ -1237,3 +1237,77 @@ def test_a_negative_expectation_is_not_softened():
 def test_a_missing_payoff_table_degrades_rather_than_raises():
     ctx = webapp._payoff_context("SBER", atr=2.0, close=100.0, table=None)
     assert ctx["long"] is None and ctx["short"] is None
+
+
+def test_analyst_page_renders_with_an_empty_log(client):
+    body = client.get("/analyst").text
+    assert "Analyst Agent" in body
+    assert "No scored judgments yet" in body
+
+
+def test_analyst_run_refuses_when_the_kill_switch_is_on(client, monkeypatch):
+    # Parity with the CLI: GTRADE_ANALYST=0 must mean the same thing on the web
+    # as it does in the terminal, or the switch is not a switch.
+    monkeypatch.setenv("GTRADE_ANALYST", "0")
+    called = []
+    monkeypatch.setattr(webapp.subprocess, "Popen",
+                        lambda *a, **k: called.append(a) or None)
+    d = client.post("/api/analyst/run").json()
+    assert d["started"] is False
+    assert "GTRADE_ANALYST=0" in d["reason"]
+    assert called == []
+
+
+def test_analyst_run_starts_a_pass_and_reports_the_pid(client, monkeypatch):
+    monkeypatch.setenv("GTRADE_ANALYST", "1")
+
+    class _Proc:
+        pid = 4321
+
+        def poll(self):
+            return None          # still running
+
+    monkeypatch.setattr(webapp, "_ANALYST_PROC", None)
+    monkeypatch.setattr(webapp.subprocess, "Popen", lambda *a, **k: _Proc())
+    d = client.post("/api/analyst/run").json()
+    assert d == {"started": True, "pid": 4321}
+
+
+def test_analyst_run_refuses_a_second_pass_while_one_is_running(client, monkeypatch):
+    # The expensive mistake this guard exists for: a double click paying for
+    # every eligible asset twice.
+    monkeypatch.setenv("GTRADE_ANALYST", "1")
+
+    class _Proc:
+        pid = 99
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(webapp, "_ANALYST_PROC", _Proc())
+    spawned = []
+    monkeypatch.setattr(webapp.subprocess, "Popen",
+                        lambda *a, **k: spawned.append(a))
+    d = client.post("/api/analyst/run").json()
+    assert d["started"] is False and d["pid"] == 99
+    assert spawned == [], "a second pass was spawned while one was running"
+
+
+def test_analyst_run_starts_again_once_the_previous_pass_exited(client, monkeypatch):
+    monkeypatch.setenv("GTRADE_ANALYST", "1")
+
+    class _Done:
+        pid = 1
+
+        def poll(self):
+            return 0             # exited
+
+    class _New:
+        pid = 2
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(webapp, "_ANALYST_PROC", _Done())
+    monkeypatch.setattr(webapp.subprocess, "Popen", lambda *a, **k: _New())
+    assert client.post("/api/analyst/run").json() == {"started": True, "pid": 2}
