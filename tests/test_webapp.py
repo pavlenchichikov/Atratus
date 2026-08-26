@@ -1324,3 +1324,18 @@ def test_every_page_carries_the_analyst_link_in_the_nav(client):
 def test_the_command_palette_also_offers_the_analyst_page(client):
     pages = client.get("/api/palette").json()["pages"]
     assert ["Analyst", "/analyst"] in pages
+
+
+def test_experience_is_reachable_but_not_in_the_nav(client):
+    # Kept off the nav bar the way Research is, so the top row stays the pages
+    # looked at daily. Both are still one Ctrl+K away, which is why the palette
+    # assertion below sits next to this one: dropping a page from the nav
+    # without leaving it in the palette makes it unreachable, not tidy.
+    assert 'href="/experience"' not in client.get("/").text
+    assert client.get("/experience").status_code == 200
+    assert ["Experience", "/experience"] in client.get("/api/palette").json()["pages"]
+
+
+def test_research_stays_off_the_nav_too(client):
+    assert 'href="/research"' not in client.get("/").text
+    assert ["Research", "/research"] in client.get("/api/palette").json()["pages"]
