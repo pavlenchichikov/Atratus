@@ -1239,7 +1239,13 @@ def test_a_missing_payoff_table_degrades_rather_than_raises():
     assert ctx["long"] is None and ctx["short"] is None
 
 
-def test_analyst_page_renders_with_an_empty_log(client):
+def test_analyst_page_renders_with_an_empty_log(client, monkeypatch, tmp_path):
+    # Points the store at a tmp database on purpose. Reading the real
+    # market.db made this test pass only while nobody had run the agent, and
+    # it started failing the moment real judgments appeared - a test about the
+    # empty branch has to create the empty branch, not hope for it.
+    from core.analyst import store
+    monkeypatch.setattr(store, "DB_PATH", str(tmp_path / "empty.db"))
     body = client.get("/analyst").text
     assert "Analyst Agent" in body
     assert "No scored judgments yet" in body
@@ -1339,3 +1345,33 @@ def test_experience_is_reachable_but_not_in_the_nav(client):
 def test_research_stays_off_the_nav_too(client):
     assert 'href="/research"' not in client.get("/").text
     assert ["Research", "/research"] in client.get("/api/palette").json()["pages"]
+
+
+def test_the_radar_says_how_much_of_the_universe_it_covers(client):
+    # The radar showed 824 of 849 assets and said nothing about the other 25,
+    # so the only way to learn why was to query the database by hand. Both
+    # reasons are legitimate - no champion means no prediction is possible, no
+    # bar dated today means log_prediction deliberately writes no row - but a
+    # page that omits assets silently is indistinguishable from one that lost
+    # them. The fixture database covers almost none of the map, so the line
+    # must appear.
+    from config import FULL_ASSET_MAP
+    body = client.get("/").text
+    assert "of %d absent" % len(FULL_ASSET_MAP) in body
+    assert "untrained" in body or "no bar today" in body
+
+
+def test_the_summary_splits_absences_by_cause(monkeypatch):
+    import webapp as w
+    monkeypatch.setattr(w, "_load_json", lambda p, d: {"HASMODEL": {}})
+    monkeypatch.setattr(w, "FULL_ASSET_MAP",
+                        {"SHOWN": "S", "HASMODEL": "H", "NOMODEL": "N"})
+    signals = [{"asset": "SHOWN", "signal": "BUY", "date": "2026-08-27",
+                "acc": {"n": 0, "correct": 0}}]
+    s = w._summary(signals, [])
+    assert s["universe"] == 3
+    assert s["absent"] == 2
+    # HASMODEL is in the registry, so its absence is a missing bar, not a
+    # missing model; NOMODEL is the other way round.
+    assert s["absent_no_champion"] == 1
+    assert s["absent_no_bar_today"] == 1

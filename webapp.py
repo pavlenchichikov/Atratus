@@ -375,8 +375,26 @@ def _summary(signals, stale):
         correct += s["acc"]["correct"]
         if last_date is None or s["date"] > last_date:
             last_date = s["date"]
+    # How much of the universe this snapshot actually covers, and why the rest
+    # is absent. performance_tracker.log_prediction deliberately writes no row
+    # for an asset with no bar dated today, because a row with nothing to check
+    # it against would sit "awaiting check" forever; an asset with no champion
+    # cannot be predicted at all. Both are correct, and both used to leave the
+    # radar quietly showing a smaller number than the map holds with nothing
+    # said about the difference.
+    covered = {s["asset"] for s in signals}
+    absent = [a for a in FULL_ASSET_MAP if a not in covered]
+    try:
+        registry = _load_json(REGISTRY_PATH, {}) or {}
+    except Exception:
+        registry = {}
+    no_champion = [a for a in absent if a not in registry]
     return {
         "total": len(signals),
+        "universe": len(FULL_ASSET_MAP),
+        "absent": len(absent),
+        "absent_no_champion": len(no_champion),
+        "absent_no_bar_today": len(absent) - len(no_champion),
         "counts": counts,
         "accuracy": (correct / verified) if verified else None,
         "verified": verified,

@@ -70,7 +70,9 @@
   <div class="stat fade">
     <span class="stat-label">Assets in journal</span>
     <span class="stat-value">{{ summary.total }}</span>
-    <span class="stat-sub">{% if summary.last_date %}snapshot {{ summary.last_date }}{% else %}journal empty{% endif %}</span>
+    <span class="stat-sub">{% if summary.last_date %}snapshot {{ summary.last_date }}{% else %}journal empty{% endif %}{% if summary.absent %}
+      &middot; {{ summary.absent }} of {{ summary.universe }} absent:
+      {% if summary.absent_no_champion %}{{ summary.absent_no_champion }} untrained{% endif %}{% if summary.absent_no_champion and summary.absent_no_bar_today %}, {% endif %}{% if summary.absent_no_bar_today %}{{ summary.absent_no_bar_today }} with no bar today{% endif %}{% endif %}</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Signals</span>
