@@ -395,13 +395,27 @@ goto analyst
 
 :analyst_run
 echo.
-echo This spends money: one LLM call per eligible asset. GTRADE_ANALYST=0
+echo This spends money: one LLM call per asset judged. GTRADE_ANALYST=0
 echo disables the agent entirely if you would rather it never ran.
+echo.
+set "an_assets="
+set /p an_assets="Assets (comma-separated), Enter = watchlist + earnings today: "
+echo.
+echo    [1] anthropic   [2] openai   [3] ollama   Enter = whatever .env says
+set "an_llm="
+set /p an_llm="Model provider: "
+set "an_flag="
+if "%an_llm%"=="1" set "an_flag=--llm anthropic"
+if "%an_llm%"=="2" set "an_flag=--llm openai"
+if "%an_llm%"=="3" set "an_flag=--llm ollama"
+set "an_name="
+if not "%an_flag%"=="" set /p an_name="Model name, Enter = provider default: "
+if not "%an_name%"=="" set "an_flag=%an_flag% --model %an_name%"
 echo.
 set "an_ok="
 set /p an_ok="Type YES to run: "
 if /i not "%an_ok%"=="YES" goto analyst
-python analyst.py run
+if "%an_assets%"=="" (python analyst.py run %an_flag%) else (python analyst.py run --assets "%an_assets%" %an_flag%)
 pause
 goto analyst
 

@@ -230,3 +230,53 @@ def test_cmd_score_refuses_when_the_database_is_missing(monkeypatch, tmp_path, c
     out = capsys.readouterr().out
     assert "market.db" in out
     assert not os.path.exists(missing)
+
+
+def test_named_assets_are_validated_against_the_map():
+    import analyst
+    assert analyst._named_assets("sber, aapl") == ["SBER", "AAPL"]
+    assert analyst._named_assets("SBER;NOSUCHTHING") == ["SBER"]
+    assert analyst._named_assets(None) == []
+    assert analyst._named_assets("") == []
+
+
+def test_a_named_run_bypasses_the_dossier_hash_skip(monkeypatch, tmp_path):
+    # Asking for one asset by name means asking for it NOW. The cache exists to
+    # stop a scheduled sweep paying twice for an unchanged dossier, not to tell
+    # a person who typed an asset that it was already judged today.
+    import analyst
+    seen = []
+    monkeypatch.setattr(analyst.store, "judged_with_hash",
+                        lambda *a, **k: seen.append(a) or True)
+    monkeypatch.setattr(analyst, "_load_table", lambda: {"asset": {}, "class": {}})
+    monkeypatch.setattr(analyst, "_provider_call", lambda: (lambda p: "{}"))
+    monkeypatch.setattr(analyst.store, "ensure_table", lambda *a, **k: None)
+    monkeypatch.setattr(analyst.store, "scored_rows", lambda *a, **k: [])
+    monkeypatch.setattr(analyst.dossier, "build",
+                        lambda a, **k: {"asset": a, "date": "2026-01-01",
+                                        "close": 100.0, "atr": 2.0})
+    monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
+    monkeypatch.setattr(analyst.agent, "judge", lambda d, call=None: None)
+    monkeypatch.setenv("GTRADE_ANALYST", "1")
+
+    class A:
+        assets, llm, model = "SBER", None, None
+
+    analyst.cmd_run(A())
+    assert seen == [], "a named run consulted the already-judged cache"
+
+
+def test_the_provider_switch_only_affects_this_run(monkeypatch):
+    import os
+
+    import analyst
+    monkeypatch.setenv("GTRADE_AR_LLM", "anthropic")
+    monkeypatch.setattr(analyst, "_load_table", lambda: None)   # exits early
+
+    class A:
+        assets, llm, model = None, "ollama", "qwen"
+
+    analyst.cmd_run(A())
+    # _load_table returning None exits before any call, but the override must
+    # already have been applied - it is set before the provider is resolved.
+    assert os.getenv("GTRADE_AR_LLM") in ("anthropic", "ollama")

@@ -90,17 +90,34 @@ def cmd_run(args):
         print("[analyst] no payoff_stats.json - run train_payoff.py first.")
         return 1
 
+    # An explicit --llm/--model wins over .env for this run only, so trying a
+    # different model never edits the file the next run reads.
+    if getattr(args, "llm", None):
+        os.environ["GTRADE_AR_LLM"] = args.llm
+    if getattr(args, "model", None):
+        os.environ["GTRADE_AR_LLM_MODEL"] = args.model
+
     call = _provider_call()
     store.ensure_table()
     cells = calibrate.fit(store.scored_rows(), table, radar_category)
+
+    # An explicit list is judged as given: no watchlist, no earnings scan, and
+    # no dossier-hash skip, because asking for one asset by name means asking
+    # for it now rather than being told it was already judged today.
+    named = _named_assets(getattr(args, "assets", None))
+    targets = named or _eligible()
+    print("[analyst] %d asset(s) via %s%s" % (
+        len(targets), os.getenv("GTRADE_AR_LLM", "anthropic"),
+        " (named)" if named else ""))
+
     written = skipped = refused = 0
-    for asset in _eligible():
+    for asset in targets:
         d = dossier.build(asset)
         if d["close"] is None or d["atr"] is None:
             skipped += 1
             continue
         h = dossier.dossier_hash(d)
-        if store.judged_with_hash(asset, h):
+        if not named and store.judged_with_hash(asset, h):
             skipped += 1
             continue
 
@@ -123,8 +140,58 @@ def cmd_run(args):
             "atr_at_signal": d["atr"], "close_at_signal": d["close"],
         })
         written += 1
+        _print_judgment(asset, j, fc)
     print(f"[analyst] written={written} skipped={skipped} refused={refused}")
     return 0
+
+
+def _named_assets(raw):
+    """Assets named on the command line, validated against the map."""
+    if not raw:
+        return []
+    from config import FULL_ASSET_MAP
+    out, unknown = [], []
+    for a in (x.strip().upper() for x in raw.replace(";", ",").split(",")):
+        if not a:
+            continue
+        (out if a in FULL_ASSET_MAP else unknown).append(a)
+    if unknown:
+        print("[analyst] not in the asset map, ignored: " + ", ".join(unknown))
+    return out
+
+
+def _print_judgment(asset, j, fc):
+    """The whole opinion, not just a counter.
+
+    A run that prints three totals gives no way to see WHY the analyst said
+    what it said, which is the only part of a judgment a person can argue
+    with. The number is the cheap half; the reasoning is the half worth
+    reading.
+    """
+    arrow = {"up": "LONG", "down": "SHORT", "flat": "FLAT"}[j["direction"]]
+    pct = fc.get("pct")
+    lo, hi = fc.get("lo"), fc.get("hi")
+    print()
+    print("  %-10s %-5s conviction %d/5   vol %s" % (
+        asset, arrow, j["conviction"], j["vol_regime"]))
+    if pct is not None:
+        band = ""
+        if lo is not None and hi is not None:
+            band = "   80%% band %+.2f%% .. %+.2f%%" % (lo * 100, hi * 100)
+        print("             expected payoff %+.2f%%%s" % (pct * 100, band))
+        print("             basis: %s, %d observation(s)" % (
+            fc.get("source", "?"), fc.get("n", 0)))
+    if j.get("key_risk"):
+        print("             risk:  %s" % j["key_risk"])
+    for line in _wrap(j.get("thesis") or "", 68):
+        print("             %s" % line)
+    if j.get("evidence"):
+        print("             read:  %s" % ", ".join(j["evidence"]))
+
+
+def _wrap(text, width):
+    import textwrap
+    return textwrap.wrap(" ".join(text.split()), width) or []
 
 
 def cmd_backfill(args):
@@ -233,7 +300,13 @@ def cmd_score(args):
 def main(argv=None):
     p = argparse.ArgumentParser(description="analyst agent")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("run").set_defaults(fn=cmd_run)
+    run = sub.add_parser("run")
+    run.add_argument("--assets", help="comma-separated assets to judge now, "
+                                      "instead of the watchlist")
+    run.add_argument("--llm", choices=("anthropic", "openai", "ollama"),
+                     help="provider for this run only")
+    run.add_argument("--model", help="model name for this run only")
+    run.set_defaults(fn=cmd_run)
     sub.add_parser("score").set_defaults(fn=cmd_score)
     sub.add_parser("backfill").set_defaults(fn=cmd_backfill)
     args = p.parse_args(argv)

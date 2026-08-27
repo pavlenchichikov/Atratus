@@ -76,6 +76,21 @@ def _yf_calendar(symbol, session):
     return yf.Ticker(symbol, session=session).calendar
 
 
+# Yahoo symbol shapes that cannot report earnings: an index, a crypto pair, an
+# FX pair, a futures contract. Asking anyway costs one 404 and one round trip
+# each, which on the full map was 147 needless requests and a wall of yfinance
+# error logging that made a healthy run look broken.
+_NO_EARNINGS_MARKS = ("^", "=X", "=F", "-USD")
+_NO_EARNINGS_SYMBOLS = frozenset({"DX-Y.NYB"})   # the dollar index, dot and all
+
+
+def can_have_earnings(symbol):
+    """False for a symbol that is not a company. Cheap, string-only."""
+    if not symbol or symbol in _NO_EARNINGS_SYMBOLS:
+        return False
+    return not any(m in symbol for m in _NO_EARNINGS_MARKS)
+
+
 def earnings_for(symbols_by_asset, session=None, fetch=None):
     """{asset: {"date": iso, "confirmed": bool}} for assets that have a date.
 
@@ -89,6 +104,8 @@ def earnings_for(symbols_by_asset, session=None, fetch=None):
     getter = fetch or _yf_calendar
     out = {}
     for asset, symbol in symbols_by_asset.items():
+        if not can_have_earnings(symbol):
+            continue
         try:
             found = _next_earnings(getter(symbol, session))
         except Exception:

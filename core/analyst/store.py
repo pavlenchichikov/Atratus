@@ -96,6 +96,22 @@ def scored_rows(db_path=None):
         return [dict(r) for r in cur.fetchall()]
 
 
+def latest_judgment(asset, db_path=None):
+    """The most recent judgment for one asset, scored or not, or None.
+
+    The asset card wants the opinion itself, not only the number derived from
+    it, and it wants it the day it is made rather than after the horizon has
+    elapsed - so this deliberately does not filter on realized_ret.
+    """
+    with _connect(db_path) as con:
+        con.execute(DDL)
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT * FROM analyst_log WHERE asset=? ORDER BY date DESC LIMIT 1",
+            (asset,)).fetchone()
+        return dict(row) if row else None
+
+
 def backfill_outcomes(db_path=None, today=None):
     """Score every judgment whose horizon has now elapsed. Returns rows filled.
 

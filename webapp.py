@@ -106,6 +106,28 @@ def _payoff_evidence(table, asset, asset_class, side):
     return f"{cls_n} on class {asset_class}"
 
 
+def _analyst_for_asset(name):
+    """The analyst's own words for this asset, or None when it has not spoken.
+
+    Its evidence list is decoded here rather than in the template, so a row
+    written before the column existed degrades to an empty list instead of
+    breaking the page.
+    """
+    try:
+        from core.analyst import store as analyst_store
+
+        row = analyst_store.latest_judgment(name)
+    except Exception:
+        return None
+    if not row:
+        return None
+    try:
+        row["evidence"] = json.loads(row.get("evidence_json") or "[]")
+    except Exception:
+        row["evidence"] = []
+    return row
+
+
 def _payoff_context(name, atr, close, table=_MISSING, analyst=None):
     """Both sides of the expected payoff for one asset, plus the analyst's read.
 
@@ -590,6 +612,7 @@ def asset_page(request: Request, name: str):
         "guru": dashboard.guru_for_asset(name),
         "payoff": _payoff_context(name, asset_levels.get("atr"),
                                   asset_levels.get("close")),
+        "analyst": _analyst_for_asset(name),
     })
 
 

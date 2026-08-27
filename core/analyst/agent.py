@@ -59,10 +59,17 @@ def prompt_for(dossier):
         + "\n\nReturn STRICT JSON, no prose, with exactly these keys:\n"
           '{"direction": "up|down|flat", "conviction": 1-5, '
           '"vol_regime": "calm|normal|elevated", '
-          '"key_risk": "one clause", "thesis": "two or three sentences", '
+          '"key_risk": "the one thing most likely to make this wrong", '
+          '"thesis": "three to five sentences", '
           '"evidence": ["names of the fields above you actually used"]}\n'
           "Do NOT return a price, a target, or a percentage. Conviction 1 "
-          "means barely a lean; 5 means you would stake the account on it."
+          "means barely a lean; 5 means you would stake the account on it.\n"
+          "In the thesis, be concrete and quote the numbers you actually "
+          "used: which fields moved you and in which direction, how the "
+          "recent move compares with this asset's own volatility, what the "
+          "next few days hinge on, and what would change your mind. Name the "
+          "things you are NOT leaning on where they might be assumed. Write "
+          "for someone deciding whether to argue with you, not for a log."
     )
 
 
@@ -98,7 +105,7 @@ def parse_judgment(text, allowed=None):
             "conviction": int(data["conviction"]),
             "vol_regime": data["vol_regime"],
             "key_risk": str(data.get("key_risk") or "")[:200],
-            "thesis": str(data.get("thesis") or "")[:600],
+            "thesis": str(data.get("thesis") or "")[:1200],
             "evidence": evidence}
 
 
