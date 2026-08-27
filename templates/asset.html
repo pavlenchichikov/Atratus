@@ -118,9 +118,11 @@
       <span class="stat-sub">conviction {{ analyst.conviction }}/5 &middot; expects {{ analyst.vol_regime }} volatility</span>
     </div>
     <div class="stat">
-      <span class="stat-label">Its forecast</span>
+      <span class="stat-label">Historical payoff for this call</span>
       <span class="stat-value">{% if analyst.forecast_pct is not none %}<b class="{{ 't-buy' if analyst.forecast_pct >= 0 else 't-sell' }}">{{ "%+.2f"|format(analyst.forecast_pct * 100) }}%</b>{% else %}-{% endif %}</span>
       <span class="stat-sub">{% if analyst.lo_pct is not none %}80% band {{ "%+.1f"|format(analyst.lo_pct * 100) }}% to {{ "%+.1f"|format(analyst.hi_pct * 100) }}%{% else %}no band recorded{% endif %}</span>
+      <span class="stat-sub">not the analyst's own number: what this direction
+        has been worth historically, so it can disagree with the call above</span>
     </div>
     <div class="stat">
       <span class="stat-label">Outcome</span>
@@ -128,6 +130,13 @@
       <span class="stat-sub">{% if analyst.realized_ret is not none %}error {{ "%.2f"|format(analyst.abs_err_atr) }} ATR &middot; {{ 'inside' if analyst.inside_interval == 1 else 'outside' }} the band{% else %}scored once the horizon elapses{% endif %}</span>
     </div>
   </div>
+  {% if payoff and payoff.long and payoff.long.source == 'prior' %}
+  <p class="dim"><b>Read this carefully.</b> No judgment in this
+    conviction cell has been scored yet, so the figure above is the class
+    baseline and the conviction shown does not move it: a 1/5 and a 5/5 call in
+    the same direction currently produce the same number. It becomes responsive
+    once the cell has its own outcomes.</p>
+  {% endif %}
   {% if analyst.key_risk %}<p><b>Key risk.</b> {{ analyst.key_risk }}</p>{% endif %}
   {% if analyst.thesis %}<p>{{ analyst.thesis }}</p>{% endif %}
   <p class="dim mono">judged {{ analyst.date }}{% if analyst.evidence %} &middot; read: {{ analyst.evidence|join(", ") }}{% endif %}</p>

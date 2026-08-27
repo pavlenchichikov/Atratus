@@ -160,3 +160,31 @@ def test_a_flat_judgments_interval_is_pinned_to_the_buy_side():
                              2.0, 100.0, table)
     assert out["lo"] == pytest.approx(-1.2 * 0.02, abs=1e-9)
     assert out["hi"] == pytest.approx(1.8 * 0.02, abs=1e-9)
+
+
+def test_conviction_does_not_move_the_number_until_a_cell_has_outcomes():
+    # Surprising, and true by design: with no scored judgment in a cell, every
+    # conviction falls back to the same prior, so 1/5 and 5/5 produce an
+    # identical figure. Pinned because the asset card shows the conviction
+    # right beside that number, and a reader - or a later contributor - would
+    # otherwise assume the one drives the other. If this test ever fails,
+    # someone has made conviction synthesise a number it has not earned.
+    cells = calibrate.fit([], _table(), lambda a: "ru")
+    out = [calibrate.forecast(_judgment(conviction=c), cells, "SBER", "ru",
+                              2.0, 100.0, _table())["pct"]
+           for c in (1, 2, 3, 4, 5)]
+    assert len(set(out)) == 1, "conviction moved the number with no evidence"
+
+
+def test_an_up_call_can_carry_a_negative_number_and_that_is_not_a_bug():
+    # The figure is what the DIRECTION has historically been worth, not what
+    # the analyst asserted. On a class whose longs lost money it is negative
+    # under a bullish call, and the card has to be able to say so.
+    table = {"asset": {}, "class": {"ru": {
+        "BUY": {"n": 700, "mean": -0.23, "q10": -1.3, "q90": 0.8},
+        "SELL": {"n": 800, "mean": 0.19, "q10": -0.8, "q90": 1.2}}}}
+    cells = calibrate.fit([], table, lambda a: "ru")
+    up = calibrate.forecast(_judgment(direction="up", conviction=5), cells,
+                            "SBER", "ru", 2.0, 100.0, table)
+    assert up["pct"] < 0
+    assert up["source"] == "prior"
