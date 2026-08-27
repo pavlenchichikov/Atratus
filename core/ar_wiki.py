@@ -43,7 +43,22 @@ def _write(path, text):
         f.write(text)
 
 
-def wiki_summary(max_chars=6000):
+# How much wiki a prompt may carry. Raised from a hardcoded 6000 and made
+# tunable, because the ceiling is not a property of the wiki, it is a property
+# of whichever model reads it: a hosted model has room to spare, while this
+# project already recorded a local one timing out on a 26k prompt. The wiki is
+# only one part of that prompt, so leave headroom.
+def wiki_chars():
+    """The prompt budget for the wiki, from GTRADE_AR_WIKI_CHARS."""
+    raw = (os.getenv("GTRADE_AR_WIKI_CHARS") or "").strip()
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return 20000
+    return max(1000, n)
+
+
+def wiki_summary(max_chars=-1):
     """The distilled wiki text for the proposer prompt (concatenated pages, truncated).
     Reads the files fresh; '' when absent/empty. Never raises.
 
@@ -56,6 +71,8 @@ def wiki_summary(max_chars=6000):
         if t:
             parts.append(f"## {page}\n{t}")
     text = "\n\n".join(parts)
+    if max_chars == -1:            # caller did not choose: use the budget
+        max_chars = wiki_chars()
     return text[:max_chars] if max_chars else text
 
 
@@ -63,7 +80,10 @@ def note_replicated(sig, detail):
     """Append a high-confidence entry to general.md when a finding clears the replication
     gate (compounding of CONFIRMED knowledge). Never raises."""
     try:
-        line = f"- (high) REPLICATED {str(sig)[:80]}: {str(detail)[:200]}\n"
+        # 80 and 200 before. Those clipped a finding as it was WRITTEN, so no
+        # later change to the read budget could bring the lost text back, and
+        # the detail is the half a future run reasons from.
+        line = f"- (high) REPLICATED {str(sig)[:400]}: {str(detail)[:2000]}\n"
         _write(_page_path("general"), _read(_page_path("general")) + line)
     except Exception:
         pass
@@ -121,8 +141,8 @@ def compile_wiki():
             "NEW findings into the CURRENT wiki: update claims, tag each (stated|high|low), "
             "reconcile contradictions to current truth, prune stale/duplicate claims. Use "
             "ONLY these page names as '## <page>' sections: " + ", ".join(PAGES) +
-            ".\nCURRENT WIKI:\n" + (wiki_summary(max_chars=8000) or "(empty)") +
-            "\nNEW FINDINGS (JSON):\n" + json.dumps(new, ensure_ascii=True)[:6000] +
+            ".\nCURRENT WIKI:\n" + (wiki_summary(max_chars=wiki_chars()) or "(empty)") +
+            "\nNEW FINDINGS (JSON):\n" + json.dumps(new, ensure_ascii=True)[:wiki_chars()] +
             "\nReturn the FULL updated wiki as '## <page>' sections, no prose.")
         out = (_backend()(prompt) or "").strip()
         if not out:
@@ -145,7 +165,7 @@ def lint_wiki():
     if not wiki_on():
         return
     try:
-        current = wiki_summary(max_chars=8000)
+        current = wiki_summary(max_chars=wiki_chars())
         if not current:
             return
         prompt = (

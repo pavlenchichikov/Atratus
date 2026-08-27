@@ -50,3 +50,29 @@ def test_compile_wiki_off_or_error_is_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("GTRADE_AR_WIKI", "1")
     monkeypatch.setattr(w, "_backend", lambda: (lambda p: (_ for _ in ()).throw(RuntimeError())))
     assert w.compile_wiki() == 0 and w.wiki_summary() == ""          # error - unchanged
+
+
+def test_the_wiki_prompt_budget_is_tunable_and_defaults_high(monkeypatch):
+    from core import ar_wiki
+    monkeypatch.delenv("GTRADE_AR_WIKI_CHARS", raising=False)
+    assert ar_wiki.wiki_chars() == 20000
+    monkeypatch.setenv("GTRADE_AR_WIKI_CHARS", "60000")
+    assert ar_wiki.wiki_chars() == 60000
+    # Nonsense and absurdly small values fall back rather than silently
+    # shipping a one-line wiki to the model.
+    monkeypatch.setenv("GTRADE_AR_WIKI_CHARS", "junk")
+    assert ar_wiki.wiki_chars() == 20000
+    monkeypatch.setenv("GTRADE_AR_WIKI_CHARS", "50")
+    assert ar_wiki.wiki_chars() == 1000
+
+
+def test_a_wiki_longer_than_the_budget_is_still_truncated(monkeypatch, tmp_path):
+    # The budget has to bind when it is reached, or raising it means nothing.
+    from core import ar_wiki
+    monkeypatch.setattr(ar_wiki, "_page_path", lambda p: str(tmp_path / (p + ".md")))
+    (tmp_path / "general.md").write_text("x" * 5000, encoding="utf-8")
+    monkeypatch.setenv("GTRADE_AR_WIKI_CHARS", "1200")
+    assert len(ar_wiki.wiki_summary()) == 1200
+    monkeypatch.setenv("GTRADE_AR_WIKI_CHARS", "9000")
+    assert len(ar_wiki.wiki_summary()) > 4000
+    assert ar_wiki.wiki_summary(max_chars=None).count("x") == 5000
