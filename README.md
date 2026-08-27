@@ -27,6 +27,7 @@
 - [Web UI](#web-ui)
 - [Screenshots](#screenshots)
 - [Auto-research agent](#auto-research-agent)
+- [Analyst agent](#analyst-agent)
 - [Self-maintaining loop](#self-maintaining-loop)
 - [Live-accuracy gate and recalibration](#live-accuracy-gate-and-live-recalibration)
 - [Telegram bot](#telegram-bot)
@@ -54,6 +55,8 @@
 - **Rich feature set.** Returns and volatility-normalized returns, tail risk (kurtosis / skew / VaR), RSI / MACD / SMA / ATR, weekly and cross-asset correlations, cross-asset lead-lag, calendar position, and a macro regime read (10y yield, VIX, dollar).
 - **Autonomous research agent.** A quality-diversity (MAP-Elites) search over features, labels and transforms, with a rigorous held-out adoption gate (Wilcoxon signed-rank + Benjamini-Hochberg + cross-run replication) so nothing is adopted on noise. Never touches production automatically.
 - **Instant FastAPI dashboard.** Reads ready-made predictions from the database (no TensorFlow at serve time), so it starts immediately - signal radar, per-asset detail, portfolio analytics, an interactive risk manager, and a what-if backtester.
+- **A second opinion that cannot see the first.** An analyst agent reads bars, volatility regime, fundamentals and the event calendar and returns a discrete judgment - a direction, a conviction, a risk and its reasoning - never a percentage, so each judgment cell accumulates history and can be recalibrated. It is walled off from the ensemble's probability and signal by two tests. Nothing it says reaches a decision until it beats three baselines over 500 scored judgments.
+- **The card finally quotes a payoff.** Each asset page shows what a long and a short in it have historically been worth per bar, in percent with an 80% band, fitted from the verified prediction journal. It is frequently negative, and it is shown negative.
 - **Value overlay.** A "Guru Council" (Lynch, Buffett, Graham, Munger) as a long-term fundamentals overlay for real stocks, tracked at a 60-day horizon while the ML signal stays primary.
 
 ## How it works
@@ -76,8 +79,9 @@ uvicorn webapp:app --host 0.0.0.0 --port 8000
 
 Lightweight web interface - no TensorFlow needed, reads predictions from the database, starts instantly. Pages:
 
-- `/` - signal radar: BUY / SELL / WAIT per asset with confidence, live accuracy, a Taleb tail-risk column, a live market-breadth panel and regime / fear-greed gauges
-- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, and the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate
+- `/` - signal radar: BUY / SELL / WAIT per asset with confidence, live accuracy, a Taleb tail-risk column, a live market-breadth panel and regime / fear-greed gauges, and a line saying how much of the asset map the snapshot covers and why the rest is absent (no champion, or no bar dated today)
+- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **expected payoff** for a long and a short in that asset, and the **analyst's own call** with its reasoning
+- `/analyst` - the analyst agent: how many judgments it has made and how many are scored, interval coverage, the latest judgments with forecast against outcome, and a button that runs a pass
 - `/levels` - the trade-level sheet: entry zone, stop and position size per active signal, with a reason on every row that has none
 - `/portfolio` - portfolio analytics over open positions: diversification score, sector-exposure heat, held-asset correlation, per-position warnings
 - `/whatif` - what-if simulator: "what if I had invested $X, N days ago, following the signals", with an equity curve and per-asset breakdown
@@ -90,6 +94,8 @@ Lightweight web interface - no TensorFlow needed, reads predictions from the dat
   model generation. Read-only and derived: it joins the research journals on each
   request and stores nothing
 - `/market`, `/sectors`, `/correlations`, `/performance`, `/news`, `/models` - analytics pages
+
+`/research` and `/experience` are deliberately off the nav bar and reached with Cmd/Ctrl-K, so the top row stays the pages looked at daily.
 
 Same data as JSON under `/api/...`. Pages auto-refresh; a Cmd-K palette jumps to any asset or page; a ticker tape of top movers runs along the bottom. Works from a phone on the same network.
 
@@ -415,6 +421,77 @@ the run. The screen and the illumination are then derived from the basis rather
 than asked, since only one pairing of them is coherent with each. Moving a frozen
 constant without starting a new campaign refuses the run, and the refusal names
 this way out.
+
+## Analyst agent
+
+A second opinion on each asset, formed **without ever seeing the ensemble's own
+call**. It never sees the model probability, the emitted signal, the timing
+action or the sizing decision; two tests enforce that, one scanning the
+serialized dossier for forbidden keys and one pinning the dossier's exact key
+set so a new field cannot be added without somebody declaring it.
+
+It reads what the project already computes: bars and ATR, the volatility
+regime, the Guru Council's fundamental verdict, the earnings and macro
+calendars. The council verdict is fundamentals, not the ensemble, so it is
+allowed in on purpose.
+
+**It returns a discrete judgment, never a percentage** - a direction, a
+conviction 1 to 5, an expected volatility regime, the one risk most likely to
+make it wrong, and its reasoning. That is the whole design: a free-form number
+from a model is measurable but uncorrectable, because every answer is unique
+and no bucket ever accumulates the history needed to recalibrate it. A discrete
+cell does accumulate, and earns its own measured payoff.
+
+The percentage on the card is therefore **not the analyst's number**. It is
+what that judgment cell has historically been worth, so it can and does
+contradict the call above it: on an asset class whose longs lost money, a
+bullish call carries a negative figure, and the card says so rather than hiding
+it. Until a cell has scored outcomes of its own the figure is the class
+baseline, which means the conviction shown beside it moves nothing - a 1/5 and
+a 5/5 call in the same direction currently produce the same number. The card
+states that outright too.
+
+That baseline comes from `train_payoff.py`, which fits what a position has
+historically been worth per asset and per asset class in ATR units, from the
+verified rows in `prediction_log`. One artifact, two jobs: the prior every
+calibration cell starts from, and the baseline the analyst has to beat. Note
+what it is measured over - only the bars the ensemble chose to signal on - so
+it is that conditional payoff, not an unconditional historical average.
+
+Judgments are written to `analyst_log` before their outcome exists, and the
+backfill that scores them runs inside `loop_cycle.py` as a step of the daily
+cycle rather than as a script somebody has to remember. That is deliberate:
+`guru_log` holds hundreds of verdicts and almost no scored outcomes for exactly
+that reason.
+
+**Nothing it says is trusted yet.** `analyst.py score` measures it against
+three baselines - forecasting nothing, the empirical payoff for the direction
+it chose, and the payoff for the direction the ensemble chose - and prints SHIP
+or HOLD. SHIP needs at least 500 scored judgments, interval coverage between
+0.75 and 0.85, a shuffle control that collapses when forecasts are detached
+from their outcomes, and a lower error than both the zero and the empirical
+baseline. A HOLD is a result, not a failure, and the criteria were fixed before
+any number arrived.
+
+### Running it
+
+```bash
+python analyst.py run                        # watchlist, plus anything reporting earnings today
+python analyst.py run --assets SBER,AAPL     # exactly these, now
+python analyst.py run --llm ollama --model qwen2.5:32b   # this run only, .env untouched
+python analyst.py score                      # standings against the baselines, and the verdict
+python analyst.py backfill                   # fill outcomes whose horizon has elapsed
+```
+
+`run_gtrade.bat` has the same under `[AN]`, which asks for the asset list and
+the provider and requires a typed YES for anything that spends money. The web
+page has a **Run now** button that refuses a second pass while one is running,
+because a double click would pay for every eligible asset twice.
+
+Cost is bounded three ways: it runs the watchlist plus earnings-today assets
+rather than the whole map, it skips any asset whose dossier is unchanged since
+it was last judged, and `GTRADE_ANALYST=0` switches it off entirely - in the
+web exactly as on the command line.
 
 ## Self-maintaining loop
 
@@ -851,6 +928,8 @@ The switches that change what is served, all default to off:
 | `GTRADE_LEVELS_OBJECTIVE` | `equity` (default) or `rate` for the levels fit |
 | `GTRADE_AB_HOLDOUT_N` | how many assets a verdict is measured over |
 | `GTRADE_TRAIN_EMBARGO_BARS` | bars dropped from the end of each training fold |
+| `GTRADE_ANALYST=0` | switch the analyst agent off entirely, on the command line and in the web alike |
+| `GTRADE_AR_WIKI_CHARS` | how much research wiki a prompt may carry (default 20000) |
 
 ## Project layout
 
@@ -863,6 +942,9 @@ train_levels.py       fit + gate the trade-levels policy (entry zone, stop)
 predict.py            console signal radar
 backtest.py           held-out evaluation (PnL, Sharpe, Brier, alpha)
 webapp.py             FastAPI dashboard (app.py = Streamlit)
+analyst.py            analyst agent CLI: run / score / backfill
+core/analyst/         its dossier, judgment parser, log, calibration and scorer
+train_payoff.py       fits payoff_stats.json: what a position has been worth, in ATR units
 alert_bot.py          Telegram bot (hourly scan)
 risk_manager.py       Kelly sizing, loss/drawdown limits, Taleb gate
 guru_report.py        Guru Council fundamentals overlay
@@ -916,6 +998,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 - [Веб-интерфейс](#веб-интерфейс)
 - [Скриншоты](#скриншоты)
 - [Исследовательский агент](#исследовательский-агент)
+- [Аналитический агент](#аналитический-агент)
 - [Самоподдерживающийся цикл](#самоподдерживающийся-цикл)
 - [Гейт по живой точности и рекалибровка](#гейт-по-живой-точности-и-рекалибровка)
 - [Telegram-бот](#telegram-бот)
@@ -943,6 +1026,8 @@ Atratus is provided for **research and educational purposes only**. It is not in
 - **Богатый набор признаков.** Доходности и волатильностно-нормированные доходности, хвостовой риск (эксцесс / асимметрия / VaR), RSI / MACD / SMA / ATR, недельные и межактивные корреляции, межактивный lead-lag, календарная позиция и макро-режим (доходность 10-леток, VIX, доллар).
 - **Автономный исследовательский агент.** Поиск quality-diversity (MAP-Elites) по признакам, лейблам и трансформациям со строгим гейтом адопции на отложенной выборке (Wilcoxon signed-rank + Benjamini-Hochberg + межзапусковая репликация), чтобы ничего не адоптилось на шуме. Никогда не трогает прод автоматически.
 - **Мгновенный дашборд на FastAPI.** Читает готовые предсказания из БД (без TensorFlow во время обслуживания), поэтому стартует сразу - радар сигналов, детализация по активу, аналитика портфеля, интерактивный риск-менеджер и what-if-бэктестер.
+- **Второе мнение, не видящее первого.** Аналитический агент читает бары, режим волатильности, фундаментал и календарь событий и возвращает дискретное суждение - направление, убеждённость, риск и рассуждение, - но не процент, поэтому каждая ячейка суждения набирает историю и поддаётся перекалибровке. От вероятности и сигнала ансамбля он отгорожен двумя тестами. Ничто из сказанного им не влияет на решение, пока он не побьёт три базовые линии на 500 посчитанных суждениях.
+- **В карточке наконец есть payoff.** На странице актива видно, чего исторически стоили лонг и шорт по нему за бар, в процентах и с 80-процентной полосой, подогнанное по верифицированному журналу прогнозов. Часто оно отрицательное - и показывается отрицательным.
 - **Value-оверлей.** "Совет гуру" (Линч, Баффет, Грэм, Мангер) как долгосрочный фундаментальный оверлей для реальных акций, с горизонтом точности 60 дней; ML-сигнал остаётся основным.
 
 ## Как это работает
@@ -979,6 +1064,8 @@ uvicorn webapp:app --host 0.0.0.0 --port 8000
   поколению модели. Только чтение, всё считается из журналов на каждый запрос и
   нигде не хранится
 - `/market`, `/sectors`, `/correlations`, `/performance`, `/news`, `/models` - аналитические страницы
+
+`/research` и `/experience` намеренно убраны из панели навигации и открываются по Cmd/Ctrl-K, чтобы верхний ряд оставался тем, куда смотрят каждый день.
 
 Те же данные в JSON под `/api/...`. Страницы обновляются сами; палитра Cmd-K переходит к любому активу или странице; внизу бежит лента топ-движений. Работает с телефона в той же сети.
 
@@ -1307,6 +1394,74 @@ p-значением и порогом в правильных единицах,
 Screen и illumination после этого выводятся из базиса, а не спрашиваются: с
 каждым базисом согласована ровно одна их пара. Сдвиг замороженной константы без
 новой кампании останавливает запуск, и в отказе написано, как из него выйти.
+
+## Аналитический агент
+
+Второе мнение по каждому активу, составленное **не видя решения ансамбля**. Он
+не видит ни вероятность модели, ни выданный сигнал, ни действие таймера, ни
+решение о размере позиции; это удерживают два теста: один сканирует
+сериализованное досье на запрещённые ключи, второй закрепляет точный набор
+полей досье, чтобы новое поле нельзя было добавить, не объявив его.
+
+Читает он то, что проект и так считает: бары и ATR, режим волатильности,
+фундаментальный вердикт совета Guru, календари отчётностей и макрособытий.
+Вердикт совета это фундаментал, а не ансамбль, поэтому он допущен намеренно.
+
+**Он возвращает дискретное суждение, а не процент** - направление,
+убеждённость от 1 до 5, ожидаемый режим волатильности, главный риск и своё
+рассуждение. В этом весь замысел: свободное число от модели измеримо, но
+неисправимо, потому что каждый ответ уникален и ни одна корзина не набирает
+истории, по которой её можно было бы перекалибровать. Дискретная ячейка
+набирает и получает свой измеренный payoff.
+
+Поэтому процент в карточке это **не число аналитика**. Это то, чего
+исторически стоила такая ячейка суждения, и оно может противоречить вызову над
+ним: на классе активов, где лонги теряли деньги, бычий вызов несёт
+отрицательную цифру, и карточка говорит об этом прямо, а не прячет. Пока у
+ячейки нет собственных посчитанных исходов, цифра равна классовому базису, а
+значит показанная рядом убеждённость не двигает ничего: вызов 1/5 и вызов 5/5
+в одну сторону сейчас дают одно и то же число. Об этом карточка тоже пишет
+прямым текстом.
+
+Базис берётся из `train_payoff.py`: он подгоняет, чего исторически стоила
+позиция, по каждому активу и по каждому классу, в единицах ATR, по
+верифицированным строкам `prediction_log`. Один артефакт, две работы: априор,
+с которого стартует каждая ячейка калибровки, и планка, которую аналитик обязан
+побить. Важно, на чём он измерен - только на барах, где ансамбль решил подать
+сигнал, - то есть это условный payoff, а не безусловное историческое среднее.
+
+Суждения пишутся в `analyst_log` до того, как исход существует, а бэкфилл,
+который их считает, живёт внутри `loop_cycle.py` шагом ежедневного цикла, а не
+отдельным скриптом, который надо помнить. Это сделано намеренно: в `guru_log`
+лежат сотни вердиктов и почти нет посчитанных исходов ровно по этой причине.
+
+**Ничему из сказанного пока не доверяют.** `analyst.py score` меряет агента
+против трёх базовых линий - прогноз «ноль», эмпирический payoff для выбранного
+им направления и payoff для направления ансамбля - и печатает SHIP или HOLD.
+Для SHIP нужны минимум 500 посчитанных суждений, покрытие интервала между 0.75
+и 0.85, контроль на перемешивание, который рушится, когда прогнозы отрывают от
+их исходов, и ошибка ниже обеих базовых линий. HOLD это результат, а не провал,
+и критерии зафиксированы до того, как пришли числа.
+
+### Как запускать
+
+```bash
+python analyst.py run                        # вотчлист плюс всё, что отчитывается сегодня
+python analyst.py run --assets SBER,AAPL     # именно эти, сейчас
+python analyst.py run --llm ollama --model qwen2.5:32b   # только этот запуск, .env не трогается
+python analyst.py score                      # расклад против базовых линий и вердикт
+python analyst.py backfill                   # проставить исходы, у которых горизонт истёк
+```
+
+То же есть в `run_gtrade.bat` под `[AN]`: там спрашивают список активов и
+провайдера и требуют набрать YES для всего, что тратит деньги. На веб-странице
+есть кнопка **Run now**, которая отказывает во втором проходе, пока идёт
+первый, потому что двойной клик оплатил бы все подходящие активы дважды.
+
+Стоимость ограничена трижды: агент идёт по вотчлисту плюс активы с отчётностью
+сегодня, а не по всей карте; пропускает актив, чьё досье не изменилось с
+прошлого суждения; и `GTRADE_ANALYST=0` выключает его целиком - в вебе ровно
+так же, как в консоли.
 
 ## Самоподдерживающийся цикл
 
@@ -1698,6 +1853,8 @@ force-promote при ремонте надо отвечать `y`: без это
 | `GTRADE_LEVELS_OBJECTIVE` | `equity` (по умолчанию) или `rate` для подбора уровней |
 | `GTRADE_AB_HOLDOUT_N` | на скольких активах меряется вердикт |
 | `GTRADE_TRAIN_EMBARGO_BARS` | сколько баров отрезается с конца каждого обучающего фолда |
+| `GTRADE_ANALYST=0` | полностью выключить аналитического агента, и в консоли, и в вебе |
+| `GTRADE_AR_WIKI_CHARS` | сколько символов вики исследователя влезает в промпт (по умолчанию 20000) |
 
 ## Структура проекта
 
@@ -1710,6 +1867,9 @@ train_levels.py       подбор и гейт политики уровней (
 predict.py            радар сигналов в консоли
 backtest.py           оценка на отложенных данных (PnL, Sharpe, Brier, альфа)
 webapp.py             дашборд на FastAPI (app.py = Streamlit)
+analyst.py            CLI аналитического агента: run / score / backfill
+core/analyst/         его досье, разбор суждения, лог, калибровка и скорер
+train_payoff.py       подгонка payoff_stats.json: чего стоила позиция, в единицах ATR
 alert_bot.py          Telegram-бот (ежечасный скан)
 risk_manager.py       размер по Келли, лимиты убытка/просадки, гейт Талеба
 guru_report.py        фундаментальный оверлей "Совет гуру"
