@@ -48,7 +48,7 @@
 
 ## Features
 
-- **~849 assets in the map, 317 with a trained champion, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
+- **~849 assets in the map, 830 with a trained champion, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
 - **Risk-managed by design.** Kelly-based position sizing, drawdown stops, sector-exposure and correlation checks, and a Taleb tail-risk index that shrinks size above a soft cap and blocks new buys above a hard cap.
 - **Prices, not just calls.** A daily trade-level sheet turns each signal into numbers you can act on: an ATR entry zone around the last close, an emergency stop that trails the position, and a size derived from the distance to that stop and clipped by the risk limits. The same entry zone and stop appear on each asset's own page, every issued set is journalled and later scored against the bars that followed, and the two ATR multipliers behind them can be fitted over the whole history and are adopted only if a held-out slice agrees. Execution stays manual.
@@ -578,7 +578,7 @@ notification when signals change, opening the Today screen. The Supabase schema 
 
 - **Python 3.12** (3.11+ likely works; 3.12 is what CI runs).
 - **OS:** Linux, macOS or Windows. On Windows a GPU needs the pinned environment described in [Environment and GPU](#environment-and-gpu): TensorFlow ships CPU-only Windows wheels from 2.11 on, so a default install never sees the card.
-- **Disk:** ~5 GB free - trained models (~4.5 GB for 317 assets) plus `market.db` (~270 MB). Serving alone needs far less.
+- **Disk:** ~8 GB free - trained models (~5.7 GB for 830 assets) plus `market.db` (~310 MB). Serving alone needs far less.
 - **RAM:** 8 GB is enough to run the dashboard and `predict.py` (no TensorFlow at serve time). Training the full universe wants ~16 GB, or train in chunks of ~15 assets (`GTRADE_ASSETS`) on a smaller box.
 - **GPU:** optional but worth having. On one RTX 2050 a single asset trains in 158 s against 2850 to 10480 s for the same asset on a 12-thread CPU. Everything still runs without a GPU, just slower. CatBoost can also use a GPU (`GTRADE_CB_DEVICE=GPU`) but is often slower on the small per-asset datasets.
 - **Network:** outbound access to Yahoo Finance and MOEX for data (`SOCKS5_PROXY` supported).
@@ -638,7 +638,7 @@ This is the sharp edge. Keras 3 writes `.keras` as a zip archive, Keras 2 writes
 Consequences:
 
 - Switching an existing installation to this environment requires retraining every asset. There is no converter.
-- Back up `models/` before that retrain. Roughly 4.5 GB for 317 assets.
+- Back up `models/` before that retrain. Roughly 5.7 GB for 830 assets.
 - Do not mix: train in one environment and serve in the other, and the neural members silently disappear from the ensemble.
 - A champion that exists on disk but does not load now logs a `WARNING` naming the file and the reason. Grep the log for `Champion exists but did not load` after any environment change.
 
@@ -850,7 +850,7 @@ python train_levels.py --seed 7               # a different search seed
 ```
 
 `[TL]` in the launcher is the same thing with a prompt for the budget. Roughly 40
-minutes over 317 assets; it fits six numbers, so no GPU is involved and it can
+minutes over 830 assets; it fits six numbers, so no GPU is involved and it can
 run beside anything else. Nothing is written unless the gate says ADOPT, and
 `_levels_report.txt` is written either way.
 
@@ -1019,7 +1019,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 
 ## Возможности
 
-- **~849 активов в карте, 317 с обученным чемпионом, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
+- **~849 активов в карте, 830 с обученным чемпионом, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
 - **Честные, калиброванные сигналы.** BUY / SELL / WAIT с калиброванной вероятностью, пер-активными настроенными порогами и живым трек-рекордом точности, который сверяет каждое предсказание с реализованным движением следующего бара.
 - **Управление риском по замыслу.** Размер позиции по Келли, стопы по просадке, проверки секторной экспозиции и корреляций, а также индекс хвостового риска Талеба, который уменьшает размер выше мягкого порога и блокирует новые покупки выше жёсткого.
 - **Цены, а не только сигналы.** Ежедневный лист уровней превращает каждый сигнал в числа, по которым можно действовать: зона входа по ATR вокруг последнего закрытия, аварийный стоп, подтягивающийся за позицией, и размер, выведенный из расстояния до этого стопа и обрезанный лимитами риска. Те же зона входа и стоп теперь показаны и на странице самого актива, каждая выданная связка пишется в журнал и позже сверяется с реально прошедшими барами, а два ATR-множителя за ними можно подобрать на всей истории, и они принимаются только если отложенная выборка это подтвердит. Исполнение остаётся ручным.
@@ -1511,7 +1511,7 @@ python push_signals.py          # или пункт [SG] в run_gtrade.bat
 
 - **Python 3.12** (3.11+ вероятно подойдёт; CI гоняет на 3.12).
 - **ОС:** Linux, macOS или Windows. На Windows для GPU нужно закреплённое окружение из раздела [Окружение и GPU](#окружение-и-gpu): начиная с 2.11 TensorFlow собирает под Windows только CPU-колёса, поэтому обычная установка карту не увидит.
-- **Диск:** ~5 ГБ свободно - обученные модели (~4.5 ГБ на 317 активов) плюс `market.db` (~270 МБ). Только для обслуживания нужно куда меньше.
+- **Диск:** ~8 ГБ свободно - обученные модели (~5.7 ГБ на 830 активов) плюс `market.db` (~310 МБ). Только для обслуживания нужно куда меньше.
 - **RAM:** 8 ГБ хватает для дашборда и `predict.py` (без TensorFlow во время обслуживания). Обучение всей вселенной хочет ~16 ГБ, либо обучайте чанками по ~15 активов (`GTRADE_ASSETS`) на слабой машине.
 - **GPU:** опционально, но заметно окупается. На RTX 2050 один актив обучается за 158 с против 2850-10480 с на том же активе на 12-поточном CPU. Без карты всё работает, просто дольше. CatBoost тоже умеет GPU (`GTRADE_CB_DEVICE=GPU`), но на маленьких пер-активных датасетах часто медленнее.
 - **Сеть:** исходящий доступ к Yahoo Finance и MOEX для данных (`SOCKS5_PROXY` поддерживается).
@@ -1571,7 +1571,7 @@ call activate_env.bat    :: только окружение, для ручной
 Следствия:
 
 - Перевод существующей установки на это окружение требует переобучения всех активов. Конвертера нет.
-- Перед переобучением сделайте копию `models/`. Это примерно 4.5 ГБ на 317 активов.
+- Перед переобучением сделайте копию `models/`. Это примерно 5.7 ГБ на 830 активов.
 - Не смешивайте: обучение в одном окружении и обслуживание в другом молча выкидывает нейронки из ансамбля.
 - Чемпион, который лежит на диске, но не загрузился, теперь пишет `WARNING` с именем файла и причиной. После любой смены окружения ищите в логе `Champion exists but did not load`.
 
@@ -1782,7 +1782,7 @@ python train_levels.py --seed 7               # другое зерно поис
 ```
 
 Пункт `[TL]` в лаунчере делает то же самое, спросив бюджет. Порядка 40 минут на
-317 активов; подбираются шесть чисел, так что GPU не задействован и это можно
+830 активов; подбираются шесть чисел, так что GPU не задействован и это можно
 гонять параллельно с чем угодно. Без вердикта ADOPT не пишется ничего, а
 `_levels_report.txt` пишется в любом случае.
 
