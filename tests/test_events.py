@@ -128,3 +128,32 @@ def test_event_rows_merges_both_sources():
     assert earn_row["confirmed"] is False
     assert earn_row["importance"] is None
     assert len({r["id"] for r in rows}) == 2
+
+
+def test_a_moscow_listed_name_is_not_asked_for_earnings():
+    # Its ticker is carried bare (VTBR, SBER), which Yahoo cannot resolve, so
+    # asking bought one 404 per Russian asset and nothing else. The fundamentals
+    # for these come from Smart-Lab on a different path and are unaffected.
+    from core.events import can_have_earnings
+    assert can_have_earnings("VTBR", "VTBR") is False
+    assert can_have_earnings("SBER", "SBER") is False
+    # A US name with the same bare shape must still be asked.
+    assert can_have_earnings("AAPL", "AAPL") is True
+    # And a foreign listing with a suffix.
+    assert can_have_earnings("ASML.AS", "ASML") is True
+    # Without the asset name the symbol-only rules still apply.
+    assert can_have_earnings("^VIX") is False
+    assert can_have_earnings("AAPL") is True
+
+
+def test_the_scan_skips_moscow_names_without_calling_out():
+    from core import events
+    called = []
+
+    def fetch(symbol, session=None):
+        called.append(symbol)
+        return {}
+
+    events.earnings_for({"VTBR": "VTBR", "SBER": "SBER", "AAPL": "AAPL"},
+                        fetch=fetch)
+    assert called == ["AAPL"], "a Moscow-listed name was sent to the source"

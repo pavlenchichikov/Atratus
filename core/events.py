@@ -84,11 +84,32 @@ _NO_EARNINGS_MARKS = ("^", "=X", "=F", "-USD")
 _NO_EARNINGS_SYMBOLS = frozenset({"DX-Y.NYB"})   # the dollar index, dot and all
 
 
-def can_have_earnings(symbol):
-    """False for a symbol that is not a company. Cheap, string-only."""
+def _is_moex(asset):
+    """True for a Moscow-listed name. Never raises, so a config problem here
+    only costs one needless lookup rather than the whole scan."""
+    try:
+        from config import radar_category
+
+        return radar_category(asset) == "ru"
+    except Exception:
+        return False
+
+
+def can_have_earnings(symbol, asset=None):
+    """False for a symbol whose earnings this source cannot serve.
+
+    Two separate reasons, and the second needs the asset name rather than the
+    symbol. An index, an FX pair, a futures contract and a crypto pair are not
+    companies and never report. A Moscow-listed name is a company and does
+    report, but its ticker is carried here bare (VTBR, SBER), which Yahoo does
+    not resolve at all, so asking buys one 404 per asset and nothing else. The
+    fundamentals for those come from Smart-Lab elsewhere and are unaffected.
+    """
     if not symbol or symbol in _NO_EARNINGS_SYMBOLS:
         return False
-    return not any(m in symbol for m in _NO_EARNINGS_MARKS)
+    if any(m in symbol for m in _NO_EARNINGS_MARKS):
+        return False
+    return not (asset is not None and _is_moex(asset))
 
 
 def earnings_for(symbols_by_asset, session=None, fetch=None):
@@ -104,7 +125,7 @@ def earnings_for(symbols_by_asset, session=None, fetch=None):
     getter = fetch or _yf_calendar
     out = {}
     for asset, symbol in symbols_by_asset.items():
-        if not can_have_earnings(symbol):
+        if not can_have_earnings(symbol, asset):
             continue
         try:
             found = _next_earnings(getter(symbol, session))
