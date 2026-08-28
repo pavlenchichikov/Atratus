@@ -69,9 +69,21 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
     # carries the ensemble's opinion. Adding a field here is meant to be a
     # deliberate act, not a silent one.
     assert set(dossier.build("SBER", db_path=db)) == {
-        "asset", "date", "close", "atr", "atr_pct",
-        "ret_1", "ret_5", "ret_20", "high_20", "low_20", "bars_available",
+        # price and scale
+        "asset", "date", "close", "atr", "atr_pct", "bars_available",
+        # movement
+        "ret_1", "ret_5", "ret_20", "ret_60", "streak_days",
+        # where the price sits, in the asset's own units of movement
+        "high_20", "low_20", "atr_to_high_20", "atr_to_low_20", "drawdown_60",
+        # volatility against this asset's own norm, not an absolute threshold
+        "vol_20", "vol_20_vs_60",
+        # fundamentals and the calendar
         "guru_verdict", "guru_pct", "next_earnings", "macro_events",
+        # the analyst's OWN history on this asset. Not the ensemble's: these
+        # come from analyst_log, so they say what this agent previously called
+        # and how that turned out, which is the one track record it is entitled
+        # to see.
+        "past_calls", "past_hit_rate", "past_last_call", "past_last_outcome",
     }
 
 

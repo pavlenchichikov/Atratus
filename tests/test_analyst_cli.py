@@ -256,7 +256,8 @@ def test_a_named_run_bypasses_the_dossier_hash_skip(monkeypatch, tmp_path):
                         lambda a, **k: {"asset": a, "date": "2026-01-01",
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
-    monkeypatch.setattr(analyst.agent, "judge", lambda d, call=None: None)
+    monkeypatch.setattr(analyst.agent, "judge",
+                        lambda d, call=None, depth=None: None)
     monkeypatch.setenv("GTRADE_ANALYST", "1")
 
     class A:
@@ -280,3 +281,70 @@ def test_the_provider_switch_only_affects_this_run(monkeypatch):
     # _load_table returning None exits before any call, but the override must
     # already have been applied - it is set before the provider is resolved.
     assert os.getenv("GTRADE_AR_LLM") in ("anthropic", "ollama")
+
+
+def test_depth_defaults_to_full_when_an_asset_is_named(monkeypatch):
+    # Naming an asset is a person asking to read the reasoning; a sweep is a
+    # throughput job. The default has to follow that intent, because on a local
+    # model the difference is 2189s against 637s per asset.
+    import analyst
+    seen = {}
+    monkeypatch.setenv("GTRADE_ANALYST", "1")
+    monkeypatch.setattr(analyst, "_load_table", lambda: {"asset": {}, "class": {}})
+    monkeypatch.setattr(analyst, "_provider_call", lambda: (lambda p: "{}"))
+    monkeypatch.setattr(analyst, "_eligible", lambda *a, **k: ["AAPL"])
+    monkeypatch.setattr(analyst.store, "ensure_table", lambda *a, **k: None)
+    monkeypatch.setattr(analyst.store, "scored_rows", lambda *a, **k: [])
+    monkeypatch.setattr(analyst.store, "judged_with_hash", lambda *a, **k: False)
+    monkeypatch.setattr(analyst.dossier, "build",
+                        lambda a, **k: {"asset": a, "date": "2026-01-01",
+                                        "close": 100.0, "atr": 2.0})
+    monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
+    def _record(d, call=None, depth=None):
+        # Записываем глубину и отказываемся судить: возврат суждения потянул
+        # бы за собой калибровку, а этот тест не про неё. Неявный None здесь и
+        # есть отказ, ровно как у настоящего judge.
+        seen["depth"] = depth
+
+    monkeypatch.setattr(analyst.agent, "judge", _record)
+
+    class Named:
+        assets, llm, model, depth = "SBER", None, None, None
+
+    class Sweep:
+        assets, llm, model, depth = None, None, None, None
+
+    analyst.cmd_run(Named())
+    assert seen["depth"] == "full"
+
+    seen.clear()
+    analyst.cmd_run(Sweep())
+    assert seen["depth"] == "brief"
+
+
+def test_an_explicit_depth_overrides_the_default(monkeypatch):
+    import analyst
+    seen = {}
+    monkeypatch.setenv("GTRADE_ANALYST", "1")
+    monkeypatch.setattr(analyst, "_load_table", lambda: {"asset": {}, "class": {}})
+    monkeypatch.setattr(analyst, "_provider_call", lambda: (lambda p: "{}"))
+    monkeypatch.setattr(analyst.store, "ensure_table", lambda *a, **k: None)
+    monkeypatch.setattr(analyst.store, "scored_rows", lambda *a, **k: [])
+    monkeypatch.setattr(analyst.store, "judged_with_hash", lambda *a, **k: False)
+    monkeypatch.setattr(analyst.dossier, "build",
+                        lambda a, **k: {"asset": a, "date": "2026-01-01",
+                                        "close": 100.0, "atr": 2.0})
+    monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
+    def _record(d, call=None, depth=None):
+        # Записываем глубину и отказываемся судить: возврат суждения потянул
+        # бы за собой калибровку, а этот тест не про неё. Неявный None здесь и
+        # есть отказ, ровно как у настоящего judge.
+        seen["depth"] = depth
+
+    monkeypatch.setattr(analyst.agent, "judge", _record)
+
+    class A:
+        assets, llm, model, depth = "SBER", None, None, "brief"
+
+    analyst.cmd_run(A())
+    assert seen["depth"] == "brief"

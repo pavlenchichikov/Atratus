@@ -42,8 +42,22 @@ def _first_json_object(text):
     return None
 
 
-def prompt_for(dossier):
+BRIEF_TAIL = (
+    "Do NOT return a price, a target, or a percentage. Conviction 1 means "
+    "barely a lean; 5 means you would stake the account on it. In the thesis, "
+    "quote the numbers you actually used and say what would change your mind."
+)
+
+
+def prompt_for(dossier, depth="full"):
     """The judgment prompt. Carries the dossier and nothing else.
+
+    `depth` buys substance with time, and on a local model the exchange rate is
+    steep: measured on gemma4:12b over one asset, the brief form answered in
+    637s with a 383-character thesis and the full form in 2189s with a
+    1044-character one. That is 3.4 times the wall clock for 2.7 times the
+    reasoning, which is worth it for one asset a person asked about and not
+    worth it for a sweep of the whole watchlist.
 
     Note what is absent: the ensemble's probability, signal, timing/shadow
     action - no channel of the model's own opinion reaches this prompt (see
@@ -60,16 +74,40 @@ def prompt_for(dossier):
           '{"direction": "up|down|flat", "conviction": 1-5, '
           '"vol_regime": "calm|normal|elevated", '
           '"key_risk": "the one thing most likely to make this wrong", '
-          '"thesis": "three to five sentences", '
+          '"thesis": "six to ten sentences", '
           '"evidence": ["names of the fields above you actually used"]}\n'
+        + (BRIEF_TAIL if depth == "brief" else
           "Do NOT return a price, a target, or a percentage. Conviction 1 "
           "means barely a lean; 5 means you would stake the account on it.\n"
-          "In the thesis, be concrete and quote the numbers you actually "
-          "used: which fields moved you and in which direction, how the "
-          "recent move compares with this asset's own volatility, what the "
-          "next few days hinge on, and what would change your mind. Name the "
-          "things you are NOT leaning on where they might be assumed. Write "
-          "for someone deciding whether to argue with you, not for a log."
+          "The thesis is the part a person can argue with, so make it worth "
+          "arguing with. Work through these in order, in prose rather than as "
+          "a list:\n"
+          "1. Where the price sits. Use atr_to_high_20 and atr_to_low_20, "
+          "which are distances in this asset's own units of movement, and "
+          "drawdown_60. Say whether the price is stretched or mid-range.\n"
+          "2. What the move has been. Compare ret_5, ret_20 and ret_60 and say "
+          "whether they agree. A short-term bounce inside a long decline is a "
+          "different situation from a steady trend, and streak_days tells you "
+          "which.\n"
+          "3. What the volatility says. vol_20_vs_60 is current volatility "
+          "against this asset's own recent norm, so a value near 1 means "
+          "ordinary conditions for THIS asset regardless of the absolute "
+          "number.\n"
+          "4. What the fundamentals and the calendar add, if anything. "
+          "guru_verdict is a value-investing council, a slow signal; say "
+          "plainly when it is irrelevant to a one-day view rather than "
+          "citing it for the sake of it. next_earnings and macro_events "
+          "matter only if they are close.\n"
+          "5. Your own record here. past_calls, past_hit_rate and "
+          "past_last_call are YOUR previous judgments on this asset and how "
+          "they resolved. If you were recently wrong in the direction you are "
+          "about to choose again, say so and justify repeating it.\n"
+          "6. What would change your mind, concretely: a level, a move, or an "
+          "event, not a vague condition.\n"
+          "Quote the numbers you use. Name what you are deliberately NOT "
+          "leaning on where a reader might assume you did. If the evidence is "
+          "thin, say the case is thin and pick conviction 1 or 2 rather than "
+          "dressing up a guess.")
     )
 
 
@@ -104,12 +142,12 @@ def parse_judgment(text, allowed=None):
     return {"direction": data["direction"],
             "conviction": int(data["conviction"]),
             "vol_regime": data["vol_regime"],
-            "key_risk": str(data.get("key_risk") or "")[:200],
-            "thesis": str(data.get("thesis") or "")[:1200],
+            "key_risk": str(data.get("key_risk") or "")[:400],
+            "thesis": str(data.get("thesis") or "")[:2500],
             "evidence": evidence}
 
 
-def judge(dossier, call=None):
+def judge(dossier, call=None, depth="full"):
     """One judgment for one dossier, or None when the model will not produce one.
 
     Returning None rather than a default is the point: a fabricated neutral
@@ -117,7 +155,7 @@ def judge(dossier, call=None):
     """
     if call is None:
         raise ValueError("judge() needs an injected call; see analyst.py")
-    prompt = prompt_for(dossier)
+    prompt = prompt_for(dossier, depth=depth)
     allowed = set(dossier)
     for _ in range(MAX_ATTEMPTS):
         try:

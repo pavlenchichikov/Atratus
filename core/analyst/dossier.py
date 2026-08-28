@@ -67,6 +67,82 @@ def _context(asset):
     }
 
 
+def _atr_distance(price, level, atr):
+    """How far a level sits from the price, in ATR. None when either is absent.
+
+    A percentage says nothing without knowing how much this asset normally
+    moves; two ATR is a long way for a bond ETF and an ordinary Tuesday for a
+    small-cap. The model needs the distance in the asset's own units.
+    """
+    if price is None or level is None or not atr:
+        return None
+    return (level - price) / atr
+
+
+def _realized_vol(closes, window):
+    """Standard deviation of daily returns over `window` bars, as a fraction."""
+    if len(closes) < window + 1:
+        return None
+    rets = [(closes[i] - closes[i - 1]) / closes[i - 1]
+            for i in range(len(closes) - window, len(closes)) if closes[i - 1]]
+    if len(rets) < 2:
+        return None
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+    return var ** 0.5
+
+
+def _streak(closes):
+    """Consecutive closes in one direction, signed. Positive is up."""
+    if len(closes) < 2:
+        return None
+    step = 1 if closes[-1] >= closes[-2] else -1
+    n = 0
+    for i in range(len(closes) - 1, 0, -1):
+        up = 1 if closes[i] >= closes[i - 1] else -1
+        if up != step:
+            break
+        n += 1
+    return step * n
+
+
+def _own_record(asset):
+    """What this analyst has already said about this asset, and how it went.
+
+    The design named the agent's own track record as a dossier input and it was
+    never wired in. Without it the analyst repeats a call it has already been
+    wrong about and has no way to know. Scored rows only: an unresolved
+    judgment is an opinion, not evidence.
+    """
+    try:
+        from core.analyst import store
+
+        rows = [r for r in store.scored_rows() if r.get("asset") == asset]
+    except Exception:
+        return {"past_calls": 0, "past_hit_rate": None, "past_last_call": None,
+                "past_last_outcome": None}
+    if not rows:
+        return {"past_calls": 0, "past_hit_rate": None, "past_last_call": None,
+                "past_last_outcome": None}
+    hits = 0
+    for r in rows:
+        realized = r.get("realized_ret")
+        if realized is None:
+            continue
+        want_up = r.get("direction") == "up"
+        want_down = r.get("direction") == "down"
+        if (want_up and realized > 0) or (want_down and realized < 0):
+            hits += 1
+    last = rows[-1]
+    return {
+        "past_calls": len(rows),
+        "past_hit_rate": round(hits / len(rows), 3) if rows else None,
+        "past_last_call": last.get("direction"),
+        "past_last_outcome": (round(last["realized_ret"], 5)
+                              if last.get("realized_ret") is not None else None),
+    }
+
+
 def build(asset, db_path=None, today=None):
     """One asset's dossier. Missing pieces are None, never absent, so that the
     prompt and the hash have a fixed shape regardless of what was available."""
@@ -78,6 +154,12 @@ def build(asset, db_path=None, today=None):
     atr = atr_abs(bars) if len(bars) >= ATR_PERIOD else None
     closes = [b["close"] for b in bars]
 
+    high_20 = max(closes[-RECENT_BARS:]) if closes else None
+    low_20 = min(closes[-RECENT_BARS:]) if closes else None
+    high_60 = max(closes[-60:]) if closes else None
+    vol_now = _realized_vol(closes, 20)
+    vol_ref = _realized_vol(closes, 60)
+
     return {
         "asset": asset,
         "date": bars[-1]["date"] if bars else None,
@@ -87,10 +169,24 @@ def build(asset, db_path=None, today=None):
         "ret_1": _pct(closes[-2], closes[-1]) if len(closes) >= 2 else None,
         "ret_5": _pct(closes[-6], closes[-1]) if len(closes) >= 6 else None,
         "ret_20": _pct(closes[-21], closes[-1]) if len(closes) >= 21 else None,
-        "high_20": max(closes[-RECENT_BARS:]) if closes else None,
-        "low_20": min(closes[-RECENT_BARS:]) if closes else None,
+        "ret_60": _pct(closes[-61], closes[-1]) if len(closes) >= 61 else None,
+        "high_20": high_20,
+        "low_20": low_20,
+        # The same two levels in the asset's own units of movement, which is
+        # what makes "close to the low" mean something comparable across a
+        # bond ETF and a small-cap.
+        "atr_to_high_20": _atr_distance(close, high_20, atr),
+        "atr_to_low_20": _atr_distance(close, low_20, atr),
+        "drawdown_60": _pct(high_60, close) if high_60 else None,
+        # Volatility measured against this asset's own recent norm rather than
+        # an absolute threshold: 2 percent daily is calm for one name and a
+        # crisis for another.
+        "vol_20": vol_now,
+        "vol_20_vs_60": (vol_now / vol_ref) if (vol_now and vol_ref) else None,
+        "streak_days": _streak(closes),
         "bars_available": len(bars),
         **_context(asset),
+        **_own_record(asset),
     }
 
 

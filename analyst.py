@@ -106,8 +106,15 @@ def cmd_run(args):
     # for it now rather than being told it was already judged today.
     named = _named_assets(getattr(args, "assets", None))
     targets = named or _eligible()
-    print("[analyst] %d asset(s) via %s%s" % (
-        len(targets), os.getenv("GTRADE_AR_LLM", "anthropic"),
+
+    # Naming an asset means a person wants to read the reasoning, so it gets
+    # the full structured prompt. A sweep wants throughput and gets the brief
+    # one. Measured on the local model: 2189s per asset full against 637s
+    # brief, which turns a 28-asset watchlist pass from five hours into
+    # seventeen. --depth overrides when the default guesses wrong.
+    depth = getattr(args, "depth", None) or ("full" if named else "brief")
+    print("[analyst] %d asset(s) via %s, depth %s%s" % (
+        len(targets), os.getenv("GTRADE_AR_LLM", "anthropic"), depth,
         " (named)" if named else ""))
 
     written = skipped = refused = 0
@@ -121,7 +128,7 @@ def cmd_run(args):
             skipped += 1
             continue
 
-        j = agent.judge(d, call=call)
+        j = agent.judge(d, call=call, depth=depth)
         if j is None:
             refused += 1
             continue
@@ -306,6 +313,9 @@ def main(argv=None):
     run.add_argument("--llm", choices=("anthropic", "openai", "ollama"),
                      help="provider for this run only")
     run.add_argument("--model", help="model name for this run only")
+    run.add_argument("--depth", choices=("brief", "full"),
+                     help="how much reasoning to ask for. Default: full for a "
+                          "named asset, brief for a sweep")
     run.set_defaults(fn=cmd_run)
     sub.add_parser("score").set_defaults(fn=cmd_score)
     sub.add_parser("backfill").set_defaults(fn=cmd_backfill)
