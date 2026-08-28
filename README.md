@@ -872,6 +872,45 @@ TensorFlow on Windows is CPU-only since 2.11, so neural training runs on CPU - f
 
 TensorFlow accumulates memory across many assets in one process, so a full 849-asset retrain on a memory-constrained box is best run in chunks (~15 assets via `GTRADE_ASSETS`), restarting a fresh process per chunk; the champion registry accumulates per asset, so chunks add up to a full run.
 
+`train_chunked.py` is that run, automated. It splits the asset list, starts a
+fresh `train_hybrid` process per chunk so TensorFlow's memory goes back to the
+operating system between them, and merges the quality report at the end. It is
+what `[5C]` and `[5F]` in the launcher call.
+
+```bash
+python train_chunked.py                          # every asset, chunks of 15, 2 processes
+python train_chunked.py --jobs 1                 # one process, if a chunk dies out of memory
+python train_chunked.py --assets-file list.txt   # only the assets named in the file
+python train_chunked.py --assets-file list.txt --force-promote
+```
+
+Two chunk processes is the default because net training is host-bound: measured
+on four assets, two processes finished in 458.8 s against 624.8 s for one, 27
+percent faster, while each individual process ran 43 percent slower. The gain is
+overlap, not extra work on the card.
+
+What makes that safe is that everything sized against the whole box is divided
+before a second process starts. The VRAM pool share is read from the same
+campaign profile the unattended research run uses, so both launchers load the
+card identically; the worker count is halved so the number of assets training at
+once does not go up; and `GTRADE_NEURAL_SLOTS` is pinned to 1, because the
+parallelism is the process count and a second slot INSIDE a process is what
+handed models the wrong sequence length and silently emptied 27 genomes.
+
+The card is asked before the second process is launched. Two processes on a card
+with 140 MiB of headroom do not fail cleanly: they ran for 15000 s without
+finishing a single asset, with no out-of-memory line at all. So if something else
+holds the GPU, a local model server for instance, the run says so and drops to
+one process instead of hanging:
+
+```
+[GPU] 1548 MiB free fits 1 chunk process(es), not 2. Running 1.
+```
+
+Use `--force-promote` only when repairing: it rewrites a champion even when the
+challenger loses, which is what you want for an asset whose files and registry
+entry disagree, and not what you want on an ordinary retrain.
+
 A champion's registry entry is written the moment its model files are, not once
 at the end of the run. Before that, an interrupted retrain left assets whose
 `.cbm` on disk was newer than the entry describing it, and serving then handed a
@@ -1803,6 +1842,47 @@ python train_levels.py --seed 7               # другое зерно поис
 TensorFlow на Windows только-CPU с версии 2.11, поэтому нейро-обучение идёт на CPU - нормально для дневных данных. Для GPU используйте WSL2 и `pip install tensorflow[and-cuda]`.
 
 TensorFlow накапливает память по многим активам в одном процессе, поэтому полный ретрейн на 849 активов на машине с ограниченной памятью лучше гонять чанками (~15 активов через `GTRADE_ASSETS`), перезапуская свежий процесс на каждый чанк; реестр чемпионов накапливается по активам, так что чанки складываются в полный прогон. Готовый оркестратор для этого - `train_chunked.py`.
+
+`train_chunked.py` это тот же прогон, автоматизированный. Он делит список
+активов, поднимает свежий процесс `train_hybrid` на каждый кусок, чтобы память
+TensorFlow возвращалась операционной системе между ними, и в конце сливает
+отчёт о качестве. Именно его вызывают пункты `[5C]` и `[5F]` в меню.
+
+```bash
+python train_chunked.py                          # все активы, куски по 15, 2 процесса
+python train_chunked.py --jobs 1                 # один процесс, если кусок падает по памяти
+python train_chunked.py --assets-file list.txt   # только активы из файла
+python train_chunked.py --assets-file list.txt --force-promote
+```
+
+Два процесса по умолчанию, потому что обучение сетей упирается в хост, а не в
+карту: на четырёх активах два процесса закрылись за 458.8 с против 624.8 с у
+одного, то есть на 27 процентов быстрее, при том что каждый процесс по
+отдельности стал на 43 процента медленнее. Выигрыш даёт перекрытие ожиданий, а
+не дополнительная работа на карте.
+
+Безопасным это делает то, что всё, посчитанное на всю машину, делится до
+запуска второго процесса. Доля пула видеопамяти берётся из того же профиля
+кампании, на котором работает автономный исследовательский прогон, поэтому оба
+запускающих грузят карту одинаково; число воркеров делится пополам, чтобы
+количество одновременно обучаемых активов не выросло; а `GTRADE_NEURAL_SLOTS`
+прибит к единице, потому что параллелизм здесь это число процессов, а второй
+слот ВНУТРИ процесса это то, что раздало моделям неверную длину
+последовательности и молча опустошило 27 геномов.
+
+Карту спрашивают до запуска второго процесса. Два процесса при запасе в 140 MiB
+не падают честно: они проработали 15000 секунд, не закончив ни одного актива, и
+без единой строки о нехватке памяти. Поэтому если карту держит что-то ещё,
+например локальный сервер модели, прогон сообщает об этом и откатывается к
+одному процессу вместо зависания:
+
+```
+[GPU] 1548 MiB free fits 1 chunk process(es), not 2. Running 1.
+```
+
+`--force-promote` нужен только при починке: он переписывает чемпиона даже когда
+претендент проиграл. Это то, что нужно активу, у которого файлы и запись в
+реестре разошлись, и не то, что нужно обычному переобучению.
 
 Запись чемпиона в реестр делается в тот же момент, что и файлы его моделей, а не
 один раз в конце прогона. До этого прерванный ретрейн оставлял активы, у которых

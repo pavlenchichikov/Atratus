@@ -110,8 +110,6 @@ ab_objective_v2.py
 tests/test_ab_labeling.py
 tests/test_ab_objective.py
 tests/test_ab_noise.py
-tests/test_train_chunked_local.py
-train_chunked.py
 # Fitted levels policy and its run report: the policy is the edge, same
 # reasoning as adopted_genome.json, and the report is local run state.
 levels_policy.json
