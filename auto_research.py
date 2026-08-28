@@ -453,12 +453,72 @@ def chunk_subsets(subset, size):
     return [",".join(assets[i:i + size]) for i in range(0, len(assets), size)]
 
 
-def train_jobs():
-    """How many training chunks run at once. 1 (the default) is sequential."""
+# Memory a training process holds OUTSIDE the TF pool: the CUDA context plus
+# cuDNN workspaces. Derived from the 2026-08-17 measurement, where two
+# processes at a 1024 MiB pool each peaked at 3956 MiB in total.
+VRAM_OVERHEAD_MB = 950
+
+
+def free_vram_mb():
+    """Free VRAM in MiB, or None when the card cannot be asked."""
     try:
-        return max(1, int(os.getenv("GTRADE_AR_TRAIN_JOBS", "1") or 1))
+        import subprocess
+
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, check=False)
+        if r.returncode == 0:
+            return int(r.stdout.strip().split("\n")[0].strip())
+    except Exception:
+        pass
+    return None
+
+
+def gpu_fit_jobs(jobs, pool_pct=None, free_mb=None):
+    """How many training processes the card can actually take right now.
+
+    The 2026-08-24 failure was not an exception. Two processes on a card with
+    140 MiB of headroom did not OOM and did not raise; they ran for 15000 s
+    without finishing a single asset. Nothing checked first, so there was
+    nothing to report and no way to tell a stall from slow progress.
+
+    This is that check. It is deliberately arithmetic and pessimistic: pool
+    plus a measured per-process overhead, against what the card says is free.
+    Returning fewer jobs than asked costs wall clock; not returning fewer costs
+    a night.
+    """
+    if jobs <= 1:
+        return jobs
+    free = free_mb if free_mb is not None else free_vram_mb()
+    if not free:
+        return jobs          # no card or no answer: leave the caller's choice
+    try:
+        pct = float(pool_pct if pool_pct is not None
+                    else (os.getenv("GTRADE_TF_POOL_PCT") or "0.34"))
+    except (TypeError, ValueError):
+        pct = 0.34
+    per_process = max(640, int(free * pct / jobs)) + VRAM_OVERHEAD_MB
+    fits = max(1, int(free // per_process))
+    return min(jobs, fits)
+
+
+def train_jobs():
+    """How many training chunks run at once, after the card has been asked.
+
+    Two by default: measured 27 percent faster than one on the same four
+    assets, because net training is host-bound and the gain comes from overlap.
+    gpu_fit_jobs is what keeps that from turning into the 15000-second stall.
+    """
+    try:
+        want = max(1, int(os.getenv("GTRADE_AR_TRAIN_JOBS", "2") or 2))
     except ValueError:
-        return 1
+        want = 2
+    fits = gpu_fit_jobs(want)
+    if fits < want:
+        print("[ar] GPU has %s MiB free, which fits %d training process(es), "
+              "not %d. Running %d." % (free_vram_mb(), fits, want, fits))
+    return fits
 
 
 def effective_chunk_size(subset, size=None, jobs=None):

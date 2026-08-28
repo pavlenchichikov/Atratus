@@ -2461,3 +2461,42 @@ def test_regate_mode_is_reachable_from_the_environment_alone(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_AXES", "hyper")
     ar.main()
     assert seen == {}
+
+
+def test_two_processes_only_when_the_card_can_take_them():
+    # The 2026-08-24 failure was a stall, not an exception: two processes on
+    # 140 MiB of headroom ran 15000 s without finishing an asset. Nothing
+    # checked the card first, so there was nothing to report. This is that
+    # check, and it has to be pessimistic: fewer jobs costs wall clock, too
+    # many costs a night.
+    import auto_research as ar
+    assert ar.gpu_fit_jobs(2, pool_pct=0.34, free_mb=4096) == 2
+    assert ar.gpu_fit_jobs(2, pool_pct=0.34, free_mb=3600) == 2
+    # A card with a local LLM resident cannot take two, and says so instead of
+    # hanging.
+    assert ar.gpu_fit_jobs(2, pool_pct=0.34, free_mb=1680) == 1
+    assert ar.gpu_fit_jobs(2, pool_pct=0.34, free_mb=900) == 1
+
+
+def test_one_job_is_never_reduced_and_never_asks_the_card():
+    import auto_research as ar
+    assert ar.gpu_fit_jobs(1, pool_pct=0.34, free_mb=1) == 1
+
+
+def test_an_unreadable_card_leaves_the_choice_alone(monkeypatch):
+    # No GPU, or nvidia-smi missing: guessing "one" would silently halve a CPU
+    # box's throughput, so the caller's choice stands. free_mb=None means "not
+    # supplied, go and ask", which is why the reader itself is stubbed here
+    # rather than the argument.
+    import auto_research as ar
+    monkeypatch.setattr(ar, "free_vram_mb", lambda: None)
+    assert ar.gpu_fit_jobs(2, pool_pct=0.34) == 2
+
+
+def test_the_pool_floor_is_respected_when_the_percentage_is_tiny():
+    # Below the floor the pool cannot shrink further, so the fit calculation
+    # must use the floor rather than the percentage, or it would promise room
+    # that train_hybrid will not honour.
+    import auto_research as ar
+    assert ar.gpu_fit_jobs(2, pool_pct=0.01, free_mb=4096) == 2
+    assert ar.gpu_fit_jobs(2, pool_pct=0.01, free_mb=2400) == 1

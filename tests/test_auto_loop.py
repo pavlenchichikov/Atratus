@@ -447,6 +447,10 @@ def test_only_the_first_parallel_chunk_writes_the_real_progress_files():
 def test_chunks_train_in_parallel_and_the_rows_stay_in_order(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "2")
     monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "2")
+    # train_jobs asks the card before agreeing to two processes, which is the
+    # point of it. A test about ORDERING must not also depend on how much VRAM
+    # this particular box happens to have spare, so the card is stubbed roomy.
+    monkeypatch.setattr(ar, "free_vram_mb", lambda: 4096)
     seen = []
     monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
         seen.append((sub, env.get("GTRADE_TF_POOL_PCT"))) or
@@ -471,13 +475,19 @@ def test_one_job_keeps_the_sequential_path_byte_identical(monkeypatch):
 
 
 def test_the_safe_retry_also_drops_back_to_one_training_process():
-    """Two processes peak at 3956 MiB of a 4096 MiB card. Measured 2026-08-24,
-    that margin does not fail cleanly: two processes did not finish a single
-    asset in 15000 s where one finished four in 1039. So one is the campaign
-    default now, and the retry can only ever narrow, never widen."""
+    """Two processes are the campaign default again, and the retry still only
+    narrows.
+
+    They peaked at 3956 MiB of a 4096 MiB card and stalled for 15000 s on the
+    140 MiB that left. Two things made that possible and both are fixed: the
+    pool was sized from memory.TOTAL rather than memory.free, and its 1024 MiB
+    floor made the percentage unshrinkable, so lowering it changed nothing. At
+    a 0.34 pool each process now takes about 696 MiB and the projected peak
+    leaves roughly 800 MiB spare, and auto_research.gpu_fit_jobs refuses the
+    second process outright when the card cannot actually take it."""
     campaign = int(auto_loop.CAMPAIGN["GTRADE_AR_TRAIN_JOBS"])
     safe = int(auto_loop.SAFE_LOAD["GTRADE_AR_TRAIN_JOBS"])
-    assert campaign == 1
+    assert campaign == 2
     assert safe <= campaign
 
 
@@ -499,6 +509,7 @@ def test_one_job_leaves_the_chunk_cap_exactly_as_configured():
 
 
 def test_the_search_path_itself_splits_not_only_the_cached_one(monkeypatch):
+    monkeypatch.setattr(ar, "free_vram_mb", lambda: 4096)
     """The miss this covers: parallelism lived in _cached_train, but run_axis and
     run_qd hand `train_env` to the trainer directly, so every candidate - the
     hours of the run - went past the split while only the base was parallel."""

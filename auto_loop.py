@@ -108,7 +108,7 @@ CAMPAIGN = {
     # holds about 6 GB and only 4.1 is free, so more workers is the one knob
     # here that trades a stall for a swap.
     "GTRADE_CB_THREADS": "12",
-    "GTRADE_TF_POOL_PCT": "0.50",
+    "GTRADE_TF_POOL_PCT": "0.34",
     "GTRADE_NEURAL_SLOTS": "1",
     # Two training PROCESSES, which is the parallelism that works: each gets its
     # own TF graph, so the shape mismatch that a second in-process slot causes
@@ -123,9 +123,20 @@ CAMPAIGN = {
     # illumination unit: one process finished the four tier assets in 1039 and
     # 1299 s across two seeds; two processes did not finish a SINGLE asset in
     # 15000 s, with no OOM line, the GPU pinned at 100 percent utilisation and
-    # 3 percent memory traffic. So the default is one, and the honest way back
-    # to two is to lower GTRADE_TF_POOL_PCT, not to raise this.
-    "GTRADE_AR_TRAIN_JOBS": "1",
+    # 3 percent memory traffic.
+    #
+    # Two is the default again, and the two things that made it unsafe are
+    # fixed rather than avoided. First, train_hybrid sized its pool from
+    # memory.TOTAL, so it handed out memory another process already held;
+    # it now reads memory.free. Second, its floor of 1024 MiB made the pool
+    # unshrinkable, so lowering this percentage did nothing and both processes
+    # took 1024 regardless; the floor is now 640. At 0.34 each process gets
+    # about 696 MiB of pool against 1024 before, which puts the projected peak
+    # near 3.3 GB and leaves roughly 800 MiB of headroom instead of 140.
+    # gpu_fit_jobs() checks the card before the run and drops to one process
+    # when the memory is not actually there, so the failure mode is an
+    # explained fallback in seconds rather than a stall measured in hours.
+    "GTRADE_AR_TRAIN_JOBS": "2",
 }
 
 # The load half of CAMPAIGN: what a phase runs the box at, as opposed to what it

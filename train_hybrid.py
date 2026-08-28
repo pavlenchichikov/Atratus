@@ -43,7 +43,7 @@ if gpus:
         try:
             import subprocess as _sp_vram
             _smi_r = _sp_vram.run(
-                ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
                 capture_output=True, text=True, timeout=5, check=False,
             )
             if _smi_r.returncode == 0:
@@ -52,7 +52,11 @@ if gpus:
             logger.debug("VRAM detection failed: %s", _e)
 
         if _vram_mb and _vram_mb > 0:
-            # Reserve 60% of VRAM for TF pool, leave rest for cuDNN + OS.
+            # FREE vram, not total: another process on the card (a local
+            # LLM server, a second training process) already holds part of
+            # it, and sizing the pool against the total is how a card that
+            # looks like it has 4 GB hands out 2 GB it does not have.
+            # Reserve a share of it for TF, leave the rest for cuDNN + OS.
             # GTRADE_TF_POOL_PCT trades pool for headroom: cuDNN allocates its
             # workspaces OUTSIDE this pool, which is why GTRADE_NEURAL_SLOTS>1
             # OOMs at the default on a 4GB card. Shrink the pool first, then
@@ -63,7 +67,13 @@ if gpus:
                 _pool_pct = 0.60
             _pool_pct = min(max(_pool_pct, 0.20), 0.90)
             _tf_pool_mb = int(_vram_mb * _pool_pct)
-            _tf_pool_mb = max(1024, min(_tf_pool_mb, _vram_mb - 1024))  # at least 1GB free
+            # The floor used to be 1024 MiB, which quietly made the pool
+            # UNSHRINKABLE: two training processes each take pool_pct/2,
+            # and at any pct below 0.5 on a 4 GB card the floor put both
+            # back to 1024 anyway. That is why the two-process run peaked
+            # at 3956 of 4096 and stalled on 140 MiB of headroom, and why
+            # the advice to lower GTRADE_TF_POOL_PCT could not work.
+            _tf_pool_mb = max(640, min(_tf_pool_mb, _vram_mb - 640))
             tf.config.set_logical_device_configuration(
                 gpus[0],
                 [tf.config.LogicalDeviceConfiguration(memory_limit=_tf_pool_mb)]
