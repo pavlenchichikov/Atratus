@@ -224,6 +224,28 @@ def price_series_many(assets, days: int = 60, db_path=None) -> dict:
         con.close()
 
 
+def volume_series(asset: str, days: int = 60, db_path=None) -> list:
+    """Last `days` bars of traded volume and turnover, ascending by date.
+
+    ohlc_series deliberately returns price only, because every caller of it so
+    far wants price. Volume is a separate question and gets a separate reader
+    rather than a wider row that four other callers would have to ignore.
+    """
+    table = _table_name(asset)
+    with _connect(db_path) as con:
+        try:
+            rows = con.execute(
+                f'SELECT Date, Volume, Value FROM "{table}" '
+                f'ORDER BY Date DESC LIMIT ?',
+                (days,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    rows.reverse()
+    return [{"date": str(d)[:10], "volume": v, "value": val}
+            for d, v, val in rows if v is not None]
+
+
 def ohlc_series(asset: str, days: int = 120, db_path=None) -> list:
     """Last `days` OHLC bars ascending by date: [{date,open,high,low,close}, ...]."""
     table = _table_name(asset)

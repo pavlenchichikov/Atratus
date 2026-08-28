@@ -14,7 +14,7 @@ import hashlib
 import json
 
 from core.levels import ATR_PERIOD, atr_abs
-from core.track_record import ohlc_series
+from core.track_record import ohlc_series, volume_series
 
 FORBIDDEN_KEYS = frozenset({
     "probability", "cb_prob", "lstm_prob", "meta_prob", "signal",
@@ -143,6 +143,181 @@ def _own_record(asset):
     }
 
 
+# Which index an asset is naturally read against. Without this the analyst can
+# see that a name fell six percent and has no way to tell whether the whole
+# market fell with it, which is the first thing a person would ask.
+BENCHMARK_BY_CLASS = {
+    "ru": "IMOEX",
+    "us": "SP500",
+    "eu": "STOXX600",
+    "crypto": "BTC",
+    "commodity": "DBC",
+}
+FEAR_GAUGE = "VIX"
+
+
+def _median(values):
+    vals = sorted(v for v in values if v is not None)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
+
+
+def _series_ret(asset, span, db_path, today):
+    """Return of one asset over `span` bars, from the same local database."""
+    bars = ohlc_series(asset, days=span + 5, db_path=db_path)
+    if today is not None:
+        bars = [b for b in bars if b["date"] <= today]
+    closes = [b["close"] for b in bars]
+    if len(closes) < span + 1 or not closes[-(span + 1)]:
+        return None
+    return (closes[-1] - closes[-(span + 1)]) / closes[-(span + 1)]
+
+
+def _correlation(a_closes, b_closes):
+    """Pearson correlation of daily returns over the overlapping tail."""
+    n = min(len(a_closes), len(b_closes))
+    if n < 21:
+        return None
+    a, b = a_closes[-n:], b_closes[-n:]
+    ra = [(a[i] - a[i - 1]) / a[i - 1] for i in range(1, n) if a[i - 1]]
+    rb = [(b[i] - b[i - 1]) / b[i - 1] for i in range(1, n) if b[i - 1]]
+    m = min(len(ra), len(rb))
+    if m < 20:
+        return None
+    ra, rb = ra[-m:], rb[-m:]
+    ma, mb = sum(ra) / m, sum(rb) / m
+    cov = sum((ra[i] - ma) * (rb[i] - mb) for i in range(m))
+    va = sum((x - ma) ** 2 for x in ra) ** 0.5
+    vb = sum((x - mb) ** 2 for x in rb) ** 0.5
+    if not va or not vb:
+        return None
+    return cov / (va * vb)
+
+
+def _market_context(asset, bars, db_path, today):
+    """Where the market stood while this asset did whatever it did.
+
+    Local only: every one of these is already an asset in the map with its own
+    table, so this costs a few sqlite reads and no network at all.
+    """
+    from config import radar_category
+
+    bench = BENCHMARK_BY_CLASS.get(radar_category(asset))
+    out = {"benchmark": bench, "benchmark_ret_1": None, "benchmark_ret_20": None,
+           "corr_to_benchmark_60": None, "vix_level": None, "vix_chg_20": None}
+    if bench and bench != asset:
+        out["benchmark_ret_1"] = _series_ret(bench, 1, db_path, today)
+        out["benchmark_ret_20"] = _series_ret(bench, 20, db_path, today)
+        bb = ohlc_series(bench, days=70, db_path=db_path)
+        if today is not None:
+            bb = [b for b in bb if b["date"] <= today]
+        out["corr_to_benchmark_60"] = _correlation(
+            [b["close"] for b in bars], [b["close"] for b in bb])
+    if asset != FEAR_GAUGE:
+        vix = ohlc_series(FEAR_GAUGE, days=30, db_path=db_path)
+        if today is not None:
+            vix = [b for b in vix if b["date"] <= today]
+        if vix:
+            out["vix_level"] = vix[-1]["close"]
+            out["vix_chg_20"] = _series_ret(FEAR_GAUGE, 20, db_path, today)
+    return out
+
+
+def _flow(asset, bars, atr, db_path, today):
+    """Volume against its own norm, the opening gap, and today's range.
+
+    A move on triple the usual volume and the same move on a third of it are
+    different events, and the dossier could not tell them apart before.
+    """
+    out = {"volume_vs_20": None, "turnover": None,
+           "gap_open": None, "range_atr": None}
+    vols = volume_series(asset, days=60, db_path=db_path)
+    if today is not None:
+        vols = [v for v in vols if v["date"] <= today]
+    if vols:
+        today_vol = vols[-1]["volume"]
+        norm = _median([v["volume"] for v in vols[-21:-1]])
+        if today_vol and norm:
+            out["volume_vs_20"] = today_vol / norm
+        out["turnover"] = vols[-1].get("value")
+    if len(bars) >= 2 and bars[-2]["close"]:
+        out["gap_open"] = (bars[-1]["open"] - bars[-2]["close"]) / bars[-2]["close"]
+    if bars and atr:
+        out["range_atr"] = (bars[-1]["high"] - bars[-1]["low"]) / atr
+    return out
+
+
+def _profile(asset):
+    """Slow-moving facts about the instrument itself, not an opinion about it.
+
+    Sector, size, float, short interest and beta describe what the thing IS.
+    They change over months, so a stale value is still a true value, and the
+    call is skipped entirely for symbols this source cannot resolve, which is
+    the same guard the earnings scan uses and the reason Moscow-listed names
+    stopped producing a 404 each.
+
+    The ex-dividend date earns its place on its own: a dividend gap looks
+    exactly like a fall and is not one, and an analyst that cannot see the date
+    will read the drop as weakness every single time.
+    """
+    blank = {"sector": None, "industry": None, "market_cap": None,
+             "float_shares": None, "short_ratio": None, "beta": None,
+             "ex_dividend_date": None}
+    try:
+        from config import FULL_ASSET_MAP
+        from core.events import can_have_earnings
+
+        symbol = FULL_ASSET_MAP.get(asset)
+        if not can_have_earnings(symbol, asset):
+            return blank
+        import yfinance as yf
+
+        info = yf.Ticker(symbol).info or {}
+    except Exception:
+        return blank
+    ex = info.get("exDividendDate")
+    if ex:
+        try:
+            import datetime as _dt
+
+            ex = _dt.datetime.fromtimestamp(int(ex), _dt.UTC).date().isoformat()
+        except Exception:
+            ex = None
+    return {
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "market_cap": info.get("marketCap"),
+        "float_shares": info.get("floatShares"),
+        "short_ratio": info.get("shortRatio"),
+        "beta": info.get("beta"),
+        "ex_dividend_date": ex,
+    }
+
+
+def _headlines(asset, limit=6):
+    """Raw headlines, deliberately without the sentiment score computed on them.
+
+    A headline is material the analyst can read; a sentiment number is somebody
+    else's reading of it, and the whole point of this agent is that it forms
+    its own. news_analyzer caches internally, so repeated calls in one run are
+    cheap.
+    """
+    try:
+        import news_analyzer
+
+        items = news_analyzer.fetch_news(asset, max_articles=limit) or []
+    except Exception:
+        return {"headlines": []}
+    out = []
+    for it in items[:limit]:
+        title = (it.get("title") or "").strip() if isinstance(it, dict) else ""
+        if title:
+            out.append(title[:180])
+    return {"headlines": out}
+
+
 def build(asset, db_path=None, today=None):
     """One asset's dossier. Missing pieces are None, never absent, so that the
     prompt and the hash have a fixed shape regardless of what was available."""
@@ -185,6 +360,10 @@ def build(asset, db_path=None, today=None):
         "vol_20_vs_60": (vol_now / vol_ref) if (vol_now and vol_ref) else None,
         "streak_days": _streak(closes),
         "bars_available": len(bars),
+        **_flow(asset, bars, atr, db_path, today),
+        **_market_context(asset, bars, db_path, today),
+        **_profile(asset),
+        **_headlines(asset),
         **_context(asset),
         **_own_record(asset),
     }

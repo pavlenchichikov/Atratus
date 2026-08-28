@@ -31,6 +31,16 @@ def _no_network(monkeypatch):
     monkeypatch.setattr("core.events.earnings_for",
                         lambda symbols_by_asset, session=None, fetch=None: {})
     monkeypatch.setattr("core.events.load_macro", lambda path=None: [])
+    # The profile and the headlines reach yfinance and the news feeds, so they
+    # are stubbed at the dossier's own boundary: patching yfinance itself would
+    # leave the news path live, and patching news_analyzer would leave yfinance
+    # live. One seam per source, both closed.
+    from core.analyst import dossier as _d
+    monkeypatch.setattr(_d, "_profile", lambda asset: {
+        "sector": None, "industry": None, "market_cap": None,
+        "float_shares": None, "short_ratio": None, "beta": None,
+        "ex_dividend_date": None})
+    monkeypatch.setattr(_d, "_headlines", lambda asset, limit=6: {"headlines": []})
 
 
 def test_the_dossier_carries_price_scale_and_regime(db):
@@ -84,6 +94,17 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # and how that turned out, which is the one track record it is entitled
         # to see.
         "past_calls", "past_hit_rate", "past_last_call", "past_last_outcome",
+        # flow: how much actually traded, and how the day opened
+        "volume_vs_20", "turnover", "gap_open", "range_atr",
+        # the market the asset moved in, so a fall can be told apart from a
+        # fall that everything shared
+        "benchmark", "benchmark_ret_1", "benchmark_ret_20",
+        "corr_to_benchmark_60", "vix_level", "vix_chg_20",
+        # what the instrument IS, as opposed to what anyone thinks of it
+        "sector", "industry", "market_cap", "float_shares", "short_ratio",
+        "beta", "ex_dividend_date",
+        # raw headlines, without the sentiment score computed on them
+        "headlines",
     }
 
 
