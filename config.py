@@ -273,7 +273,7 @@ FULL_ASSET_MAP = {
     # queries. A test refuses any key that cannot be a table name.
     'AFL': 'AFL', 'AFRM': 'AFRM', 'AIG': 'AIG', 'ALLSTATE': 'ALL',
     'ALLY': 'ALLY',
-    'AMT': 'AMT', 'AON': 'AON', 'APD': 'APD', 'APH': 'APH', 'AVB': 'AVB',
+    'AMT': 'AMT', 'AON': 'AON', 'APD': 'APD', 'APH': 'APH', 'VMRK': 'VMRK',
     'AZO': 'AZO', 'BE': 'BE', 'BEN': 'BEN', 'BG': 'BG', 'BIIB': 'BIIB',
     'BRK-B': 'BRK-B', 'BSX': 'BSX', 'CB': 'CB', 'CCI': 'CCI', 'CCL': 'CCL',
     'CF': 'CF', 'CFG': 'CFG', 'CHPT': 'CHPT', 'CI': 'CI', 'CLF': 'CLF',
@@ -281,7 +281,7 @@ FULL_ASSET_MAP = {
     'CVS': 'CVS', 'D': 'D', 'DAL': 'DAL', 'DASH': 'DASH', 'DD': 'DD',
     'DG': 'DG', 'DHR': 'DHR', 'DLR': 'DLR', 'DLTR': 'DLTR', 'DOWINC': 'DOW',
     'DPZ': 'DPZ', 'DTE': 'DTE', 'DUK': 'DUK', 'ECL': 'ECL', 'ED': 'ED',
-    'ELV': 'ELV', 'EMR': 'EMR', 'ENPH': 'ENPH', 'EQIX': 'EQIX', 'EQR': 'EQR',
+    'ELV': 'ELV', 'EMR': 'EMR', 'ENPH': 'ENPH', 'EQIX': 'EQIX',
     'ES': 'ES', 'ETN': 'ETN', 'ETR': 'ETR', 'EVRG': 'EVRG', 'EXC': 'EXC',
     'FAST': 'FAST', 'FCX': 'FCX', 'FDX': 'FDX', 'FE': 'FE', 'FITB': 'FITB',
     'FSLR': 'FSLR', 'GD': 'GD', 'GIS': 'GIS', 'GLW': 'GLW', 'GWW': 'GWW',
@@ -307,7 +307,7 @@ FULL_ASSET_MAP = {
     'TEL': 'TEL', 'TER': 'TER', 'TFC': 'TFC', 'TJX': 'TJX', 'TROW': 'TROW',
     'TRV': 'TRV', 'TSN': 'TSN', 'TTWO': 'TTWO', 'U': 'U', 'UAL': 'UAL',
     'UPS': 'UPS', 'URI': 'URI', 'USB': 'USB', 'VMC': 'VMC', 'VTR': 'VTR',
-    'WBD': 'WBD', 'WBS': 'WBS', 'WEC': 'WEC', 'WELL': 'WELL', 'WM': 'WM',
+    'WBD': 'WBD', 'WEC': 'WEC', 'WELL': 'WELL', 'WM': 'WM',
     'XEL': 'XEL', 'YUM': 'YUM', 'ZION': 'ZION', 'ZTS': 'ZTS',
 
     # EU STOCKS (extra) - key is the native listing on Yahoo
@@ -490,11 +490,11 @@ ASSET_TYPES = {
         "RICE", "SOYMEAL", "SOYOIL"],
     "US EXTRA": [
         "AA", "AAL", "ADM", "AEE", "AEP", "AFL", "AFRM", "AIG", "ALLSTATE",
-        "ALLY", "AMT", "AON", "APD", "APH", "AVB", "AZO", "BE", "BEN", "BG",
+        "ALLY", "AMT", "AON", "APD", "APH", "AZO", "BE", "BEN", "BG",
         "BIIB", "BRK-B", "BSX", "CB", "CCI", "CCL", "CF", "CFG", "CHPT",
         "CI", "CLF", "CME", "CMI", "CMS", "COF", "CSX", "CVS", "D", "DAL",
         "DASH", "DD", "DG", "DHR", "DLR", "DLTR", "DOWINC", "DPZ", "DTE",
-        "DUK", "ECL", "ED", "ELV", "EMR", "ENPH", "EQIX", "EQR", "ES", "ETN",
+        "DUK", "ECL", "ED", "ELV", "EMR", "ENPH", "EQIX", "ES", "ETN",
         "ETR", "EVRG", "EXC", "FAST", "FCX", "FDX", "FE", "FITB", "FSLR",
         "GD", "GIS", "GLW", "GWW", "HBAN", "HLT", "HOG", "HSY", "HUM", "HWM",
         "ICE", "ITW", "IVZ", "KEY", "KEYS", "KHC", "KMB", "KR", "LCID",
@@ -506,7 +506,7 @@ ASSET_TYPES = {
         "ROK", "ROSS", "RSG", "SBAC", "SEDG", "SHW", "SNAP", "SO", "SOFI",
         "SPG", "SRE", "STT", "SYK", "SYY", "TDG", "TEL", "TER", "TFC", "TJX",
         "TROW", "TRV", "TSN", "TTWO", "U", "UAL", "UPS", "URI", "USB", "VMC",
-        "VTR", "WBD", "WBS", "WEC", "WELL", "WM", "XEL", "YUM", "ZION",
+        "VMRK", "VTR", "WBD", "WEC", "WELL", "WM", "XEL", "YUM", "ZION",
         "ZTS"],
     "EU EXTRA": [
         "ABB", "ADYEN", "AENA", "AHOLD", "AIRLIQUIDE", "ANGLO", "ASSAABLOY",

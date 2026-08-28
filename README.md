@@ -48,7 +48,7 @@
 
 ## Features
 
-- **~849 assets in the map, 830 with a trained champion, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
+- **~847 assets in the map, 830 with a trained champion, one model each.** Every asset trains its own ensemble of four models (CatBoost, LSTM, Transformer, TCN); the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
 - **Risk-managed by design.** Kelly-based position sizing, drawdown stops, sector-exposure and correlation checks, and a Taleb tail-risk index that shrinks size above a soft cap and blocks new buys above a hard cap.
 - **Prices, not just calls.** A daily trade-level sheet turns each signal into numbers you can act on: an ATR entry zone around the last close, an emergency stop that trails the position, and a size derived from the distance to that stop and clipped by the risk limits. The same entry zone and stop appear on each asset's own page, every issued set is journalled and later scored against the bars that followed, and the two ATR multipliers behind them can be fitted over the whole history and are adopted only if a held-out slice agrees. Execution stays manual.
@@ -1019,7 +1019,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 
 ## Возможности
 
-- **~849 активов в карте, 830 с обученным чемпионом, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
+- **~847 активов в карте, 830 с обученным чемпионом, у каждого своя модель.** Для каждого актива обучается собственный ансамбль из четырёх моделей (CatBoost, LSTM, Transformer, TCN); чемпион выбирается walk-forward-бэктестом с комиссиями, проскальзыванием и эмбарго против утечки.
 - **Честные, калиброванные сигналы.** BUY / SELL / WAIT с калиброванной вероятностью, пер-активными настроенными порогами и живым трек-рекордом точности, который сверяет каждое предсказание с реализованным движением следующего бара.
 - **Управление риском по замыслу.** Размер позиции по Келли, стопы по просадке, проверки секторной экспозиции и корреляций, а также индекс хвостового риска Талеба, который уменьшает размер выше мягкого порога и блокирует новые покупки выше жёсткого.
 - **Цены, а не только сигналы.** Ежедневный лист уровней превращает каждый сигнал в числа, по которым можно действовать: зона входа по ATR вокруг последнего закрытия, аварийный стоп, подтягивающийся за позицией, и размер, выведенный из расстояния до этого стопа и обрезанный лимитами риска. Те же зона входа и стоп теперь показаны и на странице самого актива, каждая выданная связка пишется в журнал и позже сверяется с реально прошедшими барами, а два ATR-множителя за ними можно подобрать на всей истории, и они принимаются только если отложенная выборка это подтвердит. Исполнение остаётся ручным.
