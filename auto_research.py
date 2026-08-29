@@ -454,9 +454,13 @@ def chunk_subsets(subset, size):
 
 
 # Memory a training process holds OUTSIDE the TF pool: the CUDA context plus
-# cuDNN workspaces. Derived from the 2026-08-17 measurement, where two
-# processes at a 1024 MiB pool each peaked at 3956 MiB in total.
-VRAM_OVERHEAD_MB = 950
+# cuDNN workspaces. MEASURED 2026-08-29 on a free card, two chunk processes at
+# a 0.17 share each: pool 673 MiB apiece, peak 3682 MiB of 4096, so the part
+# outside the pool is (3682 - 1346) / 2 = 1168 per process. The earlier value
+# here was 950, inferred from the 2026-08-17 total rather than measured, and it
+# understated the real figure by 23 percent - which made gpu_fit_jobs promise
+# room the card does not have on a partly occupied GPU.
+VRAM_OVERHEAD_MB = 1170
 
 
 def free_vram_mb():

@@ -2471,7 +2471,10 @@ def test_two_processes_only_when_the_card_can_take_them():
     # many costs a night.
     import auto_research as ar
     assert ar.gpu_fit_jobs(2, pool_pct=0.34, free_mb=4096) == 2
-    assert ar.gpu_fit_jobs(2, pool_pct=0.34, free_mb=3600) == 2
+    # 3600 free used to answer 2, on an overhead figure inferred rather than
+    # measured. Measured 2026-08-29 the pair peaks at 3682 MiB, so 3600 would
+    # leave it about 40 MiB - the margin that stalled for 15000 s. One process.
+    assert ar.gpu_fit_jobs(2, pool_pct=0.34, free_mb=3600) == 1
     # A card with a local LLM resident cannot take two, and says so instead of
     # hanging.
     assert ar.gpu_fit_jobs(2, pool_pct=0.34, free_mb=1680) == 1
