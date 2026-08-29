@@ -553,8 +553,17 @@ echo     final A/B's. The search gate GROWS, keeping every asset already in it,
 echo     so earlier runs stay comparable.
 echo     Cost per arm, measured 2026-08-13: 33 min at 14, so ~95 at 40.
 echo     1 = 40 (recommended)   2 = 14 (as before)   3 = 80   4 = other
+echo     5 = neural: the 14 assets whose stacker actually leans on the nets.
+echo         Measured from the ^|coef^| shares in models/*_meta.pkl: those
+echo         assets give the neural members .54-.69 of the stacker's weight,
+echo         against a .17 median on the standard gate, where ADA is .05 and
+echo         MSFT .08. A neural change measured on the standard gate is
+echo         measured mostly where the nets barely matter. Use this to SEE a
+echo         neural effect, not to adopt one: the set is biased by
+echo         construction, so a winner here still has to clear a normal gate.
 set "GS=1"
 set /p "GS=    choice [1]: "
+if "%GS%"=="5" goto gate_neural
 set "GATE_N=40"
 if "%GS%"=="2" set "GATE_N=14"
 if "%GS%"=="3" set "GATE_N=80"
@@ -568,6 +577,19 @@ if errorlevel 1 (
 ) else (
   set /p GTRADE_AR_HELDOUT=<_search_gate.txt
 )
+goto gate_done
+
+:gate_neural
+REM The neural-diagnostic holdout lives in auto_research.heldout_assets()
+REM and was reachable only by setting the variable by hand, because the
+REM block above overwrote it from _search_gate.txt on every campaign start.
+REM Both gates stay on the same 14 assets so the search and the A/B read
+REM the same set.
+set "GTRADE_AR_HELDOUT=neural"
+set "GTRADE_AB_HOLDOUT_N=14"
+echo     search gate: neural-diagnostic set, 14 assets, for MEASURING nets.
+
+:gate_done
 echo.
 echo     New campaign: search basis %GTRADE_AR_SCORE_BASIS%, objective %GTRADE_AR_OBJECTIVE%,
 echo     screen %GTRADE_AR_SCREEN%, illumination %GTRADE_AR_ILLUM% (both derived from the basis).
