@@ -2500,3 +2500,78 @@ def test_the_pool_floor_is_respected_when_the_percentage_is_tiny():
     import auto_research as ar
     assert ar.gpu_fit_jobs(2, pool_pct=0.01, free_mb=4096) == 2
     assert ar.gpu_fit_jobs(2, pool_pct=0.01, free_mb=2400) == 1
+
+
+def _tn_rows(assets, score):
+    return [{"Asset": a, "Score": score} for a in assets]
+
+
+def test_the_tier_drops_a_candidate_that_starves_the_nets(monkeypatch):
+    """Positive control first: prove the check CAN reject.
+
+    Measured 2026-08-29: two elites cleared significance (p=0.018, p=0.003) and
+    the effect floor (0.03 and 0.04 against 0.005) and were refused only for
+    neural_lift -1.15 and -1.29 - each after a full held-out evaluation. The
+    search fitness is the CatBoost-only screen, so it cannot see what it is
+    doing to the nets; this asks at tier cost instead.
+    """
+    import auto_research as ar
+    tier = ar.tier_assets().split(",")
+    # base: nets contribute +1.0 per asset (full 3.0 minus CatBoost 2.0)
+    base_contrib = {a: 1.0 for a in tier}   # {asset: contribution}, as _objective_delta wants
+    # candidate: nets contribute -0.5, a lift of -1.5, past the -1.0 tier floor
+    # The key is a sha256 digest, so the fake has to compute the real one: the
+    # FULL tier rows are the ones _passes_tier already cached under "mini".
+    # _passes_tier keys on the tier_assets() STRING, not a list; the fake has
+    # to match it exactly or it silently misses and the check passes vacuously.
+    full_key = ar.ar_memory.genome_key(ar.tier_assets(), "sig", "mini")
+    monkeypatch.setattr(ar.ar_memory, "cache_get",
+                        lambda k: _tn_rows(tier, 3.0) if k == full_key else None)
+    monkeypatch.setattr(ar.ar_memory, "cache_put", lambda k, v: None)
+    ok, lift = ar._tier_neural_ok({}, "sig", base_contrib,
+                                  train_fn=lambda a, e: _tn_rows(tier, 3.5))
+    assert lift == -1.5, lift
+    assert ok is False, "a candidate that costs the nets 1.5 must not reach the holdout"
+
+
+def test_the_tier_keeps_a_candidate_that_leaves_the_nets_alone(monkeypatch):
+    import auto_research as ar
+    tier = ar.tier_assets().split(",")
+    base_contrib = {a: 1.0 for a in tier}   # {asset: contribution}, as _objective_delta wants
+    # candidate: nets contribute +0.8, a lift of -0.2, well inside the floor
+    # The key is a sha256 digest, so the fake has to compute the real one: the
+    # FULL tier rows are the ones _passes_tier already cached under "mini".
+    # _passes_tier keys on the tier_assets() STRING, not a list; the fake has
+    # to match it exactly or it silently misses and the check passes vacuously.
+    full_key = ar.ar_memory.genome_key(ar.tier_assets(), "sig", "mini")
+    monkeypatch.setattr(ar.ar_memory, "cache_get",
+                        lambda k: _tn_rows(tier, 3.0) if k == full_key else None)
+    monkeypatch.setattr(ar.ar_memory, "cache_put", lambda k, v: None)
+    ok, lift = ar._tier_neural_ok({}, "sig", base_contrib,
+                                  train_fn=lambda a, e: _tn_rows(tier, 2.2))
+    assert lift == -0.2, lift
+    assert ok is True
+
+
+def test_an_unmeasurable_tier_lift_never_blocks(monkeypatch):
+    """Same convention adopt_ok uses: neural_lift=None never refuses a genome."""
+    import auto_research as ar
+    assert ar._tier_neural_ok({}, "sig", None) == (True, None)
+    # tier rows absent from the cache: nothing to compare, so nothing to reject.
+    monkeypatch.setattr(ar.ar_memory, "cache_get", lambda k: None)
+    monkeypatch.setattr(ar.ar_memory, "cache_put", lambda k, v: None)
+    base = {a: 1.0 for a in ar.tier_assets().split(",")}
+    assert ar._tier_neural_ok({}, "sig", base,
+                              train_fn=lambda a, e: []) == (True, None)
+
+
+def test_the_tier_floor_is_looser_than_the_adoption_floor(monkeypatch):
+    """Four assets at half epochs is a noisy read and two of them sit outside
+    the set where the stacker leans on the nets, so only a CLEARLY negative
+    lift costs a genome its holdout."""
+    import auto_research as ar
+    monkeypatch.delenv("GTRADE_AR_TIER_NEURAL_MIN", raising=False)
+    assert ar.tier_neural_floor() == 2.0 * ar.neural_floor()
+    assert ar.tier_neural_floor() < ar.neural_floor()
+    monkeypatch.setenv("GTRADE_AR_TIER_NEURAL_MIN", "-0.75")
+    assert ar.tier_neural_floor() == -0.75

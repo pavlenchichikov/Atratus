@@ -1753,6 +1753,7 @@ def run_qd(train_fn=None):
         _progress_fold_unit("holdout_14", time.time() - _t0, since=_mark,
                             done_pairs=(_snap[0] if _snap else None))
         qd_tier_base = _tier_base(base_fn) if tier_on() else None
+        qd_tier_neural = _tier_neural_base(base_fn) if tier_on() else None
         base_contrib = {r["Asset"]: r["Score"] for r in ho_base_contrib}
         results = []
         for _i, e in enumerate(elites, 1):
@@ -1769,6 +1770,13 @@ def run_qd(train_fn=None):
                 if not tp:
                     print("[qd] elite tiered out (mini dScore %+.2f): drops=%s "
                           "label=%s/%d" % (td, g.drops, g.label_mode, g.label_window))
+                    continue
+                nok, nlift = _tier_neural_ok(genome_to_env(g), genome_sig(g),
+                                             qd_tier_neural, train_fn=train_fn)
+                if not nok:
+                    print("[qd] elite tiered out (nets pay for it: tier "
+                          "neural_lift %+.2f): drops=%s label=%s/%d"
+                          % (nlift, g.drops, g.label_mode, g.label_window))
                     continue
             _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_holdout",
                                             "unit_kind": "holdout_14"},
@@ -2425,6 +2433,78 @@ def _tier_base(base_fn):
     return out
 
 
+def tier_neural_floor():
+    """How far the nets may fall on the TIER before a candidate is dropped.
+
+    Looser than neural_floor() on purpose, twice it by default. The tier is four
+    assets at half epochs and two of them sit outside the set where the stacker
+    leans on the nets, so the reading is noisy and biased towards zero. A false
+    pass costs one held-out evaluation; a false reject costs a genome nobody
+    looks at again. Override with GTRADE_AR_TIER_NEURAL_MIN.
+    """
+    try:
+        v = os.getenv("GTRADE_AR_TIER_NEURAL_MIN")
+        return float(v) if v else 2.0 * neural_floor()
+    except ValueError:
+        return 2.0 * neural_floor()
+
+
+def _tier_neural_base(base_fn):
+    """The BASE's neural contribution on the tier assets as {asset: score}.
+
+    A dict, not rows: _objective_delta takes its base side keyed by asset, the
+    same shape the held-out path builds at its own neural_lift call. Both trains
+    go through base_fn, so they are cached for the whole run the way _tier_base's
+    is - the base pays for this once.
+    """
+    full = base_fn(tier_assets(), tier_env({}))
+    cb = base_fn(tier_assets(), tier_env(screen_env({})))
+    if not full or not cb:
+        return None
+    return neural_contribution(full, cb)
+
+
+def _tier_neural_ok(env, cache_key, base_contrib, train_fn=None):
+    """(ok, lift) - is this candidate paying for its CatBoost gain in nets?
+
+    The question adopt_ok asks with neural_lift, asked at TIER cost instead of
+    holdout cost. The search fitness is the CatBoost-only screen, so a genome is
+    free to win by starving the sequence members, and until now the only thing
+    that noticed was the final gate. Measured 2026-08-29: two elites cleared
+    significance (p=0.018 and p=0.003) and the effect floor (0.03 and 0.04
+    against 0.005) and were both refused for neural_lift -1.15 and -1.29 - after
+    each had spent a full held-out evaluation, 5438 s of nets plus 197 s of
+    CatBoost on 14 assets.
+
+    Here the full tier rows are already in the cache _passes_tier just filled,
+    so the only new work is the CatBoost-only counterpart on the same four
+    assets. An unmeasurable lift never blocks, the same convention adopt_ok
+    uses for neural_lift=None.
+    """
+    if not base_contrib:
+        return True, None
+    if train_fn is None:
+        train_fn = train_env
+    full = ar_memory.cache_get(
+        ar_memory.genome_key(tier_assets(), cache_key, "mini"))
+    if not full:
+        return True, None
+    key_cb = ar_memory.genome_key(tier_assets(), cache_key, "mini_cb")
+    cb = ar_memory.cache_get(key_cb)
+    if cb is None:
+        cb = train_fn(tier_assets(), tier_env(screen_env(env)))
+        if cb:
+            ar_memory.cache_put(key_cb, cb)
+    if not cb:
+        return True, None
+    contrib = [{"Asset": a, "Score": c}
+               for a, c in neural_contribution(full, cb).items()]
+    lift, measured = _objective_delta(contrib, dict(base_contrib), "mean")
+    if not measured:
+        return True, None
+    return lift > tier_neural_floor(), round(lift, 4)
+
+
 def _tier_key(axis, cand):
     """Stable cache identity for an axis candidate (genomes use genome_sig)."""
     if axis.sig is not None:
@@ -2528,7 +2608,8 @@ class Axis:
 
 
 def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, persist=None,
-             screen_base=None, screen_min=0.0, tier_base=None):
+             screen_base=None, screen_min=0.0, tier_base=None,
+             tier_neural_base=None):
     """Generalized search over one axis, sharing the mean-delta gate.
 
     additive: forward-selection - keep the running list when the cumulative mean
@@ -2587,6 +2668,16 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
                     _mark_tried(new)
                     persist(log)
                     continue
+                nok, nlift = _tier_neural_ok(axis.to_env(cand),
+                                             _tier_key(axis, new),
+                                             tier_neural_base, train_fn=train_fn)
+                if not nok:
+                    log.append({"axis": axis.name, "iter": i, "cand": new,
+                                "tier_neural_lift": nlift,
+                                "note": "nets pay for it"})
+                    _mark_tried(new)
+                    persist(log)
+                    continue
             rows = score_rows(selection_assets(), axis.to_env(cand), train_fn)
             delta, _ = _objective_delta(rows, base_score, objective)
             entry = {"axis": axis.name, "iter": i, "cand": new,
@@ -2636,6 +2727,16 @@ def run_axis(axis, budget, base_rows, train_fn, screen_df=None, prior_log=None, 
             if not tpassed:
                 log.append({"axis": axis.name, "iter": i, "cand": cand,
                             "tier_delta": tdelta, "note": "tiered out"})
+                _mark_tried(cand)
+                persist(log)
+                i += 1
+                continue
+            nok, nlift = _tier_neural_ok(axis.to_env(cand),
+                                         _tier_key(axis, cand),
+                                         tier_neural_base, train_fn=train_fn)
+            if not nok:
+                log.append({"axis": axis.name, "iter": i, "cand": cand,
+                            "tier_neural_lift": nlift, "note": "nets pay for it"})
                 _mark_tried(cand)
                 persist(log)
                 i += 1
@@ -3191,6 +3292,8 @@ def main():
     base_rows = score_rows(selection_assets(), {}, train_base_cached)  # shared base
     screen_base = train_base_cached(selection_assets(), {"GTRADE_SCREEN_ONLY": "1"}) if _screen_on() else None
     tier_base = _tier_base(train_base_cached) if tier_on() else None
+    tier_neural_base = (_tier_neural_base(train_base_cached)
+                        if tier_on() else None)
     obj = _objective()
     basis = _score_basis()
     winners = []   # (axis_name, winner, p, value, tag, neural_lift)
@@ -3200,7 +3303,8 @@ def main():
             prior = load_state().get("by_axis", {}).get(axis.name)
             res = run_axis(axis, BUDGET, base_rows, train_env, screen_df=screen_df,
                            prior_log=prior, persist=lambda log, a=axis.name: _persist(a, log),
-                           screen_base=screen_base, screen_min=SCREEN_MIN, tier_base=tier_base)
+                           screen_base=screen_base, screen_min=SCREEN_MIN,
+                           tier_base=tier_base, tier_neural_base=tier_neural_base)
             winner = res.get("kept") or res.get("best")
             if not winner:
                 print(f"[auto-research] axis {axis.name}: nothing beat the base.")
