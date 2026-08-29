@@ -507,6 +507,35 @@ def gpu_fit_jobs(jobs, pool_pct=None, free_mb=None):
     return min(jobs, fits)
 
 
+def apply_manual_load_profile():
+    """Give a hand-started run the same load profile the campaign runs at.
+
+    auto_loop.LOAD_KEYS was named for exactly this - "so a phase started BY HAND
+    can borrow the same profile" - and nothing here ever called it. The cost was
+    not a slower run but a silently different one: GTRADE_AR_TRAIN_CHUNK
+    defaults to 0, at which chunk_subsets returns a single chunk, jobs collapses
+    to min(train_jobs(), 1), and GTRADE_AR_TRAIN_JOBS=2 means nothing. So every
+    manual run trained sequentially at a 60 percent pool with 6 undivided
+    workers, while the campaign ran two processes at 34 percent with 3 each, and
+    the log gave no sign of it beyond those numbers.
+
+    setdefault semantics, inherited from apply_load_profile: an explicit value
+    in the shell still wins. Only the LOAD half is borrowed, never the gate or
+    the objective - a wrong load setting costs time, a wrong basis costs the
+    comparison, and a manual run is usually manual because it varies the latter.
+    """
+    try:
+        from auto_loop import apply_load_profile
+
+        took = apply_load_profile()
+    except Exception:
+        return {}
+    if took:
+        print("[ar] load profile from campaign: %s"
+              % ", ".join("%s=%s" % kv for kv in sorted(took.items())))
+    return took
+
+
 def train_jobs():
     """How many training chunks run at once, after the card has been asked.
 
@@ -3249,6 +3278,9 @@ def genome_from_axis(axis, winner):
 
 def main():
     import argparse
+
+    # Before anything trains, and before the regate branch too: both paths train.
+    apply_manual_load_profile()
     p = argparse.ArgumentParser(description="auto-research")
     p.add_argument("--regate", action="store_true",
                    help="re-gate stored candidate genomes under the current gate")

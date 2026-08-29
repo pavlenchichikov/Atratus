@@ -2578,3 +2578,36 @@ def test_the_tier_floor_is_looser_than_the_adoption_floor(monkeypatch):
     assert ar.tier_neural_floor() < ar.neural_floor()
     monkeypatch.setenv("GTRADE_AR_TIER_NEURAL_MIN", "-0.75")
     assert ar.tier_neural_floor() == -0.75
+
+
+def test_a_hand_started_run_borrows_the_campaign_load_profile(monkeypatch):
+    """The manual run was not slower than the campaign, it was different.
+
+    GTRADE_AR_TRAIN_CHUNK defaults to 0, and at 0 chunk_subsets returns ONE
+    chunk however many assets it is given, so jobs collapses to 1 and
+    GTRADE_AR_TRAIN_JOBS is read and discarded. The positive control below is
+    the point of the test: it asserts the un-profiled environment really does
+    serialise, so the profiled assertion after it means something.
+    """
+    import auto_loop
+
+    for k in auto_loop.LOAD_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    tier = ar.tier_assets()
+
+    # positive control: without the profile the tier trains in one process
+    assert ar.train_chunk_size() == 0
+    assert len(ar.chunk_subsets(tier, ar.effective_chunk_size(tier, jobs=2))) == 1
+
+    took = ar.apply_manual_load_profile()
+    assert took["GTRADE_AR_TRAIN_CHUNK"] == auto_loop.CAMPAIGN["GTRADE_AR_TRAIN_CHUNK"]
+    # and now the same four assets are two chunks, which is what jobs=2 needs
+    assert len(ar.chunk_subsets(tier, ar.effective_chunk_size(tier, jobs=2))) == 2
+
+
+def test_an_explicit_setting_still_beats_the_borrowed_profile(monkeypatch):
+    # The profile is a default for an unattended box, not a policy. Somebody
+    # lowering the load for one run must not have to edit the campaign.
+    monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "1")
+    ar.apply_manual_load_profile()
+    assert os.environ["GTRADE_AR_TRAIN_JOBS"] == "1"
