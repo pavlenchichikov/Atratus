@@ -79,7 +79,7 @@ set /p choice="Select: "
 
 if "%choice%"=="1" goto full_run
 if "%choice%"=="2" goto dashboard
-if /i "%choice%"=="WU" goto webui
+if /i "%choice%"=="WU" goto webui_root
 if "%choice%"=="3" goto predict
 if "%choice%"=="4" goto data_only
 if "%choice%"=="5" goto train_only
@@ -152,13 +152,25 @@ python -m streamlit run app.py
 pause
 goto menu
 
+:webui_root
+set "WU_PATH="
+goto webui
+
+:analyst_watch
+set "WU_PATH=/analyst"
+goto webui
+
 :webui
 cls
-echo [Web UI] FastAPI on http://127.0.0.1:8000  (Ctrl+C to stop)
+REM  WU_PATH is the page to land on, empty for the dashboard. Every entry
+REM  point sets it before jumping here, INCLUDING the one that wants the
+REM  root: the menu loops, so a value left over from an earlier visit would
+REM  otherwise send the next [WU] to whatever page was opened last.
+echo [Web UI] FastAPI on http://127.0.0.1:8000%WU_PATH%  (Ctrl+C to stop)
 REM  The browser used to open on the line BEFORE uvicorn started, so the first
 REM  paint was always "connection refused" and the UI read as broken. Hand the
 REM  open to a detached shell that waits for the server to come up.
-start "" /b cmd /c "timeout /t 4 /nobreak >nul&start http://127.0.0.1:8000"
+start "" /b cmd /c "timeout /t 4 /nobreak >nul&start http://127.0.0.1:8000%WU_PATH%"
 python -m uvicorn webapp:app --port 8000
 pause
 goto menu
@@ -380,7 +392,7 @@ if /i "%an_choice%"=="S" goto analyst_score
 if /i "%an_choice%"=="B" goto analyst_backfill
 if /i "%an_choice%"=="R" goto analyst_run
 if /i "%an_choice%"=="F" goto analyst_fit
-if /i "%an_choice%"=="W" goto webui
+if /i "%an_choice%"=="W" goto analyst_watch
 goto menu
 
 :analyst_score
