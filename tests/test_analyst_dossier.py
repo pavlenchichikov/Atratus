@@ -36,10 +36,10 @@ def _no_network(monkeypatch):
     # leave the news path live, and patching news_analyzer would leave yfinance
     # live. One seam per source, both closed.
     from core.analyst import dossier as _d
-    monkeypatch.setattr(_d, "_profile", lambda asset: {
-        "sector": None, "industry": None, "market_cap": None,
-        "float_shares": None, "short_ratio": None, "beta": None,
-        "ex_dividend_date": None})
+    # dict(PROFILE_BLANK), not a restatement of it: the stub must inherit the
+    # real block's shape or it goes stale the next time a field is added, which
+    # is exactly what happened when the valuation fields arrived.
+    monkeypatch.setattr(_d, "_profile", lambda asset: dict(_d.PROFILE_BLANK))
     monkeypatch.setattr(_d, "_headlines", lambda asset, limit=6: {"headlines": []})
 
 
@@ -103,9 +103,51 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # what the instrument IS, as opposed to what anyone thinks of it
         "sector", "industry", "market_cap", "float_shares", "short_ratio",
         "beta", "ex_dividend_date",
+        # valuation, from Yahoo where it resolves and from Smart-Lab where it
+        # does not. Not an opinion about the asset: a bank at a P/E of 3.5 with
+        # a 14 percent yield is a fact, and the block was blank for every
+        # Moscow-listed name until this was wired to the table the guru report
+        # already downloads.
+        "pe", "roe", "debt_ebitda", "div_yield",
         # raw headlines, without the sentiment score computed on them
         "headlines",
     }
+
+
+def test_a_moscow_name_gets_its_fundamentals_from_smartlab(monkeypatch):
+    """Yahoo cannot resolve a bare MOEX ticker, so can_have_earnings skips it
+    and the whole block used to come back blank. The positive control is the
+    empty-table half: without it this passes on a function that hardcodes."""
+    dossier._SMARTLAB_CACHE.clear()
+    monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
+        "SBER": {"pe": 3.5, "roe": 0.227, "debt": 0.0, "div": 14.0}})
+    assert dossier._smartlab_fundamentals("SBER") == {
+        "pe": 3.5, "roe": 0.227, "debt_ebitda": None, "div_yield": 14.0}
+    # the remap guru_report applies for the two renamed tickers
+    monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
+        "YDEX": {"pe": 12.0, "roe": 0.1, "debt": 1.5, "div": 0.0}})
+    assert dossier._smartlab_fundamentals("YNDX")["pe"] == 12.0
+    # 99.0 is the fetcher's "not reported" filler, never a real P/E
+    monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
+        "GAZP": {"pe": 99.0, "roe": 0.0, "debt": 0.0, "div": 0.0}})
+    assert dossier._smartlab_fundamentals("GAZP")["pe"] is None
+    monkeypatch.setattr(dossier, "_smartlab_map", dict)
+    assert dossier._smartlab_fundamentals("SBER") == dossier._FUNDAMENTALS_BLANK
+
+
+def test_a_dead_network_is_visible_block_by_block():
+    """Every network field is wrapped in _safe, so a run with no connection
+    produces judgments and no complaint. filled_blocks is what the CLI counts
+    to say so out loud."""
+    full = {"headlines": ["x"], "guru_verdict": "BUY", "pe": 3.5,
+            "next_earnings": "2026-09-01", "macro_events": ["FOMC"]}
+    assert dossier.filled_blocks(full) == {k: 1 for k in dossier.NETWORK_BLOCKS}
+    assert dossier.filled_blocks({}) == {k: 0 for k in dossier.NETWORK_BLOCKS}
+    # a thin asset is not a dead source: an index has no earnings date and a
+    # Moscow name no sector, and neither may read as a broken connection
+    thin = {"headlines": ["x"], "guru_verdict": "BUY", "sector": None,
+            "market_cap": None, "pe": 3.5}
+    assert dossier.filled_blocks(thin)["fundamentals"] == 1
 
 
 def test_the_hash_is_stable_for_equal_content(db):

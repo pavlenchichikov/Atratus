@@ -2650,3 +2650,52 @@ def test_the_illumination_default_follows_the_basis(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
     monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
     assert ar.illum_full() is False
+
+
+def test_a_trip_lasts_one_run_and_the_next_one_starts_clean(monkeypatch):
+    """The message says "for the rest of this run"; make that true.
+
+    `disabled` was not persisted while the monitor windows were, and while
+    disabled every draw records as a floor draw - so sched_hits froze at the
+    evidence that tripped it and every later run re-tripped on that same stale
+    window. The positive control is the first assertion: a saved state that was
+    NOT disabled must keep its windows, or this test would pass on a controller
+    that simply forgot everything every time.
+    """
+    saved = {}
+    monkeypatch.setenv("GTRADE_AR_RL", "1")
+    monkeypatch.setattr(ar.ar_memory, "blob_get", lambda *a, **k: dict(saved))
+    monkeypatch.setattr(ar.ar_memory, "blob_put",
+                        lambda _name, obj: saved.update(obj))
+
+    tripping = {"floor": [True] * 30, "sched": [False] * 50}
+
+    saved.clear()
+    saved.update({"monitor": dict(tripping), "disabled": False})
+    ar._rl_controller_reset_for_tests()
+    assert ar._rl_controller().monitor.tripped() is True, "windows must survive"
+
+    saved.clear()
+    saved.update({"monitor": dict(tripping), "disabled": True})
+    ar._rl_controller_reset_for_tests()
+    ctl = ar._rl_controller()
+    assert ctl.disabled is False
+    assert ctl.monitor.tripped() is False
+    assert ctl.monitor.to_state() == {"floor": [], "sched": []}
+    ar._rl_controller_reset_for_tests()
+
+
+def test_the_disabled_flag_is_saved_so_the_next_run_can_see_it(monkeypatch):
+    saved = {}
+    monkeypatch.setenv("GTRADE_AR_RL", "1")
+    monkeypatch.setattr(ar.ar_memory, "blob_get", lambda *a, **k: None)
+    monkeypatch.setattr(ar.ar_memory, "blob_put",
+                        lambda _name, obj: saved.update(obj))
+    ar._rl_controller_reset_for_tests()
+    ctl = ar._rl_controller()
+    ctl.save()
+    assert saved["disabled"] is False
+    ctl.disabled = True
+    ctl.save()
+    assert saved["disabled"] is True
+    ar._rl_controller_reset_for_tests()

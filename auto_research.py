@@ -1488,7 +1488,16 @@ class _RlController:
         self.cma = ar_rl.CmaEmitter(state.get("cma"))
         self.monitor = ar_rl.FallbackMonitor(state.get("monitor"))
         self.origin = dict(state.get("origin") or {})
+        # A trip lasts one run, which is what its own message promises. The
+        # windows are what carried it further: while disabled every draw is
+        # recorded as a floor draw, so sched_hits freezes at the evidence that
+        # tripped it, and the next run - which starts enabled, since `disabled`
+        # itself was never persisted - re-tripped on that stale window before
+        # the scheduler chose anything. Starting the run with both windows
+        # cleared is what gives it a fresh MIN_SCHED draws to answer for itself.
         self.disabled = False
+        if state.get("disabled"):
+            self.monitor.clear()
         base = ar_memory.base_key(selection_assets(), {})
         if state.get("base_key") and state["base_key"] != base:
             self.sched.halve()
@@ -1502,6 +1511,7 @@ class _RlController:
             "curiosity": self.cur.to_state(),
             "cma": self.cma.to_state(),
             "monitor": self.monitor.to_state(),
+            "disabled": self.disabled,
             "origin": dict(list(self.origin.items())[-ar_rl.ORIGIN_CAP:]),
         })
 

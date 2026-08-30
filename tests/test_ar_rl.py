@@ -168,6 +168,52 @@ class TestFallback:
             m.record(False, True)
         assert m.tripped() is False
 
+    def test_a_scheduler_no_worse_than_uniform_is_not_disabled_by_noise(self):
+        """The whole reason the fallback fired 50 times in seven days.
+
+        Stored children are rare, so both windows carry single-digit hit counts.
+        The old rule (sched_rate < 0.8 * floor_rate) called that a failure four
+        times out of ten when the two were identical. The exact test has to keep
+        the null rate near alpha while STILL firing on a real gap, which is what
+        the second half asserts - a monitor that never trips would pass the
+        first half on its own.
+        """
+        rng = random.Random(7)
+
+        def trip_rate(p_sched, p_floor, trials=3000):
+            hits = 0
+            for _ in range(trials):
+                m = ar_rl.FallbackMonitor()
+                m.floor_hits = [rng.random() < p_floor for _ in range(30)]
+                m.sched_hits = [rng.random() < p_sched for _ in range(50)]
+                hits += m.tripped()
+            return hits / trials
+
+        for p in (0.05, 0.10, 0.20):
+            assert trip_rate(p, p) < 0.06, p
+        assert trip_rate(0.02, 0.30) > 0.80    # positive control
+
+    def test_the_observed_state_that_used_to_flap_is_quiet(self):
+        """floor 2/30 against sched 5/50, read off the live state 2026-08-30.
+        The scheduler is ahead there, so nothing about it justifies a trip."""
+        m = ar_rl.FallbackMonitor({"floor": [True] * 2 + [False] * 28,
+                                   "sched": [True] * 5 + [False] * 45})
+        assert m.tripped() is False
+
+    def test_clear_forgets_both_windows(self):
+        """Re-enabling on a new run must not inherit the frozen sched window:
+        while disabled every draw is a floor draw, so that window is evidence
+        the scheduler was never allowed to answer."""
+        m = ar_rl.FallbackMonitor()
+        for _ in range(30):
+            m.record(True, True)
+        for _ in range(50):
+            m.record(False, False)
+        assert m.tripped() is True
+        m.clear()
+        assert m.tripped() is False
+        assert m.to_state() == {"floor": [], "sched": []}
+
 
 class _FakeGenome:
     """Minimal stand-in with the six numeric genes."""

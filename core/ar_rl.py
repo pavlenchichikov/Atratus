@@ -146,11 +146,48 @@ class CuriosityMap:
         return {"scores": self.scores}
 
 
+def fisher_less_p(a, b, c, d):
+    """One-sided Fisher exact p for row 1 having the LOWER success rate.
+
+    Table is [[a, b], [c, d]] = [[hits, misses] for the scheduler,
+    [hits, misses] for the uniform floor]. Returns P(X <= a) under the
+    hypergeometric null that both rows share one rate.
+
+    math.comb, not scipy: this module's contract is stdlib plus core.ar_memory
+    only, and the totals here never exceed FLOOR_WIN + SCHED_WIN = 80, where the
+    exact sum is instant.
+    """
+    n1, k, n = a + b, a + c, a + b + c + d
+    if n1 <= 0 or n - n1 <= 0 or k <= 0 or k >= n:
+        return 1.0
+    denom = math.comb(n, n1)
+    lo = max(0, n1 - (n - k))
+    return sum(math.comb(k, x) * math.comb(n - k, n1 - x)
+               for x in range(lo, a + 1)) / denom
+
+
+def rl_alpha():
+    """Significance the auto-fallback demands before it disables the scheduler."""
+    try:
+        return float(os.getenv("GTRADE_AR_RL_ALPHA") or 0.05)
+    except ValueError:
+        return 0.05
+
+
 class FallbackMonitor:
     """Floor draws are uniform-random, so their rolling hit-rate is an unbiased
-    live baseline. Trip when the scheduler's window underperforms it."""
+    live baseline. Trip when the scheduler's window underperforms it.
 
-    FLOOR_WIN, SCHED_WIN, MIN_FLOOR, MIN_SCHED, RATIO = 30, 50, 20, 50, 0.8
+    The comparison is a one-sided Fisher exact test, not a ratio of the two
+    rates. The ratio form (sched_rate < 0.8 * floor_rate) was a coin flip:
+    stored children are rare, so the windows carry single-digit hit counts, and
+    a simulation over 200k draws at the observed rate (floor 2/30, sched 5/50)
+    put the chance of tripping a scheduler that is EXACTLY as good as uniform at
+    0.40 per check - checked after every result, with no multiplicity control.
+    That is why the fallback fired 50 times over seven days, every day.
+    """
+
+    FLOOR_WIN, SCHED_WIN, MIN_FLOOR, MIN_SCHED = 30, 50, 20, 50
 
     def __init__(self, state=None):
         self.floor_hits, self.sched_hits = [], []
@@ -164,12 +201,26 @@ class FallbackMonitor:
         else:
             self.sched_hits = (self.sched_hits + [hit])[-self.SCHED_WIN:]
 
+    def clear(self):
+        """Forget both windows.
+
+        Called when a disabled controller is re-enabled for a new run. While
+        disabled every draw is a floor draw, so sched_hits freezes at whatever
+        tripped it and the next run re-trips on the same stale evidence before
+        the scheduler has made a single choice. The message the trip prints says
+        "for the rest of this run"; without this it meant "forever, unless the
+        random baseline gets worse", which is how it actually recovered.
+        """
+        self.floor_hits, self.sched_hits = [], []
+
     def tripped(self):
         if len(self.floor_hits) < self.MIN_FLOOR or len(self.sched_hits) < self.MIN_SCHED:
             return False
-        floor_rate = sum(self.floor_hits) / len(self.floor_hits)
-        sched_rate = sum(self.sched_hits) / len(self.sched_hits)
-        return sched_rate < self.RATIO * floor_rate
+        sh = sum(self.sched_hits)
+        fh = sum(self.floor_hits)
+        p = fisher_less_p(sh, len(self.sched_hits) - sh,
+                          fh, len(self.floor_hits) - fh)
+        return p < rl_alpha()
 
     def to_state(self):
         return {"floor": self.floor_hits, "sched": self.sched_hits}

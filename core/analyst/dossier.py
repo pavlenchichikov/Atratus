@@ -249,6 +249,54 @@ def _flow(asset, bars, atr, db_path, today):
     return out
 
 
+_FUNDAMENTALS_BLANK = {"pe": None, "roe": None, "debt_ebitda": None,
+                       "div_yield": None}
+
+# The profile block's shape, in one place. It is a module constant so the test
+# suite's no-network stub can BE this shape instead of restating it: a stub that
+# restates a shape is a stub that silently lags the real one, and four new
+# fields reached the dossier while every dossier test kept seeing seven.
+PROFILE_BLANK = {"sector": None, "industry": None, "market_cap": None,
+                 "float_shares": None, "short_ratio": None, "beta": None,
+                 "ex_dividend_date": None, **_FUNDAMENTALS_BLANK}
+
+# Smart-Lab publishes one table for the whole market, so this is a single
+# request for every Russian name in a sweep, not one per asset. Cached for the
+# life of the process; the numbers are quarterly, so a stale value inside one
+# run is still a true value.
+_SMARTLAB_CACHE = {}
+
+
+def _smartlab_map():
+    if "map" not in _SMARTLAB_CACHE:
+        try:
+            from guru_report import fetch_smartlab_data
+
+            _SMARTLAB_CACHE["map"] = fetch_smartlab_data() or {}
+        except Exception:
+            _SMARTLAB_CACHE["map"] = {}
+    return _SMARTLAB_CACHE["map"]
+
+
+def _smartlab_fundamentals(asset):
+    """P/E, ROE, debt/EBITDA and dividend yield for a Moscow-listed name.
+
+    The same two-ticker remap guru_report.resolve_fundamentals applies, for the
+    same reason: Smart-Lab carries the post-rename tickers.
+    """
+    remap = {"YNDX": "YDEX", "TCSG": "T"}
+    key = remap.get(asset.split(".")[0], asset.split(".")[0])
+    row = _smartlab_map().get(key)
+    if not row:
+        return dict(_FUNDAMENTALS_BLANK)
+    # 99.0 is fetch_smartlab_data's "not reported" filler, not a P/E of 99.
+    pe = row.get("pe")
+    return {"pe": None if pe in (None, 99.0) else pe,
+            "roe": row.get("roe") or None,
+            "debt_ebitda": row.get("debt") or None,
+            "div_yield": row.get("div") or None}
+
+
 def _profile(asset):
     """Slow-moving facts about the instrument itself, not an opinion about it.
 
@@ -262,16 +310,19 @@ def _profile(asset):
     exactly like a fall and is not one, and an analyst that cannot see the date
     will read the drop as weakness every single time.
     """
-    blank = {"sector": None, "industry": None, "market_cap": None,
-             "float_shares": None, "short_ratio": None, "beta": None,
-             "ex_dividend_date": None}
+    blank = dict(PROFILE_BLANK)
     try:
         from config import FULL_ASSET_MAP
         from core.events import can_have_earnings
 
         symbol = FULL_ASSET_MAP.get(asset)
         if not can_have_earnings(symbol, asset):
-            return blank
+            # Yahoo cannot resolve a bare Moscow ticker, which is why the call
+            # is skipped - but the project already fetches those fundamentals
+            # from Smart-Lab for the guru report, so the whole block used to be
+            # blank for every Russian name for want of a lookup. SBER read as
+            # an instrument with no sector, no size and no dividend at all.
+            return {**blank, **_smartlab_fundamentals(asset)}
         import yfinance as yf
 
         info = yf.Ticker(symbol).info or {}
@@ -293,6 +344,10 @@ def _profile(asset):
         "short_ratio": info.get("shortRatio"),
         "beta": info.get("beta"),
         "ex_dividend_date": ex,
+        "pe": info.get("trailingPE"),
+        "roe": info.get("returnOnEquity"),
+        "debt_ebitda": None,          # not in Yahoo's info payload
+        "div_yield": info.get("dividendYield"),
     }
 
 
@@ -316,6 +371,30 @@ def _headlines(asset, limit=6):
         if title:
             out.append(title[:180])
     return {"headlines": out}
+
+
+# Which dossier blocks come off the network rather than out of market.db.
+# Ordered, because they are printed as a run summary.
+NETWORK_BLOCKS = ("headlines", "guru", "fundamentals", "earnings", "macro")
+
+
+def filled_blocks(dossier):
+    """Which network blocks actually arrived, as {block: 0 or 1}.
+
+    Per-block, not per-field: `sector` is legitimately absent for a Moscow name
+    and `next_earnings` for an index, so a field-level count would cry wolf on
+    every sweep. A block counts as arrived when ANY of its fields did, which is
+    the question that separates a thin asset from a dead source.
+    """
+    return {
+        "headlines": int(bool(dossier.get("headlines"))),
+        "guru": int(dossier.get("guru_verdict") is not None),
+        "fundamentals": int(any(dossier.get(k) is not None for k in
+                                ("sector", "market_cap", "beta", "pe", "roe",
+                                 "div_yield"))),
+        "earnings": int(dossier.get("next_earnings") is not None),
+        "macro": int(bool(dossier.get("macro_events"))),
+    }
 
 
 def build(asset, db_path=None, today=None):
