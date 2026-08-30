@@ -2246,8 +2246,20 @@ SCREEN_MIN = float(os.getenv("GTRADE_AR_SCREEN_MIN", "0.0"))
 
 
 def _screen_on():
-    """Whether the cheap CatBoost-only screen runs before the full eval (default on)."""
-    return (os.getenv("GTRADE_AR_SCREEN", "1") or "1").strip() not in ("0", "false", "False", "")
+    """Whether the cheap CatBoost-only screen runs before the full eval.
+
+    The DEFAULT follows the basis (auto_loop.default_screen): off on a net
+    basis, where the screen stubs every neural member to a constant and so
+    discards net levers on CatBoost's opinion; on everywhere else. It was a
+    blanket "on", which made raw + full the shape a launcher produced by
+    answering its own defaults - and that pairing is refused.
+    """
+    from auto_loop import default_screen
+
+    v = os.getenv("GTRADE_AR_SCREEN")
+    if v is None:
+        v = default_screen(_score_basis())
+    return (v or "1").strip() not in ("0", "false", "False", "")
 
 
 def _load_history(record):

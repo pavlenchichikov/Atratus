@@ -713,3 +713,18 @@ def test_the_campaign_re_arms_the_tier_neural_veto(monkeypatch):
 
     # and it is not in FROZEN, so setting it cannot strand a running campaign
     assert "GTRADE_AR_TIER_NEURAL_MIN" not in auto_loop.FROZEN
+
+
+def test_an_unset_screen_is_not_a_problem_on_any_basis():
+    """The screen default moved for the same reason the illumination one did.
+    auto_research.bat set both BEFORE asking for the basis, so accepting the
+    menu default built raw + full, which the campaign guard refuses outright:
+    a default that produces a refused campaign is not a default."""
+    for basis in ("net_auc", "net_gain", "ens_auc", "raw", "neural"):
+        assert auto_loop.campaign_problems(
+            {"GTRADE_AR_SCORE_BASIS": basis}) == [], basis
+    assert auto_loop.default_screen("net_auc") == "0"
+    assert auto_loop.default_screen("raw") == "1"
+    # the contradiction it exists to prevent is still caught when set by hand
+    assert auto_loop.campaign_problems(
+        {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_SCREEN": "1"})

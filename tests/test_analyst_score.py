@@ -81,8 +81,8 @@ def test_a_perfect_forecaster_does_not_read_as_an_unmeasurable_one():
     # base MAE is exactly 0. Shuffling must break it, so the control has to
     # report survives_shuffle False. Before this was pinned, the `base > 0`
     # guard skipped the comparison and left the default True, which by this
-    # module's own contract means "the measurement showed nothing" — the
-    # opposite of the truth for the strongest signal there is.
+    # module's own contract means "the measurement showed nothing",
+    # which is the opposite of the truth for the strongest signal there is.
     rows = _rows(skill=1.0)
     result = shuffle_control(rows, seed=1)
     assert result["mae"] == pytest.approx(0.0, abs=1e-9)

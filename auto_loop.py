@@ -218,6 +218,24 @@ FROZEN = ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_OBJECTIVE",
 NET_BASES = ("net_auc", "net_gain", "ens_auc")
 
 
+def default_screen(basis):
+    """What GTRADE_AR_SCREEN means when nobody set it, given the basis.
+
+    Off on a net basis, for the reason campaign_problems refuses the pairing:
+    the CatBoost-only screen stubs every neural member to a constant 0.5, so
+    every candidate screens identically and net levers are thrown away on
+    CatBoost's opinion. On on raw and neural, where the screen is a cheap and
+    honest prefilter.
+
+    Derived for the same reason default_illum is: the launchers used to set both
+    by hand, and auto_research.bat set them BEFORE its own basis question, so
+    answering the default (raw) produced raw + full - a pairing the guard added
+    on 2026-08-30 refuses outright. A default that can build a refused campaign
+    is not a default.
+    """
+    return "0" if basis in NET_BASES else "1"
+
+
 def default_illum(basis):
     """What GTRADE_AR_ILLUM means when nobody set it, given the basis.
 

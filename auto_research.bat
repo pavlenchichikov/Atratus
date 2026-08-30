@@ -65,16 +65,17 @@ REM    The screen replaces the nets with a constant 0.5, so on a NET basis
 REM    (GTRADE_AR_SCORE_BASIS=net_auc) every candidate screens identically and
 REM    the screen carries no information - it only throws net levers away on
 REM    CatBoost's opinion. Set to 0 for any net-basis run. 1 for Score runs.
-set "GTRADE_AR_SCREEN=0"
-REM    QD search illumination. "cb" = the historical cheap CatBoost-only screen
-REM    (nets stubbed to 0.5, ~43s/genome) - fast, but every elite is then a pure
-REM    CatBoost pick and no net lever can ever be found. "full" trains the tier
-REM    assets with real nets (~545s/genome, 12x) so the net basis actually decides
-REM    what gets illuminated. Use "full" ONLY with GTRADE_AR_SCORE_BASIS=net_auc:
-REM    on the raw Score basis the nets do not reproduce on this GPU and the
-REM    archive would rank noise. Clear _qd_archive.json when switching basis -
-REM    Score-scale fitness (1.5-8.9) never loses to AUC-scale fitness (~0.01).
-set "GTRADE_AR_ILLUM=full"
+REM    The screen and the illumination are NOT set here any more. Both derive
+REM    from the score basis chosen in [4b] below, which is the only place that
+REM    knows it: setting them here ran BEFORE that question, so accepting the
+REM    menu default produced raw + full - a pairing the campaign guard refuses
+REM    outright. Export GTRADE_AR_SCREEN / GTRADE_AR_ILLUM before this file to
+REM    override either.
+REM    For reference: "cb" illumination stubs every net to 0.5 (~43s/genome) so
+REM    no net lever can become an elite; "full" trains the tier assets with real
+REM    nets (~545s/genome, 12x) so a net basis decides what gets illuminated.
+REM    Clear _qd_archive.json when switching basis - Score-scale fitness
+REM    (1.5-8.9) never loses to AUC-scale fitness (~0.01).
 set "GTRADE_AR_SCREEN_MIN=0.0"
 set "GTRADE_AR_PRUNE_MIN=8"
 set "GTRADE_AR_QD_INIT=8"
@@ -244,9 +245,12 @@ echo [4b] Score basis (WHICH number the objective above is applied to):
 echo     1 = raw ensemble Score (default)
 echo     2 = neural contribution (ensemble minus a CatBoost-only run)
 echo         Use 2 to hunt specifically for something that revives the neural
-echo         members. The qd SEARCH always runs the CatBoost-only screen, so
-echo         basis 2 re-scores the final GATE only; the elites are still picked
-echo         by CatBoost alone. That is why earlier neural runs read flat.
+echo         members, but 2 is a SCORE basis, so the search still
+echo         illuminates on the CatBoost-only screen and 2 re-scores the final
+echo         GATE only; the elites are still picked by CatBoost alone. That is
+echo         why earlier neural runs read flat. Bases 3, 4 and 5 no longer have
+echo         that problem: on them the illumination trains real nets and the
+echo         basis decides which genomes become elites, at 12x the cost.
 echo         Basis 2 is a DIFFERENCE, so an axis that helps both learners equally
 echo         (weighting, labeling, folds) reads as zero on it. Use basis 1 there.
 echo     3 = neural AUC (Net_AUC: the nets' own probabilities, averaged over ALL
