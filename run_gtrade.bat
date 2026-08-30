@@ -558,6 +558,13 @@ set "DEC=1"
 set /p "DEC=    choice [1]: "
 set "GTRADE_AR_DECISION_BASIS=raw"
 if "%DEC%"=="2" set "GTRADE_AR_DECISION_BASIS="
+REM  Not asked, because there is one right answer. tier_neural_floor() is
+REM  2 * neural_floor(), and neural_floor() is -inf on every net basis, so the
+REM  tier check that refuses a genome for starving the nets never fires on the
+REM  campaigns that most need it. Writing the documented default out re-arms
+REM  it. It filters what reaches the gate and never changes what a result must
+REM  clear there.
+set "GTRADE_AR_TIER_NEURAL_MIN=-1.0"
 
 echo.
 echo [0d] Gate size: how many assets a verdict is measured over. dScore has a

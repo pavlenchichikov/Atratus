@@ -91,6 +91,13 @@ REM    Floor on neural_lift for adoption (Score scale). A candidate that clears
 REM    the Score bar but sinks the nets below this is rejected instead of merely
 REM    reported. Blank = default -0.5.
 set "GTRADE_AR_NEURAL_FLOOR="
+REM    Floor on neural_lift at TIER cost instead of holdout cost. Blank means
+REM    2 * GTRADE_AR_NEURAL_FLOOR, and that is -inf on any net basis, so the
+REM    check is OFF exactly where it is needed. Written out here: of 147
+REM    recorded winners 83 percent lowered the neural contribution, and of the
+REM    29 that cleared the net_auc adoption floor exactly one had a positive
+REM    lift. Refusing those at 545s instead of 1500-5700s is most of the queue.
+set "GTRADE_AR_TIER_NEURAL_MIN=-1.0"
 REM    Adoption floor on the net_auc basis (AUC units, not Score). Blank = 0.005.
 set "GTRADE_AR_ADOPT_AUC="
 set "AR_PRESCREEN_MIN=0.02"

@@ -73,6 +73,22 @@ CAMPAIGN = {
     "GTRADE_AR_OBJECTIVE": "mean",
     "GTRADE_AR_SCREEN": "0",
     "GTRADE_AR_ILLUM": "full",
+    # Re-arms the tier's neural veto, which a net-basis campaign silently
+    # disables: tier_neural_floor() is 2 * neural_floor(), and neural_floor()
+    # returns -inf on net_auc, net_gain and ens_auc, so the check added for
+    # exactly this never fired on the campaign that needed it. -1.0 is that
+    # documented default written out, not a tighter bar invented here.
+    #
+    # It earns its place in the data: of 147 recorded winners carrying a
+    # neural_lift, 83 percent are negative, median -0.539, worst -7.60, and of
+    # the 29 that cleared the net_auc adoption floor exactly ONE had a positive
+    # lift. Refusing those at tier cost (545s) instead of holdout cost (1500 to
+    # 5700s) is most of the queue.
+    #
+    # A filter, not a yardstick: it changes which candidates reach the gate,
+    # never what a result has to clear there, so findings already recorded stay
+    # comparable.
+    "GTRADE_AR_TIER_NEURAL_MIN": "-1.0",
     "GTRADE_AR_RL": "1",
     "GTRADE_AR_WIKI": "1",
     "GTRADE_LABEL_MODE": "direction",

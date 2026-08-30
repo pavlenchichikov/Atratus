@@ -690,3 +690,26 @@ def test_an_unset_illumination_is_not_a_problem_on_any_basis():
     assert auto_loop.campaign_problems(
         {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_SCREEN": "0",
          "GTRADE_AR_ILLUM": "cb"})
+
+
+def test_the_campaign_re_arms_the_tier_neural_veto(monkeypatch):
+    """tier_neural_floor() is 2 * neural_floor(), and neural_floor() returns
+    -inf on every net basis - so the check that refuses a genome for starving
+    the nets was off on the campaigns built to hunt net levers.
+
+    The first assertion is the positive control: it proves the derived default
+    really is -inf on this campaign's basis, so the second one means something.
+    """
+    import auto_research as ar
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS",
+                       auto_loop.CAMPAIGN["GTRADE_AR_SCORE_BASIS"])
+    monkeypatch.delenv("GTRADE_AR_TIER_NEURAL_MIN", raising=False)
+    assert ar.tier_neural_floor() == float("-inf")
+
+    monkeypatch.setenv("GTRADE_AR_TIER_NEURAL_MIN",
+                       auto_loop.CAMPAIGN["GTRADE_AR_TIER_NEURAL_MIN"])
+    assert ar.tier_neural_floor() == -1.0
+
+    # and it is not in FROZEN, so setting it cannot strand a running campaign
+    assert "GTRADE_AR_TIER_NEURAL_MIN" not in auto_loop.FROZEN
