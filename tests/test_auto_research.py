@@ -754,10 +754,10 @@ def test_qd_illumination_full_trains_real_nets(monkeypatch):
 
 
 def test_qd_illumination_never_trains_a_net(monkeypatch):
-    """DEFAULT (GTRADE_AR_ILLUM unset) stays on the CatBoost-only screen: it is
-    the one training unit that reproduces bit-for-bit on this GPU (measured
-    2026-08-14), so a net-training illumination on the Score basis would rank
-    noise. Opt in with ILLUM=full + a net basis, see the test above."""
+    """On a SCORE basis (here: neural) the unset default stays on the CatBoost-only
+    screen: it is the one training unit that reproduces bit-for-bit on this GPU
+    (measured 2026-08-14), so a net-training illumination there would rank noise.
+    On a NET basis the unset default is now full, see the test below."""
     monkeypatch.delenv("GTRADE_AR_ILLUM", raising=False)
     monkeypatch.setattr(ar, "_qd_load", dict)
     monkeypatch.setattr(ar, "_qd_save", lambda a: None)
@@ -2611,3 +2611,42 @@ def test_an_explicit_setting_still_beats_the_borrowed_profile(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_TRAIN_JOBS", "1")
     ar.apply_manual_load_profile()
     assert os.environ["GTRADE_AR_TRAIN_JOBS"] == "1"
+
+
+def test_a_hand_started_run_refuses_a_net_basis_it_cannot_measure(monkeypatch, capsys):
+    """The guard lived in the launcher, so `python auto_research.py` walked past it.
+
+    Positive control first: the same environment WITHOUT the contradiction must
+    pass, or the refusal below proves nothing.
+    """
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_gain")
+    monkeypatch.setenv("GTRADE_AR_SCREEN", "0")
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "full")
+    assert ar.refuse_contradictory_campaign() is False
+
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    assert ar.refuse_contradictory_campaign() is True
+    assert "CatBoost alone" in capsys.readouterr().out
+
+
+def test_the_illumination_default_follows_the_basis(monkeypatch):
+    """A net basis with GTRADE_AR_ILLUM unset must illuminate on real nets.
+
+    The old blanket "cb" default is what made a hand-started net-basis run search
+    on CatBoost alone: every elite was a pure CatBoost pick and the basis only
+    re-scored the final gate, so no net lever could reach the gate at all. The
+    raw and neural halves are the positive control - if the default were simply
+    "full" everywhere, they would fail, and campaign_problems refuses that pair.
+    """
+    monkeypatch.delenv("GTRADE_AR_ILLUM", raising=False)
+    for basis in ("net_auc", "net_gain", "ens_auc"):
+        monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", basis)
+        assert ar.illum_full() is True, basis
+    for basis in ("raw", "neural"):
+        monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", basis)
+        assert ar.illum_full() is False, basis
+
+    # An explicit value still wins over the derived default, both ways.
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    assert ar.illum_full() is False

@@ -674,3 +674,19 @@ def test_the_projection_names_a_holdout_that_cannot_answer(tmp_path, monkeypatch
     # and the other end: a floor the same holdout CAN resolve reads as clear
     big = ab_build.projected_power(14, 5.0, str(tmp_path))
     assert "clears the floor" in big
+
+
+def test_an_unset_illumination_is_not_a_problem_on_any_basis():
+    """campaign_problems must read the same default the run will use.
+
+    It defaulted GTRADE_AR_ILLUM to "cb" while auto_research now derives it from
+    the basis. Left as it was, a net-basis campaign that simply never sets the
+    variable would be refused for a CatBoost illumination it is not going to do.
+    """
+    for basis in ("net_auc", "net_gain", "ens_auc", "raw", "neural"):
+        env = {"GTRADE_AR_SCORE_BASIS": basis, "GTRADE_AR_SCREEN": "0"}
+        assert auto_loop.campaign_problems(env) == [], basis
+    # and the contradiction it exists for is still caught
+    assert auto_loop.campaign_problems(
+        {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_SCREEN": "0",
+         "GTRADE_AR_ILLUM": "cb"})

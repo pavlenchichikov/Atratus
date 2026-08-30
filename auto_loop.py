@@ -202,6 +202,26 @@ FROZEN = ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_OBJECTIVE",
 NET_BASES = ("net_auc", "net_gain", "ens_auc")
 
 
+def default_illum(basis):
+    """What GTRADE_AR_ILLUM means when nobody set it, given the basis.
+
+    "full" on a net basis, and that is the point: the CatBoost-only illumination
+    makes every elite a pure CatBoost pick, so a net basis only re-scored the
+    final gate and no net lever could ever become a candidate. A hand-started
+    run inherited the old blanket "cb" default and spent 2026-08-30 illuminating
+    on CatBoost under a net campaign, which is what this default exists to stop.
+
+    Still "cb" on raw and neural: both carry the Score's irreproducibility on
+    this GPU (same seed, same config, 0.45 to 1.52 apart, more than the adoption
+    floor), so a net-trained archive there would rank noise. campaign_problems
+    refuses that pairing, and this default must never build one.
+
+    The one rule, in one place: auto_research.illum_full and the launcher menu
+    both read it, so the code default and the menu default cannot drift apart.
+    """
+    return "full" if basis in NET_BASES else "cb"
+
+
 def build_env(environ=None, budget=0):
     """The environment every phase runs under.
 
@@ -233,7 +253,7 @@ def campaign_problems(env):
     """
     out = []
     basis = env.get("GTRADE_AR_SCORE_BASIS", "raw")
-    illum = env.get("GTRADE_AR_ILLUM", "cb")
+    illum = env.get("GTRADE_AR_ILLUM") or default_illum(basis)
     if basis in NET_BASES:
         if env.get("GTRADE_AR_SCREEN") == "1":
             out.append(

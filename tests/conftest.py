@@ -111,3 +111,22 @@ def _isolate_local_adoption(tmp_path, monkeypatch):
     # directly, so clearing the env alone still leaves seven adopted DSL specs in
     # force for anything that asks what features are active.
     monkeypatch.setattr(adopted, "PATH", str(tmp_path / "no_adopted_genome.json"))
+
+
+@pytest.fixture(autouse=True)
+def _no_campaign_load_profile(monkeypatch):
+    """Keep auto_research.main() off the chunked training path.
+
+    main() borrows the campaign's load profile, which sets
+    GTRADE_AR_TRAIN_CHUNK=7. At any non-zero chunk the base train goes through
+    _train_chunks and calls the injected trainer as train_env(part, env,
+    split=False) - a keyword the fakes in the main() tests do not take, so four
+    of them started failing on a TypeError from inside the trainer. The value
+    comes from a module constant, not from a gitignored file, so this is not a
+    local-only leak.
+
+    The chunk key only, not the whole profile: the rest is thread and VRAM
+    sizing that no test reads. The test that measures the profile being borrowed
+    deletes every load key itself first, so it still sees a clean environment.
+    """
+    monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "0")

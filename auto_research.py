@@ -536,6 +536,36 @@ def apply_manual_load_profile():
     return took
 
 
+def refuse_contradictory_campaign():
+    """True when this run's environment contradicts itself. Prints why.
+
+    auto_loop.campaign_problems already knew that a net basis with the CatBoost
+    screen or CatBoost illumination measures nothing: the screen stubs every
+    neural member to a constant 0.5, so the archive is a pure CatBoost selection
+    and the basis only re-scores the final gate. But that check ran in the
+    LAUNCHER, so `python auto_research.py` walked straight past it and spent the
+    night illuminating on CatBoost under a net basis. The guard belongs where
+    the run starts, not where one of its two callers starts.
+
+    Refuses rather than warns on purpose: a warning at 06:12 scrolls off the
+    console behind the first training unit, which is exactly how this was missed.
+    """
+    try:
+        from auto_loop import campaign_problems
+
+        problems = campaign_problems(os.environ)
+    except Exception:
+        return False
+    if not problems:
+        return False
+    print("[ar] this run's settings contradict each other:")
+    for p in problems:
+        print("  - %s" % p)
+    print("  fix: GTRADE_AR_ILLUM=full with GTRADE_AR_SCREEN=0 on a net basis, "
+          "or GTRADE_AR_SCORE_BASIS=raw to search CatBoost on purpose.")
+    return True
+
+
 def train_jobs():
     """How many training chunks run at once, after the card has been asked.
 
@@ -2396,15 +2426,23 @@ def out_of_time():
 def illum_full():
     """Whether the QD search illuminates on REAL nets (GTRADE_AR_ILLUM=full).
 
-    Default "cb" is the historical cheap screen: 10 assets, every neural member
-    replaced by a constant 0.5. That makes the archive - and therefore every
-    elite the run ever proposes - a pure CatBoost selection, which is why
-    mutate(ops=["nets"]) is absent from the bandit arms and why a net basis
-    scores every genome identically here. On "full" the search trains the tier
-    assets with the tier's reduced epochs instead, so the nets are real and the
-    active basis (net_auc etc.) actually means something during illumination.
-    Costs roughly 12x per genome, so it is opt-in."""
-    return (os.getenv("GTRADE_AR_ILLUM", "cb") or "cb").strip().lower() == "full"
+    "cb" is the historical cheap screen: 10 assets, every neural member replaced
+    by a constant 0.5. That makes the archive - and therefore every elite the run
+    ever proposes - a pure CatBoost selection, which is why mutate(ops=["nets"])
+    is absent from the bandit arms and why a net basis scores every genome
+    identically here. On "full" the search trains the tier assets with the tier's
+    reduced epochs instead, so the nets are real and the active basis (net_auc
+    etc.) actually means something during illumination. Costs roughly 12x per
+    genome.
+
+    The DEFAULT now follows the basis (auto_loop.default_illum): full on a net
+    basis, cb on raw and neural where net training does not reproduce here. It
+    used to be a blanket "cb", so a net-basis run started without the variable
+    searched on CatBoost and let the basis re-score only the final gate."""
+    from auto_loop import default_illum
+
+    return (os.getenv("GTRADE_AR_ILLUM")
+            or default_illum(_score_basis())).strip().lower() == "full"
 
 
 def tier_assets():
@@ -3281,6 +3319,8 @@ def main():
 
     # Before anything trains, and before the regate branch too: both paths train.
     apply_manual_load_profile()
+    if refuse_contradictory_campaign():
+        return 1
     p = argparse.ArgumentParser(description="auto-research")
     p.add_argument("--regate", action="store_true",
                    help="re-gate stored candidate genomes under the current gate")

@@ -500,18 +500,36 @@ if "%BAS%"=="2" set "GTRADE_AR_SCORE_BASIS=ens_auc"
 if "%BAS%"=="3" set "GTRADE_AR_SCORE_BASIS=net_gain"
 if "%BAS%"=="4" set "GTRADE_AR_SCORE_BASIS=raw"
 if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=neural"
-REM  The screen and the illumination are DERIVED from the basis, not asked. On a
-REM  net basis the CB-only screen stubs every net to a constant, so every
-REM  candidate screens identically and net levers get thrown away on CatBoost's
-REM  opinion. On a Score basis the reverse: full illumination would rank noise,
-REM  because net training does not reproduce here. auto_loop refuses either
-REM  combination anyway; deriving it means the menu cannot build one.
+REM  The SCREEN stays derived: on a net basis the CB-only screen stubs every net
+REM  to a constant, so every candidate screens identically and net levers get
+REM  thrown away on CatBoost's opinion. The ILLUMINATION is asked below, but only
+REM  where both answers are real: on a Score basis full illumination would rank
+REM  noise, because net training does not reproduce here, and auto_loop refuses
+REM  that pairing - so 4 and 5 keep cb and skip the question.
 set "GTRADE_AR_SCREEN=0"
 set "GTRADE_AR_ILLUM=full"
 if "%BAS%"=="4" set "GTRADE_AR_SCREEN=1"
 if "%BAS%"=="4" set "GTRADE_AR_ILLUM=cb"
 if "%BAS%"=="5" set "GTRADE_AR_SCREEN=1"
 if "%BAS%"=="5" set "GTRADE_AR_ILLUM=cb"
+if "%BAS%"=="4" goto :illum_done
+if "%BAS%"=="5" goto :illum_done
+
+echo.
+echo [0a2] Search illumination: what the ARCHIVE is scored on, i.e. which
+echo     genomes ever become elites.
+echo     1 = full (default) trains the tier assets with REAL nets, about 545s a
+echo         genome. The only setting under which a net lever can become an
+echo         elite: the basis you just picked decides what gets illuminated.
+echo     2 = cb   the CatBoost-only screen, about 43s a genome, 12x cheaper.
+echo         Every net member is stubbed to a constant 0.5, so every elite is a
+echo         pure CatBoost pick and the basis only re-scores the final gate.
+echo     Clear _qd_archive.json when you switch: Score-scale fitness never
+echo     loses to AUC-scale fitness, so the two do not share an archive.
+set "ILL=1"
+set /p "ILL=    choice [1]: "
+if "%ILL%"=="2" set "GTRADE_AR_ILLUM=cb"
+:illum_done
 
 echo.
 echo [0b] Objective: how the per-asset held-out lifts reduce to ONE number.
@@ -592,7 +610,7 @@ echo     search gate: neural-diagnostic set, 14 assets, for MEASURING nets.
 :gate_done
 echo.
 echo     New campaign: search basis %GTRADE_AR_SCORE_BASIS%, objective %GTRADE_AR_OBJECTIVE%,
-echo     screen %GTRADE_AR_SCREEN%, illumination %GTRADE_AR_ILLUM% (both derived from the basis).
+echo     screen %GTRADE_AR_SCREEN% (derived from the basis), illumination %GTRADE_AR_ILLUM%.
 echo     The search archive is kept: only a move of the SEARCH basis sets it aside.
 :al_director
 
