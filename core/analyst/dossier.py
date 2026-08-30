@@ -374,27 +374,72 @@ def _headlines(asset, limit=6):
 
 
 # Which dossier blocks come off the network rather than out of market.db.
-# Ordered, because they are printed as a run summary.
-NETWORK_BLOCKS = ("headlines", "guru", "fundamentals", "earnings", "macro")
+# Ordered, because they are printed as a run summary. macro is NOT here: it is
+# read from a local calendar file, so an empty one says nothing about the
+# connection and gets its own line.
+NETWORK_BLOCKS = ("headlines", "guru", "fundamentals", "earnings")
+
+
+def _applicable(asset):
+    """(fundamentals_possible, earnings_possible) for this asset.
+
+    The two are not the same question, which is why the first version of this
+    summary told a person to check the network because SBER had no earnings
+    date. can_have_earnings documents both of its reasons: called WITHOUT the
+    asset it answers "is this a company at all", which is what decides whether
+    fundamentals can exist; called WITH it, it also excludes Moscow-listed
+    names, whose earnings this source genuinely cannot serve while their
+    fundamentals come from Smart-Lab and are unaffected.
+    """
+    try:
+        from config import FULL_ASSET_MAP
+        from core.events import can_have_earnings
+
+        symbol = FULL_ASSET_MAP.get(asset)
+        return bool(can_have_earnings(symbol)), bool(
+            can_have_earnings(symbol, asset))
+    except Exception:
+        return True, True
 
 
 def filled_blocks(dossier):
-    """Which network blocks actually arrived, as {block: 0 or 1}.
+    """Which network blocks arrived: 1 yes, 0 expected but empty, None n/a here.
 
-    Per-block, not per-field: `sector` is legitimately absent for a Moscow name
-    and `next_earnings` for an index, so a field-level count would cry wolf on
-    every sweep. A block counts as arrived when ANY of its fields did, which is
-    the question that separates a thin asset from a dead source.
+    Per-block, not per-field: `sector` is legitimately absent for a Moscow name,
+    so a field-level count would cry wolf on every sweep. A block counts as
+    arrived when ANY of its fields did. None is the third state the first
+    version lacked: an index has no earnings and gold has no P/E, and counting
+    those as misses is what turned a correct run into a connection warning.
     """
+    funda_ok, earn_ok = _applicable(dossier.get("asset"))
     return {
         "headlines": int(bool(dossier.get("headlines"))),
         "guru": int(dossier.get("guru_verdict") is not None),
         "fundamentals": int(any(dossier.get(k) is not None for k in
                                 ("sector", "market_cap", "beta", "pe", "roe",
-                                 "div_yield"))),
-        "earnings": int(dossier.get("next_earnings") is not None),
-        "macro": int(bool(dossier.get("macro_events"))),
+                                 "div_yield"))) if funda_ok else None,
+        "earnings": (int(dossier.get("next_earnings") is not None)
+                     if earn_ok else None),
     }
+
+
+def macro_status():
+    """Why macro_events is empty, in the words of the actual cause.
+
+    Returns None when there is nothing to report. The calendar is a local file
+    that ships only as an example, so the honest message names the file rather
+    than blaming the network for it.
+    """
+    import os
+
+    from core import events
+
+    if not os.path.exists(events.MACRO_PATH):
+        return ("%s does not exist (only the .example), so no macro event "
+                "reached any judgment" % os.path.basename(events.MACRO_PATH))
+    if not events.load_macro():
+        return "%s carries no usable events" % os.path.basename(events.MACRO_PATH)
+    return None
 
 
 def build(asset, db_path=None, today=None):

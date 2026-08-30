@@ -139,15 +139,54 @@ def test_a_dead_network_is_visible_block_by_block():
     """Every network field is wrapped in _safe, so a run with no connection
     produces judgments and no complaint. filled_blocks is what the CLI counts
     to say so out loud."""
-    full = {"headlines": ["x"], "guru_verdict": "BUY", "pe": 3.5,
-            "next_earnings": "2026-09-01", "macro_events": ["FOMC"]}
+    full = {"asset": "AAPL", "headlines": ["x"], "guru_verdict": "BUY",
+            "pe": 3.5, "next_earnings": "2026-09-01"}
     assert dossier.filled_blocks(full) == {k: 1 for k in dossier.NETWORK_BLOCKS}
-    assert dossier.filled_blocks({}) == {k: 0 for k in dossier.NETWORK_BLOCKS}
-    # a thin asset is not a dead source: an index has no earnings date and a
-    # Moscow name no sector, and neither may read as a broken connection
-    thin = {"headlines": ["x"], "guru_verdict": "BUY", "sector": None,
-            "market_cap": None, "pe": 3.5}
+    assert dossier.filled_blocks({"asset": "AAPL"}) == {
+        k: 0 for k in dossier.NETWORK_BLOCKS}
+    # a Moscow name carrying only its Smart-Lab valuation is a FILLED block,
+    # not a thin one: sector and market cap were never available for it
+    thin = {"asset": "SBER", "headlines": ["x"], "guru_verdict": "BUY",
+            "sector": None, "market_cap": None, "pe": 3.5}
     assert dossier.filled_blocks(thin)["fundamentals"] == 1
+
+
+def test_what_an_asset_cannot_have_is_not_a_missing_source():
+    """The first version of this summary told a person to check the network
+    because SBER had no earnings date and gold no P/E. Neither has a source at
+    all, so both must read as not-applicable rather than as a failed fetch.
+    The AAPL line is the positive control: for a name that CAN have both, an
+    absence is still a real 0."""
+    assert dossier.filled_blocks({"asset": "SBER"})["earnings"] is None
+    assert dossier.filled_blocks({"asset": "SBER"})["fundamentals"] == 0
+    gold = dossier.filled_blocks({"asset": "GOLD"})
+    assert gold["earnings"] is None and gold["fundamentals"] is None
+    assert gold["headlines"] == 0 and gold["guru"] == 0
+    aapl = dossier.filled_blocks({"asset": "AAPL"})
+    assert aapl["earnings"] == 0 and aapl["fundamentals"] == 0
+
+
+def test_macro_names_the_file_rather_than_blaming_the_network(monkeypatch,
+                                                              tmp_path):
+    """macro_events is read from a local calendar, so an empty one says nothing
+    about the connection. It shipped only as an example, which is why it was
+    empty for all 853 assets."""
+    from core import events
+
+    monkeypatch.setattr(events, "MACRO_PATH",
+                        str(tmp_path / "macro_calendar.json"))
+    assert "does not exist" in dossier.macro_status()
+
+    cal = tmp_path / "macro_calendar.json"
+    cal.write_text("[]", encoding="utf-8")
+    assert "no usable events" in dossier.macro_status()
+
+    # load_macro is stubbed to [] for every test in this file, so the "a real
+    # calendar is quiet" case has to say so explicitly. Parsing the file is
+    # core.events' own test, not this one's.
+    monkeypatch.setattr(events, "load_macro",
+                        lambda path=None: [{"name": "FOMC"}])
+    assert dossier.macro_status() is None
 
 
 def test_the_hash_is_stable_for_equal_content(db):

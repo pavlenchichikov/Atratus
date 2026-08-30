@@ -122,13 +122,14 @@ def cmd_run(args):
     # reads as None and the run continues on a quietly thinner dossier. Counting
     # them turns "no internet" from something you notice weeks later in the
     # judgments into one line at the end of the run.
-    seen = {k: 0 for k in dossier.NETWORK_BLOCKS}
-    built = 0
+    seen = {k: [0, 0] for k in dossier.NETWORK_BLOCKS}   # [arrived, applicable]
     for asset in targets:
         d = dossier.build(asset)
-        built += 1
         for name, filled in dossier.filled_blocks(d).items():
-            seen[name] += filled
+            if filled is None:       # not applicable to this asset, not a miss
+                continue
+            seen[name][0] += filled
+            seen[name][1] += 1
         if d["close"] is None or d["atr"] is None:
             skipped += 1
             continue
@@ -158,14 +159,20 @@ def cmd_run(args):
         written += 1
         _print_judgment(asset, j, fc)
     print(f"[analyst] written={written} skipped={skipped} refused={refused}")
-    if built:
-        print("[analyst] sources: " + ", ".join(
-            "%s %d/%d" % (k, seen[k], built) for k in dossier.NETWORK_BLOCKS))
-        dead = [k for k in dossier.NETWORK_BLOCKS if seen[k] == 0]
-        if dead:
-            print("[analyst] NOTHING came back from: %s. Every judgment above "
-                  "was made without them - check the connection (and the VPN "
-                  "route) before trusting these calls." % ", ".join(dead))
+    print("[analyst] sources: " + ", ".join(
+        "%s %d/%d" % (k, got, n) if n else "%s n/a" % k
+        for k, (got, n) in ((k, seen[k]) for k in dossier.NETWORK_BLOCKS)))
+    # Only a source that COULD have answered and did not: an index has no
+    # earnings and gold no P/E, and calling those a dead connection is how this
+    # line first cried wolf on a run where nothing was wrong.
+    dead = [k for k in dossier.NETWORK_BLOCKS if seen[k][1] and not seen[k][0]]
+    if dead:
+        print("[analyst] NOTHING came back from: %s, though every asset judged "
+              "could have had it. Check the connection and the VPN route "
+              "before trusting these calls." % ", ".join(dead))
+    macro = dossier.macro_status()
+    if macro:
+        print("[analyst] %s" % macro)
     return 0
 
 
