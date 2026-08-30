@@ -17,6 +17,7 @@ stdlib + numpy + catboost + core.timing_policy only. Series come from
 train_timing.build_asset_series; nothing here reads a database or a model file.
 """
 import os
+import time
 
 import numpy as np
 
@@ -252,8 +253,14 @@ def fit_q(batches, iters=6, gamma=0.97, seed=0):
     next_rows = np.concatenate([b["next_rows"] for b in batches])
     terminal = np.concatenate([b["terminal"] for b in batches])
 
+    # One line per rung. CB_PARAMS carries verbose=0 and allow_writing_files=0,
+    # so a pooled fit over every asset is an hour of total silence with nothing
+    # to distinguish it from a hang - which is exactly the question it got asked.
+    print("[fqi] %d transitions, %d features, ladder of %d"
+          % (len(rows), rows.shape[1] if rows.ndim > 1 else 1, iters), flush=True)
     models, targets = [], rewards.copy()
     for k in range(iters):
+        t0 = time.time()
         model = CatBoostRegressor(random_seed=seed + k, **CB_PARAMS)
         model.fit(rows, targets)
         models.append(model)
@@ -261,6 +268,8 @@ def fit_q(batches, iters=6, gamma=0.97, seed=0):
             bootstrap = _q_max(model, next_rows)
             bootstrap[terminal] = 0.0
             targets = rewards + gamma * bootstrap
+        print("[fqi]   iter %d/%d  %.0fs" % (k + 1, iters, time.time() - t0),
+              flush=True)
     return models
 
 

@@ -446,3 +446,17 @@ class TestReplayReadsDecisionsAgainstFacts:
         s["next_ret"] = np.array([0.01, np.nan])
         st = tt.hit_stats(s, [1, 1])
         assert st["bars"] == 1 and st["held"] == 1 and st["held_hits"] == 1
+
+
+def test_the_ladder_reports_every_rung_it_climbs(capsys):
+    """A pooled fit over every asset is an hour with no output, which is
+    indistinguishable from a hang. One line per rung is what tells the two
+    apart, so the count of them is the thing worth asserting."""
+    import random
+    s = _series(120, seed=5)
+    batch = fq.rollout(s, tp.RulesPolicy(dict(tp.DEFAULT_PARAMS)),
+                       random.Random(1), epsilon=0.3)
+    fq.fit_q([batch], iters=3, seed=0)
+    out = capsys.readouterr().out
+    assert out.count("[fqi]   iter") == 3, out
+    assert "iter 3/3" in out and "transitions" in out
