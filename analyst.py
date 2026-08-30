@@ -80,6 +80,34 @@ def _eligible(today=None):
     return sorted(chosen)
 
 
+def _judge_one(d, asset, h, horizon, call, depth, cells, table,
+               written, refused):
+    """One judgment, for one asset over one horizon. Returns the two counters.
+
+    Split out of cmd_run when the horizon became a loop: the same dossier over
+    one day and over five is two questions, so it is two model calls and two
+    rows, which the log's (date, asset, horizon) primary key has always allowed.
+    """
+    j = agent.judge(d, call=call, depth=depth, horizon=horizon)
+    if j is None:
+        return written, refused + 1
+
+    fc = calibrate.forecast(j, cells, asset, radar_category(asset),
+                            d["atr"], d["close"], table)
+    store.write_judgment({
+        "date": d["date"], "asset": asset, "horizon": horizon,
+        "direction": j["direction"], "conviction": j["conviction"],
+        "vol_regime": j["vol_regime"], "key_risk": j["key_risk"],
+        "thesis": j["thesis"],
+        "evidence_json": json.dumps(j["evidence"]),
+        "dossier_hash": h, "llm_model": os.getenv("GTRADE_AR_LLM", "default"),
+        "forecast_pct": fc["pct"], "lo_pct": fc["lo"], "hi_pct": fc["hi"],
+        "atr_at_signal": d["atr"], "close_at_signal": d["close"],
+    })
+    _print_judgment(asset, j, fc, horizon=horizon)
+    return written + 1, refused
+
+
 def cmd_run(args):
     if (os.getenv("GTRADE_ANALYST") or "1").strip() == "0":
         print("[analyst] GTRADE_ANALYST=0, nothing to do.")
@@ -117,6 +145,19 @@ def cmd_run(args):
         len(targets), os.getenv("GTRADE_AR_LLM", "anthropic"), depth,
         " (named)" if named else ""))
 
+    try:
+        horizons = [int(h) for h in
+                    (getattr(args, "horizons", "1") or "1").split(",") if h.strip()]
+    except ValueError:
+        print("[analyst] --horizons takes whole numbers of trading days.")
+        return 1
+    as_of = getattr(args, "as_of", None)
+    if as_of:
+        print("[analyst] as-of %s: the dossier is rewound, so fundamentals, "
+              "headlines, the guru verdict and the market classifiers are "
+              "blank. They cannot be fetched for a past date and faking them "
+              "would be look-ahead." % as_of)
+
     written = skipped = refused = 0
     # Every network field in the dossier is wrapped in _safe, so a dead source
     # reads as None and the run continues on a quietly thinner dossier. Counting
@@ -124,7 +165,7 @@ def cmd_run(args):
     # judgments into one line at the end of the run.
     seen = {k: [0, 0] for k in dossier.NETWORK_BLOCKS}   # [arrived, applicable]
     for asset in targets:
-        d = dossier.build(asset)
+        d = dossier.build(asset, today=as_of)
         for name, filled in dossier.filled_blocks(d).items():
             if filled is None:       # not applicable to this asset, not a miss
                 continue
@@ -134,30 +175,12 @@ def cmd_run(args):
             skipped += 1
             continue
         h = dossier.dossier_hash(d)
-        if not named and store.judged_with_hash(asset, h):
-            skipped += 1
-            continue
-
-        j = agent.judge(d, call=call, depth=depth)
-        if j is None:
-            refused += 1
-            continue
-
-        fc = calibrate.forecast(j, cells, asset, radar_category(asset),
-                                d["atr"], d["close"], table)
-
-        store.write_judgment({
-            "date": d["date"], "asset": asset, "horizon": 1,
-            "direction": j["direction"], "conviction": j["conviction"],
-            "vol_regime": j["vol_regime"], "key_risk": j["key_risk"],
-            "thesis": j["thesis"],
-            "evidence_json": json.dumps(j["evidence"]),
-            "dossier_hash": h, "llm_model": os.getenv("GTRADE_AR_LLM", "default"),
-            "forecast_pct": fc["pct"], "lo_pct": fc["lo"], "hi_pct": fc["hi"],
-            "atr_at_signal": d["atr"], "close_at_signal": d["close"],
-        })
-        written += 1
-        _print_judgment(asset, j, fc)
+        for horizon in horizons:
+            if not named and store.judged_with_hash(asset, h, horizon=horizon):
+                skipped += 1
+                continue
+            written, refused = _judge_one(d, asset, h, horizon, call, depth,
+                                          cells, table, written, refused)
     print(f"[analyst] written={written} skipped={skipped} refused={refused}")
     print("[analyst] sources: " + ", ".join(
         "%s %d/%d" % (k, got, n) if n else "%s n/a" % k
@@ -191,7 +214,7 @@ def _named_assets(raw):
     return out
 
 
-def _print_judgment(asset, j, fc):
+def _print_judgment(asset, j, fc, horizon=1):
     """The whole opinion, not just a counter.
 
     A run that prints three totals gives no way to see WHY the analyst said
@@ -203,13 +226,19 @@ def _print_judgment(asset, j, fc):
     pct = fc.get("pct")
     lo, hi = fc.get("lo"), fc.get("hi")
     print()
-    print("  %-10s %-5s conviction %d/5   vol %s" % (
-        asset, arrow, j["conviction"], j["vol_regime"]))
+    print("  %-10s %-5s %dd   conviction %d/5   vol %s" % (
+        asset, arrow, horizon, j["conviction"], j["vol_regime"]))
     if pct is not None:
         band = ""
         if lo is not None and hi is not None:
             band = "   80%% band %+.2f%% .. %+.2f%%" % (lo * 100, hi * 100)
-        print("             expected payoff %+.2f%%%s" % (pct * 100, band))
+        # The direction is the model's, the payoff is the empirical table's for
+        # that side. They disagreed on 10 of the first 33 judgments and the card
+        # printed "LONG ... expected payoff -0.32%" with nothing marking it. On
+        # the log so far the agreeing half scores MAE 0.416 against 0.517.
+        flag = "" if pct > 0 else "   [the payoff table disagrees]"
+        print("             expected payoff %+.2f%%%s%s"
+              % (pct * 100, band, flag))
         print("             basis: %s, %d observation(s)" % (
             fc.get("source", "?"), fc.get("n", 0)))
     if j.get("key_risk"):
@@ -298,7 +327,7 @@ def _score_baselines(table):
 
 
 def cmd_score(args):
-    from core.analyst.score import standings
+    from core.analyst.score import field_usage, standings
 
     if not os.path.exists(store.DB_PATH):
         print("[analyst] no market.db - run the data pipeline "
@@ -325,6 +354,18 @@ def cmd_score(args):
         and len(rows) >= 500
     ) else "HOLD"
     print(f"[analyst] verdict: {verdict} on {len(rows)} scored judgments")
+
+    if getattr(args, "fields", False):
+        fu = field_usage(rows)
+        print(f"[analyst] fields: {len(fu['fields'])} ever cited over "
+              f"{fu['n']} directional judgments, {fu['measurable']} with "
+              f"enough of both sides to test")
+        for name, e in sorted(fu["fields"].items(),
+                              key=lambda kv: -kv[1]["cited"]):
+            hw = "-" if e["hit_with"] is None else "%.2f" % e["hit_with"]
+            ho = "-" if e["hit_without"] is None else "%.2f" % e["hit_without"]
+            print("    %-26s cited %3d   hit %s vs %s   %s"
+                  % (name, e["cited"], hw, ho, e["verdict"]))
     return 0
 
 
@@ -340,8 +381,23 @@ def main(argv=None):
     run.add_argument("--depth", choices=("brief", "full"),
                      help="how much reasoning to ask for. Default: full for a "
                           "named asset, brief for a sweep")
+    run.add_argument("--horizons", default="1",
+                     help="comma-separated horizons in trading days (default 1). "
+                          "Each is its own question and its own LLM call; the "
+                          "log's primary key has carried a horizon column since "
+                          "it was written and nothing ever used it")
+    run.add_argument("--as-of", dest="as_of",
+                     help="judge a PAST date (YYYY-MM-DD) instead of today. The "
+                          "dossier is rewound: fundamentals, headlines, the guru "
+                          "verdict and the three market classifiers cannot be, "
+                          "so they come back blank rather than carrying data "
+                          "from after the date being judged")
     run.set_defaults(fn=cmd_run)
-    sub.add_parser("score").set_defaults(fn=cmd_score)
+    sc = sub.add_parser("score")
+    sc.add_argument("--fields", action="store_true",
+                    help="per-field usage: how often the model cites each "
+                         "dossier field and whether citing it pays")
+    sc.set_defaults(fn=cmd_score)
     sub.add_parser("backfill").set_defaults(fn=cmd_backfill)
     args = p.parse_args(argv)
     return args.fn(args)

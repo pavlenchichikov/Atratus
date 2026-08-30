@@ -49,7 +49,12 @@ BRIEF_TAIL = (
 )
 
 
-def prompt_for(dossier, depth="full"):
+def _span(horizon):
+    return ("the next trading day" if int(horizon) == 1
+            else "the next %d trading days" % int(horizon))
+
+
+def prompt_for(dossier, depth="full", horizon=1):
     """The judgment prompt. Carries the dossier and nothing else.
 
     `depth` buys substance with time, and on a local model the exchange rate is
@@ -68,7 +73,7 @@ def prompt_for(dossier, depth="full"):
     """
     return (
         "You are an independent market analyst. Below is everything known "
-        "about one asset. Form your own view of the next trading day.\n\n"
+        "about one asset. Form your own view of " + _span(horizon) + ".\n\n"
         + json.dumps(dossier, indent=2, ensure_ascii=True)
         + "\n\nReturn STRICT JSON, no prose, with exactly these keys:\n"
           '{"direction": "up|down|flat", "conviction": 1-5, '
@@ -93,11 +98,18 @@ def prompt_for(dossier, depth="full"):
           "against this asset's own recent norm, so a value near 1 means "
           "ordinary conditions for THIS asset regardless of the absolute "
           "number.\n"
-          "4. What the fundamentals and the calendar add, if anything. "
-          "guru_verdict is a value-investing council, a slow signal; say "
-          "plainly when it is irrelevant to a one-day view rather than "
-          "citing it for the sake of it. next_earnings and macro_events "
-          "matter only if they are close.\n"
+          + ("4. What the fundamentals and the calendar add. guru_verdict "
+             "is a value-investing council and pe, roe and div_yield are "
+             "slow facts. Over %s they are part of the case rather than "
+             "decoration, so weigh them instead of waving them off. "
+             "next_earnings and macro_events matter if they fall inside "
+             "the window.\n" % _span(horizon)
+             if int(horizon) > 1 else
+             "4. What the fundamentals and the calendar add, if anything. "
+             "guru_verdict is a value-investing council, a slow signal; "
+             "say plainly when it is irrelevant to a one-day view rather "
+             "than citing it for the sake of it. next_earnings and "
+             "macro_events matter only if they are close.\n") +
           "5. Your own record here. past_calls, past_hit_rate and "
           "past_last_call are YOUR previous judgments on this asset and how "
           "they resolved. If you were recently wrong in the direction you are "
@@ -111,14 +123,23 @@ def prompt_for(dossier, depth="full"):
     )
 
 
-def parse_judgment(text, allowed=None):
+def parse_judgment(text, allowed=None, empty=()):
     """A validated judgment, or None. Never raises.
 
     `allowed`, when given, is the set of dossier field names the model may cite
-    as evidence. An invented field name means the answer was not grounded in
-    what it was shown. An empty evidence list is also rejected: a model that
-    cannot name one field it used did not ground its answer either, and this
-    is the only check that tells those two cases apart.
+    as evidence; `empty` is the subset of those that carried no value. An
+    invented field name means the answer was not grounded in what it was shown.
+    An empty evidence list is also rejected: a model that cannot name one field
+    it used did not ground its answer either, and this is the only check that
+    tells those two cases apart.
+
+    A cited field that was present but EMPTY is dropped from the evidence rather
+    than failing the whole judgment. The check used to be against the key set
+    alone, so macro_events - blank for every asset on every run because the
+    calendar file does not exist - was cited five times in the first 33
+    judgments and recorded as grounding. One filler citation is not a reason to
+    throw away an otherwise reasoned call; citing nothing else is, and that
+    falls through to the empty-evidence rejection above.
     """
     if not text:
         return None
@@ -136,8 +157,12 @@ def parse_judgment(text, allowed=None):
     if not isinstance(evidence, list) or not evidence or not all(
             isinstance(e, str) for e in evidence):
         return None
-    if allowed is not None and not set(evidence) <= set(allowed):
-        return None
+    if allowed is not None:
+        if not set(evidence) <= set(allowed) | set(empty):
+            return None                      # a field name that does not exist
+        evidence = [e for e in evidence if e not in set(empty)]
+        if not evidence:
+            return None                      # cited only fields that were empty
 
     return {"direction": data["direction"],
             "conviction": int(data["conviction"]),
@@ -147,7 +172,7 @@ def parse_judgment(text, allowed=None):
             "evidence": evidence}
 
 
-def judge(dossier, call=None, depth="full"):
+def judge(dossier, call=None, depth="full", horizon=1):
     """One judgment for one dossier, or None when the model will not produce one.
 
     Returning None rather than a default is the point: a fabricated neutral
@@ -155,14 +180,17 @@ def judge(dossier, call=None, depth="full"):
     """
     if call is None:
         raise ValueError("judge() needs an injected call; see analyst.py")
-    prompt = prompt_for(dossier, depth=depth)
+    prompt = prompt_for(dossier, depth=depth, horizon=horizon)
     allowed = set(dossier)
+    # A field the dossier carries as None or [] was shown to the model as empty,
+    # so citing it is not evidence of anything.
+    empty = {k for k, v in dossier.items() if v is None or v == []}
     for _ in range(MAX_ATTEMPTS):
         try:
             answer = call(prompt)
         except Exception:
             continue
-        parsed = parse_judgment(answer, allowed=allowed)
+        parsed = parse_judgment(answer, allowed=allowed, empty=empty)
         if parsed is not None:
             return parsed
     return None

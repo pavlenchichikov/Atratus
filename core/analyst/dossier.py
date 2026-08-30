@@ -106,8 +106,12 @@ def _streak(closes):
     return step * n
 
 
-def _own_record(asset):
+def _own_record(asset, before=None):
     """What this analyst has already said about this asset, and how it went.
+
+    `before` clips it to judgments made strictly BEFORE that date, which is
+    what makes the block safe to put in a historical dossier: unclipped, a
+    judgment dated in May would be told how its May calls turned out.
 
     The design named the agent's own track record as a dossier input and it was
     never wired in. Without it the analyst repeats a call it has already been
@@ -117,7 +121,8 @@ def _own_record(asset):
     try:
         from core.analyst import store
 
-        rows = [r for r in store.scored_rows() if r.get("asset") == asset]
+        rows = [r for r in store.scored_rows() if r.get("asset") == asset
+                and (before is None or (r.get("date") or "") < before)]
     except Exception:
         return {"past_calls": 0, "past_hit_rate": None, "past_last_call": None,
                 "past_last_outcome": None}
@@ -548,9 +553,46 @@ def macro_status():
     return None
 
 
+def _as_of(asset, today):
+    """The blocks whose value depends on WHEN you ask, resolved for `today`.
+
+    today=None is the live path: everything is fetched exactly as before.
+
+    today set means a historical judgment, and then most of this cannot be had
+    honestly. Yahoo will not tell you last month's P/E, the news feeds will not
+    give you last month's front page, and regime_detector, correlation_alert
+    and sector_rotation all classify off the WHOLE price table with no date
+    argument, so on a past date they answer using bars from AFTER it. Feeding
+    any of that to a backfilled judgment is look-ahead, and look-ahead does not
+    produce a weak measurement, it produces a flattering one - which is worse,
+    because it reads as success.
+
+    The agent's own record is the one block here that genuinely rewinds, and it
+    is also the most dangerous one left unrewound: unfiltered it would tell a
+    judgment dated in May how its May calls turned out.
+
+    So a historical dossier keeps what is truly rewound - every price field,
+    flow, market context, and the own record as of that date - and blanks the
+    rest. It is thinner than a live one and must be read as such. The
+    alternative was a backfill whose numbers could not be trusted at all.
+    """
+    if today is None:
+        return {**_profile(asset), **_regime(asset), **_market_state(),
+                **_sector_state(asset), **_headlines(asset), **_context(asset),
+                **_own_record(asset)}
+    return {**PROFILE_BLANK, **_REGIME_BLANK, **_MARKET_BLANK, **_SECTOR_BLANK,
+            "headlines": [], "guru_verdict": None, "guru_pct": None,
+            "next_earnings": None, "macro_events": [],
+            **_own_record(asset, before=today)}
+
+
 def build(asset, db_path=None, today=None):
     """One asset's dossier. Missing pieces are None, never absent, so that the
-    prompt and the hash have a fixed shape regardless of what was available."""
+    prompt and the hash have a fixed shape regardless of what was available.
+
+    `today` rewinds it: see _as_of for what can be rewound and what is blanked
+    rather than faked.
+    """
     bars = ohlc_series(asset, days=HISTORY_BARS, db_path=db_path)
     if today is not None:
         bars = [b for b in bars if b["date"] <= today]
@@ -592,13 +634,7 @@ def build(asset, db_path=None, today=None):
         "bars_available": len(bars),
         **_flow(asset, bars, atr, db_path, today),
         **_market_context(asset, bars, db_path, today),
-        **_profile(asset),
-        **_regime(asset),
-        **_market_state(),
-        **_sector_state(asset),
-        **_headlines(asset),
-        **_context(asset),
-        **_own_record(asset),
+        **_as_of(asset, today),
     }
 
 

@@ -356,3 +356,60 @@ def test_the_sector_group_comes_from_the_projects_own_map(monkeypatch):
 
     assert dossier._sector_state("NO_SUCH_ASSET") == dossier._SECTOR_BLANK
     dossier._MARKET_CACHE.clear()
+
+
+def test_a_rewound_dossier_carries_nothing_from_after_its_date(db, monkeypatch):
+    """The trap in backfilling judgments. Only the bars were ever clipped by
+    `today`; fundamentals, headlines, the guru verdict and the three market
+    classifiers all answer as of NOW, and regime/breadth/sector read the whole
+    price table with no date argument at all. A backfill fed any of that would
+    not be a weak measurement, it would be a flattering one.
+
+    The live half is the positive control: blanking everything unconditionally
+    would pass the historical assertions on its own."""
+    from core.analyst import dossier as _d
+
+    monkeypatch.setattr(_d, "_profile", lambda a: dict(_d.PROFILE_BLANK,
+                                                       pe=3.5, sector="Banks"))
+    monkeypatch.setattr(_d, "_regime", lambda a: dict(_d._REGIME_BLANK,
+                                                      regime_trend="DOWNTREND"))
+    monkeypatch.setattr(_d, "_market_state",
+                        lambda: dict(_d._MARKET_BLANK,
+                                     breadth_above_sma50_pct=57.8))
+    monkeypatch.setattr(_d, "_sector_state",
+                        lambda a: dict(_d._SECTOR_BLANK, sector_group="Russia"))
+    monkeypatch.setattr(_d, "_headlines", lambda a, limit=6: {"headlines": ["x"]})
+    monkeypatch.setattr(_d, "_context", lambda a: {
+        "guru_verdict": "BUY", "guru_pct": 75.0,
+        "next_earnings": "2026-09-01", "macro_events": ["FOMC"]})
+
+    live = dossier.build("SBER", db_path=db)
+    assert live["pe"] == 3.5 and live["regime_trend"] == "DOWNTREND"
+    assert live["guru_verdict"] == "BUY" and live["headlines"] == ["x"]
+    assert live["breadth_above_sma50_pct"] == 57.8
+    assert live["sector_group"] == "Russia"
+
+    past = dossier.build("SBER", db_path=db, today="2026-01-20")
+    assert set(past) == set(live), "the shape must not depend on the date"
+    for key in ("pe", "sector", "regime_trend", "breadth_above_sma50_pct",
+                "sector_group", "guru_verdict", "guru_pct", "next_earnings"):
+        assert past[key] is None, key
+    assert past["headlines"] == [] and past["macro_events"] == []
+    # and the price half really is rewound rather than blanked too
+    assert past["close"] is not None and past["close"] != live["close"]
+
+
+def test_the_own_record_is_clipped_to_what_it_knew_by_then(monkeypatch):
+    """Left unclipped this is the worst leak of the lot: a judgment dated in
+    January would be shown how its January calls turned out."""
+    from core.analyst import store
+
+    rows = [{"asset": "SBER", "date": "2026-01-10", "direction": "up",
+             "realized_ret": 0.01},
+            {"asset": "SBER", "date": "2026-03-10", "direction": "down",
+             "realized_ret": 0.02}]
+    monkeypatch.setattr(store, "scored_rows", lambda *a, **k: rows)
+    assert dossier._own_record("SBER")["past_calls"] == 2
+    early = dossier._own_record("SBER", before="2026-02-01")
+    assert early["past_calls"] == 1 and early["past_last_call"] == "up"
+    assert dossier._own_record("SBER", before="2026-01-01")["past_calls"] == 0

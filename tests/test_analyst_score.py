@@ -9,7 +9,7 @@ import sqlite3
 
 import pytest
 
-from core.analyst import store
+from core.analyst import score, store
 from core.analyst.payoff import ret_atr
 from core.analyst.score import coverage, mae_atr, shuffle_control, standings
 
@@ -189,3 +189,96 @@ def test_deriving_forecast_atr_from_the_stored_columns_fixes_the_mae(tmp_path):
     # (see test_analyst_store.py:test_backfill_fills_the_next_bar_outcome).
     assert rows[0]["forecast_atr"] == pytest.approx(0.5)
     assert mae_atr(rows) == pytest.approx(0.5)
+
+
+def _row(direction, conviction, realized, forecast=1.0):
+    return {"direction": direction, "conviction": conviction,
+            "realized_ret": realized, "forecast_atr": forecast,
+            "realized_atr_units": realized}
+
+
+class TestConvictionCalibration:
+    def test_it_refuses_to_call_a_small_sample_informative(self):
+        """The live log's own numbers: rho -0.125 at p=0.543 over 26 rows. The
+        table looks monotone and means nothing, and reporting that as an effect
+        is exactly how a belief gets manufactured."""
+        rows = ([_row("up", 2, 1.0)] * 3 + [_row("up", 2, -1.0)] * 2
+                + [_row("up", 3, 1.0)] * 8 + [_row("up", 3, -1.0)] * 6
+                + [_row("up", 4, 1.0)] * 3 + [_row("up", 4, -1.0)] * 4)
+        c = score.conviction_calibration(rows)
+        assert c["n"] == 26
+        assert c["by_conviction"][4]["rate"] < c["by_conviction"][2]["rate"]
+        assert c["informative"] == "unknown", c
+
+    def test_it_names_a_real_inversion_when_there_is_one(self):
+        """The positive control. A monitor that always says "unknown" would
+        pass the test above on its own."""
+        rows = ([_row("up", 1, 1.0)] * 30 + [_row("up", 5, -1.0)] * 30)
+        c = score.conviction_calibration(rows)
+        assert c["informative"] == "INVERTED" and c["rho"] < 0
+
+        rows = ([_row("up", 1, -1.0)] * 30 + [_row("up", 5, 1.0)] * 30)
+        assert score.conviction_calibration(rows)["informative"] == "yes"
+
+    def test_flat_calls_are_not_scored_as_directions(self):
+        """A flat call is a claim about the SIZE of a move; scoring it as a
+        direction needs a band this function has no business picking."""
+        assert score.conviction_calibration(
+            [_row("flat", 3, 0.001)] * 10)["n"] == 0
+
+
+class TestPayoffAgreement:
+    def test_it_splits_on_the_sign_of_the_forecast(self):
+        """Direction is the model's, the forecast is the empirical payoff of
+        that side. Ten of the first 33 judgments disagreed with themselves."""
+        rows = [_row("up", 3, 1.0, forecast=+0.5),
+                _row("up", 3, 1.0, forecast=+0.5),
+                _row("down", 3, -1.0, forecast=-0.5)]
+        a = score.payoff_agreement(rows)
+        assert a["n"] == 3 and a["agree"] == 2
+        assert a["agree_rate"] == pytest.approx(2 / 3)
+        assert a["agree_mae"] is not None and a["disagree_mae"] is not None
+
+    def test_a_row_without_a_forecast_is_not_counted_either_way(self):
+        rows = [_row("up", 3, 1.0, forecast=None), _row("up", 3, 1.0, 0.5)]
+        assert score.payoff_agreement(rows)["n"] == 1
+
+
+class TestFieldUsage:
+    @staticmethod
+    def _rows(field, hits_with, n_with, hits_without, n_without):
+        out = []
+        for i in range(n_with):
+            out.append({"direction": "up", "realized_ret": 1.0 if i < hits_with
+                        else -1.0, "evidence_json": '["%s"]' % field})
+        for i in range(n_without):
+            out.append({"direction": "up",
+                        "realized_ret": 1.0 if i < hits_without else -1.0,
+                        "evidence_json": '["other"]'})
+        return out
+
+    def test_a_thinly_cited_field_is_not_given_a_verdict(self):
+        """The live log's shape: gap_open cited once, hit rate 1.00. A table
+        that prints that as an effect manufactures knowledge out of one row."""
+        u = score.field_usage(self._rows("gap_open", 1, 1, 13, 25))
+        assert u["fields"]["gap_open"]["verdict"] == "thin"
+        assert u["fields"]["gap_open"]["hit_with"] == 1.0
+        assert u["measurable"] == 0
+
+    def test_a_field_with_both_sides_populated_gets_tested(self):
+        """The positive control. Without it, a function that always answers
+        "thin" would pass the test above."""
+        u = score.field_usage(self._rows("ret_20", 28, 30, 6, 30))
+        e = u["fields"]["ret_20"]
+        assert e["verdict"] == "helps" and e["p"] < 0.05
+
+        u = score.field_usage(self._rows("ret_20", 6, 30, 28, 30))
+        assert u["fields"]["ret_20"]["verdict"] == "hurts"
+
+        u = score.field_usage(self._rows("ret_20", 15, 30, 15, 30))
+        assert u["fields"]["ret_20"]["verdict"] == "no effect"
+
+    def test_unreadable_evidence_does_not_stop_the_report(self):
+        rows = [{"direction": "up", "realized_ret": 1.0,
+                 "evidence_json": "not json"}]
+        assert score.field_usage(rows)["n"] == 1

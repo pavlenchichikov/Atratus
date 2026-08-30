@@ -140,3 +140,46 @@ def test_the_prompt_never_contains_the_ensembles_opinion():
     for banned in ("probability", "cb_prob", "lstm_prob", "meta_prob",
                    "timing_action", "shadow_action", "sig_shown"):
         assert banned not in text
+
+
+def test_citing_an_empty_field_is_not_grounding():
+    """macro_events was cited five times in the first 33 judgments while blank
+    for every asset on every run, and the validator recorded it as evidence: it
+    checked the field NAME against the dossier's keys, never the value.
+
+    Dropped, not fatal, so one filler citation does not throw away a reasoned
+    call. Citing nothing else IS fatal, and the last case is the positive
+    control for that."""
+    answer = ('{"direction": "down", "conviction": 2, "vol_regime": "calm",'
+              ' "key_risk": "r", "thesis": "t",'
+              ' "evidence": ["ret_20", "macro_events"]}')
+    allowed = {"ret_20", "macro_events", "close"}
+    j = agent.parse_judgment(answer, allowed=allowed, empty={"macro_events"})
+    assert j["evidence"] == ["ret_20"]
+
+    # a name that is in neither set was invented, and still fails outright
+    bad = answer.replace("macro_events", "confidence")
+    assert agent.parse_judgment(bad, allowed=allowed,
+                                empty={"macro_events"}) is None
+
+    only_empty = ('{"direction": "down", "conviction": 2, "vol_regime": "calm",'
+                  ' "key_risk": "r", "thesis": "t",'
+                  ' "evidence": ["macro_events"]}')
+    assert agent.parse_judgment(only_empty, allowed=allowed,
+                                empty={"macro_events"}) is None
+
+
+def test_judge_marks_the_empty_dossier_fields_for_the_validator():
+    """The seam between the two: judge knows the VALUES, parse_judgment only
+    ever sees names. A None or [] field must reach it as empty."""
+    seen = {}
+
+    def fake_call(prompt):
+        return ('{"direction": "up", "conviction": 3, "vol_regime": "calm",'
+                ' "key_risk": "r", "thesis": "t",'
+                ' "evidence": ["ret_20", "headlines", "next_earnings"]}')
+
+    d = {"asset": "SBER", "ret_20": -0.05, "headlines": [],
+         "next_earnings": None, "close": 268.9}
+    j = agent.judge(d, call=fake_call, depth="brief")
+    assert j["evidence"] == ["ret_20"], seen

@@ -257,7 +257,7 @@ def test_a_named_run_bypasses_the_dossier_hash_skip(monkeypatch, tmp_path):
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
     monkeypatch.setattr(analyst.agent, "judge",
-                        lambda d, call=None, depth=None: None)
+                        lambda d, call=None, depth=None, horizon=1: None)
     monkeypatch.setenv("GTRADE_ANALYST", "1")
 
     class A:
@@ -300,11 +300,12 @@ def test_depth_defaults_to_full_when_an_asset_is_named(monkeypatch):
                         lambda a, **k: {"asset": a, "date": "2026-01-01",
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
-    def _record(d, call=None, depth=None):
+    def _record(d, call=None, depth=None, horizon=1):
         # Записываем глубину и отказываемся судить: возврат суждения потянул
         # бы за собой калибровку, а этот тест не про неё. Неявный None здесь и
         # есть отказ, ровно как у настоящего judge.
         seen["depth"] = depth
+        seen["horizon"] = horizon
 
     monkeypatch.setattr(analyst.agent, "judge", _record)
 
@@ -335,11 +336,12 @@ def test_an_explicit_depth_overrides_the_default(monkeypatch):
                         lambda a, **k: {"asset": a, "date": "2026-01-01",
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
-    def _record(d, call=None, depth=None):
+    def _record(d, call=None, depth=None, horizon=1):
         # Записываем глубину и отказываемся судить: возврат суждения потянул
         # бы за собой калибровку, а этот тест не про неё. Неявный None здесь и
         # есть отказ, ровно как у настоящего judge.
         seen["depth"] = depth
+        seen["horizon"] = horizon
 
     monkeypatch.setattr(analyst.agent, "judge", _record)
 
@@ -348,3 +350,81 @@ def test_an_explicit_depth_overrides_the_default(monkeypatch):
 
     analyst.cmd_run(A())
     assert seen["depth"] == "brief"
+
+
+def _stub_run(monkeypatch, calls, build=None):
+    import analyst
+    monkeypatch.setattr(analyst, "_load_table", lambda: {"asset": {}, "class": {}})
+    monkeypatch.setattr(analyst, "_provider_call", lambda: (lambda p: "{}"))
+    monkeypatch.setattr(analyst.store, "ensure_table", lambda *a, **k: None)
+    monkeypatch.setattr(analyst.store, "scored_rows", lambda *a, **k: [])
+    monkeypatch.setattr(analyst.store, "judged_with_hash", lambda *a, **k: False)
+    monkeypatch.setattr(analyst.dossier, "build", build or (
+        lambda a, **k: {"asset": a, "date": "2026-01-01", "close": 100.0,
+                        "atr": 2.0}))
+    monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
+    monkeypatch.setattr(analyst.dossier, "macro_status", lambda: None)
+    monkeypatch.setattr(analyst.agent, "judge",
+                        lambda d, call=None, depth=None, horizon=1:
+                        calls.append(horizon) or None)
+    monkeypatch.setenv("GTRADE_ANALYST", "1")
+    return analyst
+
+
+def test_each_horizon_is_its_own_question(monkeypatch):
+    """One day and five days are two different questions about one dossier, so
+    two model calls and two rows - which (date, asset, horizon) has allowed
+    since the table was written and nothing ever used."""
+    calls = []
+    analyst = _stub_run(monkeypatch, calls)
+
+    class A:
+        assets, llm, model, depth = "SBER", None, None, None
+        horizons, as_of = "1,5", None
+
+    analyst.cmd_run(A())
+    assert calls == [1, 5], calls
+
+
+def test_the_default_is_still_a_single_one_day_judgment(monkeypatch):
+    """The positive control for the test above: without --horizons nothing
+    about the existing behaviour may change."""
+    calls = []
+    analyst = _stub_run(monkeypatch, calls)
+
+    class A:
+        assets, llm, model, depth = "SBER", None, None, None
+
+    analyst.cmd_run(A())
+    assert calls == [1], calls
+
+
+def test_as_of_rewinds_the_dossier_it_asks_for(monkeypatch):
+    """The date has to reach dossier.build, or the run would judge a past date
+    on today's prices - which is the whole failure this flag exists to avoid."""
+    calls, asked = [], []
+
+    def _build(a, **k):
+        asked.append(k.get("today"))
+        return {"asset": a, "date": "2026-05-04", "close": 100.0, "atr": 2.0}
+
+    analyst = _stub_run(monkeypatch, calls, build=_build)
+
+    class A:
+        assets, llm, model, depth = "SBER", None, None, None
+        horizons, as_of = "1", "2026-05-04"
+
+    analyst.cmd_run(A())
+    assert asked == ["2026-05-04"], asked
+
+
+def test_a_bad_horizon_list_stops_the_run_before_it_spends_anything(monkeypatch):
+    calls = []
+    analyst = _stub_run(monkeypatch, calls)
+
+    class A:
+        assets, llm, model, depth = "SBER", None, None, None
+        horizons, as_of = "1,tomorrow", None
+
+    assert analyst.cmd_run(A()) == 1
+    assert calls == [], "it called the model before validating its arguments"

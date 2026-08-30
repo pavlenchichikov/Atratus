@@ -69,14 +69,22 @@ def write_judgment(row, db_path=None):
             f'VALUES ({placeholders})', values)
 
 
-def judged_with_hash(asset, dossier_hash, db_path=None):
-    """Whether this exact dossier was already judged. The LLM cache key."""
+def judged_with_hash(asset, dossier_hash, db_path=None, horizon=None):
+    """Whether this exact dossier was already judged. The LLM cache key.
+
+    `horizon` scopes it, because the same dossier asked over one day and over
+    five is two different questions with two different answers - and the table's
+    own primary key has said so since it was written, (date, asset, horizon).
+    Left None the check spans every horizon, which is the old behaviour.
+    """
+    sql = "SELECT 1 FROM analyst_log WHERE asset=? AND dossier_hash=?"
+    args = [asset, dossier_hash]
+    if horizon is not None:
+        sql += " AND horizon=?"
+        args.append(int(horizon))
     with _connect(db_path) as con:
         con.execute(DDL)
-        row = con.execute(
-            "SELECT 1 FROM analyst_log WHERE asset=? AND dossier_hash=? LIMIT 1",
-            (asset, dossier_hash)).fetchone()
-        return row is not None
+        return con.execute(sql + " LIMIT 1", args).fetchone() is not None
 
 
 def pending_count(db_path=None):

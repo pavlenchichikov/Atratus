@@ -58,6 +58,127 @@ def shuffle_control(rows, seed=0, forecast_key="forecast_atr"):
             "survives_shuffle": survives}
 
 
+def _directional(rows):
+    """(conviction, hit) for every up/down call whose outcome is known.
+
+    `flat` is excluded on purpose: a flat call is a claim about the SIZE of the
+    move, and scoring it as a direction would need a band this function has no
+    business choosing. coverage() already measures flat calls properly.
+    """
+    out = []
+    for r in rows:
+        d, realized = r.get("direction"), r.get("realized_ret")
+        if d not in ("up", "down") or realized is None:
+            continue
+        out.append((r.get("conviction"), int((d == "up") == (realized > 0))))
+    return out
+
+
+def conviction_calibration(rows):
+    """Does a 4-of-5 call land more often than a 2-of-5 one?
+
+    Nothing in this scorer ever asked. The agent states a conviction on every
+    judgment, the card prints it, and until now no measurement told anyone
+    whether the number carried information, was noise, or ran backwards - the
+    last of which this project has already found once, in the ensemble's own
+    confidence.
+
+    `informative` is deliberately three-valued. On the sample this log will
+    reach for months the honest answer is "cannot tell", and reporting a
+    monotone-looking table as an effect is how a 26-row rho of -0.125 at
+    p=0.543 turns into a belief.
+    """
+    d = _directional(rows)
+    by = {}
+    for conv, hit in d:
+        cell = by.setdefault(conv, [0, 0])
+        cell[0] += hit
+        cell[1] += 1
+    table = {c: {"hits": h, "n": n, "rate": h / n}
+             for c, (h, n) in sorted(by.items()) if n}
+    out = {"n": len(d), "by_conviction": table, "rho": None, "p": None,
+           "informative": "unknown"}
+    if len(d) >= 3 and len({c for c, _h in d}) >= 2:
+        from scipy.stats import spearmanr
+
+        rho, p = spearmanr([c for c, _h in d], [h for _c, h in d])
+        out["rho"], out["p"] = round(float(rho), 3), round(float(p), 3)
+        if p < 0.05:
+            out["informative"] = "yes" if rho > 0 else "INVERTED"
+    return out
+
+
+def payoff_agreement(rows):
+    """How often the stated direction and its own expected payoff agree.
+
+    They come from two unconnected mechanisms: the direction is the model's,
+    the forecast is the empirical payoff of that side out of the shrunk cell
+    table. Ten of the first 33 judgments carried a NEGATIVE expected payoff
+    behind a directional call, which the card printed verbatim ("up, expected
+    payoff -0.32%").
+
+    The split is the point. If the agreeing subset scores better, agreement is
+    a free filter that costs no new model call; if it does not, the two
+    mechanisms are independent noise and the card should stop implying
+    otherwise.
+    """
+    marked = [r for r in rows if r.get("forecast_atr") is not None]
+    agree = [r for r in marked if r["forecast_atr"] > 0]
+    disagree = [r for r in marked if r["forecast_atr"] <= 0]
+    return {"n": len(marked), "agree": len(agree),
+            "agree_rate": (len(agree) / len(marked)) if marked else None,
+            "agree_mae": mae_atr(agree), "disagree_mae": mae_atr(disagree)}
+
+
+def field_usage(rows, min_n=20):
+    """Which dossier fields the model cites, and whether citing one pays.
+
+    The dossier now carries 60 fields and the first 33 judgments named 24 of
+    them, mostly plain returns. Some of the other 36 are worth their place and
+    some are prompt weight; nothing measured which was which.
+
+    Per field: how often it was cited, and the directional hit rate of the
+    judgments that cited it against those that did not. `verdict` stays
+    "thin" until BOTH sides reach min_n, because a field cited five times has
+    a hit rate that means nothing and a table of those reads as knowledge.
+    """
+    import json as _json
+
+    d = []
+    for r in rows:
+        if r.get("direction") not in ("up", "down") or r.get("realized_ret") is None:
+            continue
+        try:
+            cited = set(_json.loads(r.get("evidence_json") or "[]"))
+        except ValueError:
+            cited = set()
+        d.append((cited, int((r["direction"] == "up") == (r["realized_ret"] > 0))))
+
+    fields = sorted({f for cited, _h in d for f in cited})
+    out = {}
+    for f in fields:
+        with_f = [h for cited, h in d if f in cited]
+        without = [h for cited, h in d if f not in cited]
+        entry = {"cited": len(with_f),
+                 "hit_with": (sum(with_f) / len(with_f)) if with_f else None,
+                 "hit_without": (sum(without) / len(without)) if without else None,
+                 "verdict": "thin"}
+        if len(with_f) >= min_n and len(without) >= min_n:
+            from scipy.stats import fisher_exact
+
+            p = fisher_exact([[sum(with_f), len(with_f) - sum(with_f)],
+                              [sum(without), len(without) - sum(without)]])[1]
+            if p < 0.05:
+                entry["verdict"] = ("helps" if entry["hit_with"] >
+                                    entry["hit_without"] else "hurts")
+            else:
+                entry["verdict"] = "no effect"
+            entry["p"] = round(float(p), 3)
+        out[f] = entry
+    return {"n": len(d), "fields": out,
+            "measurable": sum(1 for e in out.values() if e["verdict"] != "thin")}
+
+
 def standings(rows, baselines):
     """The agent against every baseline, plus the disagreement subset.
 
@@ -88,4 +209,6 @@ def standings(rows, baselines):
             "baselines": out_baselines,
             "coverage": coverage(rows),
             "disagreement": dis,
+            "conviction": conviction_calibration(rows),
+            "payoff_agreement": payoff_agreement(rows),
             "control": shuffle_control(rows)}
