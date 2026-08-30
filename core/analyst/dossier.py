@@ -351,6 +351,112 @@ def _profile(asset):
     }
 
 
+_REGIME_BLANK = {"regime_trend": None, "regime_vol": None,
+                 "regime_momentum": None, "rsi_14": None, "atr_vs_90d": None}
+_MARKET_BLANK = {"breadth_above_sma50_pct": None,
+                 "breadth_positive_20d_pct": None,
+                 "cross_asset_corr": None, "cross_asset_corr_label": None}
+_SECTOR_BLANK = {"sector_group": None, "sector_momentum": None,
+                 "sector_trend": None}
+
+# get_market_breadth reads every asset table in the database: 12.7s measured on
+# 844 of them, against 0.1s for the per-asset regime. Market-wide answers are
+# the same for every asset in a run, so they are computed once and held for the
+# life of the process, the way _SMARTLAB_CACHE is. Inside the sweep loop this
+# would have been 12.7s per asset instead of 12.7s per run.
+_MARKET_CACHE = {}
+
+
+def _regime(asset):
+    """This asset's own regime: trend, volatility band, momentum, RSI.
+
+    From regime_detector, which classifies off SMA, ATR and RSI over the price
+    table and reaches no model, so nothing here is a channel of the ensemble's
+    opinion. RSI is new to the dossier outright; atr_vs_90d measures today's
+    ATR against a 90-bar norm, a much longer memory than vol_20_vs_60's.
+    """
+    try:
+        import regime_detector
+
+        r = regime_detector.get_asset_regime(asset) or {}
+    except Exception:
+        return dict(_REGIME_BLANK)
+    if not r:
+        return dict(_REGIME_BLANK)
+    return {"regime_trend": r.get("trend"), "regime_vol": r.get("volatility"),
+            "regime_momentum": r.get("momentum"), "rsi_14": r.get("rsi"),
+            "atr_vs_90d": r.get("atr_ratio")}
+
+
+def _market_state():
+    """Breadth and cross-asset correlation, the same for every asset today.
+
+    Breadth answers whether a fall was this name's or everyone's, one level
+    above the single benchmark the dossier already carries. Average pairwise
+    correlation is the other half: a market where everything moves together is
+    a different place to be short than one where it does not.
+    """
+    if "state" not in _MARKET_CACHE:
+        out = dict(_MARKET_BLANK)
+        try:
+            import regime_detector
+
+            b = regime_detector.get_market_breadth() or {}
+            out["breadth_above_sma50_pct"] = b.get("above_sma50_pct")
+            out["breadth_positive_20d_pct"] = b.get("positive_20d_pct")
+        except Exception:
+            pass
+        try:
+            import correlation_alert
+
+            c = correlation_alert.get_stress_indicator() or {}
+            if c.get("label") != "N/A":
+                out["cross_asset_corr"] = c.get("avg_corr")
+                out["cross_asset_corr_label"] = c.get("label")
+        except Exception:
+            pass
+        _MARKET_CACHE["state"] = out
+    return dict(_MARKET_CACHE["state"])
+
+
+def _sector_momentum_table():
+    """{sector: (momentum_score, trend)}, computed once per process."""
+    if "sectors" not in _MARKET_CACHE:
+        table = {}
+        try:
+            import sector_rotation
+
+            df = sector_rotation.get_sector_momentum()
+            for _i, row in df.iterrows():
+                table[row["Sector"]] = (float(row["Momentum_Score"]),
+                                        row["Trend"])
+        except Exception:
+            table = {}
+        _MARKET_CACHE["sectors"] = table
+    return _MARKET_CACHE["sectors"]
+
+
+def _sector_state(asset):
+    """Whether this asset's sector is being bought or sold.
+
+    The group comes from config.SECTOR_MAP, the project's canonical asset-to-
+    sector map, NOT from the Yahoo `sector` field - so Moscow-listed names get
+    a group (Russia) where their Yahoo sector is blank. SECTOR_MAP is curated
+    rather than exhaustive, so an asset outside it keeps the blank shape: no
+    sector is a true answer, not a missing one.
+    """
+    try:
+        from config import SECTOR_MAP
+    except Exception:
+        return dict(_SECTOR_BLANK)
+    group = next((g for g, names in SECTOR_MAP.items() if asset in names), None)
+    if group is None:
+        return dict(_SECTOR_BLANK)
+    score, trend = _sector_momentum_table().get(group, (None, None))
+    return {"sector_group": group, "sector_momentum": score,
+            "sector_trend": trend}
+
+
 def _headlines(asset, limit=6):
     """Raw headlines, deliberately without the sentiment score computed on them.
 
@@ -487,6 +593,9 @@ def build(asset, db_path=None, today=None):
         **_flow(asset, bars, atr, db_path, today),
         **_market_context(asset, bars, db_path, today),
         **_profile(asset),
+        **_regime(asset),
+        **_market_state(),
+        **_sector_state(asset),
         **_headlines(asset),
         **_context(asset),
         **_own_record(asset),

@@ -3,9 +3,16 @@
 import json
 import sqlite3
 
+import pandas as pd
 import pytest
 
 from core.analyst import dossier
+
+# Captured at import, BEFORE the autouse _no_network fixture replaces them.
+# The fixture has to stub these three for every other test in this file, so a
+# test that wants to exercise the real one has to ask for it back by name.
+_REAL = {n: getattr(dossier, n)
+         for n in ("_regime", "_market_state", "_sector_state")}
 
 
 @pytest.fixture()
@@ -41,6 +48,14 @@ def _no_network(monkeypatch):
     # is exactly what happened when the valuation fields arrived.
     monkeypatch.setattr(_d, "_profile", lambda asset: dict(_d.PROFILE_BLANK))
     monkeypatch.setattr(_d, "_headlines", lambda asset, limit=6: {"headlines": []})
+    # The regime, market and sector blocks read the REAL market.db through
+    # their own engines, not through the db_path this suite hands in, and
+    # get_market_breadth walks every table in it (12.7s measured). Stubbed at
+    # the dossier's own boundary for the same reason the two above are.
+    monkeypatch.setattr(_d, "_regime", lambda asset: dict(_d._REGIME_BLANK))
+    monkeypatch.setattr(_d, "_market_state", lambda: dict(_d._MARKET_BLANK))
+    monkeypatch.setattr(_d, "_sector_state", lambda asset: dict(_d._SECTOR_BLANK))
+    _d._MARKET_CACHE.clear()      # process-lifetime cache, so per-test as well
 
 
 def test_the_dossier_carries_price_scale_and_regime(db):
@@ -111,6 +126,17 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         "pe", "roe", "debt_ebitda", "div_yield",
         # raw headlines, without the sentiment score computed on them
         "headlines",
+        # this asset's own regime, classified from prices alone. rsi_14 is new
+        # to the dossier entirely, and atr_vs_90d measures volatility against a
+        # much longer norm than vol_20_vs_60 does.
+        "regime_trend", "regime_vol", "regime_momentum", "rsi_14", "atr_vs_90d",
+        # the state of the whole market, which is "did it fall alone or did
+        # everything" one level above the single benchmark
+        "breadth_above_sma50_pct", "breadth_positive_20d_pct",
+        "cross_asset_corr", "cross_asset_corr_label",
+        # and of its sector, from config.SECTOR_MAP rather than from Yahoo, so
+        # Moscow-listed names are covered too
+        "sector_group", "sector_momentum", "sector_trend",
     }
 
 
@@ -236,3 +262,97 @@ def test_a_dead_context_source_does_not_stop_the_dossier(db, monkeypatch):
     assert d["guru_pct"] is None
     assert d["next_earnings"] is None
     assert d["macro_events"] == []
+
+
+def test_the_regime_block_maps_the_classifier_it_reads(monkeypatch):
+    """regime_detector answers in its own vocabulary; the dossier renames it
+    once, here. A dead source must give the blank shape rather than raise, or
+    one missing price table stops the whole day's run."""
+    import regime_detector
+
+    monkeypatch.setattr(dossier, "_regime", _REAL["_regime"])
+    monkeypatch.setattr(regime_detector, "get_asset_regime", lambda a: {
+        "trend": "DOWNTREND", "volatility": "NORMAL", "momentum": "NEUTRAL",
+        "rsi": 38.7, "atr_ratio": 0.9})
+    assert dossier._regime("SBER") == {
+        "regime_trend": "DOWNTREND", "regime_vol": "NORMAL",
+        "regime_momentum": "NEUTRAL", "rsi_14": 38.7, "atr_vs_90d": 0.9}
+
+    monkeypatch.setattr(regime_detector, "get_asset_regime", lambda a: None)
+    assert dossier._regime("SBER") == dossier._REGIME_BLANK
+
+    def _boom(_a):
+        raise RuntimeError("no such table")
+
+    monkeypatch.setattr(regime_detector, "get_asset_regime", _boom)
+    assert dossier._regime("SBER") == dossier._REGIME_BLANK
+
+
+def test_the_market_block_is_computed_once_for_the_whole_run(monkeypatch):
+    """get_market_breadth reads every asset table, 12.7s against 0.1s for the
+    per-asset regime. In a 28-asset sweep an uncached call is 356s of repeating
+    an answer that cannot change. The count IS the test."""
+    import correlation_alert
+    import regime_detector
+
+    calls = []
+    monkeypatch.setattr(dossier, "_market_state", _REAL["_market_state"])
+    monkeypatch.setattr(regime_detector, "get_market_breadth",
+                        lambda: calls.append("b") or {"above_sma50_pct": 57.8,
+                                                      "positive_20d_pct": 47.7})
+    monkeypatch.setattr(correlation_alert, "get_stress_indicator",
+                        lambda: {"avg_corr": -0.02, "label": "LOW (dispersed)"})
+    dossier._MARKET_CACHE.clear()
+
+    first = dossier._market_state()
+    for _ in range(27):
+        assert dossier._market_state() == first
+    assert len(calls) == 1, "the market answer was recomputed per asset"
+    assert first["breadth_above_sma50_pct"] == 57.8
+    assert first["cross_asset_corr_label"] == "LOW (dispersed)"
+
+    # the caller must not be able to poison the cache for everyone else
+    first["breadth_above_sma50_pct"] = 0.0
+    assert dossier._market_state()["breadth_above_sma50_pct"] == 57.8
+    dossier._MARKET_CACHE.clear()
+
+
+def test_a_dead_stress_source_still_leaves_the_breadth_half(monkeypatch):
+    """Two independent sources in one block. One failing must not blank the
+    other, which is what a single try around both would have done."""
+    import correlation_alert
+    import regime_detector
+
+    def _boom():
+        raise RuntimeError("no returns")
+
+    monkeypatch.setattr(dossier, "_market_state", _REAL["_market_state"])
+    monkeypatch.setattr(regime_detector, "get_market_breadth",
+                        lambda: {"above_sma50_pct": 57.8,
+                                 "positive_20d_pct": 47.7})
+    monkeypatch.setattr(correlation_alert, "get_stress_indicator", _boom)
+    dossier._MARKET_CACHE.clear()
+    state = dossier._market_state()
+    assert state["breadth_above_sma50_pct"] == 57.8
+    assert state["cross_asset_corr"] is None
+    dossier._MARKET_CACHE.clear()
+
+
+def test_the_sector_group_comes_from_the_projects_own_map(monkeypatch):
+    """Not from Yahoo's `sector`, which is blank for every Moscow-listed name -
+    the whole reason SBER can have a sector reading at all. An asset outside
+    the curated map keeps the blank shape: no sector is a true answer here."""
+    import sector_rotation
+
+    monkeypatch.setattr(dossier, "_sector_state", _REAL["_sector_state"])
+    monkeypatch.setattr(sector_rotation, "get_sector_momentum",
+                        lambda: pd.DataFrame([
+                            {"Sector": "Russia", "Momentum_Score": -0.91,
+                             "Trend": "FALLING"}]))
+    dossier._MARKET_CACHE.clear()
+    sber = dossier._sector_state("SBER")
+    assert sber["sector_group"] == "Russia"
+    assert sber["sector_momentum"] == -0.91 and sber["sector_trend"] == "FALLING"
+
+    assert dossier._sector_state("NO_SUCH_ASSET") == dossier._SECTOR_BLANK
+    dossier._MARKET_CACHE.clear()
