@@ -15,6 +15,7 @@ Usage:
 import argparse
 import json
 import os
+import time
 
 import numpy as np
 
@@ -564,11 +565,15 @@ def gate_challenger(test_by_asset, candidates, reference):
     is interpretable and already live.
     """
     rows = []
-    for name, pol in candidates:
+    for _i, (name, pol) in enumerate(candidates, 1):
+        _t0 = time.time()
         g = gate_policy(test_by_asset, pol, reference=reference)
         rows.append({"name": name, "p": g["p"], "mean_d": g["mean_d"],
                      "n": g["n"], "n_unscorable": g["n_unscorable"],
                      "per_asset": g["per_asset"]})
+        print("[stage-b] test %d/%d  %s  mean_d %+.3f  p %.3f  n %d  %.0fs"
+              % (_i, len(candidates), name, g["mean_d"], g["p"], g["n"],
+                 time.time() - _t0), flush=True)
     rows = bh_rows(rows)
     for r in rows:
         r["adopt"] = bool(r["bh_flag"] and r["mean_d"] > MIN_EFFECT
@@ -639,12 +644,26 @@ def stage_b(by_asset, iters=6, gamma=0.97, epsilon=0.1, seed=0,
 
     # VAL picks the horizon; TEST judges it. The same discipline Stage A runs
     # on, and the reason a candidate list is gated rather than a single fit.
-    val_scores = [(name, fitness([eval_policy(s, pol)["score"]
-                                  for s in val.values()]))
-                  for name, pol in candidates]
+    #
+    # One line per candidate, on both passes. The ladder above reports itself
+    # and takes about five minutes; these two loops replay every candidate over
+    # every asset's whole history in Python and took the ninety after it, in
+    # total silence, which is indistinguishable from a hang.
+    val_scores = []
+    for _i, (name, pol) in enumerate(candidates, 1):
+        _t0 = time.time()
+        val_scores.append((name, fitness([eval_policy(s, pol)["score"]
+                                          for s in val.values()])))
+        print("[stage-b] val  %d/%d  %s  %+.2f  %.0fs"
+              % (_i, len(candidates), name, val_scores[-1][1],
+                 time.time() - _t0), flush=True)
     best_name = max(val_scores, key=lambda kv: kv[1])[0]
+    print("[stage-b] val picks %s; gating all %d on TEST"
+          % (best_name, len(candidates)), flush=True)
     gate = gate_challenger(test, candidates, reference=incumbent)
     chosen = dict(candidates)[best_name]
+    print("[stage-b] gate %s; measuring the fit objective against it"
+          % gate["verdict"], flush=True)
     proxy = objective_vs_gate(test, chosen, incumbent)
     return {"verdict": gate["verdict"], "rows": gate["rows"],
             "best": gate["best"], "val": dict(val_scores),

@@ -197,3 +197,58 @@ class TestRefusesToGateNothing:
         series = {"A%d" % i: _series(120, seed=i)
                   for i in range(tt.GATE_MIN_ASSETS)}
         assert tt.require_scorable(series, "timing") is True
+
+
+def test_stage_b_reports_both_of_its_silent_passes(capsys, monkeypatch):
+    """The ladder reports itself and takes five minutes; these two loops replay
+    every candidate over every asset and took the ninety after it without a
+    single line, which cannot be told apart from a hang.
+
+    One line per candidate per pass, so six rungs give six and six. The counts
+    are the assertion: a print inside gate_challenger only, or only on val,
+    would leave half the wait dark again."""
+    import train_timing as tt
+    from core import timing_fqi as fq
+    from core import timing_policy as tp
+
+    def _fqi_series(seed):
+        # _series above predates the FQI path and carries no `close`, which
+        # series_features needs for its trend feature.
+        s = _series(n=300, seed=seed)
+        s["close"] = 100.0 * np.cumprod(1.0 + np.nan_to_num(s["next_ret"]))
+        s["is_forex"] = False
+        return s
+
+    by_asset = {"A": _fqi_series(1), "B": _fqi_series(2)}
+    rules = tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
+
+    # Two rungs, not six: the point is the reporting, and fitting a real ladder
+    # here would make this a slow test for no extra coverage.
+    def two_rungs(models):
+        return [("q_iter_1", fq.FqiPolicy(models[0])),
+                ("q_iter_2", fq.FqiPolicy(models[-1]))]
+
+    monkeypatch.setattr(fq, "fit_q", lambda batches, **k: [
+        _ConstQ(0.0), _ConstQ(1.0)])
+    tt.stage_b(by_asset, iters=2, seed=0, challenger_factory=two_rungs,
+               reference=rules)
+    out = capsys.readouterr().out
+    # "/2" pins it to the per-candidate lines: "[stage-b] val picks ..." also
+    # starts with "[stage-b] val " and would inflate the count to three.
+    assert out.count("[stage-b] val  1/2") == 1, out
+    assert out.count("[stage-b] val  2/2") == 1, out
+    assert out.count("[stage-b] test 1/2") == 1, out
+    assert out.count("[stage-b] test 2/2") == 1, out
+    assert "val picks" in out and "[stage-b] gate " in out
+
+
+class _ConstQ:
+    """A stand-in CatBoost model: predict() returns one constant per row."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def predict(self, rows):
+        import numpy as _np
+
+        return _np.full(len(rows), self.value, dtype=float)
