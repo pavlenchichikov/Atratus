@@ -338,6 +338,7 @@ def _score_baselines(table):
 
 def cmd_score(args):
     from core.analyst.score import field_usage, standings
+    from core.analyst.score import verdict as analyst_verdict
 
     if not os.path.exists(store.DB_PATH):
         print("[analyst] no market.db - run the data pipeline "
@@ -355,15 +356,11 @@ def cmd_score(args):
           f"ensemble comparison)")
     print(f"[analyst] standings: {s}")
 
-    verdict = "SHIP" if (
-        s["control"]["survives_shuffle"] is False
-        and s["coverage"]["rate"] is not None
-        and 0.75 <= s["coverage"]["rate"] <= 0.85
-        and "zero" in s["agent"]["beats"]
-        and "empirical" in s["agent"]["beats"]
-        and len(rows) >= 500
-    ) else "HOLD"
-    print(f"[analyst] verdict: {verdict} on {len(rows)} scored judgments")
+    v = analyst_verdict(s, len(rows))
+    print(f"[analyst] verdict: {v['verdict']} on {len(rows)} scored judgments")
+    for c in v["checks"]:
+        if not c["ok"]:
+            print("            missing: %-16s %s" % (c["name"], c["want"]))
 
     if getattr(args, "fields", False):
         fu = field_usage(rows)

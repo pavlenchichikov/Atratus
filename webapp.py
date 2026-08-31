@@ -819,13 +819,37 @@ def analyst_page(request: Request):
         pending = store.pending_count()
     except Exception:
         rows, pending = [], 0
+
+    # The standings need the three baselines, which only analyst.py knows how to
+    # build (they go through the payoff table and the calibrator). Reusing that
+    # rather than rebuilding it here is what keeps the page and `analyst.py
+    # score` answering with the same numbers.
+    #
+    # Cost, measured: 7.1s on the first call in a process, of which 7.0 is the
+    # one-time import of scipy.stats, then 0.001s. A failure here must not take
+    # the page down: the log is the point, the comparison is the bonus.
+    stand = board = None
+    try:
+        import analyst as analyst_cli
+
+        table = analyst_cli._load_table() or {"asset": {}, "class": {}}
+        scored, baselines, _nf, _nem = analyst_cli._score_baselines(table)
+        stand = analyst_score.standings(scored, baselines)
+        board = analyst_score.verdict(stand, len(scored))
+    except Exception as exc:
+        from core.logger import get_logger
+
+        get_logger("webapp").debug("analyst standings unavailable: %s", exc)
+
     return templates.TemplateResponse(request, "analyst.html", {
         "scored": len(rows),
         "pending": pending,
         "coverage": analyst_score.coverage(rows),
         "recent": list(reversed(rows))[:15],
         "running": _analyst_running(),
-        "floor": 500,
+        "floor": analyst_score.SHIP_FLOOR,
+        "stand": stand,
+        "board": board,
         "disabled": (os.getenv("GTRADE_ANALYST") or "1").strip() == "0",
     })
 

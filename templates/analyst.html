@@ -21,6 +21,132 @@
     <span class="stat-sub">{% if coverage.rate is not none %}{{ coverage.inside }} of {{ coverage.n }}, target 80%{% else %}nothing scored yet{% endif %}</span></div>
 </div>
 
+{% if board %}
+<section class="panel fade">
+  <div class="panel-head"><h2>Verdict: <span class="{{ 'good' if board.verdict == 'SHIP' else 'warn' }}">{{ board.verdict }}</span></h2></div>
+  <p class="dim">Five conditions, all of which have to hold. The word alone says
+    nothing about which one is missing, so they are listed.</p>
+  <table class="table">
+    <tbody>
+      {% for c in board.checks %}
+      <tr>
+        <td style="width:2.4em" class="{{ 'good' if c.ok else 'bad' }}">{{ 'PASS' if c.ok else 'no' }}</td>
+        <td class="mono">{{ c.name }}</td>
+        <td class="dim">{{ c.want }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if stand %}
+<section class="panel fade">
+  <div class="panel-head"><h2>Against the baselines</h2></div>
+  <p class="dim">Mean absolute error in ATR units, so lower is better and the
+    scale is the same across a bond ETF and a small-cap. `zero` forecasts no
+    move at all; `empirical` is what that judgment cell has historically been
+    worth; `ensemble` is the same forecast made from the ensemble's own
+    direction.</p>
+  <table class="table">
+    <thead><tr><th>Forecaster</th><th>MAE (ATR)</th><th></th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>agent</b></td>
+        <td class="mono">{% if stand.agent.mae is not none %}{{ "%.4f"|format(stand.agent.mae) }}{% else %}-{% endif %}</td>
+        <td class="dim">beats: {{ stand.agent.beats|join(', ') if stand.agent.beats else 'nothing yet' }}</td>
+      </tr>
+      {% for name, b in stand.baselines.items() %}
+      <tr>
+        <td class="dim">{{ name }}</td>
+        <td class="mono">{% if b.mae is not none %}{{ "%.4f"|format(b.mae) }}{% else %}-{% endif %}</td>
+        <td class="dim">{% if b.mae is not none and stand.agent.mae is not none %}{{ "%+.4f"|format(stand.agent.mae - b.mae) }} vs agent{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="panel-head" style="margin-top:1.2em"><h2>Shuffle control</h2></div>
+  <p class="dim">Every forecast is detached from the outcome it was made for and
+    the score recomputed. A real edge collapses. `survives_shuffle` true is a
+    FAILURE of the measurement, not a success of the forecaster.</p>
+  <div class="kv">
+    <span>unshuffled MAE</span><span class="mono">{% if stand.control.mae is not none %}{{ "%.4f"|format(stand.control.mae) }}{% else %}-{% endif %}</span>
+    <span>shuffled MAE</span><span class="mono">{% if stand.control.mae_shuffled is not none %}{{ "%.4f"|format(stand.control.mae_shuffled) }}{% else %}-{% endif %}</span>
+    <span>survives shuffle</span><span class="mono {{ 'bad' if stand.control.survives_shuffle else 'good' }}">{{ 'yes, so it measured nothing' if stand.control.survives_shuffle else 'no, the pairing mattered' }}</span>
+  </div>
+</section>
+
+<section class="panel fade">
+  <div class="panel-head"><h2>Where the agent disagrees with the ensemble</h2></div>
+  <p class="dim">The subset that justifies a second opinion at all. If it is not
+    better here, it is not adding one.</p>
+  {% if stand.disagreement.n %}
+  <div class="kv">
+    <span>disagreeing judgments</span><span class="mono">{{ stand.disagreement.n }} of {{ board.n if board else scored }}</span>
+    <span>agent MAE there</span><span class="mono">{% if stand.disagreement.agent_mae is not none %}{{ "%.4f"|format(stand.disagreement.agent_mae) }}{% else %}-{% endif %}</span>
+    <span>ensemble MAE there</span><span class="mono">{% if stand.disagreement.ensemble_mae is not none %}{{ "%.4f"|format(stand.disagreement.ensemble_mae) }}{% else %}-{% endif %}</span>
+  </div>
+  {% else %}
+  <p class="dim">No judgment has a matching ensemble signal yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel fade">
+  <div class="panel-head"><h2>Does conviction mean anything?</h2></div>
+  <p class="dim">The agent states a conviction on every judgment and the card
+    prints it. This asks whether a 4-of-5 call actually lands more often than a
+    2-of-5 one. Directional calls only: a `flat` call is a claim about the size
+    of a move, not its sign.</p>
+  {% if stand.conviction.by_conviction %}
+  <table class="table">
+    <thead><tr><th>Conviction</th><th>Hits</th><th>Rate</th></tr></thead>
+    <tbody>
+      {% for c, cell in stand.conviction.by_conviction.items() %}
+      <tr>
+        <td class="mono">{{ c }} / 5</td>
+        <td class="mono">{{ cell.hits }} of {{ cell.n }}</td>
+        <td class="mono">{{ "%.2f"|format(cell.rate) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="dim" style="margin-top:.6em">
+    n={{ stand.conviction.n }}, rho={{ stand.conviction.rho if stand.conviction.rho is not none else '-' }},
+    p={{ stand.conviction.p if stand.conviction.p is not none else '-' }}.
+    Reading:
+    {% if stand.conviction.informative == 'unknown' %}
+      <b class="warn">cannot tell yet</b>. The table may look monotone and mean
+      nothing at this sample; that is how a belief gets manufactured.
+    {% elif stand.conviction.informative == 'INVERTED' %}
+      <b class="bad">inverted</b>. Higher conviction lands LESS often.
+    {% else %}
+      <b class="good">informative</b>. Higher conviction lands more often.
+    {% endif %}
+  </p>
+  {% else %}
+  <p class="dim">No directional call has resolved yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel fade">
+  <div class="panel-head"><h2>When the agent and the payoff table agree</h2></div>
+  <p class="dim">The direction is the model's; the expected payoff comes from
+    what that side has historically earned in that cell. They are two unconnected
+    mechanisms, and the card prints both, so a judgment can read "LONG, expected
+    payoff negative". This splits the log on whether they agreed.</p>
+  {% if stand.payoff_agreement.n %}
+  <div class="kv">
+    <span>they agree</span><span class="mono">{{ stand.payoff_agreement.agree }} of {{ stand.payoff_agreement.n }}{% if stand.payoff_agreement.agree_rate is not none %} ({{ "%.0f"|format(stand.payoff_agreement.agree_rate * 100) }}%){% endif %}</span>
+    <span>MAE when they agree</span><span class="mono">{% if stand.payoff_agreement.agree_mae is not none %}{{ "%.4f"|format(stand.payoff_agreement.agree_mae) }}{% else %}-{% endif %}</span>
+    <span>MAE when they disagree</span><span class="mono">{% if stand.payoff_agreement.disagree_mae is not none %}{{ "%.4f"|format(stand.payoff_agreement.disagree_mae) }}{% else %}-{% endif %}</span>
+  </div>
+  {% else %}
+  <p class="dim">Nothing carries a forecast yet.</p>
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="panel fade">
   <div class="panel-head"><h2>Run a pass</h2></div>
   <p class="dim">One judgment per eligible asset: the watchlist plus anything
@@ -41,13 +167,14 @@
   {% if recent %}
   <div style="overflow-x:auto">
   <table class="table">
-    <thead><tr><th>Date</th><th>Asset</th><th>Call</th><th>Conv</th><th>Regime</th>
+    <thead><tr><th>Date</th><th>Asset</th><th>H</th><th>Call</th><th>Conv</th><th>Regime</th>
       <th>Forecast</th><th>Realized</th><th>Error (ATR)</th><th>In band</th></tr></thead>
     <tbody>
       {% for r in recent %}
       <tr>
         <td class="mono">{{ r.date }}</td>
         <td class="mono">{{ r.asset }}</td>
+        <td class="mono dim">{{ r.horizon }}d</td>
         <td>{{ r.direction }}</td>
         <td class="mono">{{ r.conviction }}</td>
         <td class="dim">{{ r.vol_regime }}</td>
@@ -56,6 +183,15 @@
         <td class="mono">{% if r.abs_err_atr is not none %}{{ "%.2f"|format(r.abs_err_atr) }}{% else %}-{% endif %}</td>
         <td>{% if r.inside_interval == 1 %}yes{% elif r.inside_interval == 0 %}no{% else %}-{% endif %}</td>
       </tr>
+      {% if r.thesis %}
+      <tr><td colspan="10" style="padding-top:0">
+        <details><summary class="dim">why</summary>
+          <p style="margin:.5em 0">{{ r.thesis }}</p>
+          {% if r.key_risk %}<p class="dim"><b>risk:</b> {{ r.key_risk }}</p>{% endif %}
+          {% if r.evidence_json %}<p class="dim mono">read: {{ r.evidence_json|replace('"', '')|replace('[', '')|replace(']', '') }}</p>{% endif %}
+        </details>
+      </td></tr>
+      {% endif %}
       {% endfor %}
     </tbody>
   </table>

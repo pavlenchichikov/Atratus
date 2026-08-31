@@ -1375,3 +1375,78 @@ def test_the_summary_splits_absences_by_cause(monkeypatch):
     # missing model; NOMODEL is the other way round.
     assert s["absent_no_champion"] == 1
     assert s["absent_no_bar_today"] == 1
+
+
+def _fake_standings():
+    """The shape score.standings returns, with the live log's own numbers."""
+    return {
+        "agent": {"mae": 0.4667, "beats": ["zero", "ensemble"]},
+        "baselines": {"zero": {"mae": 0.4864}, "empirical": {"mae": 0.4664},
+                      "ensemble": {"mae": 0.5559}},
+        "coverage": {"n": 32, "inside": 26, "rate": 0.8125},
+        "disagreement": {"n": 18, "agent_mae": 0.5492, "ensemble_mae": 0.6244},
+        "conviction": {"n": 26, "rho": -0.125, "p": 0.543,
+                       "informative": "unknown",
+                       "by_conviction": {2: {"hits": 3, "n": 5, "rate": 0.6},
+                                         4: {"hits": 3, "n": 7, "rate": 0.4286}}},
+        "payoff_agreement": {"n": 32, "agree": 16, "agree_rate": 0.5,
+                             "agree_mae": 0.4164, "disagree_mae": 0.5171},
+        "control": {"mae": 0.4667, "mae_shuffled": 0.4990, "n": 32,
+                    "survives_shuffle": True},
+    }
+
+
+def test_the_analyst_page_shows_what_decides_the_verdict(client, monkeypatch):
+    """The page asks "is it worth believing yet" and used to answer with the
+    sample size alone: not one comparison, not the control, not the verdict.
+    Each panel below is a question a person came to the page with."""
+    import analyst as analyst_cli
+    from core.analyst import score as sc
+
+    monkeypatch.setattr(analyst_cli, "_load_table", lambda: {"asset": {}, "class": {}})
+    monkeypatch.setattr(analyst_cli, "_score_baselines",
+                        lambda t: ([{}] * 32, {}, 0, 0))
+    monkeypatch.setattr(sc, "standings", lambda rows, base: _fake_standings())
+
+    body = client.get("/analyst").text
+    assert "HOLD" in body
+    # the failing conditions have to be named, not just the word
+    assert "beats empirical" in body and "sample" in body
+    # the baselines, and the one number that says the measurement worked
+    for token in ("0.4864", "0.5559", "0.4990"):
+        assert token in body, token
+    assert "yes, so it measured nothing" in body
+    # the two diagnostics that carry the strongest signal in the log
+    assert "0.4164" in body and "0.5171" in body
+    assert "cannot tell yet" in body
+
+
+def test_a_broken_standings_does_not_take_the_page_down(client, monkeypatch):
+    """The log is the point and the comparison is the bonus. A missing payoff
+    table must cost the panels, never the page."""
+    import analyst as analyst_cli
+
+    def _boom(_t):
+        raise RuntimeError("payoff_stats.json is gone")
+
+    monkeypatch.setattr(analyst_cli, "_load_table", lambda: {"asset": {}, "class": {}})
+    monkeypatch.setattr(analyst_cli, "_score_baselines", _boom)
+    r = client.get("/analyst")
+    assert r.status_code == 200
+    assert "Analyst Agent" in r.text
+    assert "Against the baselines" not in r.text
+
+
+def test_the_page_and_the_command_line_share_one_verdict():
+    """Two definitions of SHIP would drift the first time either moved."""
+    from core.analyst import score as sc
+
+    st = _fake_standings()
+    v = sc.verdict(st, 32)
+    assert v["verdict"] == "HOLD"
+    assert {c["name"] for c in v["checks"] if not c["ok"]} == {
+        "control", "beats empirical", "sample"}
+
+    st["control"]["survives_shuffle"] = False
+    st["agent"]["beats"] = ["zero", "empirical", "ensemble"]
+    assert sc.verdict(st, 500)["verdict"] == "SHIP"

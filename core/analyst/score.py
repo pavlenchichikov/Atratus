@@ -179,6 +179,39 @@ def field_usage(rows, min_n=20):
             "measurable": sum(1 for e in out.values() if e["verdict"] != "thin")}
 
 
+SHIP_FLOOR = 500
+COVERAGE_BAND = (0.75, 0.85)
+
+
+def verdict(st, n, floor=SHIP_FLOOR):
+    """SHIP or HOLD, and every condition that decided it.
+
+    Returns the conditions rather than just the word, because "HOLD" alone says
+    nothing about WHICH of the five is missing, and on this log four of them
+    pass while the sample sits at 32 of 500.
+
+    Lives here rather than in analyst.py's cmd_score so the page and the command
+    line cannot drift into two different definitions of the same verdict.
+    """
+    cov = (st.get("coverage") or {}).get("rate")
+    beats = (st.get("agent") or {}).get("beats") or []
+    checks = [
+        ("control", st.get("control", {}).get("survives_shuffle") is False,
+         "the shuffled forecaster must score WORSE, by a clear margin"),
+        ("coverage", cov is not None and COVERAGE_BAND[0] <= cov <= COVERAGE_BAND[1],
+         "%.0f to %.0f percent of moves inside the stated interval"
+         % (COVERAGE_BAND[0] * 100, COVERAGE_BAND[1] * 100)),
+        ("beats zero", "zero" in beats, "better than forecasting no move at all"),
+        ("beats empirical", "empirical" in beats,
+         "better than the cell's own historical payoff"),
+        ("sample", n >= floor, "%d scored judgments" % floor),
+    ]
+    return {"verdict": "SHIP" if all(ok for _n, ok, _w in checks) else "HOLD",
+            "checks": [{"name": n, "ok": bool(ok), "want": w}
+                       for n, ok, w in checks],
+            "n": n, "floor": floor}
+
+
 def standings(rows, baselines):
     """The agent against every baseline, plus the disagreement subset.
 
