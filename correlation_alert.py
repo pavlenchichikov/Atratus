@@ -26,8 +26,13 @@ except ImportError:
 
 engine = create_engine(f"sqlite:///{DB_PATH}")
 
+# Deliberately short: the matrix is read as a picture, and forty names is a wall
+# rather than a reading. Extended 2026-08-31 because the sixteen it held predate
+# the map's growth and covered no rates and no credit at all, so the two things
+# that move first in a risk-off were the two the picture could not show.
 KEY_ASSETS = ["BTC", "ETH", "SP500", "NASDAQ", "GOLD", "OIL", "VIX", "DXY",
-              "SBER", "IMOEX", "NVDA", "TSLA", "EURUSD", "JPM", "XOM", "ESTOXX50"]
+              "SBER", "IMOEX", "NVDA", "TSLA", "EURUSD", "JPM", "XOM", "ESTOXX50",
+              "TNX", "TLT", "HYG", "COPPER", "USDJPY", "HANGSENG"]
 
 KEY_PAIRS = [
     ("BTC", "ETH"), ("BTC", "SP500"), ("BTC", "GOLD"),

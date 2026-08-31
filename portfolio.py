@@ -29,6 +29,21 @@ SECTOR_LIMITS: dict[str, float] = {
     "Russia":      0.35,
     "Europe":      0.30,
     "Forex":       0.30,
+    # Added 2026-08-31 with SECTOR_MAP's nine new rows. Before this, 523 of 847
+    # assets belonged to no sector, so every position in them counted against
+    # OTHER's single 0.20 and against nothing else. They now have their own
+    # ceilings; these are starting values chosen by kind, not measured, and the
+    # ones to argue with first are US Broad (167 names, so a loose cap is a real
+    # cap) and Rates and Volatility (small and directional, so a tight one).
+    "Rates":          0.20,
+    "Volatility":     0.10,
+    "World Indices":  0.30,
+    "Bond ETFs":      0.30,
+    "Sector ETFs":    0.25,
+    "Broad ETFs":     0.35,
+    "Theme ETFs":     0.20,
+    "Commodity ETFs": 0.25,
+    "US Broad":       0.40,
     "OTHER":       0.20,
 }
 

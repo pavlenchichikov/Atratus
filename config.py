@@ -566,12 +566,18 @@ RADAR_GROUPS = {
     "US INDUSTRIAL":   ASSET_TYPES["US INDUSTRIAL"],
     "US SEMI":         ASSET_TYPES["US SEMI"],
     "US SOFTWARE":     ASSET_TYPES["US SOFTWARE"],
-    "EUROPE":          _merge_types("EU INDICES", "EU STOCKS"),
+    "EUROPE":          _merge_types("EU INDICES", "EU STOCKS", "EU EXTRA"),
     "CRYPTO":          ASSET_TYPES["CRYPTO"],
     # show IMOEX together with the Russian names
+    # RUS EXTRA belongs here and was missing. radar_category falls back to "us"
+    # for anything unlisted, so 130 second-tier Moscow names read as American:
+    # _is_moex went false, can_have_earnings went TRUE, and the earnings scan
+    # asked Yahoo about a bare MOEX ticker and bought one 404 each - the failure
+    # 844a70b fixed for SBER and VTBR and never reached these. They also lost
+    # their Smart-Lab fundamentals and wore the wrong accent on the radar.
     "MOEX":            ["IMOEX"] + _merge_types(
         "RUS BLUE CHIPS", "RUS FINANCE", "RUS TECH", "RUS METALS",
-        "RUS INFRA", "RUS CONSUMER", "RUS PROPERTY"),
+        "RUS INFRA", "RUS CONSUMER", "RUS PROPERTY", "RUS EXTRA"),
     "FOREX":           _merge_types("FOREX MAJORS", "FOREX CROSSES", "FOREX EXOTIC"),
 }
 
@@ -609,7 +615,29 @@ SECTOR_MAP = {
         "RUS BLUE CHIPS", "RUS FINANCE", "RUS TECH", "RUS METALS",
         "RUS INFRA", "RUS CONSUMER", "RUS PROPERTY"),
     "Forex":         _merge_types("FOREX MAJORS", "FOREX CROSSES", "FOREX EXOTIC"),
+    # Added 2026-08-31. SECTOR_MAP named 12 of the 35 ASSET_TYPES categories and
+    # stopped being extended as the map grew, so 523 of 847 assets belonged to no
+    # sector at all: invisible to the rotation heatmap and pooled into portfolio's
+    # OTHER bucket for exposure. The EXTRA categories fold into the region they
+    # belong to; the rest are their own row because an ETF sleeve is not a sector
+    # of the equity market and averaging it into one would say nothing.
+    "Rates":         ASSET_TYPES["RATES"],
+    "Volatility":    ASSET_TYPES["VOLATILITY"],
+    "World Indices": ASSET_TYPES["WORLD INDICES"],
+    "Bond ETFs":     ASSET_TYPES["BOND ETFS"],
+    "Sector ETFs":   ASSET_TYPES["SECTOR ETFS"],
+    "Broad ETFs":    ASSET_TYPES["BROAD ETFS"],
+    "Theme ETFs":    ASSET_TYPES["THEME ETFS"],
+    "Commodity ETFs": ASSET_TYPES["COMMODITY ETFS"],
+    # US EXTRA is 167 names with no recorded sector of their own. One row rather
+    # than a guess: splitting them across the existing US sectors would need
+    # membership nobody wrote down, and inventing it would make the rotation
+    # reading confidently wrong instead of coarse.
+    "US Broad":      ASSET_TYPES["US EXTRA"],
 }
+SECTOR_MAP["Commodities"] = SECTOR_MAP["Commodities"] + ASSET_TYPES["COMMODITIES EXTRA"]
+SECTOR_MAP["Europe"] = SECTOR_MAP["Europe"] + ASSET_TYPES["EU EXTRA"]
+SECTOR_MAP["Russia"] = SECTOR_MAP["Russia"] + ASSET_TYPES["RUS EXTRA"]
 
 
 # --- 4. ENVIRONMENT VALIDATION ---
