@@ -171,3 +171,116 @@ def test_a_halted_stack_does_no_work_at_all():
     assert report["verdict"] == "HALT"
     assert report["assets"] == 0
     assert len(state["journal"]) == 1
+
+
+class _CountingPolicy:
+    """An FqiPolicy-shaped stand-in that records how often it was rolled out.
+
+    It only has to answer act(); rollout dispatches on that, which is the whole
+    point of the change under test.
+    """
+
+    def __init__(self, action=1):
+        self.action = action
+        self.calls = 0
+        self.model = object()
+
+    def act(self, feat, i, st):
+        self.calls += 1
+        return self.action
+
+
+def test_share_zero_is_byte_for_byte_the_old_tick():
+    """The positive control for every assertion below. If the default moved,
+    a tick that never asked for self-collection would silently change what it
+    measures, and every earlier generation would stop being comparable."""
+    import train_timing_online as tto
+    from core import timing_policy as tp
+
+    by_asset = {"A%d" % k: _fake_series(seed=k) for k in range(6)}
+    anchor = tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
+    champ = _CountingPolicy()
+
+    _s1, r1 = tto.tick(by_asset, on.fresh_state(), iters=2, seed=0,
+                       anchor=anchor)
+    _s2, r2 = tto.tick(by_asset, on.fresh_state(), iters=2, seed=0,
+                       anchor=anchor, champion=champ, self_share=0.0)
+    assert champ.calls == 0, "the champion collected data at share 0"
+    assert r1["self_rollouts"] == 0 and r2["self_rollouts"] == 0
+    assert r1["score"] == r2["score"] and r1["agreement"] == r2["agreement"]
+    assert r1["selected_on_val"] == r2["selected_on_val"]
+
+
+def test_a_share_moves_only_the_data_never_the_trust_region():
+    """The invariant the design turns on: the anchor keeps measuring, whatever
+    collects. Half the assets roll out under the champion, and agreement is
+    still computed against the rules."""
+    import train_timing_online as tto
+    from core import timing_policy as tp
+
+    by_asset = {"A%d" % k: _fake_series(seed=k) for k in range(6)}
+    anchor = tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
+    champ = _CountingPolicy()
+    _state, report = tto.tick(by_asset, on.fresh_state(), iters=2, seed=0,
+                              anchor=anchor, champion=champ, self_share=0.5)
+    assert report["self_rollouts"] == 3, report
+    assert champ.calls > 0, "the champion was chosen but never rolled out"
+    assert 0.0 <= report["agreement"] <= 1.0
+
+
+def test_no_stored_champion_falls_back_to_the_anchor():
+    """First ever tick, or a killed run that left no model. Asking for
+    self-collection must not stop the schedule."""
+    import train_timing_online as tto
+    from core import timing_policy as tp
+
+    by_asset = {"A%d" % k: _fake_series(seed=k) for k in range(4)}
+    anchor = tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
+    _state, report = tto.tick(by_asset, on.fresh_state(), iters=2, seed=0,
+                              anchor=anchor, champion=None, self_share=0.5)
+    assert report["self_rollouts"] == 0
+    assert report["verdict"] in ("ACCEPT", "REJECT", "ROLLBACK", "HALT")
+
+
+def test_the_split_is_deterministic_and_sized(monkeypatch):
+    """By asset, not by bar: a Q that is wrong must not be able to poison every
+    series a little. The same seed has to pick the same assets, or two ticks
+    would not be comparable."""
+    import random
+
+    import train_timing_online as tto
+
+    names = {"A%d" % k: None for k in range(10)}
+    a, c = object(), object()
+    first = tto._behaviour_for(names, a, c, 0.3, random.Random(7))
+    again = tto._behaviour_for(names, a, c, 0.3, random.Random(7))
+    assert first == again
+    assert sum(1 for v in first.values() if v is c) == 3
+    assert tto._behaviour_for(names, a, c, 1.0, random.Random(7)) == {
+        n: c for n in names}
+    assert tto._behaviour_for(names, a, None, 0.9, random.Random(7)) == {
+        n: a for n in names}
+
+
+def test_only_an_accepted_generation_is_kept(monkeypatch, tmp_path):
+    """A rejected Q collecting the next tick's data is the lock-in this whole
+    design guards against, handed the keys."""
+    import train_timing_online as tto
+    from core import timing_policy as tp
+
+    saved = []
+    monkeypatch.setattr(on, "save_champion", lambda m: saved.append(m) or True)
+    by_asset = {"A%d" % k: _fake_series(seed=k) for k in range(6)}
+    anchor = tp.RulesPolicy(dict(tp.DEFAULT_PARAMS))
+    _state, report = tto.tick(by_asset, on.fresh_state(), iters=2, seed=0,
+                              anchor=anchor)
+    assert len(saved) == (1 if report["verdict"] == "ACCEPT" else 0), report
+
+
+def test_a_missing_or_broken_champion_file_reads_as_none(tmp_path):
+    """Never raises: this runs on a schedule, and a half-written model from a
+    killed run must fall back to the anchor rather than stop the tick."""
+    assert on.load_champion(str(tmp_path / "nothing.cbm")) is None
+    junk = tmp_path / "junk.cbm"
+    junk.write_bytes(b"not a catboost model")
+    assert on.load_champion(str(junk)) is None

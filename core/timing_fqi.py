@@ -159,17 +159,32 @@ def advance(state, feat, i, action):
     return st, "EXIT", reason
 
 
-def _stage_a_action(policy, feat, i, st):
-    """What the Stage-A rules would do here, as a binary action.
+def behaviour_action(policy, feat, i, st):
+    """What `policy` would do here, as a binary action.
 
-    Asked of policy_step itself rather than reimplemented, so the behaviour
-    cloned into the transition store is the behaviour that was adopted.
+    Dispatches on the policy's own interface rather than assuming the rules:
+    a RulesPolicy is asked through policy_step (so the behaviour cloned into
+    the transition store is the behaviour that was adopted), and an FqiPolicy
+    through its own act(), which already returns this same binary action and
+    forces spec 4.2 outside the model exactly as policy_step does.
+
+    The dispatch is what lets a tick collect data under the CURRENT Q instead
+    of under the rules. Those are two different jobs the anchor used to do at
+    once: the policy that GENERATES the data, and the policy the result is
+    measured against. Only the second one is the trust region, and only the
+    second one has to be the rules forever.
     """
+    if hasattr(policy, "act"):
+        return policy.act(feat, i, st)
     action, _reason, _new = tp.policy_step(
         policy, float(feat["prob"][i]), feat["buy_thr"], feat["sell_thr"],
         float(feat["atr"][i]), bool(feat["taleb_hi"][i]),
         bool(feat["risky"]), st)
     return ACT_YES if action in ("ENTER", "HOLD") else ACT_NO
+
+
+# The old name, kept because tests and any caller outside this module used it.
+_stage_a_action = behaviour_action
 
 
 def rollout(series, policy, rng, epsilon=0.1, costs=(0.0, 0.0)):
@@ -191,7 +206,7 @@ def rollout(series, policy, rng, epsilon=0.1, costs=(0.0, 0.0)):
     st = dict(tp.FRESH_STATE)
     for i in range(n):
         pnl_atr = (st["seg_ret"] / feat["atr"][i]) if feat["atr"][i] else 0.0
-        act = _stage_a_action(policy, feat, i, st)
+        act = behaviour_action(policy, feat, i, st)
         if epsilon > 0.0 and rng.random() < epsilon:
             act = 1 - act
         rows[i] = state_row(feat, i, st["pos"], st["days_held"], pnl_atr,

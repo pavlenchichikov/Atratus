@@ -130,3 +130,48 @@ def load_state(path=None):
 def save_state(state, path=None):
     with open(path or STATE_PATH, "w", encoding="utf-8") as fh:
         json.dump(state, fh, indent=1, default=float)
+
+
+CHAMPION_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "timing_online_q.cbm")
+
+
+def save_champion(model, path=None):
+    """Keep the accepted generation's Q so the NEXT tick can roll out with it.
+
+    The state file carries a generation number and no model, which was enough
+    while every tick refitted from the anchor's trajectory. Collecting data
+    under the current champion needs the champion itself to survive the run.
+
+    Never raises: this is a scheduled job, and failing to cache a model is not
+    a reason to lose the verdict that was just computed.
+    """
+    try:
+        model.save_model(path or CHAMPION_PATH)
+        return True
+    except Exception:
+        return False
+
+
+def load_champion(path=None):
+    """The accepted generation's Q as an FqiPolicy, or None.
+
+    None on anything unexpected - a missing file on the first ever tick, a
+    model written by another CatBoost, a half-written file from a killed run.
+    The caller falls back to the anchor, which is the behaviour this replaced
+    and is always safe.
+    """
+    try:
+        from catboost import CatBoostRegressor
+
+        from core.timing_fqi import FqiPolicy
+
+        target = path or CHAMPION_PATH
+        if not os.path.exists(target):
+            return None
+        m = CatBoostRegressor()
+        m.load_model(target)
+        return FqiPolicy(m)
+    except Exception:
+        return None
