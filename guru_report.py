@@ -286,6 +286,34 @@ def fetch_smartlab_data():
         return {}
 
 
+def smartlab_ticker(asset):
+    """The Smart-Lab key for a Moscow-listed name, or None for anything else.
+
+    FULL_ASSET_MAP already carries the post-rename ticker (HHRU -> HEAD,
+    TCSG -> T, FIVE -> X5, FIXP -> FIXR, MOEX_EX -> MOEX, YNDX -> YDEX), and
+    the hand-written two-entry remap this replaces was a second, incomplete
+    copy of that. Only TCSG and YNDX were in it, so HH.ru, X5, Fix Price and
+    the Exchange itself matched nothing and came back with no fundamentals at
+    all, while Smart-Lab carried every one of them.
+
+    The _is_moex guard is not caution, it is the reason this cannot just key on
+    the map value: ROSS is Ross Stores and maps to ROST, and Smart-Lab has a
+    RUSSIAN ROST at a P/E of -6.4. Without the guard a US retailer would be
+    handed a Russian company's numbers, which is worse than the blank it gets
+    today because it looks like an answer.
+    """
+    try:
+        from config import FULL_ASSET_MAP
+        from core.events import _is_moex
+
+        if not _is_moex(asset):
+            return None
+        bare = asset.split(".")[0]
+        return (FULL_ASSET_MAP.get(asset) or bare).split(".")[0].upper()
+    except Exception:
+        return None
+
+
 def resolve_fundamentals(name, symbol, smartlab):
     """Resolve one asset's fundamentals dict: smartlab, then yfinance, then backup, else None.
 
@@ -296,8 +324,7 @@ def resolve_fundamentals(name, symbol, smartlab):
     both use the exact same fundamentals resolution.
     """
     clean_name = name.split('.')[0]
-    ticker_map = {'YNDX': 'YDEX', 'TCSG': 'T'}
-    search = ticker_map.get(clean_name, clean_name)
+    search = smartlab_ticker(name) or clean_name
 
     if search in smartlab:
         d = smartlab[search]

@@ -286,12 +286,15 @@ def _smartlab_map():
 def _smartlab_fundamentals(asset):
     """P/E, ROE, debt/EBITDA and dividend yield for a Moscow-listed name.
 
-    The same two-ticker remap guru_report.resolve_fundamentals applies, for the
-    same reason: Smart-Lab carries the post-rename tickers.
+    The key comes from guru_report.smartlab_ticker, which derives it from
+    FULL_ASSET_MAP rather than from a hand-written remap: this function used to
+    carry its own copy of that remap with two entries in it, so HH.ru, X5, Fix
+    Price and MOEX itself silently had no fundamentals here either.
     """
-    remap = {"YNDX": "YDEX", "TCSG": "T"}
-    key = remap.get(asset.split(".")[0], asset.split(".")[0])
-    row = _smartlab_map().get(key)
+    from guru_report import smartlab_ticker
+
+    key = smartlab_ticker(asset)
+    row = _smartlab_map().get(key) if key else None
     if not row:
         return dict(_FUNDAMENTALS_BLANK)
     # 99.0 is fetch_smartlab_data's "not reported" filler, not a P/E of 99.

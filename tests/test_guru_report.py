@@ -81,3 +81,25 @@ def test_recalc_all_stocks_scrapes_once_skips_na_logs_real(monkeypatch):
     assert res == {"total": 2, "updated": 1, "skipped": 1, "errors": 0}
     assert progress[0] == (0, 2, None)              # total reported before the scrape
     assert progress[-1][0] == 2
+
+
+def test_resolve_fundamentals_finds_a_renamed_moscow_name():
+    """HH.ru trades as HEAD and the guru report looked it up as HHRU, so it fell
+    through to the yfinance branch, which cannot resolve a bare MOEX ticker
+    either, and the council scored it on nothing.
+
+    The second half is the control: a foreign name whose map value collides with
+    a Russian ticker must NOT pick up the Russian row."""
+    import guru_report as gr
+
+    sl = {"HEAD": {"pe": 6.1, "roe": 0.0, "debt": -0.6, "div": 17.3},
+          "ROST": {"pe": -6.4, "roe": 0.0, "debt": 2.4, "div": 0.0}}
+
+    got = gr.resolve_fundamentals("HHRU", "HEAD", sl)
+    assert got["_source"] == "smartlab"
+    assert got["pe"] == 6.1 and got["dividend_yield"] == 17.3
+
+    # ROSS is Ross Stores; ROST here is a Russian company at a negative P/E
+    ross = gr.resolve_fundamentals("ROSS", "ROST", sl) or {}
+    assert ross.get("_source") != "smartlab", ross
+    assert ross.get("pe") != -6.4, "a US retailer got Russian fundamentals"

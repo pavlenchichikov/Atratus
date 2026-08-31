@@ -413,3 +413,36 @@ def test_the_own_record_is_clipped_to_what_it_knew_by_then(monkeypatch):
     early = dossier._own_record("SBER", before="2026-02-01")
     assert early["past_calls"] == 1 and early["past_last_call"] == "up"
     assert dossier._own_record("SBER", before="2026-01-01")["past_calls"] == 0
+
+
+def test_the_smartlab_key_comes_from_the_asset_map_not_a_hand_written_remap():
+    """The remap this replaces had two entries, YNDX and TCSG. Every other
+    renamed Moscow name matched nothing and came back blank while Smart-Lab
+    carried it: HH.ru trades as HEAD, X5 as X5, Fix Price as FIXR, the Exchange
+    as MOEX."""
+    from guru_report import smartlab_ticker
+
+    for asset, key in (("HHRU", "HEAD"), ("TCSG", "T"), ("FIVE", "X5"),
+                       ("FIXP", "FIXR"), ("MOEX_EX", "MOEX"),
+                       ("YNDX", "YDEX"), ("SBER", "SBER")):
+        assert smartlab_ticker(asset) == key, asset
+
+
+def test_a_foreign_name_never_reaches_the_russian_table():
+    """The reason this cannot key on the map value alone. ROSS is Ross Stores
+    and maps to ROST; Smart-Lab has a RUSSIAN ROST at a P/E of -6.4. Handing a
+    US retailer those numbers is worse than the blank it gets, because it looks
+    like an answer."""
+    from guru_report import smartlab_ticker
+
+    for asset in ("ROSS", "AAPL", "GOLD", "BTC", "EURUSD", "SP500"):
+        assert smartlab_ticker(asset) is None, asset
+
+
+def test_a_blocked_lookup_returns_the_blank_shape(monkeypatch):
+    dossier._SMARTLAB_CACHE.clear()
+    monkeypatch.setattr(dossier, "_smartlab_map",
+                        lambda: {"ROST": {"pe": -6.4, "roe": 0.0,
+                                          "debt": 2.4, "div": 0.0}})
+    assert dossier._smartlab_fundamentals("ROSS") == dossier._FUNDAMENTALS_BLANK
+    dossier._SMARTLAB_CACHE.clear()
