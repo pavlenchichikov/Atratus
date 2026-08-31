@@ -466,3 +466,50 @@ def test_the_launcher_never_emits_a_blank_model(monkeypatch):
     text = open(bat, encoding="utf-8", errors="replace").read()
     assert 'set "GTRADE_AR_LLM_MODEL="' not in text
     assert 'set "GTRADE_AR_LLM_MODEL=auto"' in text
+
+
+class TestCredentials:
+    def test_a_missing_key_stops_before_the_retry_loop(self, monkeypatch):
+        """The SDK raises at CLIENT CONSTRUCTION, inside the three-attempt loop,
+        so one absent string produced three identical failures here and two more
+        from the caller. And its own message names neither the variable nor the
+        file to put it in."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(lp.ProviderUnavailable) as e:
+            lp._call_anthropic("hi")
+        assert "ANTHROPIC_API_KEY" in str(e.value) and ".env" in str(e.value)
+        assert "ollama" in str(e.value)
+
+    def test_a_key_that_is_only_whitespace_does_not_count(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+        with pytest.raises(lp.ProviderUnavailable):
+            lp._call_anthropic("hi")
+
+    def test_a_custom_endpoint_needs_no_openai_key(self, monkeypatch):
+        """GTRADE_AR_LLM_BASE_URL points the same backend at LM Studio and
+        friends, which the docstring promises and which have no key. The first
+        half is the positive control: without a base URL the key IS required."""
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GTRADE_AR_LLM_BASE_URL", raising=False)
+        with pytest.raises(lp.ProviderUnavailable):
+            lp._call_openai("hi")
+
+        monkeypatch.setenv("GTRADE_AR_LLM_BASE_URL", "http://127.0.0.1:1234/v1")
+        with pytest.raises(Exception) as e:
+            lp._call_openai("hi")
+        assert not isinstance(e.value, lp.ProviderUnavailable), e.value
+
+    def test_ollama_never_asks_for_a_key(self, monkeypatch):
+        """A fully local, keyless setup is the whole point of the third option.
+
+        Pointed at a closed port on purpose: the first version of this test
+        reached the real Ollama on this machine and got a 200, so it asserted
+        nothing about keys and would have passed with the check in place.
+        """
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("GTRADE_AR_LLM_BASE_URL", "http://127.0.0.1:1/v1")
+        monkeypatch.setenv("GTRADE_AR_LLM_MODEL", "whatever")
+        with pytest.raises(Exception) as e:
+            lp._call_ollama("hi")
+        assert not isinstance(e.value, lp.ProviderUnavailable), e.value

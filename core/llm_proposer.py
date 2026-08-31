@@ -161,8 +161,30 @@ def _require(module, provider, pip_name=None):
         ) from exc
 
 
+def _require_key(var, provider):
+    """The provider's credential, or the same clear stop a missing SDK gives.
+
+    Checked here rather than left to the SDK for two reasons. The SDK raises at
+    CLIENT CONSTRUCTION, inside the retry loop, so one missing key produced
+    three identical attempts and then two more from the caller, six failures
+    for one absent string. And its message ("Could not resolve authentication
+    method. Expected one of api_key, auth_token, or credentials...") names
+    neither the variable nor the file, which is what a person actually needs.
+
+    config.py loads .env at import, so a key written there is already in the
+    environment by the time any of this runs.
+    """
+    if (os.getenv(var) or "").strip():
+        return
+    raise ProviderUnavailable(
+        "the %s provider needs %s, which is not set. Put it in .env next to "
+        "the other secrets (see .env.example), or use provider ollama, which "
+        "needs no key at all." % (provider, var))
+
+
 def _call_anthropic(prompt):
     """Anthropic SDK. Model via GTRADE_AR_LLM_MODEL (default claude-opus-4-8)."""
+    _require_key("ANTHROPIC_API_KEY", "anthropic")
     anthropic = _require("anthropic", "anthropic")
     client = anthropic.Anthropic()
     model = model_override() or "claude-opus-4-8"
@@ -182,6 +204,11 @@ def _call_openai(prompt):
     """OpenAI-compatible chat API. Works with OpenAI and any compatible endpoint
     (Mistral, LM Studio, etc.) via GTRADE_AR_LLM_BASE_URL. Model via
     GTRADE_AR_LLM_MODEL (default gpt-4o)."""
+    # Only when talking to OpenAI itself. GTRADE_AR_LLM_BASE_URL points this
+    # same backend at LM Studio and friends, which the docstring above promises
+    # and which need no key, so the check must not fire there.
+    if not (os.getenv("GTRADE_AR_LLM_BASE_URL") or "").strip():
+        _require_key("OPENAI_API_KEY", "openai")
     openai = _require("openai", "openai")
     client = openai.OpenAI(base_url=os.getenv("GTRADE_AR_LLM_BASE_URL") or None,
                            timeout=_llm_timeout())
