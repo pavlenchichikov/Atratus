@@ -271,7 +271,7 @@ echo asset's scorable history first.
 echo.
 set /p RP_ASSETS="Assets (list or ALL), Enter = cancel: "
 if "%RP_ASSETS%"=="" goto menu
-set "RP_SEL=--assets %RP_ASSETS%"
+set "RP_SEL=--assets "%RP_ASSETS%""
 if /i "%RP_ASSETS%"=="all" set "RP_SEL="
 echo.
 python train_timing.py --replay %RP_SEL%
@@ -308,7 +308,7 @@ echo   you mean "check the adopted rule against assets it never saw".
 echo.
 set /p OS_ASSETS="Assets (list or ALL), Enter = cancel: "
 if "%OS_ASSETS%"=="" goto menu
-set "OS_SEL=--assets %OS_ASSETS%"
+set "OS_SEL=--assets "%OS_ASSETS%""
 if /i "%OS_ASSETS%"=="all" set "OS_SEL="
 if /i "%OS_ASSETS%"=="all" echo [OS] every asset in the map; the fitters skip any without a champion.
 set /p OS_BUDGET="Search iterations (Enter = 300): "
@@ -422,8 +422,14 @@ if "%an_llm%"=="1" set "an_flag=--llm anthropic"
 if "%an_llm%"=="2" set "an_flag=--llm openai"
 if "%an_llm%"=="3" set "an_flag=--llm ollama"
 set "an_name="
-if not "%an_flag%"=="" set /p an_name="Model name, Enter = provider default: "
-if not "%an_name%"=="" set "an_flag=%an_flag% --model %an_name%"
+REM  An exact model id, not a nickname: it is passed through to the SDK.
+REM  Showing the shape here because "opus 5" reads like a valid answer and
+REM  is not one, and the run only finds out after the YES.
+if not "%an_flag%"=="" set /p an_name="Model id (e.g. claude-opus-4-8), Enter = provider default: "
+REM  QUOTED. Unquoted, a model id with a space in it reached argparse as two
+REM  arguments and the run died with "unrecognized arguments" after the YES,
+REM  which is the most expensive moment to find a typo.
+if not "%an_name%"=="" set "an_flag=%an_flag% --model "%an_name%""
 echo.
 set "an_ok="
 set /p an_ok="Type YES to run: "
