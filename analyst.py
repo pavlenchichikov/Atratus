@@ -20,6 +20,7 @@ import sys
 import train_payoff
 from config import radar_category
 from core.analyst import agent, calibrate, dossier, payoff, store
+from core.llm_proposer import ProviderUnavailable
 
 
 def _load_table():
@@ -179,8 +180,17 @@ def cmd_run(args):
             if not named and store.judged_with_hash(asset, h, horizon=horizon):
                 skipped += 1
                 continue
-            written, refused = _judge_one(d, asset, h, horizon, call, depth,
-                                          cells, table, written, refused)
+            try:
+                written, refused = _judge_one(d, asset, h, horizon, call, depth,
+                                              cells, table, written, refused)
+            except ProviderUnavailable as exc:
+                # One line, then stop. A sweep of 28 assets would otherwise
+                # print the same missing-package error 28 times and finish
+                # claiming 28 refusals.
+                print("[analyst] %s" % exc)
+                print("[analyst] nothing was asked, so nothing was judged. "
+                      "Provider ollama needs no key and no Anthropic package.")
+                return 1
     print(f"[analyst] written={written} skipped={skipped} refused={refused}")
     print("[analyst] sources: " + ", ".join(
         "%s %d/%d" % (k, got, n) if n else "%s n/a" % k

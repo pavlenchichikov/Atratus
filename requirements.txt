@@ -45,5 +45,15 @@ h5py>=3.15,<4
 # it was needed (auto_loop, loop_cycle and loop_retrain all take that lock).
 psutil>=5.9,<8
 
+# LLM providers (auto-research proposer, research wiki, analyst agent)
+# Not optional in practice: the launcher offers all three and two of them were
+# only ever working because `openai` happened to be ambient on this machine
+# while `anthropic` was not, so [AN] with provider 1 died on ImportError and
+# reported it as a REFUSED judgment. `openai` also serves the OLLAMA path,
+# which talks to a local model over its OpenAI-compatible API - so a fully
+# local, keyless setup still needs this package and no other.
+anthropic>=0.40,<1
+openai>=1.50,<3
+
 # Mobile app push notifications
 firebase-admin>=6.2,<8  # send_each_for_multicast needs 6.2+; 7.x verified too

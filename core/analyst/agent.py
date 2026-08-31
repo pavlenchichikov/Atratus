@@ -185,9 +185,16 @@ def judge(dossier, call=None, depth="full", horizon=1):
     # A field the dossier carries as None or [] was shown to the model as empty,
     # so citing it is not evidence of anything.
     empty = {k for k, v in dossier.items() if v is None or v == []}
+    from core.llm_proposer import ProviderUnavailable
+
     for _ in range(MAX_ATTEMPTS):
         try:
             answer = call(prompt)
+        except ProviderUnavailable:
+            # Not a refusal and not worth a second attempt: the SDK will be
+            # just as absent next time. Let it out so the caller can say what
+            # is missing instead of reporting a model that would not answer.
+            raise
         except Exception:
             continue
         parsed = parse_judgment(answer, allowed=allowed, empty=empty)

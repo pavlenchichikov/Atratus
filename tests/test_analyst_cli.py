@@ -428,3 +428,29 @@ def test_a_bad_horizon_list_stops_the_run_before_it_spends_anything(monkeypatch)
 
     assert analyst.cmd_run(A()) == 1
     assert calls == [], "it called the model before validating its arguments"
+
+
+def test_a_missing_provider_stops_the_sweep_instead_of_refusing_every_asset(
+        monkeypatch, capsys):
+    """28 assets would otherwise print the same missing-package line 28 times
+    and finish claiming 28 refusals."""
+    from core.llm_proposer import ProviderUnavailable
+
+    calls = []
+    analyst = _stub_run(monkeypatch, calls)
+
+    def _missing(d, call=None, depth=None, horizon=1):
+        calls.append(horizon)
+        raise ProviderUnavailable("the anthropic provider needs the anthropic "
+                                  "package: pip install anthropic")
+
+    monkeypatch.setattr(analyst.agent, "judge", _missing)
+
+    class A:
+        assets, llm, model, depth = "SBER,BTC,GOLD", None, None, None
+        horizons, as_of = "1", None
+
+    assert analyst.cmd_run(A()) == 1
+    assert len(calls) == 1, "it kept asking after the provider was gone"
+    out = capsys.readouterr().out
+    assert "pip install anthropic" in out and "nothing was asked" in out

@@ -6,6 +6,8 @@ how core/llm_proposer.py is exercised.
 
 import json
 
+import pytest
+
 from core.analyst import agent
 
 
@@ -183,3 +185,36 @@ def test_judge_marks_the_empty_dossier_fields_for_the_validator():
          "next_earnings": None, "close": 268.9}
     j = agent.judge(d, call=fake_call, depth="brief")
     assert j["evidence"] == ["ret_20"], seen
+
+
+def test_a_missing_provider_is_not_a_refusal():
+    """The 2026-08-31 run: provider anthropic, the SDK absent, two identical
+    attempts, and a report of refused=1. A refusal means the model would not
+    answer; here nothing was ever asked, and the two readings deserve opposite
+    handling.
+
+    The second half is the positive control: an ordinary failure must still be
+    retried and still end as a refusal, or this would have turned every hiccup
+    into a hard stop."""
+    from core.llm_proposer import ProviderUnavailable
+
+    tries = []
+
+    def missing(_prompt):
+        tries.append(1)
+        raise ProviderUnavailable("the anthropic provider needs the anthropic "
+                                  "package: pip install anthropic")
+
+    with pytest.raises(ProviderUnavailable):
+        agent.judge({"asset": "SBER", "close": 1.0}, call=missing, depth="brief")
+    assert len(tries) == 1, "a missing package was retried"
+
+    flaky = []
+
+    def broken(_prompt):
+        flaky.append(1)
+        raise RuntimeError("the model returned nothing")
+
+    assert agent.judge({"asset": "SBER", "close": 1.0}, call=broken,
+                       depth="brief") is None
+    assert len(flaky) == agent.MAX_ATTEMPTS

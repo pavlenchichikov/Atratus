@@ -1075,7 +1075,11 @@ goto menu
 
 :install_fix
 cls
-python -m pip install apimoex requests yfinance pandas "numpy<2" plotly streamlit sqlalchemy catboost scikit-learn pyTelegramBotAPI pysocks python-dotenv tabulate tqdm optuna fastapi uvicorn jinja2 --no-cache-dir
+REM  requirements.txt, not a second list written out by hand. The hand one
+REM  had drifted: it pinned "numpy<2" while requirements asks for >=2.4,
+REM  so running this repair DOWNGRADED numpy out of the supported range,
+REM  and it named none of the three LLM providers the menus offer.
+python -m pip install -r "%~dp0requirements.txt" --no-cache-dir
 pause
 goto menu
 

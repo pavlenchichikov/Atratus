@@ -138,9 +138,32 @@ def _parse_specs(text):
     return specs if isinstance(specs, list) else []
 
 
+class ProviderUnavailable(RuntimeError):
+    """The provider cannot be reached at all: its SDK is not installed.
+
+    Distinct from a call that failed, because the two deserve opposite
+    handling. A failed call is worth retrying and is a fair "refused". A
+    missing package will fail identically every time, and counting it as a
+    refusal reports a model that would not answer when the truth is that
+    nothing was ever asked. On 2026-08-31 an analyst run reported refused=1
+    for exactly this, after two identical attempts.
+    """
+
+
+def _require(module, provider, pip_name=None):
+    """Import a provider SDK or say, once and precisely, how to get it."""
+    try:
+        return __import__(module)
+    except ImportError as exc:
+        raise ProviderUnavailable(
+            "the %s provider needs the %s package, which is not installed "
+            "here: pip install %s" % (provider, module, pip_name or module)
+        ) from exc
+
+
 def _call_anthropic(prompt):
     """Anthropic SDK. Model via GTRADE_AR_LLM_MODEL (default claude-opus-4-8)."""
-    import anthropic
+    anthropic = _require("anthropic", "anthropic")
     client = anthropic.Anthropic()
     model = model_override() or "claude-opus-4-8"
     last_err = None
@@ -159,7 +182,7 @@ def _call_openai(prompt):
     """OpenAI-compatible chat API. Works with OpenAI and any compatible endpoint
     (Mistral, LM Studio, etc.) via GTRADE_AR_LLM_BASE_URL. Model via
     GTRADE_AR_LLM_MODEL (default gpt-4o)."""
-    import openai
+    openai = _require("openai", "openai")
     client = openai.OpenAI(base_url=os.getenv("GTRADE_AR_LLM_BASE_URL") or None,
                            timeout=_llm_timeout())
     model = model_override() or "gpt-4o"
@@ -256,7 +279,7 @@ def _call_ollama(prompt):
     """Local Ollama via its OpenAI-compatible API. Base URL via
     GTRADE_AR_LLM_BASE_URL (default localhost:11434/v1); model via
     GTRADE_AR_LLM_MODEL or auto-detected (gemma preferred)."""
-    import openai
+    openai = _require("openai", "ollama")
     base = _ollama_base_url()
     model = model_override() or _detect_ollama_model()
     # Reasoning models (e.g. gemma) spend tokens on an internal reasoning trace before
