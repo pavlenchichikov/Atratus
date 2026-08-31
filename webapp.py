@@ -806,7 +806,7 @@ def _analyst_running():
 
 
 @app.get("/analyst", response_class=HTMLResponse)
-def analyst_page(request: Request):
+def analyst_page(request: Request, asset: str = ""):
     """What the analyst has said, and whether it is worth believing yet.
 
     Deliberately shows the sample size next to every figure: until the log
@@ -841,8 +841,29 @@ def analyst_page(request: Request):
 
         get_logger("webapp").debug("analyst standings unavailable: %s", exc)
 
+    # One asset's whole record. The table below shows the last 15 judgments
+    # across every asset, which is the wrong shape for the question a person
+    # actually arrives with: the card says SHORT on SBER, so what has this agent
+    # said about SBER before, and how did those calls end?
+    picked = (asset or "").strip().upper()
+    asset_rows = hit = None
+    if picked:
+        asset_rows = [r for r in rows if r.get("asset") == picked]
+        asset_rows.reverse()
+        done = [r for r in asset_rows
+                if r.get("realized_ret") is not None
+                and r.get("direction") in ("up", "down")]
+        if done:
+            ok = sum(1 for r in done
+                     if (r["direction"] == "up") == (r["realized_ret"] > 0))
+            hit = {"n": len(done), "hits": ok, "rate": ok / len(done)}
+
     return templates.TemplateResponse(request, "analyst.html", {
         "scored": len(rows),
+        "picked": picked,
+        "asset_rows": asset_rows,
+        "asset_hit": hit,
+        "assets": sorted({r.get("asset") for r in rows if r.get("asset")}),
         "pending": pending,
         "coverage": analyst_score.coverage(rows),
         "recent": list(reversed(rows))[:15],

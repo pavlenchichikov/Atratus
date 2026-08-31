@@ -454,3 +454,98 @@ def test_a_missing_provider_stops_the_sweep_instead_of_refusing_every_asset(
     assert len(calls) == 1, "it kept asking after the provider was gone"
     out = capsys.readouterr().out
     assert "pip install anthropic" in out and "nothing was asked" in out
+
+
+def test_the_panel_is_the_same_names_every_day(monkeypatch):
+    """The watchlist is a moving set, so 32 judgments landed on 31 assets and
+    no per-asset statistic can ever accumulate. The panel is fixed."""
+    calls = []
+    analyst = _stub_run(monkeypatch, calls)
+    seen = []
+    monkeypatch.setattr(analyst.dossier, "build",
+                        lambda a, **k: seen.append(a) or {
+                            "asset": a, "date": "2026-01-01", "close": 1.0,
+                            "atr": 0.1})
+
+    class A:
+        assets, llm, model, depth = None, None, None, None
+        horizons, as_of, panel, max_calls, back = "1", None, True, 0, 0
+
+    analyst.cmd_run(A())
+    assert seen == [a for a in analyst.panel_assets()
+                    if a in __import__("config").FULL_ASSET_MAP], seen
+    assert len(seen) >= 10, "the panel got filtered down to nothing"
+
+
+def test_the_panel_is_overridable(monkeypatch):
+    monkeypatch.setenv("GTRADE_ANALYST_PANEL", "btc, gold ,eurusd")
+    import analyst
+    assert analyst.panel_assets() == ["BTC", "GOLD", "EURUSD"]
+    monkeypatch.delenv("GTRADE_ANALYST_PANEL")
+    assert analyst.panel_assets() == list(analyst.PANEL)
+
+
+def test_a_run_over_the_ceiling_costs_nothing(monkeypatch, capsys):
+    """Checked BEFORE the first call. A ceiling that stops halfway has already
+    spent the money it existed to protect."""
+    calls = []
+    analyst = _stub_run(monkeypatch, calls)
+
+    class A:
+        assets, llm, model, depth = "SBER,BTC,GOLD", None, None, None
+        horizons, as_of, panel, back = "1,5", None, False, 0
+        max_calls = 5
+
+    assert analyst.cmd_run(A()) == 1
+    assert calls == [], "it asked the model before checking the ceiling"
+    out = capsys.readouterr().out
+    assert "3 asset(s) x 2 horizon(s) = 6 calls" in out
+    assert "Nothing was asked" in out
+
+
+def test_a_run_inside_the_ceiling_proceeds(monkeypatch):
+    """The positive control: a ceiling that refuses everything is not a ceiling."""
+    calls = []
+    analyst = _stub_run(monkeypatch, calls)
+
+    class A:
+        assets, llm, model, depth = "SBER", None, None, None
+        horizons, as_of, panel, back = "1", None, False, 0
+        max_calls = 5
+
+    analyst.cmd_run(A())
+    assert calls == [1]
+
+
+def test_back_judges_one_date_per_pass_oldest_first(monkeypatch):
+    """Oldest first so each judgment sees the own-record its predecessors left
+    and none of them sees a successor's outcome."""
+    calls = []
+    analyst = _stub_run(monkeypatch, calls)
+    asked = []
+    monkeypatch.setattr(analyst, "_recent_dates",
+                        lambda n, asset="SP500": ["2026-05-04", "2026-05-05",
+                                                  "2026-05-06"][:n])
+    monkeypatch.setattr(analyst.dossier, "build",
+                        lambda a, **k: asked.append(k.get("today")) or {
+                            "asset": a, "date": k.get("today"), "close": 1.0,
+                            "atr": 0.1})
+
+    class A:
+        assets, llm, model, depth = "SBER", None, None, None
+        horizons, as_of, panel, max_calls = "1", None, False, 0
+        back = 3
+
+    analyst.cmd_run(A())
+    assert asked == ["2026-05-04", "2026-05-05", "2026-05-06"], asked
+
+
+def test_recent_dates_excludes_the_last_bar():
+    """Its horizon has not elapsed, so a judgment there could never be scored."""
+    import analyst
+    from core.track_record import ohlc_series
+
+    bars = [b["date"] for b in ohlc_series("SP500", days=60)]
+    got = analyst._recent_dates(5)
+    assert len(got) == 5 and got == sorted(got)
+    assert bars[-1] not in got, "the unscoreable last bar was included"

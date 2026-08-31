@@ -11,6 +11,7 @@ the one already judged.
 """
 
 import argparse
+import copy
 import datetime as _dt
 import json
 import os
@@ -46,6 +47,21 @@ def _provider_call():
     """
     from core.llm_proposer import _backend
     return _backend("analyst")
+
+
+# A small, FIXED set judged every day. _eligible below is a moving target (the
+# watchlist plus whoever reports today), and 32 judgments spread over 31 assets
+# is what that produces: no per-asset statistic can ever accumulate, and the
+# field and conviction panels stay "thin" forever. Deliberately mixed by class,
+# and deliberately small, because the point is depth per name rather than
+# coverage. Override with GTRADE_ANALYST_PANEL.
+PANEL = ("SP500", "NASDAQ", "GOLD", "OIL", "BTC", "ETH", "EURUSD", "USDJPY",
+         "NVDA", "AAPL", "JPM", "SBER", "IMOEX", "TLT", "VIX")
+
+
+def panel_assets():
+    raw = (os.getenv("GTRADE_ANALYST_PANEL") or "").strip()
+    return [a.strip().upper() for a in raw.split(",") if a.strip()] or list(PANEL)
 
 
 def _eligible(today=None):
@@ -110,6 +126,28 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
 
 
 def cmd_run(args):
+    back = int(getattr(args, "back", 0) or 0)
+    if back:
+        # One ordinary pass per date, oldest first, so each judgment sees the
+        # own-record its predecessors left and none sees a successor's outcome.
+        dates = _recent_dates(back)
+        if not dates:
+            print("[analyst] no bar dates to judge; run data_engine.py first.")
+            return 1
+        print("[analyst] backfilling %d dates: %s .. %s"
+              % (len(dates), dates[0], dates[-1]))
+        for day in dates:
+            # copy.copy, not Namespace(**vars(args)): vars() on anything that
+            # is not an argparse Namespace (a plain object in a test, say)
+            # carries descriptors that Namespace refuses to take.
+            one = copy.copy(args)
+            one.back, one.as_of = 0, day
+            rc = cmd_run(one)
+            if rc:
+                print("[analyst] stopped at %s" % day)
+                return rc
+        return 0
+
     if (os.getenv("GTRADE_ANALYST") or "1").strip() == "0":
         print("[analyst] GTRADE_ANALYST=0, nothing to do.")
         return 0
@@ -134,7 +172,16 @@ def cmd_run(args):
     # no dossier-hash skip, because asking for one asset by name means asking
     # for it now rather than being told it was already judged today.
     named = _named_assets(getattr(args, "assets", None))
-    targets = named or _eligible()
+    if getattr(args, "panel", False):
+        from config import FULL_ASSET_MAP
+
+        targets = [a for a in panel_assets() if a in FULL_ASSET_MAP]
+        missing = [a for a in panel_assets() if a not in FULL_ASSET_MAP]
+        if missing:
+            print("[analyst] not in the asset map, skipped: %s"
+                  % ", ".join(missing))
+    else:
+        targets = named or _eligible()
 
     # Naming an asset means a person wants to read the reasoning, so it gets
     # the full structured prompt. A sweep wants throughput and gets the brief
@@ -158,6 +205,18 @@ def cmd_run(args):
               "headlines, the guru verdict and the market classifiers are "
               "blank. They cannot be fetched for a past date and faking them "
               "would be look-ahead." % as_of)
+
+    try:
+        max_calls = int(getattr(args, "max_calls", 0) or 0)
+    except ValueError:
+        print("[analyst] --max-calls takes a whole number.")
+        return 1
+    planned = len(targets) * len(horizons)
+    if max_calls and planned > max_calls:
+        print("[analyst] %d asset(s) x %d horizon(s) = %d calls, over the "
+              "--max-calls ceiling of %d. Nothing was asked."
+              % (len(targets), len(horizons), planned, max_calls))
+        return 1
 
     written = skipped = refused = 0
     # Every network field in the dossier is wrapped in _safe, so a dead source
@@ -376,6 +435,21 @@ def cmd_score(args):
     return 0
 
 
+def _recent_dates(n, asset="SP500"):
+    """The last n trading dates, oldest first, from the bars themselves.
+
+    Off a liquid asset's own bar dates rather than a calendar: a weekend or a
+    holiday has no bar, and a judgment dated on one would have no outcome to be
+    scored against. The last date is excluded because its horizon has not
+    elapsed, so it could never be backfilled.
+    """
+    from core.track_record import ohlc_series
+
+    bars = ohlc_series(asset, days=n + 40)
+    dates = [b["date"] for b in bars][:-1]
+    return dates[-n:] if n else []
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="analyst agent")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -388,11 +462,26 @@ def main(argv=None):
     run.add_argument("--depth", choices=("brief", "full"),
                      help="how much reasoning to ask for. Default: full for a "
                           "named asset, brief for a sweep")
+    run.add_argument("--panel", action="store_true",
+                     help="judge the fixed panel instead of the watchlist. The "
+                          "watchlist is a moving set, so per-asset statistics "
+                          "never accumulate; the panel is the same names every "
+                          "day. Override the list with GTRADE_ANALYST_PANEL")
+    run.add_argument("--max-calls", dest="max_calls", type=int, default=0,
+                     help="refuse to start if assets x horizons exceeds this. "
+                          "0 = no ceiling. Checked BEFORE the first call, so a "
+                          "run that would overspend costs nothing")
     run.add_argument("--horizons", default="1",
                      help="comma-separated horizons in trading days (default 1). "
                           "Each is its own question and its own LLM call; the "
                           "log's primary key has carried a horizon column since "
                           "it was written and nothing ever used it")
+    run.add_argument("--back", type=int, default=0, metavar="N",
+                     help="judge the last N TRADING dates instead of today, "
+                          "oldest first, each with its own rewound dossier. "
+                          "This is how the log reaches a sample without waiting "
+                          "months; see --as-of for what a rewind can and cannot "
+                          "restore")
     run.add_argument("--as-of", dest="as_of",
                      help="judge a PAST date (YYYY-MM-DD) instead of today. The "
                           "dossier is rewound: fundamentals, headlines, the guru "

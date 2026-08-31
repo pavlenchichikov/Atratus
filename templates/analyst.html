@@ -163,6 +163,58 @@
 </section>
 
 <section class="panel fade">
+  <div class="panel-head"><h2>One asset at a time</h2></div>
+  <p class="dim">The table below is the last 15 judgments across every asset,
+    which is the wrong shape for the question a person arrives with. Pick a name
+    to see what this agent has said about it and how those calls ended.</p>
+  <form method="get" action="/analyst">
+    <select name="asset" onchange="this.form.submit()">
+      <option value="">all assets</option>
+      {% for a in assets %}
+      <option value="{{ a }}"{% if a == picked %} selected{% endif %}>{{ a }}</option>
+      {% endfor %}
+    </select>
+    <noscript><button class="btn" type="submit">show</button></noscript>
+  </form>
+
+  {% if picked %}
+    {% if asset_rows %}
+    <p class="dim" style="margin-top:.8em">
+      <b class="mono">{{ picked }}</b>: {{ asset_rows|length }} judgment(s)
+      {% if asset_hit %}, directional calls landed
+      <b class="mono">{{ asset_hit.hits }} of {{ asset_hit.n }}</b>
+      ({{ "%.2f"|format(asset_hit.rate) }}){% else %}, none resolved yet{% endif %}.
+    </p>
+    <div style="overflow-x:auto">
+    <table class="table">
+      <thead><tr><th>Date</th><th>H</th><th>Call</th><th>Conv</th>
+        <th>Forecast</th><th>Realized</th><th>Error (ATR)</th><th>Thesis</th></tr></thead>
+      <tbody>
+        {% for r in asset_rows %}
+        <tr>
+          <td class="mono">{{ r.date }}</td>
+          <td class="mono dim">{{ r.horizon }}d</td>
+          <td>{{ r.direction }}</td>
+          <td class="mono">{{ r.conviction }}</td>
+          <td class="mono">{% if r.forecast_pct is not none %}{{ "%+.2f"|format(r.forecast_pct * 100) }}%{% else %}-{% endif %}</td>
+          <td class="mono">{% if r.realized_ret is not none %}{{ "%+.2f"|format(r.realized_ret * 100) }}%{% else %}<span class="dim">pending</span>{% endif %}</td>
+          <td class="mono">{% if r.abs_err_atr is not none %}{{ "%.2f"|format(r.abs_err_atr) }}{% else %}-{% endif %}</td>
+          <td>{% if r.thesis %}<details><summary class="dim">read</summary>
+            <p style="margin:.4em 0">{{ r.thesis }}</p>
+            {% if r.key_risk %}<p class="dim"><b>risk:</b> {{ r.key_risk }}</p>{% endif %}
+            </details>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="dim" style="margin-top:.8em">Nothing scored for
+      <b class="mono">{{ picked }}</b> yet.</p>
+    {% endif %}
+  {% endif %}
+</section>
+<section class="panel fade">
   <div class="panel-head"><h2>Latest scored judgments</h2></div>
   {% if recent %}
   <div style="overflow-x:auto">
@@ -173,7 +225,7 @@
       {% for r in recent %}
       <tr>
         <td class="mono">{{ r.date }}</td>
-        <td class="mono">{{ r.asset }}</td>
+        <td class="mono"><a href="/analyst?asset={{ r.asset }}">{{ r.asset }}</a></td>
         <td class="mono dim">{{ r.horizon }}d</td>
         <td>{{ r.direction }}</td>
         <td class="mono">{{ r.conviction }}</td>

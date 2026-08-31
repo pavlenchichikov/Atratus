@@ -1450,3 +1450,43 @@ def test_the_page_and_the_command_line_share_one_verdict():
     st["control"]["survives_shuffle"] = False
     st["agent"]["beats"] = ["zero", "empirical", "ensemble"]
     assert sc.verdict(st, 500)["verdict"] == "SHIP"
+
+
+def test_the_analyst_page_can_show_one_asset_at_a_time(client, monkeypatch):
+    """The card says SHORT on SBER; the question that follows is what this agent
+    said about SBER before and how it ended. The all-assets table cannot answer
+    that, and the log has 32 judgments over 31 names."""
+    from core.analyst import store
+
+    rows = [
+        {"date": "2026-08-26", "asset": "SBER", "horizon": 1, "direction": "up",
+         # up, and the price fell: a MISS, so the rate below is 1 of 2 rather
+         # than 2 of 2 and the hit logic has to actually discriminate.
+         "conviction": 4, "forecast_pct": -0.003, "realized_ret": -0.01,
+         "abs_err_atr": 0.4, "thesis": "near the floor", "key_risk": "gap",
+         "inside_interval": 1, "vol_regime": "calm", "evidence_json": "[]"},
+        {"date": "2026-08-29", "asset": "SBER", "horizon": 1, "direction": "down",
+         "conviction": 2, "forecast_pct": 0.004, "realized_ret": -0.002,
+         "abs_err_atr": 0.2, "thesis": "grinding lower", "key_risk": "dividend",
+         "inside_interval": 1, "vol_regime": "calm", "evidence_json": "[]"},
+        {"date": "2026-08-29", "asset": "BTC", "horizon": 1, "direction": "up",
+         "conviction": 3, "forecast_pct": 0.01, "realized_ret": 0.02,
+         "abs_err_atr": 0.1, "thesis": "n/a", "key_risk": "",
+         "inside_interval": 1, "vol_regime": "calm", "evidence_json": "[]"},
+    ]
+    monkeypatch.setattr(store, "scored_rows", lambda *a, **k: rows)
+    monkeypatch.setattr(store, "pending_count", lambda *a, **k: 0)
+
+    body = client.get("/analyst?asset=SBER").text
+    # both SBER calls, newest first, and the hit rate over the directional ones
+    assert "grinding lower" in body and "near the floor" in body
+    assert "1 of 2" in body, "the per-asset hit rate is missing"
+    # and not the other asset's row
+    assert body.count(">BTC<") <= 2, "BTC leaked into the SBER slice"
+
+    empty = client.get("/analyst?asset=NOSUCH").text
+    assert "Nothing scored for" in empty
+
+    plain = client.get("/analyst").text
+    assert "One asset at a time" in plain
+    assert 'href="/analyst?asset=SBER"' in plain, "no way to reach the slice"
