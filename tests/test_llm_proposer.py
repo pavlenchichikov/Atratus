@@ -513,3 +513,79 @@ class TestCredentials:
         with pytest.raises(Exception) as e:
             lp._call_ollama("hi")
         assert not isinstance(e.value, lp.ProviderUnavailable), e.value
+
+
+class TestTerminalErrors:
+    class _Resp:
+        status_code = 400
+
+        @staticmethod
+        def json():
+            return {"type": "error", "error": {
+                "type": "invalid_request_error",
+                "message": "Your credit balance is too low to access the "
+                           "Anthropic API."}}
+
+    class _Status(Exception):
+        """What an SDK status error looks like: a useless str(), a useful body.
+
+        The real one stringifies as "Connection error." while the response says
+        the balance is empty, which is exactly how the diagnosis was lost.
+        """
+
+        status_code = 400
+        response = None
+
+        def __str__(self):
+            return "Connection error."
+
+    def _boom(self):
+        exc = self._Status()
+        exc.response = self._Resp()
+        return exc
+
+    def test_the_providers_own_message_survives(self):
+        assert "credit balance" in lp._api_detail(self._boom())
+
+    def test_a_terminal_status_is_not_retried_and_is_not_a_refusal(self,
+                                                                   monkeypatch):
+        """Eighteen calls went out for one empty wallet: three SDK retries
+        inside three loop attempts inside two judge attempts."""
+        calls = []
+        exc = self._boom()
+
+        class _Client:
+            class messages:
+                @staticmethod
+                def create(**_kw):
+                    calls.append(1)
+                    raise exc
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        fake = types.SimpleNamespace(Anthropic=lambda *a, **k: _Client())
+        monkeypatch.setitem(sys.modules, "anthropic", fake)
+        with pytest.raises(lp.ProviderUnavailable) as e:
+            lp._call_anthropic("hi")
+        assert len(calls) == 1, "a deterministic 400 was retried"
+        assert "credit balance" in str(e.value) and "400" in str(e.value)
+
+    def test_a_retryable_failure_still_gets_its_three_attempts(self,
+                                                              monkeypatch):
+        """The positive control. 429 and a dropped connection are exactly the
+        cases the loop exists for, and they must not be swept up by this."""
+        calls = []
+
+        class _Client:
+            class messages:
+                @staticmethod
+                def create(**_kw):
+                    calls.append(1)
+                    raise RuntimeError("connection reset")
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        fake = types.SimpleNamespace(Anthropic=lambda *a, **k: _Client())
+        monkeypatch.setitem(sys.modules, "anthropic", fake)
+        with pytest.raises(RuntimeError) as e:
+            lp._call_anthropic("hi")
+        assert not isinstance(e.value, lp.ProviderUnavailable)
+        assert len(calls) == 3

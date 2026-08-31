@@ -182,6 +182,56 @@ def _require_key(var, provider):
         "needs no key at all." % (provider, var))
 
 
+# 4xx that will read exactly the same on the next attempt: a bad request, a
+# rejected key, a model this account cannot use, an empty wallet. 429 and 408
+# are deliberately absent - those DO deserve a retry.
+_TERMINAL_STATUS = (400, 401, 403, 404, 405, 413, 422)
+
+
+def _api_detail(exc):
+    """The provider's own words for a failed call, or None.
+
+    Worth extracting rather than str(exc) because the SDKs stringify a status
+    error as "Connection error." while the body says "Your credit balance is
+    too low to access the Anthropic API". On 2026-08-31 that cost eighteen
+    calls and an hour, and the answer was in the first response.
+    """
+    for attr in ("response", "body"):
+        obj = getattr(exc, attr, None)
+        if obj is None:
+            continue
+        try:
+            data = obj.json() if hasattr(obj, "json") else obj
+            if isinstance(data, dict):
+                err = data.get("error") or data
+                msg = err.get("message") if isinstance(err, dict) else None
+                if msg:
+                    return str(msg)
+        except Exception:
+            text = getattr(obj, "text", None)
+            if text:
+                return str(text)[:300]
+    return None
+
+
+def _raise_if_terminal(exc, provider):
+    """Stop on an error that repeating cannot fix, with the API's own message.
+
+    Raised as ProviderUnavailable for the same reason a missing package and a
+    missing key are: none of the three is the model declining to answer, and
+    counting them as refusals is what made an empty balance look like a
+    judgment the analyst chose not to make.
+    """
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status not in _TERMINAL_STATUS:
+        return
+    raise ProviderUnavailable(
+        "%s refused the request with HTTP %s: %s"
+        % (provider, status, _api_detail(exc) or exc)) from exc
+
+
 def _call_anthropic(prompt):
     """Anthropic SDK. Model via GTRADE_AR_LLM_MODEL (default claude-opus-4-8)."""
     _require_key("ANTHROPIC_API_KEY", "anthropic")
@@ -196,8 +246,10 @@ def _call_anthropic(prompt):
                 messages=[{"role": "user", "content": prompt}])
             return msg.content[0].text.strip()
         except Exception as exc:
+            _raise_if_terminal(exc, "anthropic")
             last_err = exc
-    raise RuntimeError(f"anthropic proposer failed after 3 attempts: {last_err}")
+    raise RuntimeError("anthropic proposer failed after 3 attempts: %s"
+                       % (_api_detail(last_err) or last_err))
 
 
 def _call_openai(prompt):
@@ -221,8 +273,10 @@ def _call_openai(prompt):
                 messages=[{"role": "user", "content": prompt}])
             return resp.choices[0].message.content.strip()
         except Exception as exc:
+            _raise_if_terminal(exc, "openai")
             last_err = exc
-    raise RuntimeError(f"openai proposer failed after 3 attempts: {last_err}")
+    raise RuntimeError("openai proposer failed after 3 attempts: %s"
+                       % (_api_detail(last_err) or last_err))
 
 
 def _llm_timeout():
