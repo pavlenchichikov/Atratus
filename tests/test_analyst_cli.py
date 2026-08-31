@@ -540,12 +540,31 @@ def test_back_judges_one_date_per_pass_oldest_first(monkeypatch):
     assert asked == ["2026-05-04", "2026-05-05", "2026-05-06"], asked
 
 
-def test_recent_dates_excludes_the_last_bar():
-    """Its horizon has not elapsed, so a judgment there could never be scored."""
-    import analyst
-    from core.track_record import ohlc_series
+def test_recent_dates_excludes_the_last_bar(monkeypatch):
+    """Its horizon has not elapsed, so a judgment there could never be scored.
 
-    bars = [b["date"] for b in ohlc_series("SP500", days=60)]
+    Bars are injected. The first version read the real market.db, which passes
+    on a developer machine and fails in CI where there is no database at all:
+    ohlc_series returns nothing and the assertion reads 0 == 5.
+    """
+    import analyst
+    from core import track_record
+
+    bar_dates = ["2026-05-0%d" % d for d in (1, 2, 3, 4, 5, 6, 7)]
+    # `days` is ohlc_series own keyword, so the fixture list cannot be called
+    # that without shadowing it.
+    monkeypatch.setattr(track_record, "ohlc_series",
+                        lambda a, days=0, **k: [{"date": d} for d in bar_dates])
     got = analyst._recent_dates(5)
-    assert len(got) == 5 and got == sorted(got)
-    assert bars[-1] not in got, "the unscoreable last bar was included"
+    assert got == bar_dates[-6:-1], got
+    assert bar_dates[-1] not in got, "the unscoreable last bar was included"
+    assert got == sorted(got), "the sweep has to run oldest first"
+
+
+def test_recent_dates_on_a_machine_with_no_bars_is_empty(monkeypatch):
+    """CI has no market.db. --back must say so rather than judge nothing."""
+    import analyst
+    from core import track_record
+
+    monkeypatch.setattr(track_record, "ohlc_series", lambda *a, **k: [])
+    assert analyst._recent_dates(5) == []
