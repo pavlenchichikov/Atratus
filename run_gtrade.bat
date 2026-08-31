@@ -34,45 +34,46 @@ echo          \____/          signals, levels, and the evidence for both
 echo.
 echo =======================================================
 echo.
-echo  CORE                     ANALYTICS
-echo    [1] Full Cycle           [N] News Analyzer
-echo    [2] Dashboard            [D] News Digest
-echo    [3] Predict (Radar)      [R] Regime Detector
-echo    [WU] Web UI (FastAPI)    [C] Correlation Alert
-echo                             [WL] Watchlist
-echo                             [T] Optuna Tune
-echo  DATA / TRAINING           [P] Paper Trading
-echo    [4] Data Update
-echo    [5] Train Models       REPORTS
-echo    [5C] Train Chunked
-echo    [5R] Retrain chosen assets
-echo    [5F] Fill in / repair champions
-echo    [6] Backtest             [M] Model Health
-echo                             [E] Export Signals CSV
-echo  WHAT-IF SIMULATOR          [L] Signal Log
-echo    [W1] Top-5  90d equal    [H] HTML Report
-echo    [W2] Top-10 90d equal    [Q] Equity Curve
-echo    [W3] Top-5 180d equal  OTHER
-echo    [W4] Top-5  90d Kelly    [B] DB Backup
-echo    [W5] Custom assets       [I] Install/Repair
-echo  SERVICES
-echo    [7] Telegram Bot  [8] Scheduler  [9] DB Audit  [F] DB Fix  [0] EXIT
-echo    [SG] Publish live signals to the site (Supabase)
-echo  GENOME
-echo    [AG] Adopt a genome   [AS] What is adopted   [AR] Revert adoption
-echo    [ABC] Configure a genome A/B     [ABR] Run the configured A/B
-echo  RESEARCH / MAINTENANCE
-echo    [RS] Auto-research agent (own menu)   [LC] Daily loop cycle
-echo    [AN] Analyst agent (payoff forecasts)
+echo  DAILY
+echo    [1] Full Cycle      [3] Predict (Radar)     [4] Data Update
+echo    [2] Dashboard       [WU] Web UI (FastAPI)
+echo.
+echo  TRAINING
+echo    [5] Train Models    [5C] Chunked            [5R] Chosen assets
+echo    [5F] Fill in / repair champions             [T] Optuna Tune
+echo.
+echo  SIGNALS
+echo    [6] Backtest        [M] Model Health        [E] Export CSV
+echo    [L] Signal Log      [H] HTML Report         [Q] Equity Curve
+echo    [SG] Publish live signals to the site
+echo.
+echo  ANALYTICS
+echo    [N] News Analyzer   [D] News Digest         [R] Regime Detector
+echo    [C] Correlation     [WL] Watchlist          [P] Paper Trading
+echo    [W1] Top-5 90d      [W2] Top-10 90d         [W3] Top-5 180d
+echo    [W4] Top-5 Kelly    [W5] Custom assets
+echo.
+echo  RESEARCH
+echo    [RS] Auto-research agent (own menu)         [AN] Analyst agent
 echo    [AL] Autonomous cycle: search, A/B, adopt   [ALS] Its stage / stop it
-echo    [RC] Recalibrate live probabilities   [TP] Fit the timing policy
-echo    [TL] Fit the trade-levels policy (entry zone and stop)
-echo    [PS] Policy results and how they did on LIVE signals
-echo    [TB] Timing: fitted-Q challenger   [TO] Timing: one online tick
-echo    [SZ] Fit the position-sizing rule (at matched exposure)
-echo    [DR] Fit the direction rule on LIVE outcomes (follow / aside / invert)
-echo    [OS] Refit a policy on assets it has never been scored on
-echo    [TR] Timing replay: how often each layer's decision was right
+echo    [LC] Daily loop cycle
+echo.
+echo  POLICIES
+echo    [TP] Timing rules   [TB] Timing: fitted-Q challenger
+echo    [TL] Trade levels   [TO] Timing: one online tick
+echo    [SZ] Position sizing                        [DR] Direction rule
+echo    [RC] Recalibrate live probabilities         [OS] Refit on unscored
+echo    [PS] How the policies did on LIVE signals   [TR] Timing replay
+echo.
+echo  GENOME
+echo    [AG] Adopt          [AS] What is adopted    [AR] Revert
+echo    [ABC] Configure an A/B                      [ABR] Run it
+echo.
+echo  SERVICES
+echo    [7] Telegram Bot    [8] Scheduler           [9] DB Audit
+echo    [F] DB Fix          [B] DB Backup           [I] Install/Repair
+echo.
+echo    [0] EXIT
 echo.
 echo =======================================================
 set /p choice="Select: "

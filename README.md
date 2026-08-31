@@ -37,6 +37,7 @@
 - [Requirements](#requirements)
 - [Environment and GPU](#environment-and-gpu)
 - [Quick start](#quick-start)
+- [The launcher menu](#the-launcher-menu)
 - [Daily use](#daily-use)
 - [Training](#training)
 - [Network](#network)
@@ -667,6 +668,120 @@ streamlit run app.py          # dashboard
 
 `run_gtrade.bat` opens a text menu over all of the above (full cycle, dashboard, web UI, predict, DB audit, and more). `python db_check.py` runs a read-only audit of `market.db` (`--fix` repairs duplicates and date formats). `python scheduler.py` runs as a daemon: data every 6h, predictions every 4h, a daily DB check.
 
+## The launcher menu
+
+`run_gtrade.bat` is the front door. It never activates the GPU environment in the window you are sitting in: every entry that trains something runs through `run_in_env.bat` in a child process, so the menu itself stays on base python and a later serve cannot silently lose its neural champions.
+
+Keys are case-insensitive. Enter on its own at a sub-prompt takes the default shown in brackets.
+
+### DAILY
+
+| Key | Runs | Notes |
+| --- | --- | --- |
+| `1` | `data_engine.py`, then `train_hybrid.py`, then `predict.py` | The whole cycle. Hours. |
+| `2` | `streamlit run app.py` | The Streamlit dashboard. |
+| `3` | `predict.py` | Scores every asset and writes `prediction_log`. |
+| `4` | `data_engine.py` | Today's bars only. |
+| `WU` | `uvicorn webapp:app --port 8000` | The FastAPI web UI, opened on the dashboard. |
+
+### TRAINING
+
+| Key | Runs | Notes |
+| --- | --- | --- |
+| `5` | `train_hybrid.py` | Every asset in one process. |
+| `5C` | `train_chunked.py` | One fresh process per chunk, resumable, champion-challenger. |
+| `5R` | `train_hybrid.py` on a named list | Asks which assets, and whether to force-promote. |
+| `5F` | `model_health.py --list`, then `train_chunked.py` | Asks: fill in assets with no champion, repair degraded ones, or both. |
+| `T` | `optuna_tune.py` | Per-asset hyperparameter search. |
+
+### SIGNALS
+
+| Key | Runs | Notes |
+| --- | --- | --- |
+| `6` | `backtest.py` | |
+| `M` | `model_health.py` | Champion inventory and generations. |
+| `E` | `export_signals.py` | CSV. |
+| `L` | `signal_log.py` | |
+| `H` | `performance_report.py` | HTML. |
+| `Q` | `equity_curve.py` | |
+| `SG` | `push_signals.py` | Publishes the latest snapshot to Supabase for the landing site. |
+
+### ANALYTICS
+
+| Key | Runs | Notes |
+| --- | --- | --- |
+| `N` | `news_analyzer.py` | |
+| `D` | `news_analyzer.py --digest` | |
+| `R` | `regime_detector.py` | Trend, volatility and momentum per asset, plus market breadth. |
+| `C` | `correlation_alert.py` | Cross-asset correlation and the stress reading. |
+| `WL` | `watchlist.py` | |
+| `P` | `paper_trading.py` | |
+| `W1` to `W4` | `whatif_simulator.py` with fixed presets | Top-5 or top-10, 90 or 180 days, equal or Kelly weights. |
+| `W5` | `whatif_simulator.py` | Asks for assets, days and capital. |
+
+### RESEARCH
+
+| Key | Runs | Notes |
+| --- | --- | --- |
+| `RS` | `auto_research.bat` | Its own menu. See below. |
+| `AN` | `analyst.py` | Its own menu. See below. |
+| `AL` | `auto_loop.py` | The unattended search, A/B and adopt cycle. Its own questions. See below. |
+| `ALS` | `auto_loop.py --status` | Asks whether to also stop the loop. |
+| `LC` | `loop_cycle.py` | One daily maintenance pass. |
+
+### POLICIES
+
+| Key | Runs | Notes |
+| --- | --- | --- |
+| `TP` | `train_timing.py` | Fits the Stage-A timing rules. |
+| `TB` | `train_timing.py --stage b` | The fitted-Q challenger. Asks the number of Q iterations. |
+| `TO` | `train_timing_online.py` | One online tick. Asks the self-collection share. |
+| `TL` | `train_levels.py` | Entry zone and stop. Asks the search budget. |
+| `SZ` | `train_sizing.py` | Position sizing at matched exposure. Asks the budget. |
+| `DR` | `train_direction.py` | Follow, stand aside or invert, fitted on LIVE outcomes. Asks how many days. |
+| `RC` | `recalibrate_live.py` | Recalibrates live probabilities. |
+| `OS` | `train_timing.py`, `train_sizing.py` or `train_levels.py` | Refits one policy on assets it was never scored on. Asks which, which assets, and the budget. |
+| `PS` | `policy_status.py` | How the fitted policies did on LIVE signals. Asks how many days. |
+| `TR` | `train_timing.py --replay` | How often each layer's decision was right. Asks which assets. |
+
+### GENOME
+
+| Key | Runs | Notes |
+| --- | --- | --- |
+| `AG` | `adopt_genome.py` | Adopt a genome. |
+| `AS` | `adopt_genome.py --show` | What is adopted right now. |
+| `AR` | `adopt_genome.py --revert` | Revert the adoption. |
+| `ABC` | `ab_build.py` | Configures an A/B. |
+| `ABR` | `ab_build.py --run` | Runs the configured one. |
+
+### SERVICES
+
+| Key | Runs | Notes |
+| --- | --- | --- |
+| `7` | `alert_bot.py` | Telegram bot, runs until stopped. |
+| `8` | `scheduler.py` | Daemon: data every 6h, predictions every 4h, a daily DB check. |
+| `9` | `db_check.py` | Read-only audit of `market.db`. |
+| `F` | `db_check.py --fix` | Repairs duplicates and date formats. |
+| `B` | `db_backup.py` | |
+| `I` | `pip install ...` | Install or repair the dependency set. |
+| `0` | | Exit. |
+
+### The submenus
+
+**`[RS]` auto-research.** Hands over to `auto_research.bat`, which asks, in order: the action (search for new candidates, or re-gate stored ones); the mode (`qd`, features, labeling, model levers, or a custom axes list); the label for the run; the proposer (evolutionary, or an LLM through Ollama, Anthropic or OpenAI); the budget in new genomes; the objective; the score basis; the wiki; and the RL scheduler.
+
+The answer that matters most is the score basis. On a net basis (`net_auc`, `net_gain`, `ens_auc`) the screen switches off and the illumination trains real nets, so the basis decides which genomes become elites. On `raw` or `neural` the search illuminates on the CatBoost-only screen and the basis only re-scores the final gate. Load settings are not asked: they are derived from the campaign, and they are not part of the eval-cache key, so changing them between runs would compare a cached base against differently trained candidates.
+
+**`[AL]` autonomous cycle.** Runs search, A/B and adopt until something is adopted or you stop it, and stops before the retrain. It asks whether to continue the current campaign or start a new one; a new one then asks the score basis, the illumination, the objective, the decision basis and the gate size. Those are frozen for the campaign on purpose: choosing them after seeing a verdict is a search for a verdict that passes rather than a measurement. Then the director, the proposer, the wiki, the iterations per cycle, and a deadline in hours.
+
+**`[AN]` analyst agent.** Score, backfill outcomes, refit the payoff table, run one judgment per eligible asset, or open the web UI on the analyst page. The run option asks for assets, the LLM provider and model, and a typed `YES`, because it spends one model call per asset.
+
+**`[5F]` fill in / repair champions.** Asks whether to fill in assets that never had a champion, repair the ones whose neural champion does not load here, or both. Force-promote is on for the repair half, which needs it.
+
+**`[TO]` one online tick.** Asks the self-collection share: how much of the transition buffer is generated by the current accepted Q instead of by the rules. Whatever you pick, agreement is still measured against the rules, so only the data moves and never the trust region.
+
+**`[OS]` refit on unscored assets.** Asks which policy, which assets, and the search budget.
+
 ## Daily use
 
 Two commands, in this order, every trading day:
@@ -1047,6 +1162,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 - [Требования](#требования)
 - [Окружение и GPU](#окружение-и-gpu)
 - [Быстрый старт](#быстрый-старт)
+- [Меню лаунчера](#меню-лаунчера)
 - [Ежедневная работа](#ежедневная-работа)
 - [Обучение](#обучение)
 - [Сеть](#сеть)
@@ -1638,6 +1754,120 @@ streamlit run app.py          # дашборд
 ```
 
 `run_gtrade.bat` открывает текстовое меню над всем вышеперечисленным (полный цикл, дашборд, веб-интерфейс, predict, аудит БД и не только). `python db_check.py` гоняет read-only аудит `market.db` (`--fix` чинит дубликаты и форматы дат). `python scheduler.py` работает демоном: данные каждые 6ч, предсказания каждые 4ч, ежедневная проверка БД.
+
+## Меню лаунчера
+
+`run_gtrade.bat` это главная дверь. Он никогда не активирует GPU-окружение в том окне, где ты сидишь: каждый пункт, который что-то обучает, идёт через `run_in_env.bat` в дочернем процессе, поэтому само меню остаётся на базовом python, и последующая раздача сигналов не потеряет молча нейронных чемпионов.
+
+Регистр клавиш не важен. Enter на подвопросе берёт значение в скобках.
+
+### DAILY
+
+| Клавиша | Запускает | Примечание |
+| --- | --- | --- |
+| `1` | `data_engine.py`, затем `train_hybrid.py`, затем `predict.py` | Полный цикл. Часы. |
+| `2` | `streamlit run app.py` | Дашборд на Streamlit. |
+| `3` | `predict.py` | Считает все активы и пишет `prediction_log`. |
+| `4` | `data_engine.py` | Только сегодняшние бары. |
+| `WU` | `uvicorn webapp:app --port 8000` | Веб-интерфейс на FastAPI, открывается на дашборде. |
+
+### TRAINING
+
+| Клавиша | Запускает | Примечание |
+| --- | --- | --- |
+| `5` | `train_hybrid.py` | Все активы одним процессом. |
+| `5C` | `train_chunked.py` | По свежему процессу на чанк, с возобновлением, чемпион против претендента. |
+| `5R` | `train_hybrid.py` по списку | Спрашивает активы и нужно ли форсировать промоушен. |
+| `5F` | `model_health.py --list`, затем `train_chunked.py` | Спрашивает: добрать активы без чемпиона, починить деградировавших, или и то и другое. |
+| `T` | `optuna_tune.py` | Поиск гиперпараметров по активам. |
+
+### SIGNALS
+
+| Клавиша | Запускает | Примечание |
+| --- | --- | --- |
+| `6` | `backtest.py` | |
+| `M` | `model_health.py` | Инвентарь чемпионов и поколений. |
+| `E` | `export_signals.py` | CSV. |
+| `L` | `signal_log.py` | |
+| `H` | `performance_report.py` | HTML. |
+| `Q` | `equity_curve.py` | |
+| `SG` | `push_signals.py` | Публикует свежий снимок в Supabase для лендинга. |
+
+### ANALYTICS
+
+| Клавиша | Запускает | Примечание |
+| --- | --- | --- |
+| `N` | `news_analyzer.py` | |
+| `D` | `news_analyzer.py --digest` | |
+| `R` | `regime_detector.py` | Тренд, волатильность и моментум по активу плюс ширина рынка. |
+| `C` | `correlation_alert.py` | Кросс-корреляция и индикатор стресса. |
+| `WL` | `watchlist.py` | |
+| `P` | `paper_trading.py` | |
+| `W1` до `W4` | `whatif_simulator.py` с фиксированными пресетами | Топ-5 или топ-10, 90 или 180 дней, равные веса или Келли. |
+| `W5` | `whatif_simulator.py` | Спрашивает активы, дни и капитал. |
+
+### RESEARCH
+
+| Клавиша | Запускает | Примечание |
+| --- | --- | --- |
+| `RS` | `auto_research.bat` | Своё меню, см. ниже. |
+| `AN` | `analyst.py` | Своё меню, см. ниже. |
+| `AL` | `auto_loop.py` | Автономный цикл поиска, A/B и адопта. Свои вопросы, см. ниже. |
+| `ALS` | `auto_loop.py --status` | Спрашивает, останавливать ли цикл. |
+| `LC` | `loop_cycle.py` | Один суточный проход обслуживания. |
+
+### POLICIES
+
+| Клавиша | Запускает | Примечание |
+| --- | --- | --- |
+| `TP` | `train_timing.py` | Фитит правила тайминга (Stage A). |
+| `TB` | `train_timing.py --stage b` | Fitted-Q претендент. Спрашивает число итераций Q. |
+| `TO` | `train_timing_online.py` | Один онлайн-тик. Спрашивает долю самосбора. |
+| `TL` | `train_levels.py` | Зона входа и стоп. Спрашивает бюджет поиска. |
+| `SZ` | `train_sizing.py` | Размер позиции при сопоставимой экспозиции. Спрашивает бюджет. |
+| `DR` | `train_direction.py` | Следовать, воздержаться или инвертировать, по ЖИВЫМ исходам. Спрашивает число дней. |
+| `RC` | `recalibrate_live.py` | Перекалибровка живых вероятностей. |
+| `OS` | `train_timing.py`, `train_sizing.py` или `train_levels.py` | Переобучает политику на активах, где её никогда не оценивали. Спрашивает какую, какие активы и бюджет. |
+| `PS` | `policy_status.py` | Как политики отработали на ЖИВЫХ сигналах. Спрашивает число дней. |
+| `TR` | `train_timing.py --replay` | Как часто решение каждого слоя было верным. Спрашивает активы. |
+
+### GENOME
+
+| Клавиша | Запускает | Примечание |
+| --- | --- | --- |
+| `AG` | `adopt_genome.py` | Принять геном. |
+| `AS` | `adopt_genome.py --show` | Что принято сейчас. |
+| `AR` | `adopt_genome.py --revert` | Откатить принятое. |
+| `ABC` | `ab_build.py` | Настраивает A/B. |
+| `ABR` | `ab_build.py --run` | Запускает настроенный. |
+
+### SERVICES
+
+| Клавиша | Запускает | Примечание |
+| --- | --- | --- |
+| `7` | `alert_bot.py` | Телеграм-бот, работает до остановки. |
+| `8` | `scheduler.py` | Демон: данные каждые 6ч, предсказания каждые 4ч, суточная проверка БД. |
+| `9` | `db_check.py` | Аудит `market.db` только на чтение. |
+| `F` | `db_check.py --fix` | Чинит дубли и форматы дат. |
+| `B` | `db_backup.py` | |
+| `I` | `pip install ...` | Установка или починка зависимостей. |
+| `0` | | Выход. |
+
+### Подменю
+
+**`[RS]` авто-исследование.** Передаёт управление `auto_research.bat`, который спрашивает по порядку: действие (искать новых кандидатов или перегейтить сохранённых); режим (`qd`, признаки, разметка, рычаги модели или свой список осей); метку прогона; предлагателя (эволюционный или LLM через Ollama, Anthropic, OpenAI); бюджет в новых геномах; целевую функцию; базис счёта; вики; и RL-планировщик.
+
+Самый важный ответ это базис счёта. На net-базисе (`net_auc`, `net_gain`, `ens_auc`) скрин выключается, а иллюминация тренирует настоящие сети, поэтому базис решает, какие геномы становятся элитами. На `raw` и `neural` поиск иллюминируется CatBoost-скрином, и базис пересчитывает только финальный гейт. Про мощность вопроса нет: она выводится из кампании и не входит в ключ кеша оценок, так что её смена между прогонами сравнивала бы закешированную базу с иначе обученными кандидатами.
+
+**`[AL]` автономный цикл.** Гоняет поиск, A/B и адопт, пока что-то не примется или пока ты не остановишь, и останавливается перед переобучением. Спрашивает, продолжать текущую кампанию или начать новую; для новой затем базис счёта, иллюминацию, целевую функцию, базис решения и размер гейта. Они заморожены на кампанию намеренно: выбирать их после вердикта значит искать вердикт, который пройдёт, а не измерять. Дальше директор, предлагатель, вики, итерации на цикл и дедлайн в часах.
+
+**`[AN]` аналитический агент.** Скор, бэкфилл исходов, переобучение таблицы выплат, одно суждение на подходящий актив, или веб-интерфейс на странице аналитика. Пункт запуска спрашивает активы, провайдера и модель LLM и требует набрать `YES`, потому что тратит по одному вызову модели на актив.
+
+**`[5F]` добрать и починить чемпионов.** Спрашивает: добрать активы, у которых чемпиона никогда не было, починить тех, чей нейронный чемпион здесь не грузится, или и то и другое. Для второй половины форс-промоушен включён, ей он нужен.
+
+**`[TO]` один онлайн-тик.** Спрашивает долю самосбора: какая часть буфера переходов порождается текущим принятым Q, а не правилами. Что бы ты ни выбрал, согласие всё равно меряется с правилами, то есть двигаются только данные, а не траст-регион.
+
+**`[OS]` переобучение на неоценённых активах.** Спрашивает политику, активы и бюджет поиска.
 
 ## Ежедневная работа
 
