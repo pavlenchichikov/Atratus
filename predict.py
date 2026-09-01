@@ -149,6 +149,8 @@ def run_radar():
                     log_prediction(name, res["sig_raw"], res["prob_raw"],
                                    cb_prob=res["cb_prob"], lstm_prob=res["lstm_prob"],
                                    meta_prob=res["meta_prob"],
+                                   tf_prob=res.get("tf_prob"),
+                                   tcn_prob=res.get("tcn_prob"),
                                    sig_shown=res["sig"], gate_reason=res["gate_reason"],
                                    timing_action=res.get("timing_action"),
                                    timing_stage=res.get("timing_stage"),

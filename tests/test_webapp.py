@@ -1490,3 +1490,78 @@ def test_the_analyst_page_can_show_one_asset_at_a_time(client, monkeypatch):
     plain = client.get("/analyst").text
     assert "One asset at a time" in plain
     assert 'href="/analyst?asset=SBER"' in plain, "no way to reach the slice"
+
+
+def test_confidence_bands_can_tell_an_ordering_from_a_flat_one(tmp_path):
+    """The panel exists because the live number orders nothing: 7929 verified
+    signals, spearman +0.013 at p=0.25. A panel that cannot distinguish that
+    from a real ordering would just be a second decoration.
+
+    Both halves matter. The flat half is the live case; the ordered half is the
+    positive control, without which "unknown" everywhere would pass."""
+    import sqlite3
+
+    from core import track_record as tr
+
+    def build(name, pairs):
+        db = str(tmp_path / name)
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE prediction_log (date TEXT, asset TEXT, "
+                    "signal TEXT, probability REAL, actual_next_ret REAL, "
+                    "correct INTEGER)")
+        con.executemany(
+            "INSERT INTO prediction_log VALUES ('2026-01-01','A','BUY',?,?,?)",
+            [(p, 0.01 if c else -0.01, c) for p, c in pairs])
+        con.commit(); con.close()
+        return db
+
+    # genuinely flat: each confidence level is right half the time. The
+    # first draft tied correctness TO the level and was perfectly
+    # inverted, which the panel duly reported.
+    flat = ([(0.52, i % 2) for i in range(200)]
+            + [(0.95, i % 2) for i in range(200)])
+    d = tr.confidence_bands(db_path=build("flat.db", flat))
+    assert d["n"] == 400 and d["informative"] == "unknown", d
+
+    ordered = [(0.95, 1) for _ in range(200)] + [(0.52, 0) for _ in range(200)]
+    d = tr.confidence_bands(db_path=build("ord.db", ordered))
+    assert d["informative"] == "yes" and d["rho"] > 0.5, d
+
+    inverted = [(0.95, 0) for _ in range(200)] + [(0.52, 1) for _ in range(200)]
+    d = tr.confidence_bands(db_path=build("inv.db", inverted))
+    assert d["informative"] == "INVERTED", d
+
+
+def test_confidence_bands_report_payoff_not_only_hits(tmp_path):
+    """Being right and making money are different questions. On the live log
+    the side answers the second (BUY -0.146%, SELL +0.092%) and confidence
+    answers neither, so a hit-rate-only panel would hide half the answer."""
+    import sqlite3
+
+    from core import track_record as tr
+
+    db = str(tmp_path / "pay.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE prediction_log (date TEXT, asset TEXT, "
+                "signal TEXT, probability REAL, actual_next_ret REAL, "
+                "correct INTEGER)")
+    # a SELL that was right earns the NEGATIVE of the raw return
+    con.executemany("INSERT INTO prediction_log VALUES ('2026-01-01','A',?,?,?,?)",
+                    [("SELL", 0.05, -0.02, 1)] * 60)
+    con.commit(); con.close()
+    d = tr.confidence_bands(db_path=db)
+    assert d["hit"] == 1.0
+    assert d["payoff"] > 0, "a winning short was scored as a loss"
+
+
+def test_a_database_without_the_column_returns_an_empty_panel(tmp_path):
+    import sqlite3
+
+    from core import track_record as tr
+
+    db = str(tmp_path / "old.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE prediction_log (date TEXT, asset TEXT, "
+                "signal TEXT, probability REAL, correct INTEGER)")
+    con.commit(); con.close()
+    assert tr.confidence_bands(db_path=db, source="meta_prob")["n"] == 0

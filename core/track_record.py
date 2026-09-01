@@ -154,6 +154,88 @@ def latest_gated(asset: str, db_path=None) -> dict:
                 "shadow_action": s_act}
 
 
+CONFIDENCE_BANDS = ((0.00, 0.05), (0.05, 0.10), (0.10, 0.15),
+                    (0.15, 0.25), (0.25, 0.50))
+
+
+def confidence_bands(db_path=None, source="probability", days=None):
+    """Does a more confident signal land more often, and earn more?
+
+    `source` names the column the confidence is read from, so a candidate
+    definition can be measured the same way the current one is: `probability`
+    is the served ensemble number, `meta_prob` the stacker's.
+
+    Confidence is |p - 0.5|, which is what the card draws. Measured on the live
+    log 2026-09-01 over 7929 verified directional predictions it carried
+    nothing: spearman(confidence, correct) +0.013 at p=0.25, and against the
+    PAYOFF +0.008 at p=0.50, with the most confident band of 2077 signals
+    landing 0.483 against 0.495 for the band below it. A number on the card
+    that orders nothing is decoration, so this is the panel that says so.
+
+    Payoff, not just hit rate: being right and making money are different
+    questions, and on this log the side answers the second one (BUY -0.146%,
+    SELL +0.092%) while confidence answers neither.
+    """
+    with _connect(db_path) as con:
+        if source not in _plog_cols(con):
+            return {"source": source, "n": 0, "bands": [], "rho": None,
+                    "p": None, "hit": None, "payoff": None}
+        where = "correct IS NOT NULL AND signal IN ('BUY','SELL')"
+        args = []
+        if days:
+            where += " AND date >= date('now', ?)"
+            args.append("-%d days" % int(days))
+        try:
+            rows = con.execute(
+                "SELECT %s, correct, signal, actual_next_ret FROM prediction_log "
+                "WHERE %s" % (source, where), args).fetchall()
+        except sqlite3.OperationalError:
+            return {"source": source, "n": 0, "bands": [], "rho": None,
+                    "p": None, "hit": None, "payoff": None}
+
+    data = []
+    for p, correct, sig, ret in rows:
+        if p is None or correct is None:
+            continue
+        pay = None if ret is None else (ret if sig == "BUY" else -ret)
+        data.append((abs(float(p) - 0.5), int(correct), pay))
+    if not data:
+        return {"source": source, "n": 0, "bands": [], "rho": None,
+                "p": None, "hit": None, "payoff": None}
+
+    bands = []
+    for lo, hi in CONFIDENCE_BANDS:
+        sel = [(c, pay) for conf, c, pay in data if lo <= conf < hi]
+        if not sel:
+            continue
+        pays = [pay for _c, pay in sel if pay is not None]
+        bands.append({
+            "lo": lo, "hi": hi, "n": len(sel),
+            "hit": sum(c for c, _p in sel) / len(sel),
+            "payoff": (sum(pays) / len(pays)) if pays else None,
+        })
+
+    rho = pval = None
+    if len(data) >= 3:
+        try:
+            from scipy.stats import spearmanr
+
+            r, pv = spearmanr([d[0] for d in data], [d[1] for d in data])
+            rho, pval = round(float(r), 4), round(float(pv), 4)
+        except Exception:
+            pass
+    allpay = [d[2] for d in data if d[2] is not None]
+    return {"source": source, "n": len(data), "bands": bands,
+            "rho": rho, "p": pval,
+            "hit": sum(d[1] for d in data) / len(data),
+            "payoff": (sum(allpay) / len(allpay)) if allpay else None,
+            # An ordering claim needs the bands to disagree with each other by
+            # more than their own noise; rho over the raw pairs is the honest
+            # summary and is reported beside them rather than instead of them.
+            "informative": ("unknown" if pval is None or pval >= 0.05
+                            else ("yes" if rho > 0 else "INVERTED"))}
+
+
 def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
     """Signal history for an asset, newest first."""
     with _connect(db_path) as con:
@@ -161,9 +243,12 @@ def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
         # Both timing columns, so a row can say what each policy decided that
         # day and be checked against what the bar then did. Guarded: a database
         # that has only been READ since the upgrade has not migrated them in.
+        # tf_prob and tcn_prob join the same guard: core/scoring.py always
+        # produced them, nothing stored them until 2026-09-01, and a database
+        # that has only been READ since has not migrated them in.
         extra = "".join(
             (", " + name) if name in cols else (", NULL AS " + name)
-            for name in ("timing_action", "shadow_action"))
+            for name in ("timing_action", "shadow_action", "tf_prob", "tcn_prob"))
         try:
             rows = con.execute(
                 "SELECT date, signal, probability, actual_next_ret, correct, "
@@ -177,8 +262,9 @@ def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
             {"date": d, "signal": s, "probability": p,
              "actual_next_ret": r, "correct": c,
              "cb_prob": cb, "lstm_prob": lstm,
+             "tf_prob": tf, "tcn_prob": tcn,
              "timing_action": t_act, "shadow_action": s_act}
-            for d, s, p, r, c, cb, lstm, t_act, s_act in rows
+            for d, s, p, r, c, cb, lstm, t_act, s_act, tf, tcn in rows
         ]
 
 

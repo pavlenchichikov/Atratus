@@ -452,3 +452,74 @@ def test_level_outcomes_summarises_resolved_rows(tmp_path):
 def test_level_outcomes_is_empty_without_a_database(tmp_path):
     import performance_tracker as pt
     assert pt.level_outcomes(db_path=str(tmp_path / "none.db")) == {"rows": []}
+
+
+def test_log_prediction_records_all_four_members(tmp_path, monkeypatch):
+    """core/scoring.py has always returned four member probabilities and only
+    two were stored, so the asset card drew two of the four models the ensemble
+    consults and nothing could measure whether their agreement means anything.
+
+    The legacy half is the point of the second assertion: a row written by the
+    old code keeps NULL rather than a zero, because a zero would read as a
+    member that voted strongly SELL."""
+    import sqlite3
+
+    import performance_tracker as pt
+    db = str(tmp_path / "members.db")
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE btc (Date TEXT, close REAL)")
+    con.execute("INSERT INTO btc VALUES (?, 100.0)", (today,))
+    con.execute("CREATE TABLE eth (Date TEXT, close REAL)")
+    con.execute("INSERT INTO eth VALUES (?, 100.0)", (today,))
+    con.commit()
+    con.close()
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+
+    # two ASSETS, not two calls on one: the log keeps one row per asset per
+    # day, so a second call for BTC would replace the first, not add to it.
+    pt.log_prediction("BTC", "BUY", 0.7, cb_prob=0.71, lstm_prob=0.60,
+                      tf_prob=0.55, tcn_prob=0.62)
+    pt.log_prediction("ETH", "SELL", 0.3, cb_prob=0.29, lstm_prob=0.40)
+
+    con = sqlite3.connect(db)
+    rows = con.execute("SELECT signal, cb_prob, lstm_prob, tf_prob, tcn_prob "
+                       "FROM prediction_log ORDER BY signal").fetchall()
+    con.close()
+    assert len(rows) == 2, rows
+    buy = next(r for r in rows if r[0] == "BUY")
+    assert abs(buy[3] - 0.55) < 1e-9 and abs(buy[4] - 0.62) < 1e-9
+    sell = next(r for r in rows if r[0] == "SELL")
+    assert sell[3] is None and sell[4] is None, "an unknown member became a vote"
+
+
+def test_an_old_prediction_log_gains_the_member_columns(tmp_path, monkeypatch):
+    """The live database has 7929 rows written before the columns existed and
+    must not need a hand-run ALTER while the radar holds it."""
+    import sqlite3
+
+    import performance_tracker as pt
+    db = str(tmp_path / "legacy.db")
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE btc (Date TEXT, close REAL)")
+    con.execute("INSERT INTO btc VALUES (?, 100.0)", (today,))
+    con.execute("CREATE TABLE prediction_log (date TEXT, asset TEXT, "
+                "signal TEXT, probability REAL, actual_next_ret REAL, "
+                "correct INTEGER, cb_prob REAL, lstm_prob REAL)")
+    con.execute("INSERT INTO prediction_log VALUES "
+                "('2026-01-01','BTC','BUY',0.6,NULL,NULL,0.6,0.6)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+
+    pt.log_prediction("BTC", "BUY", 0.7, tf_prob=0.55, tcn_prob=0.62)
+    con = sqlite3.connect(db)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(prediction_log)")}
+    legacy = con.execute("SELECT tf_prob FROM prediction_log "
+                         "WHERE date='2026-01-01'").fetchone()[0]
+    con.close()
+    assert {"tf_prob", "tcn_prob"} <= cols
+    assert legacy is None, "the migration invented a value for an old row"

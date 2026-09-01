@@ -133,3 +133,7 @@ _repair_list.txt
 
 # Search-gate list handed from ab_build to the launcher.
 _search_gate.txt
+
+# Held patches: work prepared while a training run is in flight, applied by
+# hand once it ends. Local by nature, like the ab_* harnesses.
+*.patch

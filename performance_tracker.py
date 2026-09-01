@@ -58,6 +58,14 @@ def _migrate(cur):
     # acted on is how a watched challenger quietly becomes the live one.
     if cols and "shadow_action" not in cols:
         cur.execute("ALTER TABLE prediction_log ADD COLUMN shadow_action TEXT")
+    # core/scoring.py has ALWAYS returned all four member probabilities and
+    # only two were ever stored, so the asset card could show two of the four
+    # models the ensemble consults and nothing could measure whether the
+    # members agreeing with each other means anything. Rows written before
+    # 2026-09-01 keep NULL, which the card and the reader both handle.
+    for _member in ('tf_prob', 'tcn_prob'):
+        if cols and _member not in cols:
+            cur.execute('ALTER TABLE prediction_log ADD COLUMN %s REAL' % _member)
 
 
 def _ensure_table(cur):
@@ -78,7 +86,9 @@ def _ensure_table(cur):
             timing_action TEXT,
             timing_reason TEXT,
             timing_stage TEXT,
-            shadow_action TEXT
+            shadow_action TEXT,
+            tf_prob REAL,
+            tcn_prob REAL
         )
     """)
     _migrate(cur)
@@ -108,7 +118,8 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                    model_version=None, meta_prob=None, date=None,
                    sig_shown=None, gate_reason=None,
                    timing_action=None, timing_reason=None,
-                   timing_stage=None, shadow_action=None):
+                   timing_stage=None, shadow_action=None,
+                   tf_prob=None, tcn_prob=None):
     # Date the prediction by the wall clock (one row per asset per day). Non-trading
     # days for an asset (a stock predicted on a weekend/holiday) are not stamped onto
     # a neighbouring bar here; update_actuals() reconciles only exact trading-bar dates
@@ -137,11 +148,13 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
             """INSERT INTO prediction_log
                (date, asset, signal, probability, actual_next_ret, correct,
                 cb_prob, lstm_prob, model_version, meta_prob, sig_shown, gate_reason,
-                timing_action, timing_reason, timing_stage, shadow_action)
-               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                timing_action, timing_reason, timing_stage, shadow_action,
+                tf_prob, tcn_prob)
+               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (today, asset, signal, probability, cb_prob, lstm_prob,
              model_version, meta_prob, sig_shown, gate_reason,
-             timing_action, timing_reason, timing_stage, shadow_action),
+             timing_action, timing_reason, timing_stage, shadow_action,
+             tf_prob, tcn_prob),
         )
         con.commit()
 
