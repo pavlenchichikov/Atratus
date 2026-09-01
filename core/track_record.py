@@ -176,6 +176,8 @@ def confidence_bands(db_path=None, source="probability", days=None):
     questions, and on this log the side answers the second one (BUY -0.146%,
     SELL +0.092%) while confidence answers neither.
     """
+    if source == "agreement":
+        return _agreement_bands(db_path=db_path, days=days)
     with _connect(db_path) as con:
         if source not in _plog_cols(con):
             return {"source": source, "n": 0, "bands": [], "rho": None,
@@ -203,9 +205,13 @@ def confidence_bands(db_path=None, source="probability", days=None):
         return {"source": source, "n": 0, "bands": [], "rho": None,
                 "p": None, "hit": None, "payoff": None}
 
+    # Bucketed through _band_of, which puts the top edge INSIDE the last band.
+    # The half-open loop this replaces dropped every row at exactly p=0 or p=1,
+    # 682 of the live log's 7929, and dropped them silently: the panel showed a
+    # smaller n and nobody could see which rows were missing.
     bands = []
     for lo, hi in CONFIDENCE_BANDS:
-        sel = [(c, pay) for conf, c, pay in data if lo <= conf < hi]
+        sel = [(c, pay) for conf, c, pay in data if _band_of(0.5 + conf) == (lo, hi)]
         if not sel:
             continue
         pays = [pay for _c, pay in sel if pay is not None]
@@ -234,6 +240,161 @@ def confidence_bands(db_path=None, source="probability", days=None):
             # summary and is reported beside them rather than instead of them.
             "informative": ("unknown" if pval is None or pval >= 0.05
                             else ("yes" if rho > 0 else "INVERTED"))}
+
+
+def _agreement_bands(db_path=None, days=None):
+    """confidence_bands for the CANDIDATE definition: the members agreeing.
+
+    Mapped onto the same 0 to 0.5 scale the probability bands use, so the two
+    definitions are read off one table: confidence = 0.5 * (1 - spread), which
+    is 0.5 when all four members say the same thing and 0 when they span the
+    whole range.
+
+    Returns n=0 until rows carry at least three members. Every row written
+    before 2026-09-01 has two, so this measures nothing yet BY CONSTRUCTION,
+    and reporting n rather than a rate is the point: the machinery is in place
+    and the answer is not available, which is a different thing from a flat
+    result.
+    """
+    with _connect(db_path) as con:
+        cols = _plog_cols(con)
+        if not {"tf_prob", "tcn_prob"} <= set(cols):
+            return {"source": "agreement", "n": 0, "bands": [], "rho": None,
+                    "p": None, "hit": None, "payoff": None,
+                    "informative": "unknown"}
+        where = "correct IS NOT NULL AND signal IN ('BUY','SELL')"
+        args = []
+        if days:
+            where += " AND date >= date('now', ?)"
+            args.append("-%d days" % int(days))
+        rows = con.execute(
+            "SELECT cb_prob, lstm_prob, tf_prob, tcn_prob, correct, signal, "
+            "actual_next_ret FROM prediction_log WHERE " + where, args).fetchall()
+
+    data = []
+    for cb, lstm, tf, tcn, correct, sig, ret in rows:
+        spread = member_spread({"cb_prob": cb, "lstm_prob": lstm,
+                                "tf_prob": tf, "tcn_prob": tcn})
+        if spread is None or correct is None:
+            continue
+        pay = None if ret is None else (ret if sig == "BUY" else -ret)
+        data.append((0.5 * (1.0 - min(1.0, spread)), int(correct), pay))
+    if not data:
+        return {"source": "agreement", "n": 0, "bands": [], "rho": None,
+                "p": None, "hit": None, "payoff": None,
+                "informative": "unknown"}
+
+    # Same bucketing as confidence_bands: perfect agreement maps to exactly
+    # 0.50 and a half-open top band would throw those rows away, which is the
+    # one case this measure most needs to see.
+    bands = []
+    for lo, hi in CONFIDENCE_BANDS:
+        sel = [(c, pay) for conf, c, pay in data if _band_of(0.5 + conf) == (lo, hi)]
+        if not sel:
+            continue
+        pays = [p for _c, p in sel if p is not None]
+        bands.append({"lo": lo, "hi": hi, "n": len(sel),
+                      "hit": sum(c for c, _p in sel) / len(sel),
+                      "payoff": (sum(pays) / len(pays)) if pays else None})
+    rho = pval = None
+    if len(data) >= 3:
+        try:
+            from scipy.stats import spearmanr
+
+            r, pv = spearmanr([d[0] for d in data], [d[1] for d in data])
+            rho, pval = round(float(r), 4), round(float(pv), 4)
+        except Exception:
+            pass
+    allpay = [d[2] for d in data if d[2] is not None]
+    return {"source": "agreement", "n": len(data), "bands": bands,
+            "rho": rho, "p": pval,
+            "hit": sum(d[1] for d in data) / len(data),
+            "payoff": (sum(allpay) / len(allpay)) if allpay else None,
+            "informative": ("unknown" if pval is None or pval >= 0.05
+                            else ("yes" if rho > 0 else "INVERTED"))}
+
+
+def _band_of(prob):
+    """Which CONFIDENCE_BANDS row a probability falls in, or None."""
+    if prob is None:
+        return None
+    conf = abs(float(prob) - 0.5)
+    for lo, hi in CONFIDENCE_BANDS:
+        if lo <= conf < hi:
+            return (lo, hi)
+    return CONFIDENCE_BANDS[-1] if conf >= CONFIDENCE_BANDS[-1][1] else None
+
+
+def confidence_evidence(asset, prob, db_path=None, k=50.0):
+    """What THIS confidence has historically been worth, for this asset.
+
+    The card printed |p - 0.5| as a confidence, and on the live log that number
+    orders nothing (see confidence_bands). This replaces the claim with the
+    record: of the past signals on this asset that landed in the same band, how
+    many were right and what the position earned.
+
+    Shrunk toward the same band's rate across every asset, with the same shape
+    core/analyst/payoff.shrink and core/guru.py already use: an asset with nine
+    observations must not print a confident number, and the honest fallback is
+    what the band is worth in general rather than silence.
+
+    Returns n as its own field on purpose. A rate without its sample size is
+    the thing this function exists to stop.
+    """
+    band = _band_of(prob)
+    if band is None:
+        return {"band": None, "n": 0, "hit": None, "payoff": None,
+                "hit_all": None, "n_all": 0}
+    with _connect(db_path) as con:
+        try:
+            rows = con.execute(
+                "SELECT asset, probability, correct, signal, actual_next_ret "
+                "FROM prediction_log WHERE correct IS NOT NULL "
+                "AND signal IN ('BUY','SELL')").fetchall()
+        except sqlite3.OperationalError:
+            return {"band": band, "n": 0, "hit": None, "payoff": None,
+                    "hit_all": None, "n_all": 0}
+
+    mine, everyone = [], []
+    for a, p, correct, sig, ret in rows:
+        if p is None or _band_of(p) != band:
+            continue
+        pay = None if ret is None else (ret if sig == "BUY" else -ret)
+        everyone.append((int(correct), pay))
+        if a == asset:
+            mine.append((int(correct), pay))
+    if not everyone:
+        return {"band": band, "n": 0, "hit": None, "payoff": None,
+                "hit_all": None, "n_all": 0}
+
+    hit_all = sum(c for c, _p in everyone) / len(everyone)
+    hit = hit_all
+    if mine:
+        from core.analyst.payoff import shrink
+
+        hit = shrink(len(mine), sum(c for c, _p in mine) / len(mine), hit_all, k)
+    pays = [p for _c, p in (mine or everyone) if p is not None]
+    return {"band": band, "n": len(mine), "hit": hit,
+            "payoff": (sum(pays) / len(pays)) if pays else None,
+            "hit_all": hit_all, "n_all": len(everyone)}
+
+
+def member_spread(row):
+    """How far the four ensemble members are from agreeing, 0 to 1.
+
+    The candidate replacement for |p - 0.5|: four models agreeing is not the
+    same claim as one model being sure, and until 2026-09-01 nothing could tell
+    them apart because only two of the four were ever stored.
+
+    None when fewer than three members are present, which is every row written
+    before that date. Deliberately None and not zero: a missing member is not
+    an agreeing one, and this number is about to be scored against outcomes.
+    """
+    vals = [row.get(k) for k in ("cb_prob", "lstm_prob", "tf_prob", "tcn_prob")]
+    vals = [float(v) for v in vals if v is not None]
+    if len(vals) < 3:
+        return None
+    return float(max(vals) - min(vals))
 
 
 def asset_track(asset: str, limit: int = 30, db_path=None) -> list:

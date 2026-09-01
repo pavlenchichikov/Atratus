@@ -1565,3 +1565,125 @@ def test_a_database_without_the_column_returns_an_empty_panel(tmp_path):
                 "signal TEXT, probability REAL, correct INTEGER)")
     con.commit(); con.close()
     assert tr.confidence_bands(db_path=db, source="meta_prob")["n"] == 0
+
+
+def _plog_db(tmp_path, name, rows):
+    """A prediction_log with (asset, probability, correct, signal, ret) rows."""
+    import sqlite3
+    db = str(tmp_path / name)
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE prediction_log (date TEXT, asset TEXT, "
+                "signal TEXT, probability REAL, actual_next_ret REAL, "
+                "correct INTEGER)")
+    con.executemany("INSERT INTO prediction_log VALUES ('2026-01-01',?,?,?,?,?)",
+                    [(a, s, p, r, c) for a, p, c, s, r in rows])
+    con.commit(); con.close()
+    return db
+
+
+def test_confidence_evidence_states_the_record_not_the_claim(tmp_path):
+    """The card printed |p - 0.5| as a confidence and the live log says that
+    number orders nothing. This replaces the claim with what the band was
+    actually worth here, and carries n so a rate can never appear without its
+    sample size."""
+    from core import track_record as tr
+
+    rows = ([("SBER", 0.62, 1, "BUY", 0.01) for _ in range(80)]
+            + [("SBER", 0.62, 0, "BUY", -0.01) for _ in range(20)]
+            + [("BTC", 0.62, 0, "BUY", -0.01) for _ in range(100)])
+    db = _plog_db(tmp_path, "ev.db", rows)
+
+    d = tr.confidence_evidence("SBER", 0.62, db_path=db)
+    assert d["band"] == (0.10, 0.15)
+    assert d["n"] == 100 and d["n_all"] == 200
+    # SBER's own 0.80 pulled toward the 0.40 both assets share, not equal to it
+    assert 0.40 < d["hit"] < 0.80, d
+    assert d["payoff"] > 0, "a winning band came back negative"
+
+
+def test_a_thin_asset_leans_on_the_band_and_says_so(tmp_path):
+    """Nine observations must not print a confident number. The all-asset rate
+    is the honest fallback, and n is what lets the page say which it is."""
+    from core import track_record as tr
+
+    rows = ([("NEW", 0.62, 1, "BUY", 0.01) for _ in range(3)]
+            + [("OLD", 0.62, 0, "BUY", -0.01) for _ in range(400)])
+    db = _plog_db(tmp_path, "thin.db", rows)
+    d = tr.confidence_evidence("NEW", 0.62, db_path=db)
+    assert d["n"] == 3
+    assert d["hit"] < 0.10, "three wins outvoted four hundred losses"
+
+    # and an asset with no history at all falls all the way back
+    d = tr.confidence_evidence("UNSEEN", 0.62, db_path=db)
+    assert d["n"] == 0 and d["hit"] == d["hit_all"]
+
+
+def test_member_spread_refuses_to_score_a_half_filled_row():
+    """Every row written before 2026-09-01 has two of the four members. A
+    missing member is not an agreeing one, and this number is about to be
+    scored against outcomes."""
+    from core import track_record as tr
+
+    assert tr.member_spread({"cb_prob": 0.7, "lstm_prob": 0.6}) is None
+    assert tr.member_spread(
+        {"cb_prob": 0.7, "lstm_prob": 0.6, "tf_prob": None,
+         "tcn_prob": None}) is None
+    full = {"cb_prob": 0.70, "lstm_prob": 0.60, "tf_prob": 0.55, "tcn_prob": 0.62}
+    assert abs(tr.member_spread(full) - 0.15) < 1e-9
+    agree = dict.fromkeys(("cb_prob", "lstm_prob", "tf_prob", "tcn_prob"), 0.6)
+    assert tr.member_spread(agree) == 0.0
+
+
+def test_agreement_is_measured_the_same_way_and_says_when_it_cannot_be(tmp_path):
+    """The candidate definition rides the same panel, so the two are read off
+    one table. Until the radar writes four members it returns n=0, which is a
+    different answer from a flat result and has to look different."""
+    import sqlite3
+
+    from core import track_record as tr
+
+    def build(name, rows, four=True):
+        db = str(tmp_path / name)
+        con = sqlite3.connect(db)
+        cols = ("date TEXT, asset TEXT, signal TEXT, probability REAL, "
+                "actual_next_ret REAL, correct INTEGER, cb_prob REAL, "
+                "lstm_prob REAL")
+        if four:
+            cols += ", tf_prob REAL, tcn_prob REAL"
+        con.execute("CREATE TABLE prediction_log (%s)" % cols)
+        n = 10 if four else 8
+        con.executemany(
+            "INSERT INTO prediction_log VALUES (%s)" % ",".join("?" * n), rows)
+        con.commit(); con.close()
+        return db
+
+    # a log from before the columns existed: nothing to measure, and it says so
+    legacy = [("2026-01-01", "A", "BUY", 0.6, 0.01, 1, 0.6, 0.6)] * 50
+    d = tr.confidence_bands(db_path=build("legacy.db", legacy, four=False),
+                            source="agreement")
+    assert d["n"] == 0 and d["informative"] == "unknown"
+
+    # four members present and agreement genuinely ordering the outcome
+    tight = [("2026-01-01", "A", "BUY", 0.6, 0.01, 1, 0.60, 0.60, 0.60, 0.60)] * 150
+    wide = [("2026-01-01", "B", "BUY", 0.6, -0.01, 0, 0.95, 0.05, 0.90, 0.10)] * 150
+    d = tr.confidence_bands(db_path=build("four.db", tight + wide),
+                            source="agreement")
+    assert d["n"] == 300, d
+    assert d["informative"] == "yes" and d["rho"] > 0.5, d
+    assert len(d["bands"]) >= 2, "agreement collapsed into a single band"
+
+
+def test_the_bands_account_for_every_row_they_were_given(tmp_path):
+    """The half-open loop this replaced dropped every row at exactly p=0 or
+    p=1: 682 of the live log's 7929, silently, so the panel reported a smaller
+    n than it had measured and no band said which rows were gone."""
+    from core import track_record as tr
+
+    rows = ([("A", 0.0, 1, "SELL", -0.01) for _ in range(40)]
+            + [("A", 1.0, 0, "BUY", -0.01) for _ in range(40)]
+            + [("A", 0.62, 1, "BUY", 0.01) for _ in range(20)])
+    d = tr.confidence_bands(db_path=_plog_db(tmp_path, "edges.db", rows))
+    assert d["n"] == 100
+    assert sum(b["n"] for b in d["bands"]) == d["n"], d["bands"]
+    top = [b for b in d["bands"] if b["hi"] == 0.50]
+    assert top and top[0]["n"] == 80, "the certain rows fell off the top band"

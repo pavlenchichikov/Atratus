@@ -497,6 +497,15 @@ def asset_page(request: Request, name: str):
         raise HTTPException(404, f"Unknown asset: {name}")
     track = track_record.asset_track(name, limit=60)
     acc = track_record.asset_accuracy(name)
+    # What this confidence has been worth here, rather than the confidence
+    # itself. |p - 0.5| orders nothing on the live log (spearman +0.013 at
+    # p=0.25 over 7929 verified signals), so the card states the record of
+    # the band instead of restating the claim.
+    try:
+        conf_ev = track_record.confidence_evidence(
+            name, track[0]["probability"]) if track else None
+    except Exception:
+        conf_ev = None
     # The watched challenger checked against what the bar then did, the same
     # correct/missed a signal's row gets. Its own definition of "right": in a
     # position, the bar went its way; flat while the signal wanted in, the trade
@@ -602,6 +611,7 @@ def asset_page(request: Request, name: str):
         "acc": acc,
         "stats": stats,
         "current": current,
+        "conf_ev": conf_ev,
         "position": pos["current"],
         "trades": pos["trades"],
         "segments": pos["segments"],

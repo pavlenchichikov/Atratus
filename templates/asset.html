@@ -265,6 +265,23 @@ fetch("/api/ohlc/{{ asset }}?days=120")
         <span class="mono"><b>{{ "%.2f"|format(current.probability) }}</b></span>
       </div>
     </div>
+      {% if conf_ev and conf_ev.hit is not none %}
+      <div class="cons-row" style="margin-top:.6em">
+        <span class="cons-name dim">This confidence, historically</span>
+        <span class="mono">
+          hit {{ "%.0f"|format(conf_ev.hit * 100) }}%
+          {% if conf_ev.payoff is not none %}, payoff {{ "%+.2f"|format(conf_ev.payoff * 100) }}%{% endif %}
+        </span>
+      </div>
+      <p class="dim" style="margin:.2em 0 0">
+        Band {{ "%.2f"|format(conf_ev.band[0]) }} to {{ "%.2f"|format(conf_ev.band[1]) }} of |p - 0.5|:
+        {{ conf_ev.n }} past signal(s) on this asset
+        {%- if conf_ev.n < 50 %}, so the number leans on the {{ conf_ev.n_all }}
+        across every asset ({{ "%.0f"|format(conf_ev.hit_all * 100) }}%){% endif %}.
+        Measured 2026-09-01, confidence itself orders nothing on this log
+        (rho +0.013, p=0.25), so this is the record, not a claim.
+      </p>
+      {% endif %}
     {% else %}
     <p class="empty">No predictions in the journal.</p>
     {% endif %}
