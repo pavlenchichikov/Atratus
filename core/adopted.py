@@ -41,14 +41,87 @@ def load(path=None):
     return data
 
 
-def specs(record):
-    """The adopted DSL specs, or [] when there are none."""
+def per_asset(record):
+    """{ASSET: genome} for the assets adopted away from the global genome.
+
+    A genome's effect is not the same on every asset - measured 2026-09-02, the
+    candidate that FAILED the gate at -0.30 over 40 assets was worth +1.20 on RTX
+    and -3.84 on ROSN, both replicated on fresh seeds. This map is how an asset
+    keeps the genome that was measured on IT, while everything else stays on the
+    global adoption.
+
+    Asset keys are upper-cased on read, so a hand-edited file does not create a
+    per-asset entry that silently never matches.
+    """
+    if not isinstance(record, dict):
+        return {}
+    raw = record.get("per_asset")
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for asset, entry in raw.items():
+        genome = (entry or {}).get("genome") if isinstance(entry, dict) else None
+        if isinstance(genome, dict) and isinstance(asset, str):
+            out[asset.strip().upper()] = genome
+    return out
+
+
+def genome_for(asset, record):
+    """The genome that trains and serves ONE asset: its own, else the global."""
+    return per_asset(record).get(str(asset).strip().upper()) \
+        or (record or {}).get("genome") or {}
+
+
+def genome_for_assets(assets, record):
+    """The genome a PROCESS should run under, given the assets it was handed.
+
+    A genome is a process-wide environment, so one process can only be right for
+    a set of assets that share a genome. GTRADE_ASSETS is what says which those
+    are, and the chunked trainer already groups by genome before it starts a
+    process, so this resolves to exactly the group's genome.
+
+    The global genome answers everything else: an empty list (serving, or a
+    trainer told to do the whole map), an unknown asset, and a MIXED set - which
+    is a caller bug, not a configuration, so it is said out loud rather than
+    silently resolved to one of the two.
+    """
+    names = [a.strip().upper() for a in (assets or "").split(",") if a.strip()]
+    mapped = per_asset(record)
+    if not names or not mapped:
+        return (record or {}).get("genome") or {}
+    wanted = {json.dumps(genome_for(a, record), sort_keys=True) for a in names}
+    if len(wanted) == 1:
+        return json.loads(next(iter(wanted)))
+    print("[adopt] %d assets in one process want %d different genomes; using the "
+          "global one. Group them by genome before training." % (len(names), len(wanted)))
+    return (record or {}).get("genome") or {}
+
+
+def _genomes(record):
+    """Every genome in force: the global one first, then the per-asset ones."""
     if not isinstance(record, dict):
         return []
-    extra = (record.get("genome") or {}).get("extra")
-    if not isinstance(extra, list):
-        return []
-    return [s for s in extra if isinstance(s, dict)]
+    return [record.get("genome") or {}] + list(per_asset(record).values())
+
+
+def specs(record):
+    """The adopted DSL specs, or [] when there are none.
+
+    The UNION over every genome in force, deduplicated by name. A per-asset
+    genome may define an extra feature no other asset uses, and the champion of
+    that asset cannot be served without it: core.scoring refuses an asset whose
+    saved feature list names a column the frame does not have.
+    """
+    out, seen = [], set()
+    for genome in _genomes(record):
+        extra = genome.get("extra")
+        if not isinstance(extra, list):
+            continue
+        for s in extra:
+            if isinstance(s, dict) and s.get("name") not in seen:
+                seen.add(s.get("name"))
+                out.append(s)
+    return out
 
 
 def _g(genome, key):

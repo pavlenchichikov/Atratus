@@ -97,3 +97,20 @@ def test_only_the_first_parallel_chunk_writes_the_real_progress_file(monkeypatch
                                     progress_dir="/scratch/x")
     assert "AR_PROGRESS_DIR" not in first
     assert rest["AR_PROGRESS_DIR"] == "/scratch/x"
+
+
+def test_a_chunk_never_mixes_two_genomes(monkeypatch):
+    """A genome is a process-wide environment, so two assets adopted onto
+    different genomes cannot share a train_hybrid process. Grouping them into
+    separate chunks is the whole of what per-asset adoption costs the trainer."""
+    record = {"genome": {"drops": ["vol_z"], "extra": []},
+              "per_asset": {"RTX": {"genome": {"drops": [], "extra": [],
+                                               "net_seeds": 3}}}}
+    monkeypatch.setattr(train_chunked, "CHUNK", 15)
+    chunks = train_chunked._plan_chunks(["AAPL", "RTX", "MSFT"], record)
+    assert ["RTX"] in chunks
+    assert sorted(a for c in chunks for a in c) == ["AAPL", "MSFT", "RTX"]
+    # positive control: with nothing adopted per asset they share one chunk
+    plain = train_chunked._plan_chunks(["AAPL", "RTX", "MSFT"],
+                                       {"genome": record["genome"]})
+    assert plain == [["AAPL", "RTX", "MSFT"]]

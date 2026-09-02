@@ -3,6 +3,8 @@
 import json
 import os
 
+import pytest
+
 import adopt_genome
 
 ARCHIVE = {
@@ -260,3 +262,64 @@ def test_a_file_written_before_the_counts_existed_is_judged_as_before(tmp_path):
     measured = next(c for c in adopt_genome.candidates(_fixtures(tmp_path))
                     if c["kind"] == "measured")
     assert measured["validated"] is True
+
+
+# --- per-asset adoption ------------------------------------------------------
+
+def _record(tmp_path):
+    path = tmp_path / "adopted.json"
+    path.write_text(json.dumps({"label": "A", "genome": {"drops": ["vol_z"],
+                                                         "extra": []}}),
+                    encoding="utf-8")
+    return str(path)
+
+
+def test_a_per_asset_adoption_leaves_every_other_asset_alone(tmp_path):
+    from core import adopted
+
+    path = _record(tmp_path)
+    genome = {"drops": [], "extra": [], "net_seeds": 3}
+    adopt_genome.adopt_for_asset("rtx", genome, "replication +1.20 p=0.019",
+                                 path=path)
+    rec = adopted.load(path)
+    assert adopted.genome_for("RTX", rec) == genome
+    assert adopted.genome_for("AAPL", rec) == rec["genome"]
+    assert rec["per_asset"]["RTX"]["evidence"]
+
+
+def test_a_per_asset_adoption_refuses_without_replication_evidence(tmp_path):
+    """The pass that SELECTS an asset overstates it - the three picked on
+    2026-09-02 kept 30% of it on fresh seeds - so the file records the
+    replication or nothing."""
+    path = _record(tmp_path)
+    with pytest.raises(SystemExit):
+        adopt_genome.adopt_for_asset("RTX", {"net_seeds": 3}, "", path=path)
+    with pytest.raises(SystemExit):
+        adopt_genome.adopt_for_asset("RTX", {}, "measured", path=path)
+
+
+def test_a_per_asset_adoption_needs_a_global_one_to_sit_beside(tmp_path):
+    missing = str(tmp_path / "nothing.json")
+    with pytest.raises(SystemExit):
+        adopt_genome.adopt_for_asset("RTX", {"net_seeds": 3}, "measured",
+                                     path=missing)
+
+
+def test_dropping_one_asset_puts_it_back_on_the_global_genome(tmp_path):
+    from core import adopted
+
+    path = _record(tmp_path)
+    adopt_genome.adopt_for_asset("RTX", {"net_seeds": 3}, "measured", path=path)
+    assert adopt_genome.drop_asset_adoption("rtx", path=path) is True
+    assert adopted.per_asset(adopted.load(path)) == {}
+    # and the file is still a valid adoption afterwards
+    assert adopted.load(path)["genome"]["drops"] == ["vol_z"]
+    assert adopt_genome.drop_asset_adoption("RTX", path=path) is False
+
+
+def test_one_asset_moving_does_not_order_a_retrain_of_the_other_207(tmp_path):
+    prog = tmp_path / "_chunk_progress.txt"
+    prog.write_text("AAPL\nRTX\nMSFT\n", encoding="utf-8")
+    assert adopt_genome._forget_chunk_progress("rtx", base=str(tmp_path)) is True
+    assert prog.read_text(encoding="utf-8").split() == ["AAPL", "MSFT"]
+    assert adopt_genome._forget_chunk_progress("RTX", base=str(tmp_path)) is False

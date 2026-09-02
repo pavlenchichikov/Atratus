@@ -117,3 +117,66 @@ def test_cb_uniqueness_gene_emits_its_env():
     from core.adopted import env_overrides
     assert env_overrides({"cb_uniqueness": 1}).get("GTRADE_CB_UNIQUENESS") == "1"
     assert "GTRADE_CB_UNIQUENESS" not in env_overrides({"cb_uniqueness": 0})
+
+
+# --- per-asset adoption ------------------------------------------------------
+
+RTX_GENOME = {"drops": [], "extra": [
+    {"name": "only_rtx_has_this", "op": "ratio", "inputs": ["bb_pos", "rsi"],
+     "params": {}}], "net_seeds": 3}
+RECORD = {"label": "A", "genome": GENOME_A,
+          "per_asset": {"rtx": {"genome": RTX_GENOME, "evidence": "replicated"}}}
+
+
+def test_an_asset_keeps_the_genome_measured_on_it():
+    # The 2026-09-02 candidate failed the gate at -0.30 over 40 assets while
+    # being worth +1.20 on RTX, both replicated. Adopting everywhere or nowhere
+    # throws one of those facts away.
+    assert adopted.genome_for("RTX", RECORD) == RTX_GENOME
+    assert adopted.genome_for("AAPL", RECORD) == GENOME_A
+
+
+def test_a_hand_written_asset_key_still_matches():
+    """A per-asset entry that silently never matched would look like a working
+    adoption and serve the global genome forever."""
+    assert set(adopted.per_asset(RECORD)) == {"RTX"}
+    assert adopted.genome_for("rtx", RECORD) == RTX_GENOME
+    assert adopted.per_asset({"per_asset": {"X": "not a dict"}}) == {}
+    assert adopted.per_asset({"per_asset": []}) == {}
+
+
+def test_the_dsl_specs_are_the_union_over_every_genome_in_force():
+    """core.scoring refuses an asset whose saved feature list names a column the
+    frame does not have, so one asset's extra feature has to be computed for
+    everyone or that asset drops off the radar."""
+    names = [s["name"] for s in adopted.specs(RECORD)]
+    assert "only_rtx_has_this" in names
+    assert "zscore_vol_z_20" in names
+    assert len(names) == len(set(names)), "a shared spec must not be computed twice"
+
+
+def test_a_process_runs_under_the_genome_of_the_assets_it_was_handed():
+    assert adopted.genome_for_assets("RTX", RECORD) == RTX_GENOME
+    assert adopted.genome_for_assets("AAPL,MSFT", RECORD) == GENOME_A
+    # Serving names no assets and keeps the global genome, exactly as before
+    # per-asset adoption existed.
+    assert adopted.genome_for_assets(None, RECORD) == GENOME_A
+    assert adopted.genome_for_assets("", RECORD) == GENOME_A
+
+
+def test_a_mixed_process_is_called_out_rather_than_silently_resolved(capsys):
+    """One process, one environment: a set spanning two genomes cannot be served
+    by either, and picking one quietly would train assets under a genome nobody
+    adopted for them."""
+    got = adopted.genome_for_assets("AAPL,RTX", RECORD)
+    assert got == GENOME_A
+    assert "different genomes" in capsys.readouterr().out
+
+
+def test_a_record_without_the_map_behaves_exactly_as_before():
+    plain = {"label": "A", "genome": GENOME_A}
+    assert adopted.per_asset(plain) == {}
+    assert adopted.genome_for("RTX", plain) == GENOME_A
+    assert adopted.genome_for_assets("RTX", plain) == GENOME_A
+    assert [s["name"] for s in adopted.specs(plain)] == \
+        [s["name"] for s in GENOME_A["extra"]]

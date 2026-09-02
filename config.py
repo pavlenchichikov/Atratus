@@ -15,7 +15,19 @@ try:
 
     _ADOPTED = _adopted.load()
     if _ADOPTED:
-        _adopted.apply(_ADOPTED.get("genome") or {})
+        # genome_for_assets, not the global genome: an asset may be adopted onto
+        # a genome of its own, and the process training it says which assets it
+        # was handed. Serving names no assets and so still gets the global one,
+        # which is also what every process saw before per-asset adoption existed.
+        # The keys it actually set, so a launcher that starts one trainer per
+        # genome can strip them from the child's environment: they are in this
+        # process's os.environ, a child inherits them, and apply() never
+        # overwrites what is already there - so without this the first genome
+        # resolved would be the genome every child ran under.
+        ADOPTED_ENV_KEYS = _adopted.apply(_adopted.genome_for_assets(
+            os.getenv("GTRADE_ASSETS"), _ADOPTED))
+    else:
+        ADOPTED_ENV_KEYS = []
 except Exception as _exc:
     # A broken adoption must never stop a run, but it must never be silent
     # either: a hand-edited value of the wrong type would otherwise leave a
@@ -23,6 +35,7 @@ except Exception as _exc:
     # force and nothing on screen to say so.
     print(f"[adopt] adopted genome ignored: {_exc}")
     _ADOPTED = None
+    ADOPTED_ENV_KEYS = []
 
 # --- 1. MODEL PARAMETERS ---
 SEQ_LEN = 10

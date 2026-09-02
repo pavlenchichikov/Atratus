@@ -343,6 +343,63 @@ def write_adoption(cand, path=None):
         json.dump(record, fh, ensure_ascii=False, indent=2)
 
 
+def adopt_for_asset(asset, genome, evidence, path=None):
+    """Adopt `genome` for ONE asset, leaving every other asset where it is.
+
+    A genome's effect is not uniform: measured 2026-09-02, the candidate that
+    FAILED the gate at -0.30 over 40 assets was worth +1.20 on RTX and -3.84 on
+    ROSN, both replicated on fresh seeds. Adopting it everywhere or nowhere
+    throws away both facts.
+
+    Refuses without a global adoption to sit beside, because the per-asset map is
+    an exception to something: with no record there is no genome for the other
+    two hundred assets, and a file holding only exceptions would read as "adopted
+    nothing" to core.adopted.load.
+
+    Evidence is REQUIRED and it must be the replication, never the pass that
+    picked the asset: the three assets selected on 2026-09-02 kept 30% of what
+    that pass measured. A selection is not an estimate.
+    """
+    from core import adopted as _adopted
+
+    dest = path or _adopted.PATH
+    record = _adopted.load(dest)
+    if not record:
+        raise SystemExit(
+            "No global adoption to attach a per-asset one to: adopt a genome "
+            "first, then adopt the exceptions on top of it.")
+    if not isinstance(genome, dict) or not genome:
+        raise SystemExit("A per-asset adoption needs a genome.")
+    if not evidence:
+        raise SystemExit("A per-asset adoption needs its replication evidence.")
+    key = str(asset).strip().upper()
+    record.setdefault("per_asset", {})[key] = {
+        "adopted": datetime.date.today().isoformat(),
+        "genome": genome,
+        "evidence": evidence,
+    }
+    with open(dest, "w", encoding="utf-8") as fh:
+        json.dump(record, fh, ensure_ascii=False, indent=2)
+    return key
+
+
+def drop_asset_adoption(asset, path=None):
+    """Put one asset back on the global genome. Returns True when it moved."""
+    from core import adopted as _adopted
+
+    dest = path or _adopted.PATH
+    record = _adopted.load(dest)
+    key = str(asset).strip().upper()
+    if not record or key not in (record.get("per_asset") or {}):
+        return False
+    del record["per_asset"][key]
+    if not record["per_asset"]:
+        del record["per_asset"]
+    with open(dest, "w", encoding="utf-8") as fh:
+        json.dump(record, fh, ensure_ascii=False, indent=2)
+    return True
+
+
 def revert(path=None):
     """Restore the previous adoption, or remove the file to go back to base."""
     from core import adopted as _adopted
@@ -360,6 +417,26 @@ def revert(path=None):
         os.remove(dest)
         return True
     return False
+
+
+def _forget_chunk_progress(asset, base=None):
+    """Drop ONE asset from _chunk_progress.txt. True when it was there.
+
+    The whole-file reset beside this is right for a global adoption, where every
+    asset must retrain. For one asset it would order 207 retrains nobody asked
+    for.
+    """
+    path = os.path.join(base or BASE, "_chunk_progress.txt")
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8") as fh:
+        lines = [ln.strip() for ln in fh if ln.strip()]
+    keep = [ln for ln in lines if ln.upper() != str(asset).strip().upper()]
+    if len(keep) == len(lines):
+        return False
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.writelines(a + "\n" for a in keep)
+    return True
 
 
 def reset_chunk_progress(base=None):
@@ -473,10 +550,48 @@ def main():
     ap.add_argument("--auto", action="store_true",
                     help="adopt the best candidate that passed its own A/B "
                          "without asking; for auto_loop.py")
+    ap.add_argument("--asset", metavar="ASSET",
+                    help="adopt a genome for ONE asset, on top of the global "
+                         "adoption; needs --evidence")
+    ap.add_argument("--genome-from", default="_ab_config.json", metavar="FILE",
+                    help="the ab_build config holding the genome to adopt for "
+                         "--asset (default: the last one built)")
+    ap.add_argument("--evidence", metavar="TEXT",
+                    help="the REPLICATION that justifies a per-asset adoption, "
+                         "not the pass that selected the asset")
+    ap.add_argument("--drop-asset", metavar="ASSET",
+                    help="put one asset back on the global genome")
     args = ap.parse_args()
 
     if args.show:
         _show()
+        return
+    if args.drop_asset:
+        moved = drop_asset_adoption(args.drop_asset)
+        print("%s is back on the global genome." % args.drop_asset.upper()
+              if moved else "%s was not adopted separately." % args.drop_asset.upper())
+        if moved:
+            print("Retrain it: python train_chunked.py --assets-file <file with it>")
+        return
+    if args.asset:
+        cfg = _read_json(os.path.join(BASE, args.genome_from)
+                         if not os.path.isabs(args.genome_from) else args.genome_from)
+        cands = (cfg or {}).get("candidates") or []
+        if len(cands) != 1:
+            raise SystemExit(
+                "%s holds %d candidates; a per-asset adoption has to name one "
+                "genome, so point --genome-from at a config with exactly one."
+                % (args.genome_from, len(cands)))
+        key = adopt_for_asset(args.asset, cands[0].get("genome"), args.evidence)
+        print("%s now trains and serves on genome %s."
+              % (key, cands[0].get("label") or "?"))
+        print("Evidence recorded: %s" % args.evidence)
+        # Only THIS asset needs retraining, so only its line leaves the progress
+        # file. Wiping the whole file (what a global adoption does) would order a
+        # 208-asset retrain for a one-asset change.
+        if _forget_chunk_progress(key):
+            print("Removed %s from the chunk progress; the next "
+                  "train_chunked.py picks it up." % key)
         return
     if args.auto:
         pick = best_validated(candidates())

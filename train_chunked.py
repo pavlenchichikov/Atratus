@@ -47,6 +47,7 @@ from datetime import datetime
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
+import config
 from config import FULL_ASSET_MAP
 from core import console_status
 
@@ -159,6 +160,37 @@ def _fit_jobs(jobs):
     return fits
 
 
+def _plan_chunks(todo, record):
+    """The chunks to train, with every chunk on ONE genome.
+
+    A genome is a process-wide environment, so assets adopted onto different
+    genomes cannot share a train_hybrid process. They do not have to: the
+    chunking already starts a process per chunk, so grouping the assets by the
+    genome they were adopted under is the whole of what per-asset adoption costs
+    the trainer. Nothing has to be passed down either - the child resolves its
+    own genome from GTRADE_ASSETS through config.py - so train_hybrid does not
+    change at all.
+
+    Assets keep their order inside a group, and a group that is not a multiple of
+    CHUNK ends short rather than borrowing from the next genome.
+    """
+    try:
+        from core import adopted as _adopted
+
+        groups = {}
+        for asset in todo:
+            key = json.dumps(_adopted.genome_for(asset, record) if record else {},
+                             sort_keys=True)
+            groups.setdefault(key, []).append(asset)
+    except Exception:
+        groups = {"": list(todo)}
+    chunks = []
+    for assets in groups.values():
+        for i in range(0, len(assets), CHUNK):
+            chunks.append(assets[i:i + CHUNK])
+    return chunks
+
+
 def _chunk_env(chunk, force_promote, jobs, progress_dir=None):
     """One chunk process's environment.
 
@@ -190,6 +222,12 @@ def _chunk_env(chunk, force_promote, jobs, progress_dir=None):
     if force_promote:
         env["GTRADE_FORCE_PROMOTE"] = "1"
     env["GTRADE_ASSETS"] = ",".join(chunk)
+    # Whatever THIS process's config.py resolved is stripped out, so the child
+    # resolves its own chunk's genome instead of inheriting ours. apply() never
+    # overwrites a key that is already set, so without this every chunk would
+    # train under the genome the parent happened to pick up at import.
+    for key in getattr(config, "ADOPTED_ENV_KEYS", []):
+        env.pop(key, None)
     if progress_dir:
         # Only the first parallel chunk keeps the real progress files, the rule
         # auto_research already follows: two trainers writing one file make the
@@ -285,8 +323,6 @@ def main():
               % (os.path.basename(args.assets_file), len(todo)))
     else:
         todo = [a for a in FULL_ASSET_MAP if a not in done]
-    chunks = [todo[i:i + CHUNK] for i in range(0, len(todo), CHUNK)]
-
     mode = ("FORCE-PROMOTE (every champion replaced)" if args.force_promote
             else "champion-challenger (a champion changes only if beaten)")
     try:
@@ -294,6 +330,7 @@ def main():
         _rec = _adopted.load()
     except Exception:
         _rec = None
+    chunks = _plan_chunks(todo, _rec)
     adopted_line = ("adopted: %s (%s)" % (_rec.get("label"), _rec.get("adopted"))
                     if _rec else "adopted: nothing (production defaults)")
 
