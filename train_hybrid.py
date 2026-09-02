@@ -9,6 +9,7 @@ if os.path.isdir(_env_lib_bin) and _env_lib_bin not in os.environ.get("PATH", ""
 # -----------------------------------------------------------------------------
 
 import json
+import shutil
 import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -984,7 +985,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 tcn_val_prob = np.full(len(X_seq_val), 0.5)
                 tcn_test_prob = np.full(len(X_seq_test), 0.5)
                 lstm = tf_enc = tcn_model = None
-                lstm_acc = 0.5
+                lstm_acc = tf_acc = tcn_acc = 0.5
             else:
                 # Net hygiene: uniqueness sample-weights (Lopez de Prado).  Off by default;
                 # set GTRADE_NET_UNIQUENESS=1 to enable.  When unset, _uniq_w is None and
@@ -1160,7 +1161,16 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     lstm      = runs[-1]["lstm"]
                     tf_enc    = runs[-1]["tf_enc"]
                     tcn_model = runs[-1]["tcn_model"]
+                # Transformer and TCN train, feed the stacker and are saved as
+                # champions, and until now nothing measured them: cb_acc and
+                # lstm_acc were the only two accuracies in this file, so the
+                # quality report showed two of the four ensemble members and
+                # LSTM_Acc read as "the state of the neural half" when it is one
+                # net of three. No new arrays and no new randomness: the same
+                # comparison the line above already does.
                 lstm_acc = float(((lstm_test_prob >= 0.5).astype(int) == y_seq_test).mean())
+                tf_acc = float(((tf_test_prob >= 0.5).astype(int) == y_seq_test).mean())
+                tcn_acc = float(((tcn_test_prob >= 0.5).astype(int) == y_seq_test).mean())
 
             # Wait for CatBoost
             cb_thread.join()
@@ -1323,6 +1333,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'features': selected,
                 'cb_acc': cb_acc,
                 'lstm_acc': lstm_acc,
+                'tf_acc': tf_acc,
+                'tcn_acc': tcn_acc,
                 'cb_auc': cb_auc,
                 'net_auc': net_auc,
                 'ens_auc': ens_auc,
@@ -1462,6 +1474,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             'Asset': asset,
             'CB_Acc': float(best_fold['cb_acc']),
             'LSTM_Acc': float(best_fold['lstm_acc']),
+            'TF_Acc': float(best_fold['tf_acc']),
+            'TCN_Acc': float(best_fold['tcn_acc']),
             'Net_AUC': None if _net_auc is None else float(_net_auc),
             'CB_AUC': None if _cb_auc is None else float(_cb_auc),
             'Ens_AUC': None if _ens_auc is None else float(_ens_auc),
@@ -1658,13 +1672,37 @@ def train_system():
             time_str = f"{elapsed:.0f}s"
         return f"  [{bar}] {done}/{total}  {time_str}  {postfix}"
 
+    def _bar_width():
+        """Room for exactly one line, so \\r rewrites it instead of adding one."""
+        return max(40, shutil.get_terminal_size((100, 24)).columns - 1)
+
+    def _bar_visible():
+        try:
+            return sys.stdout.isatty()
+        except Exception:
+            return False
+
     def _write_bar(line):
-        sys.stdout.write(f"\r{line}")
+        # One line has to STAY one line. The ticker fires every second and the
+        # postfix runs past 150 chars, so on a narrower console the terminal
+        # wrapped it and \r returned only to the start of the LAST visual row:
+        # every tick left its predecessor behind and the log grew a row a
+        # second, hours of them in one training run. Truncated to the window,
+        # it overwrites itself; padded, a shorter line leaves no tail behind.
+        #
+        # Off entirely when stdout is not a terminal (pipe, GUI, log file):
+        # there \r is not a carriage return at all, so the bar was pure noise,
+        # and the per-asset _write_result lines already carry the progress.
+        if not _bar_visible():
+            return
+        w = _bar_width()
+        sys.stdout.write("\r" + line[:w].ljust(w))
         sys.stdout.flush()
 
     def _write_result(msg):
-        sys.stdout.write(f"\r{' ' * 100}\r")
-        sys.stdout.flush()
+        if _bar_visible():
+            sys.stdout.write("\r" + " " * _bar_width() + "\r")
+            sys.stdout.flush()
         print(msg, flush=True)
 
     # nvidia-smi stats cached every 3 sec (subprocess in background thread)
@@ -1712,6 +1750,11 @@ def train_system():
 
     def _ticker():
         """Redraws the progress bar once a second."""
+        # Nothing to draw into a pipe, and the tick is not free: it spawns an
+        # nvidia-smi every 3 seconds, and every run the agent starts is piped.
+        # The thread is still created so the join below stays unconditional.
+        if not _bar_visible():
+            return
         while not _bar_stop.wait(1.0):
             elapsed = time.time() - t_train
             with _state_lock:
@@ -1848,14 +1891,27 @@ def train_system():
         print("  QUALITY REPORT")
         print("=" * W2)
         # Print top assets
-        cols = ['Asset', 'Score', 'CB_Acc', 'LSTM_Acc', 'Status']
+        # All four members, not two. Net_AUC rides along because it is what the
+        # research campaign is actually judged on and it was visible only inside
+        # the agent. The two kinds read differently: the accuracies are the
+        # CHAMPION fold's, Net_AUC is averaged over every fold (see _fold_mean),
+        # so a wide gap between them is the champion's argmax noise rather than
+        # a disagreement between the members.
+        cols = ['Asset', 'Score', 'CB_Acc', 'LSTM_Acc', 'TF_Acc', 'TCN_Acc',
+                'Net_AUC', 'Status']
         cols_present = [c for c in cols if c in rep_sorted.columns]
         if cols_present:
             header = "  " + "  ".join(f"{c:<12}" for c in cols_present)
             print(header)
             print("  " + "-" * (len(header) - 2))
             for _, row in rep_sorted.iterrows():
-                line = "  " + "  ".join(f"{row.get(c,'')!s:<12}" for c in cols_present)
+                # Rounded, not str(): a float prints all 17 digits, which was
+                # merely ugly with two accuracy columns and unreadable with six
+                # - every cell overran the 12-wide column and the table lost
+                # its alignment entirely.
+                line = "  " + "  ".join(
+                    f"{(f'{v:.4f}' if isinstance(v, float) else str(v)):<12}"
+                    for c in cols_present for v in [row.get(c, '')])
                 print(line)
         else:
             print(rep_sorted.to_string(index=False))
