@@ -1704,6 +1704,11 @@ def train_system():
         return max(40, shutil.get_terminal_size((100, 24)).columns - 1)
 
     def _bar_visible():
+        # GTRADE_NO_TICKER is for a parent that draws its own status line: the
+        # chunked runner starts two of these processes on one inherited console,
+        # so without it they and the parent all rewrite the same row.
+        if (os.getenv("GTRADE_NO_TICKER") or "").strip() in ("1", "true", "True"):
+            return False
         try:
             return sys.stdout.isatty()
         except Exception:
@@ -1737,7 +1742,7 @@ def train_system():
         "gpu_pct": "?", "mem_pct": "?",
         "mem_used": "?", "mem_free": "?", "mem_total": "?",
         "temp": "?", "pwr": "?", "pwr_limit": "?",
-        "fan": "?", "clk_gpu": "?", "clk_mem": "?",
+        "fan": "?", "clk_gpu": "?", "clk_mem": "?", "procs": "?",
         "ts": 0.0,
     }
 
@@ -1768,6 +1773,17 @@ def train_system():
                 _smi_cache["fan"]       = _g(8)
                 _smi_cache["clk_gpu"]   = _g(9)
                 _smi_cache["clk_mem"]   = _g(10)
+            # How many processes actually hold GPU memory. The one number that
+            # says the card is being used at all: this trainer configures the
+            # GPU or falls back to the CPU on its own, printing that decision in
+            # a line at startup which scrolls away within minutes, and a run
+            # that shows 0 here is that fallback or a neighbour that died.
+            _p = _sp.run(["nvidia-smi", "--query-compute-apps=pid",
+                          "--format=csv,noheader"],
+                         capture_output=True, text=True, timeout=4, check=False)
+            if _p.returncode == 0:
+                _smi_cache["procs"] = str(len(
+                    [ln for ln in _p.stdout.splitlines() if ln.strip()]))
         except Exception:
             pass
         _smi_cache["ts"] = time.time()
@@ -1807,6 +1823,7 @@ def train_system():
                     f"GPU {c['gpu_pct']}% | "
                     f"MEM {c['mem_pct']}% {c['mem_used']}/{c['mem_total']}MB "
                     f"(TF={tf_vram}) | "
+                    f"{c['procs']}proc | "
                     f"TEMP {c['temp']}C | "
                     f"PWR {c['pwr']}/{c['pwr_limit']}W | "
                     f"FAN {c['fan']}% | "

@@ -40,6 +40,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -47,6 +48,7 @@ from datetime import datetime
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 from config import FULL_ASSET_MAP
+from core import console_status
 
 PROGRESS = os.path.join(BASE, "_chunk_progress.txt")
 QPATH = os.path.join(BASE, "models", "quality_report.json")
@@ -157,7 +159,7 @@ def _fit_jobs(jobs):
     return fits
 
 
-def _chunk_env(chunk, force_promote, jobs):
+def _chunk_env(chunk, force_promote, jobs, progress_dir=None):
     """One chunk process's environment.
 
     Everything sized against the WHOLE box has to be divided, or the second
@@ -188,6 +190,12 @@ def _chunk_env(chunk, force_promote, jobs):
     if force_promote:
         env["GTRADE_FORCE_PROMOTE"] = "1"
     env["GTRADE_ASSETS"] = ",".join(chunk)
+    if progress_dir:
+        # Only the first parallel chunk keeps the real progress files, the rule
+        # auto_research already follows: two trainers writing one file make the
+        # per-asset ETA - on the research page and on this run's status line -
+        # a mix of two chunks presented as one.
+        env["AR_PROGRESS_DIR"] = progress_dir
     if jobs > 1:
         env["GTRADE_WORKERS"] = str(max(1, int(LIGHT_ENV["GTRADE_WORKERS"]) // jobs))
         env["GTRADE_TF_POOL_PCT"] = "%.2f" % max(0.15, _pool_base() / jobs)
@@ -195,14 +203,14 @@ def _chunk_env(chunk, force_promote, jobs):
     return env
 
 
-def _run_chunk(ci, total, chunk, force_promote, jobs):
+def _run_chunk(ci, total, chunk, force_promote, jobs, progress_dir=None):
     """Train one chunk. Returns (ci, chunk, returncode).
 
     Output goes to a per-chunk log only when several chunks run at once: two
     trainers interleaving into one console is unreadable, and the sequential run
     is something a human watches.
     """
-    env = _chunk_env(chunk, force_promote, jobs)
+    env = _chunk_env(chunk, force_promote, jobs, progress_dir)
     print(f"\n===== CHUNK {ci}/{total}  ({len(chunk)} assets) =====")
     print("  " + ", ".join(chunk))
     if jobs <= 1:
@@ -225,8 +233,8 @@ def _run_chunk(ci, total, chunk, force_promote, jobs):
                             stderr=subprocess.STDOUT).returncode
         log.write("\n[chunked] chunk %d/%d  finished %s  rc=%d\n"
                   % (ci, total, datetime.now().isoformat(timespec="seconds"), rc))
-    print(f"[chunked] chunk {ci}/{total} finished rc={rc}  ->  "
-          f"{os.path.relpath(path, BASE)}")
+    console_status.emit(f"[chunked] chunk {ci}/{total} finished rc={rc}  ->  "
+                        f"{os.path.relpath(path, BASE)}")
     return ci, chunk, rc
 
 
@@ -308,36 +316,61 @@ def main():
     book = threading.Lock()
     failed = []
 
+    # The status line is for the PARALLEL run only. At --jobs 1 the single child
+    # inherits this console and draws its own bar, which knows the epoch and the
+    # loss as well; two of them on one row is what the row cannot survive. At
+    # --jobs 2 every child is redirected to its own log file, so the console is
+    # free and has, until now, shown nothing at all for hours at a time.
+    status = console_status.Status(len(chunks), inner_word="chunk1") if jobs > 1 else None
+    quiet = tempfile.mkdtemp(prefix="chunk_prog_") if jobs > 1 else None
+    completed = []
+
     def _finish(ci, chunk, rc):
         if rc != 0:
             failed.append(ci)
-            print(f"\n[chunked] chunk {ci} exited with code {rc}.")
-            print("[chunked] lower CHUNK_SIZE (or --jobs) if it ran out of RAM, "
-                  "then rerun to resume.")
+            console_status.emit(f"\n[chunked] chunk {ci} exited with code {rc}.")
+            console_status.emit("[chunked] lower CHUNK_SIZE (or --jobs) if it ran "
+                                "out of RAM, then rerun to resume.")
             return
         with book:
             _merge_quality()
             with open(PROGRESS, "a", encoding="utf-8") as f:
                 f.writelines(a + "\n" for a in chunk)
-        print(f"[chunked] chunk {ci}/{len(chunks)} complete - memory reset for the next chunk.")
+        completed.append(ci)
+        if status:
+            status.unit_done()
+            status.set_progress(len(completed), "chunk %d/%d" % (ci, len(chunks)))
+        console_status.emit(f"[chunked] chunk {ci}/{len(chunks)} complete - "
+                            "memory reset for the next chunk.")
 
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = [pool.submit(_run_chunk, ci, len(chunks), chunk,
-                               args.force_promote, jobs)
-                   for ci, chunk in enumerate(chunks, 1)]
-        for fut in futures:
-            if failed:
-                # A failure is almost always the box running out of something,
-                # so the chunks not started yet would fail the same way. Already
-                # running ones are left to finish: their work is real and the
-                # progress file only records what actually completed.
-                fut.cancel()
-                continue
-            try:
-                _finish(*fut.result())
-            except Exception as exc:
-                failed.append(-1)
-                print(f"\n[chunked] a chunk could not be started: {exc}")
+    try:
+        if status:
+            status.set_progress(0, "chunk 1/%d" % len(chunks))
+            status.start()
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            futures = [pool.submit(_run_chunk, ci, len(chunks), chunk,
+                                   args.force_promote, jobs,
+                                   None if ci == 1 else quiet)
+                       for ci, chunk in enumerate(chunks, 1)]
+            for fut in futures:
+                if failed:
+                    # A failure is almost always the box running out of
+                    # something, so the chunks not started yet would fail the
+                    # same way. Already running ones are left to finish: their
+                    # work is real and the progress file only records what
+                    # actually completed.
+                    fut.cancel()
+                    continue
+                try:
+                    _finish(*fut.result())
+                except Exception as exc:
+                    failed.append(-1)
+                    console_status.emit(f"\n[chunked] a chunk could not be started: {exc}")
+    finally:
+        if status:
+            status.stop()
+        if quiet:
+            shutil.rmtree(quiet, ignore_errors=True)
 
     if failed:
         print("\n[chunked] stopped with %d failed chunk(s); rerun to resume."

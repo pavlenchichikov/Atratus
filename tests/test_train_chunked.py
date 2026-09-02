@@ -82,3 +82,18 @@ def test_the_chunked_retrain_asks_the_card_before_taking_two(monkeypatch):
     assert train_chunked._fit_jobs(2) == 2
     # One is never widened, and never costs a call.
     assert train_chunked._fit_jobs(1) == 1
+
+
+def test_only_the_first_parallel_chunk_writes_the_real_progress_file(monkeypatch):
+    # Two trainers writing ar_progress_unit.json make the per-asset ETA - on the
+    # research page and on this run's status line - a mix of two chunks shown as
+    # one. Same rule auto_research already follows for its own chunks.
+    # The suite isolates ar_progress by exporting AR_PROGRESS_DIR (conftest), and
+    # a chunk env is a copy of the environment, so that has to go first or every
+    # chunk would look redirected.
+    monkeypatch.delenv("AR_PROGRESS_DIR", raising=False)
+    first = train_chunked._chunk_env(["AAPL"], False, jobs=2)
+    rest = train_chunked._chunk_env(["MSFT"], False, jobs=2,
+                                    progress_dir="/scratch/x")
+    assert "AR_PROGRESS_DIR" not in first
+    assert rest["AR_PROGRESS_DIR"] == "/scratch/x"

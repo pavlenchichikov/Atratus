@@ -655,13 +655,23 @@ def _train_chunks_parallel(parts, env, jobs, label, key_of=None):
     """
     from concurrent.futures import ThreadPoolExecutor
 
+    from core import console_status
+
     quiet = tempfile.mkdtemp(prefix="ar_prog_")
     out = {}
+    done_chunks = []
+    # The parent owns the console for the whole phase: it is the only one that
+    # knows how many chunks there are, and it survives the child restarts. The
+    # first chunk's own bar would otherwise be the only live thing on screen and
+    # would vanish and reappear with every process.
+    status = console_status.Status(len(parts), inner_word="chunk1")
     try:
-        envs = [split_load(env, jobs, quiet if i else None)
+        envs = [console_status.quiet_child_env(split_load(env, jobs, quiet if i else None))
                 for i in range(len(parts))]
         _say("[%s] %d chunks on %d processes: %s"
              % (label, len(parts), jobs, " | ".join(parts)))
+        status.set_progress(0, label[:13])
+        status.start()
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             # _train_once, never train_env: these parts ARE the chunks, and
             # train_env would split each of them again.
@@ -677,7 +687,11 @@ def _train_chunks_parallel(parts, env, jobs, label, key_of=None):
                 out[part] = rows or []
                 if rows and key_of is not None:
                     ar_memory.cache_put(key_of(part), rows)
+                done_chunks.append(part)
+                status.unit_done()
+                status.set_progress(len(done_chunks), label[:13])
     finally:
+        status.stop()
         shutil.rmtree(quiet, ignore_errors=True)
     return out
 
@@ -1991,8 +2005,15 @@ _REGATE_PROGRESS_PATH = os.path.join(BASE, "_regate_progress.json")
 
 def _say(msg):
     """Print + mirror into the shared log file, so a lost console (the way the
-    2026-07-13 re-gate died silently) never loses the run trail."""
-    print(msg)
+    2026-07-13 re-gate died silently) never loses the run trail.
+
+    Through console_status.emit rather than print, so a line printed while the
+    chunk status bar is up wipes that row first instead of smearing through it.
+    With no bar running it IS print.
+    """
+    from core import console_status
+
+    console_status.emit(msg)
     logger.info(msg)
 
 

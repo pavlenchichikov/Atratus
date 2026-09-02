@@ -453,13 +453,17 @@ def test_chunks_train_in_parallel_and_the_rows_stay_in_order(monkeypatch):
     monkeypatch.setattr(ar, "free_vram_mb", lambda: 4096)
     seen = []
     monkeypatch.setattr(ar, "_train_once", lambda sub, env: (
-        seen.append((sub, env.get("GTRADE_TF_POOL_PCT"))) or
+        seen.append((sub, dict(env))) or
         [{"Asset": a, "Score": 1.0} for a in sub.split(",")]))
     rows = ar._cached_train("A,B,C,D", {}, lambda s: "k:" + s, "t")
     assert [r["Asset"] for r in rows] == ["A", "B", "C", "D"]
     assert sorted(s for s, _ in seen) == ["A,B", "C,D"]
     # and each process was handed a divided share, not the whole card
-    assert all(pool is not None for _, pool in seen)
+    assert all(e.get("GTRADE_TF_POOL_PCT") is not None for _, e in seen)
+    # None of them draws its own bar: the parent owns the one console row for
+    # the whole phase, and a child rewriting it would make it flicker between
+    # chunks and vanish at every process restart.
+    assert all(e.get("GTRADE_NO_TICKER") == "1" for _, e in seen)
 
 
 def test_one_job_keeps_the_sequential_path_byte_identical(monkeypatch):
