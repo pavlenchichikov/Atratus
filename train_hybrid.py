@@ -148,6 +148,19 @@ _print_lock = threading.Lock()
 # numpy/python randomness runs outside the explicitly seeded sites below.
 tf.keras.utils.set_random_seed(net_hygiene.seed_base())
 
+# GTRADE_TF_DETERMINISM=1 additionally pins the GPU KERNELS. A seed fixes the
+# initial weights and the batch order; it does not fix which cuDNN algorithm the
+# autotuner picks, and that choice is made by timing a few candidates, so it
+# follows whatever else the machine is doing. Measured 2026-09-02 on SP500: four
+# runs of one asset, same seed and same bars, gave Score +1.0241 / +0.2288 /
+# +0.2288 / +0.4109 - a spread of 0.80 against an adoption floor of 0.5. Off by
+# default because determinism costs speed and nothing measured that cost yet.
+if (os.getenv("GTRADE_TF_DETERMINISM") or "").strip() in ("1", "true", "True"):
+    try:
+        tf.config.experimental.enable_op_determinism()
+    except Exception as _e:  # older TF, or an op with no deterministic kernel
+        logger.warning("op determinism unavailable: %s", _e)
+
 # Keras 3 draws a new layer's weights from PROCESS-GLOBAL RNG state, so the
 # set-seed and the build that consumes it must be atomic: several asset threads
 # building at once would interleave their draws and every run would differ again
@@ -1390,7 +1403,15 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         if pos_ratio < 0.45:
             _safe_print(f"  [WARN] {asset:<12} unstable folds (pos_ratio={pos_ratio:.2f})")
 
-        best_fold = max(valid_folds, key=lambda x: x['score'])
+        # dict(), not the element itself. This assigned the median INTO the
+        # champion's own entry in fold_metrics, so Fold_Scores and the
+        # experiments journal printed the median in place of that fold's score
+        # (two equal numbers in a three-fold row, which reads as a fold that
+        # reproduced) and the champion fold's own score was never written down
+        # anywhere. It is the first number you want when asking why two runs of
+        # one config disagree. The median still travels on, into the registry
+        # and the quality row, exactly as before.
+        best_fold = dict(max(valid_folds, key=lambda x: x['score']))
         best_fold['score'] = median_score
         best_fold['test_profit'] = median_profit
 
@@ -1509,6 +1530,12 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     'fold': x['fold'],
                     'cb_acc': x['cb_acc'],
                     'lstm_acc': x['lstm_acc'],
+                    # Continuous, unlike the accuracies: a rerun that flips no
+                    # prediction past 0.5 leaves every accuracy identical and
+                    # still moved the probabilities, and that is exactly the
+                    # difference the fold scores amplify. Without it a fold that
+                    # is merely COARSELY reproducible reads as bit-identical.
+                    'net_auc': x.get('net_auc'),
                     'buy_thr': x['buy_thr'],
                     'sell_thr': x['sell_thr'],
                     'test_profit': x['test_profit'],
