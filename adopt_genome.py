@@ -512,6 +512,27 @@ def report_lines(rec, prev=None):
     if not env:
         out.append("  (none)")
 
+    # An exception nobody can see is the worst kind. Without this, an asset
+    # adopted onto a genome of its own would train and serve differently from
+    # every other asset while the one screen that answers "what is adopted"
+    # showed the global genome alone.
+    exceptions = _adopted.per_asset(rec)
+    if exceptions:
+        out += ["", "PER-ASSET EXCEPTIONS (%d asset(s) NOT on the genome above)"
+                % len(exceptions)]
+        raw = rec.get("per_asset") or {}
+        for asset in sorted(exceptions):
+            entry = raw.get(asset) or raw.get(asset.lower()) or {}
+            genes = {k: v for k, v in sorted(exceptions[asset].items())
+                     if k in _adopted._DEFAULTS and v != _adopted._DEFAULTS[k]}
+            out.append("  %-10s %s" % (
+                asset, ", ".join("%s=%s" % (k, json.dumps(v, ensure_ascii=False))
+                                 for k, v in genes.items())
+                or "production defaults"))
+            out.append("  %-10s adopted %s on: %s"
+                       % ("", entry.get("adopted") or "?",
+                          entry.get("evidence") or "NO EVIDENCE RECORDED"))
+
     if prev:
         pev = prev.get("evidence") or {}
         out += ["", "PREVIOUS ADOPTION (kept as adopted_genome.prev.json)",

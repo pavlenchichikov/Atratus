@@ -138,6 +138,3 @@ _search_gate.txt
 # hand once it ends. Local by nature, like the ab_* harnesses.
 *.patch
 
-# per-asset heterogeneity harness: reads the A/B cache, trains nothing
-ab_per_asset.py
-ab_confirm.py

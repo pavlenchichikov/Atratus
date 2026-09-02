@@ -323,3 +323,23 @@ def test_one_asset_moving_does_not_order_a_retrain_of_the_other_207(tmp_path):
     assert adopt_genome._forget_chunk_progress("rtx", base=str(tmp_path)) is True
     assert prog.read_text(encoding="utf-8").split() == ["AAPL", "MSFT"]
     assert adopt_genome._forget_chunk_progress("RTX", base=str(tmp_path)) is False
+
+
+def test_the_adoption_report_names_every_per_asset_exception():
+    """An exception nobody can see is the worst kind: the one screen that
+    answers "what is adopted" must not show the global genome alone while an
+    asset trains and serves on another."""
+    rec = {"label": "A", "adopted": "2026-07-27", "evidence": {"value": 1.63},
+           "genome": {"drops": ["vol_z"], "extra": []},
+           "per_asset": {"RTX": {"adopted": "2026-09-02",
+                                 "genome": {"drops": [], "extra": [],
+                                            "net_seeds": 3},
+                                 "evidence": "replication +1.198 p=0.019"}}}
+    text = "\n".join(adopt_genome.report_lines(rec))
+    assert "PER-ASSET EXCEPTIONS" in text
+    assert "RTX" in text and "net_seeds=3" in text
+    assert "replication +1.198" in text, "the evidence has to travel with it"
+    # positive control: a plain adoption says nothing about exceptions
+    plain = "\n".join(adopt_genome.report_lines(
+        {"label": "A", "genome": rec["genome"], "evidence": {}}))
+    assert "PER-ASSET" not in plain

@@ -67,6 +67,7 @@ echo    [PS] How the policies did on LIVE signals   [TR] Timing replay
 echo.
 echo  GENOME
 echo    [AG] Adopt          [AS] What is adopted    [AR] Revert
+echo    [PA] Per-asset adoption, step by step
 echo    [ABC] Configure an A/B                      [ABR] Run it
 echo.
 echo  SERVICES
@@ -106,6 +107,7 @@ if /i "%choice%"=="5C" goto train_chunked
 if /i "%choice%"=="5R" goto train_assets
 if /i "%choice%"=="5F" goto fill_champions
 if /i "%choice%"=="AG" goto adopt_genome
+if /i "%choice%"=="PA" goto per_asset_menu
 if /i "%choice%"=="AS" goto adopt_show
 if /i "%choice%"=="AR" goto adopt_revert
 if /i "%choice%"=="RS" goto auto_research
@@ -939,6 +941,122 @@ cls
 python adopt_genome.py
 pause
 goto menu
+
+:per_asset_menu
+cls
+echo =======================================================
+echo   PER-ASSET ADOPTION
+echo =======================================================
+echo.
+echo  A genome that failed on the average of the holdout can still be
+echo  worth keeping on the assets it was measured to help. Measured
+echo  2026-09-02: a candidate at -0.30 over 40 assets was +1.20 on RTX
+echo  and -3.84 on ROSN, both confirmed on fresh seeds.
+echo.
+echo  Run these in order. Each one says what it costs.
+echo.
+echo    [1] Look for per-asset differences      free, trains nothing
+echo        Reads the last A/B back out of the cache and prints, per
+echo        asset, its delta with its OWN error, plus how much of the
+echo        spread is real difference rather than seed noise.
+echo.
+echo    [2] Confirm the picks on fresh seeds    hours, trains
+echo        Step 1 picks the extremes, and extremes are overstated by
+echo        being picked. This re-measures them under seeds the pick
+echo        never saw. Shows the plan and the cost before starting.
+echo.
+echo    [3] Adopt ONE asset                     needs step 2's numbers
+echo    [4] Retrain what changed                only the moved assets
+echo    [5] Show what is adopted, exceptions included
+echo    [6] Put one asset back on the global genome
+echo.
+echo    [0] Back
+echo.
+set "pa="
+set /p pa="Select: "
+if "%pa%"=="1" goto pa_scan
+if "%pa%"=="2" goto pa_confirm
+if "%pa%"=="3" goto adopt_asset
+if "%pa%"=="4" goto pa_retrain
+if "%pa%"=="5" goto pa_show
+if "%pa%"=="6" goto adopt_asset_drop
+if "%pa%"=="0" goto menu
+goto per_asset_menu
+
+:pa_scan
+cls
+if not exist "%~dp0ab_per_asset.py" goto pa_missing
+python ab_per_asset.py
+echo.
+echo Read it this way: an asset is worth confirming when its delta is
+echo large AGAINST ITS OWN se, not when it is merely large. The one with
+echo the biggest se is the one that flipped sign on 2026-09-02.
+pause
+goto per_asset_menu
+
+:pa_confirm
+cls
+if not exist "%~dp0ab_confirm.py" goto pa_missing
+cmd /c ""%~dp0run_in_env.bat" python ab_confirm.py --dry"
+echo.
+set "pago="
+set /p pago="Run it for real? This trains for hours (y/N): "
+if /i not "%pago%"=="y" goto per_asset_menu
+cmd /c ""%~dp0run_in_env.bat" python ab_confirm.py"
+pause
+goto per_asset_menu
+
+:pa_retrain
+cls
+echo Only the assets whose genome moved are missing from the progress
+echo file, so this retrains those and leaves the rest alone. Runs in the
+echo GPU environment; serving reads the old weights until it finishes.
+echo.
+cmd /c ""%~dp0run_in_env.bat" python train_chunked.py"
+pause
+goto per_asset_menu
+
+:pa_show
+cls
+python adopt_genome.py --show
+pause
+goto per_asset_menu
+
+:pa_missing
+echo That step's script is missing from this checkout. Both steps ship with
+echo the project, so this means the file was deleted or moved.
+pause
+goto per_asset_menu
+
+:adopt_asset
+cls
+echo Adopts the genome from _ab_config.json for ONE asset, on top of the global
+echo adoption. Everything else stays where it is.
+echo.
+echo The evidence must be the REPLICATION, not the pass that selected the asset:
+echo on 2026-09-02 the three assets picked out of forty kept 30 percent of what
+echo that pass measured when they were re-measured on fresh seeds.
+echo.
+set "aga_asset="
+set /p aga_asset="Asset (blank to cancel): "
+if not defined aga_asset goto per_asset_menu
+set "aga_ev="
+set /p aga_ev="Replication evidence (blank to cancel): "
+if not defined aga_ev goto per_asset_menu
+python adopt_genome.py --asset %aga_asset% --evidence "%aga_ev%"
+pause
+goto per_asset_menu
+
+:adopt_asset_drop
+cls
+echo Puts one asset back on the global genome.
+echo.
+set "agd_asset="
+set /p agd_asset="Asset (blank to cancel): "
+if not defined agd_asset goto per_asset_menu
+python adopt_genome.py --drop-asset %agd_asset%
+pause
+goto per_asset_menu
 
 :adopt_show
 cls
