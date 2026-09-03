@@ -341,6 +341,22 @@ def write_adoption(cand, path=None):
     }
     with open(dest, "w", encoding="utf-8") as fh:
         json.dump(record, fh, ensure_ascii=False, indent=2)
+    _ledger(cand["label"], None, "global adoption")
+
+
+def _ledger(label, assets, note):
+    """Bank the live accuracy these assets had BEFORE this adoption.
+
+    Never allowed to interrupt an adoption: the ledger exists to answer a
+    question in six months, and losing one row is a smaller loss than a failed
+    adoption.
+    """
+    try:
+        from core import adoption_ledger
+
+        adoption_ledger.record(label, assets, note)
+    except Exception:
+        pass
 
 
 def adopt_for_asset(asset, genome, evidence, path=None):
@@ -380,6 +396,7 @@ def adopt_for_asset(asset, genome, evidence, path=None):
     }
     with open(dest, "w", encoding="utf-8") as fh:
         json.dump(record, fh, ensure_ascii=False, indent=2)
+    _ledger("per-asset", [key], evidence)
     return key
 
 
@@ -582,10 +599,18 @@ def main():
                          "not the pass that selected the asset")
     ap.add_argument("--drop-asset", metavar="ASSET",
                     help="put one asset back on the global genome")
+    ap.add_argument("--ledger", action="store_true",
+                    help="what each adoption did to the LIVE number since")
     args = ap.parse_args()
 
     if args.show:
         _show()
+        return
+    if args.ledger:
+        from core import adoption_ledger
+
+        for line in adoption_ledger.report_lines():
+            print(line)
         return
     if args.drop_asset:
         moved = drop_asset_adoption(args.drop_asset)

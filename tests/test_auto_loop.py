@@ -732,3 +732,83 @@ def test_an_unset_screen_is_not_a_problem_on_any_basis():
     # the contradiction it exists to prevent is still caught when set by hand
     assert auto_loop.campaign_problems(
         {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_SCREEN": "1"})
+
+
+# --- what a gate is allowed to spend hours on --------------------------------
+
+def test_an_underpowered_gate_is_refused_rather_than_warned_about(monkeypatch, capsys):
+    """The warning existed since 2026-08-21 and was printed at configure time.
+    On 2026-09-02 a 12-asset run started anyway, spent nine hours, and reported
+    that it could resolve +1.74 against a floor of +0.5."""
+    monkeypatch.setattr(ab_build, "last_spread", lambda base=None: 2.43)
+    monkeypatch.delenv("GTRADE_AB_ALLOW_UNDERPOWERED", raising=False)
+    assert "cannot answer" in ab_build.projected_power(12, 0.5)
+    assert ab_build._allow_underpowered() is False
+    monkeypatch.setenv("GTRADE_AB_ALLOW_UNDERPOWERED", "1")
+    assert ab_build._allow_underpowered() is True
+    # and a holdout that CAN resolve its floor is never refused
+    assert "cannot answer" not in ab_build.projected_power(400, 0.5)
+
+
+def test_only_a_gate_that_measured_this_genome_burns_its_assets(tmp_path):
+    """The blanket rule cost 254 of 847 assets and the whole forex class. The
+    failure it was written for was narrower: re-gating the SAME genome compared
+    a result with itself and produced dScore 0.00, p=1.000."""
+    (tmp_path / "_ab_genomes_a.json").write_text(json.dumps({
+        "holdout": "AAA,BBB", "reference_sig": "REF",
+        "results": {"x": {"sig": "SIG-1"}}}), encoding="utf-8")
+    (tmp_path / "_ab_genomes_b.json").write_text(json.dumps({
+        "holdout": "CCC,DDD", "reference_sig": "REF",
+        "results": {"y": {"sig": "SIG-2"}}}), encoding="utf-8")
+    everything = ab_build.previous_holdouts(base=str(tmp_path))
+    assert len(everything) == 2, "with no signature the old behaviour stands"
+    only_one = ab_build.previous_holdouts(base=str(tmp_path), for_sigs=["SIG-2"])
+    assert only_one == ["CCC,DDD"]
+
+
+def test_the_noise_book_ranks_assets_and_never_drops_the_unmeasured(tmp_path):
+    """The holdout a floor needs grows with the SQUARE of the spread, and the
+    spread runs from 0.53 to 8.87 across assets. Unmeasured assets keep their
+    place instead of being treated as noisy, or the draw would circle the same
+    handful forever."""
+    import numpy as np
+
+    path = str(tmp_path / "noise.json")
+    ab_build.record_asset_noise(
+        ["QUIET", "LOUD"],
+        np.array([[1.0, 1.1, 0.9, 1.0], [5.0, -5.0, 4.0, -4.0]]), path=path)
+    assert ab_build.quiet_first(["LOUD", "QUIET", "NEW"], path=path) == \
+        ["QUIET", "LOUD", "NEW"]
+    # no book yet: the order is left exactly as it came
+    assert ab_build.quiet_first(["B", "A"], path=str(tmp_path / "none.json")) == ["B", "A"]
+
+
+def test_a_failed_gate_still_names_the_assets_it_helped(tmp_path, monkeypatch, capsys):
+    """A failed verdict is a mean over a heterogeneous effect. Twice out of
+    twice the failing run held an asset that later survived a replication: RTX
+    out of a run that read -0.30, AUDCAD out of one that read +0.63."""
+    import numpy as np
+
+    monkeypatch.setattr(ab_build, "QUEUE_PATH", str(tmp_path / "q.json"))
+    monkeypatch.setattr("ab_per_asset.original",
+                        lambda *a, **k: (["QUIET", "NOISY"],
+                                         np.array([[4.0, 4.2, 3.8, 4.1],
+                                                   [0.1, -0.2, 0.3, 0.0]]),
+                                         "cand", "res.json", None, 0.0))
+    entry = ab_build.queue_per_asset({"floor": 0.5, "alpha": 0.05})
+    assert entry["picks"] == ["QUIET"]
+    assert entry["confirm"].endswith("--assets QUIET")
+    assert "ab_confirm" in capsys.readouterr().out
+    assert json.load(open(str(tmp_path / "q.json"), encoding="utf-8"))["picks"] == ["QUIET"]
+
+
+def test_the_follow_up_never_takes_the_gate_down(tmp_path, monkeypatch, capsys):
+    """It runs after hours of training have already been paid for."""
+    monkeypatch.setattr(ab_build, "QUEUE_PATH", str(tmp_path / "q.json"))
+
+    def boom(*a, **k):
+        raise SystemExit("the arms were not identified correctly")
+
+    monkeypatch.setattr("ab_per_asset.original", boom)
+    assert ab_build.queue_per_asset({"floor": 0.5, "alpha": 0.05}) is None
+    assert "skipped" in capsys.readouterr().out

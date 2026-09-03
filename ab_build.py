@@ -16,6 +16,7 @@ Usage:
   python ab_build.py --n 20          # a different holdout size
 """
 import argparse
+import datetime
 import glob
 import json
 import os
@@ -70,18 +71,37 @@ def is_reference(cand, ref):
     return bool(ref.get("sig")) and cand.get("sig") == ref["sig"]
 
 
-def previous_holdouts(base=None):
-    """The holdout of every earlier A/B run, so none of them is reused.
+def previous_holdouts(base=None, for_sigs=None):
+    """Holdouts a NEW gate must avoid.
 
-    The adopted record's own holdout is included too: its result file can be
-    moved or archived, and those assets must not quietly become drawable again.
+    The rule used to be "every asset of every past A/B, forever", and the cost
+    was measured on 2026-09-03: 254 of 847 assets consumed and the whole forex
+    class gone, which is what made a class hypothesis untestable.
+
+    The failure it was written for was narrower than that. Re-gating the SAME
+    genome on the same assets compared a result with itself and produced dScore
+    0.00, p=1.000 - both arms read the same cached rows. A DIFFERENT genome
+    trains a new candidate arm on those assets, so nothing is compared with
+    itself; what remains is ordinary multiple testing, which alpha and the
+    replication step already handle.
+
+    So a run is excluded only when it measured one of `for_sigs`. Passing None
+    keeps the old blanket behaviour, which is what a caller with no signature in
+    hand should get.
     """
     out = []
+    want = {s for s in (for_sigs or []) if s}
     for path in sorted(glob.glob(os.path.join(base or BASE,
                                               "_ab_genomes_*.json"))):
         data = _read_json(path)
-        if isinstance(data, dict) and data.get("holdout"):
-            out.append(data["holdout"])
+        if not isinstance(data, dict) or not data.get("holdout"):
+            continue
+        if want:
+            sigs = {(r or {}).get("sig") for r in (data.get("results") or {}).values()}
+            sigs.add(data.get("reference_sig"))
+            if not (sigs & want):
+                continue
+        out.append(data["holdout"])
     rec = _adopted_record()
     held = ((rec or {}).get("evidence") or {}).get("holdout")
     if held:
@@ -160,6 +180,10 @@ def last_spread(base=None):
             if isinstance(res, dict) and res.get("sd_raw"):
                 return float(res["sd_raw"])
     return None
+
+
+def _allow_underpowered():
+    return (os.getenv("GTRADE_AB_ALLOW_UNDERPOWERED") or "").strip() in ("1", "true", "True")
 
 
 def projected_power(n, floor, base=None):
@@ -354,7 +378,14 @@ def _closes(asset):
         return []
 
 
-def _suggest_assets(n, seed):
+def _suggest_assets(n, seed, for_sigs=None):
+    """A holdout for a gate, preferring assets whose noise is already known small.
+
+    `for_sigs` are the genome signatures about to be measured: only runs that
+    already measured one of them make their assets off limits (see
+    previous_holdouts). Everything else is drawable again, which is what puts
+    the 254 consumed assets - the whole forex class among them - back in play.
+    """
     import auto_research as ar
     from config import ASSET_TYPES, FULL_ASSET_MAP
     from core import holdout
@@ -364,9 +395,69 @@ def _suggest_assets(n, seed):
     # auto_research says as much beside the alias - "live code calls
     # heldout_assets()" - and this was the one live caller that did not.
     ex = holdout.excluded([ar.SELECTION_ASSETS, ar.heldout_assets(),
-                           ar.tier_assets()], previous_holdouts())
+                           ar.tier_assets()], previous_holdouts(for_sigs=for_sigs))
     elig = holdout.eligible(list(FULL_ASSET_MAP), bar_counts(), ex)
-    return holdout.suggest(elig, ASSET_TYPES, n=n, seed=seed), elig
+    quiet = quiet_first(elig)
+    return holdout.suggest(quiet, ASSET_TYPES, n=n, seed=seed), elig
+
+
+NOISE_PATH = os.path.join(BASE, "_asset_noise.json")
+
+
+def record_asset_noise(assets, deltas, path=None):
+    """Bank each asset's own seed noise, so later holdouts can prefer the quiet.
+
+    The required holdout grows with the SQUARE of the spread, and the spread is
+    wildly uneven: measured 2026-09-02, se runs from 0.53 (EVRG) to 8.87 (SHY).
+    Selecting on it cuts the noise part of 2.75 and leaves the 1.83 that is a
+    real difference between assets, which is why this helps and cannot solve.
+
+    A variance is far more stable than a mean, and this one is not the quantity
+    any verdict is read on, so reusing it to choose assets is not the selection
+    trap that reusing an EFFECT would be.
+    """
+    path = path or NOISE_PATH
+    try:
+        with open(path, encoding="utf-8") as fh:
+            book = json.load(fh)
+    except (OSError, ValueError):
+        book = {}
+    n = deltas.shape[1] if getattr(deltas, "ndim", 0) == 2 else 0
+    if n < 2:
+        return book
+    for i, asset in enumerate(assets):
+        row = deltas[i]
+        se = float(row.std(ddof=1) / (n ** 0.5))
+        prev = book.get(asset) or {}
+        book[asset] = {"se": se, "n_seeds": n,
+                       "measured": datetime.date.today().isoformat(),
+                       "times": int(prev.get("times", 0)) + 1}
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(book, fh, ensure_ascii=False, indent=2, sort_keys=True)
+    except OSError:
+        pass
+    return book
+
+
+def quiet_first(assets, path=None):
+    """`assets` with the measured-quiet ones first and the unmeasured after.
+
+    Unmeasured assets are NOT pushed to the back as if they were noisy: nothing
+    is known about them, and a holdout of only previously-measured assets would
+    keep re-drawing the same handful. They keep their order behind the quiet
+    ones, so the draw still spreads across classes.
+    """
+    try:
+        with open(path or NOISE_PATH, encoding="utf-8") as fh:
+            book = json.load(fh)
+    except (OSError, ValueError):
+        return list(assets)
+    known = [(a, float((book.get(a) or {}).get("se", 0))) for a in assets
+             if isinstance(book.get(a), dict) and book[a].get("se") is not None]
+    quiet = [a for a, _ in sorted(known, key=lambda x: x[1])]
+    rest = [a for a in assets if a not in set(quiet)]
+    return quiet + rest
 
 
 def _holdout_default_n():
@@ -568,7 +659,31 @@ def _heldout_eval(subset, env, fn, **kw):
             os.environ["GTRADE_SEED"] = was
     if not fulls:
         return [], []
+    _bank_noise(fulls)
     return _mean_rows(fulls), _mean_rows(contribs)
+
+
+def _bank_noise(fulls):
+    """Record each asset's seed spread from the rolls this arm just trained.
+
+    One ARM's own standard error, not the delta's - the delta of two arms is
+    about sqrt(2) times larger. That constant does not matter for what the book
+    is used for, which is ranking assets from quiet to noisy, and keeping the
+    raw quantity means the number stays meaningful if the use ever changes.
+    """
+    import numpy as _np
+
+    try:
+        per = [{r["Asset"]: float(r["Score"]) for r in roll
+                if isinstance(r, dict) and isinstance(r.get("Score"), (int, float))}
+               for roll in fulls]
+        common = sorted(set(per[0]).intersection(*[set(p) for p in per[1:]]))
+        if not common or len(per) < 2:
+            return
+        record_asset_noise(common,
+                           _np.array([[p[a] for p in per] for a in common]))
+    except Exception:
+        pass  # a bookkeeping aid must never take a gate down
 
 
 def train_reference(subset, ref):
@@ -773,6 +888,17 @@ def run(cfg):
         # file here, so the run would train on nothing and say so late.
         print(f"market.db not found at {DB_PATH}; run data_engine first.")
         return
+    # Refuse an underpowered gate instead of only warning about it. The warning
+    # has existed since 2026-08-21 and was printed at configure time; on
+    # 2026-09-02 a 12-asset run was started anyway, spent nine hours, and
+    # reported that it could resolve +1.74 against a floor of +0.5. The hours
+    # are the same whether the question is answerable or not.
+    pw = projected_power(len(subset.split(",")), cfg["floor"])
+    if pw and "cannot answer" in pw and not _allow_underpowered():
+        print(pw)
+        print("Refusing to start. Add assets, raise the floor, or set "
+              "GTRADE_AB_ALLOW_UNDERPOWERED=1 to run it anyway.")
+        return
     fp_start = ar_memory.data_fingerprint(subset)
     print("Reference: {}   holdout: {}   data {}".format(ref["label"], subset, fp_start))
     seeds = seed_roll()
@@ -818,7 +944,51 @@ def run(cfg):
               "unreliable; rerun it on a quiet database.")
     path = write_result(cfg, results)
     print(f"\nWrote {os.path.basename(path)}")
+    if all(verdict(st, cfg["floor"], cfg["alpha"]) != "PASSED"
+           for st in results.values()):
+        queue_per_asset(cfg)
     print("Next: python adopt_genome.py")
+
+
+QUEUE_PATH = os.path.join(BASE, "_per_asset_queue.json")
+
+
+def queue_per_asset(cfg, path=None):
+    """After a gate that adopted nothing, say which assets it DID help.
+
+    A failed verdict is a mean over a heterogeneous effect, and twice out of
+    twice the failing run contained an asset that later survived a replication:
+    RTX out of a run that read -0.30 overall, AUDCAD out of one that read +0.63.
+    Leaving that on the floor throws away the expensive half of the run.
+
+    Nothing is trained or adopted here. The picks are written down with the
+    command that would confirm them, because confirming costs hours and this
+    also runs inside an unattended loop that stops before the retrain by design.
+    """
+    try:
+        import ab_confirm
+        import ab_per_asset
+
+        assets, deltas, label, result_file, _rec, _got = ab_per_asset.original()
+        picks, why = ab_confirm.picks_from_scan(assets, deltas)
+        if not picks:
+            return None
+        entry = {"result": result_file, "candidate": label, "picks": picks,
+                 "why": why,
+                 "confirm": "python ab_confirm.py --assets " + ",".join(picks)}
+        with open(path or QUEUE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(entry, fh, ensure_ascii=False, indent=2)
+        print()
+        print("Nothing adopted, but the run was not empty. Per asset, %s:" % why)
+        print("  " + ", ".join(picks))
+        print("  " + entry["confirm"])
+        return entry
+    except (Exception, SystemExit) as exc:
+        # SystemExit too: ab_per_asset REFUSES with one when it cannot identify
+        # the arms, and SystemExit is not an Exception - so a refusal here would
+        # have killed the gate's process after the hours were already spent.
+        print("Per-asset follow-up skipped: %s" % exc)
+    return None
 
 
 def main():

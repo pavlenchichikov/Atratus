@@ -26,6 +26,7 @@ than living beside it like the throwaway ab_* harnesses: the menu offers it, and
 a menu entry pointing at a file that is not in the repository is not an offer.
 """
 
+import glob
 import json
 import os
 import re
@@ -88,10 +89,39 @@ def phases(log_path=None, since=None, until=None):
     The path is resolved on the CALL, not bound as a default: a default is
     evaluated once at import, so a caller pointing LOG somewhere else - a test,
     or a second checkout - would have gone on reading the original file.
+
+    ROTATED files are read too, oldest first. The log rotates at a few megabytes
+    and one training run writes megabytes, so a gate finished yesterday can have
+    its phases in gtrade.log.1 while gtrade.log starts this morning - which is
+    exactly what happened on 2026-09-03, and the tool answered "no training
+    phases found" as if the run had never existed.
     """
-    log_path = log_path or LOG
+    paths = [log_path] if log_path else _log_files()
     offset = _utc_offset_seconds()
     out = []
+    for one in paths:
+        out += _phases_in(one, offset, since, until)
+    out.sort()
+    return out
+
+
+def _log_files(log_path=None):
+    """The log and its rotated siblings, oldest first."""
+    base = log_path or LOG
+    rotated = sorted(glob.glob(base + ".*"),
+                     key=lambda p: -_suffix_number(p))
+    return [p for p in rotated if os.path.exists(p)] + [base]
+
+
+def _suffix_number(path):
+    tail = path.rsplit(".", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def _phases_in(log_path, offset, since, until):
+    out = []
+    if not os.path.exists(log_path):
+        return out
     with open(log_path, encoding="utf-8", errors="ignore") as fh:
         for line in fh:
             m = PHASE_RE.match(line)
