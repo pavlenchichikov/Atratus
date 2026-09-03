@@ -1021,6 +1021,12 @@ echo.
 echo Read it this way: an asset is worth confirming when its delta is
 echo large AGAINST ITS OWN se, not when it is merely large. The one with
 echo the biggest se is the one that flipped sign on 2026-09-02.
+echo.
+echo The "on" column says which genome that asset's reference arm ran:
+echo "own" means the delta is against ITS OWN adoption, so a negative
+echo one would undo work already measured and replicated. Heed the
+echo ADOPTED AFTER warning if it appears - it means the baseline is
+echo older than the adoption and the gain is being counted twice.
 pause
 goto per_asset_menu
 

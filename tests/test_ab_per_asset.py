@@ -165,3 +165,36 @@ def test_step_two_confirms_what_step_one_picked():
     # and when nothing clears, the extremes are offered with that said out loud
     picked, why = ab_confirm.picks_from_scan(assets[1:], deltas[1:], limit=1)
     assert picked == ["B"] and "not for significance" in why
+
+
+def test_an_asset_on_its_own_genome_is_labelled_as_such(monkeypatch):
+    """A delta against the global adoption and a delta against the asset's OWN
+    adoption are different claims, and the row read identically for both.
+    -3.8 on an adopted asset means this pass would undo measured, replicated
+    work; on an unadopted one it just means the candidate does not help."""
+    monkeypatch.setattr("core.adopted.load", lambda path=None: {
+        "genome": {"drops": []},
+        "per_asset": {"rtx": {"genome": {"drops": ["x"]},
+                              "adopted": "2026-09-02"}}})
+    own, where, dates = ab_per_asset.adoption_state(["RTX", "SBER"])
+    assert set(own) == {"RTX"}, "the file's lower-case key still matches"
+    assert where == {"RTX": "own", "SBER": "global"}
+    assert dates["RTX"] == "2026-09-02"
+
+
+def test_with_nothing_adopted_no_asset_claims_a_genome(monkeypatch):
+    monkeypatch.setattr("core.adopted.load", lambda path=None: {})
+    _own, where, _dates = ab_per_asset.adoption_state(["RTX"])
+    assert where == {"RTX": "-"}, "not 'global' when there is no global genome"
+
+
+def test_an_adoption_made_after_the_baseline_ran_is_flagged():
+    """The reference arm is only "the current adopted state" if it ran under
+    it. The eval cache is keyed by data fingerprint and seed, not by genome,
+    so a pre-adoption baseline row survives an adoption and is reused."""
+    dates = {"RTX": "2026-09-02", "AUDCAD": "2026-09-03", "_global": "2026-07-27"}
+    assert ab_per_asset.stale_baseline("2026-09-02", dates) == ["AUDCAD"]
+    # everything already in force when the arm ran is fine
+    assert ab_per_asset.stale_baseline("2026-09-05", dates) == []
+    # and with no run date there is nothing to compare against, so no claim
+    assert ab_per_asset.stale_baseline(None, dates) == []

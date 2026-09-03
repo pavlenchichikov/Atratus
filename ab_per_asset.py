@@ -257,6 +257,61 @@ def original(verify=True):
     return assets, deltas, label, result_file, recorded, got
 
 
+def adoption_state(assets):
+    """(per-asset genome map, {asset: "own"|"global"|"-"}, adoption dates).
+
+    The reference arm already carries every adoption: it runs through the same
+    config.py, whose ADOPTED_ENV_KEYS resolves genome_for_assets. So a delta IS
+    measured against what the asset is on today - but nothing on the row SAID
+    so, and an asset on its own genome reads identically to one on the global
+    default. They are different claims: -3.8 on an adopted asset means this
+    pass would UNDO an adoption that was measured and replicated, and -3.8 on
+    an unadopted one just means the candidate does not help there.
+    """
+    from core import adopted
+
+    record = adopted.load() or {}
+    own = adopted.per_asset(record)
+    has_global = bool(record.get("genome"))
+    where = {}
+    for asset in assets:
+        key = str(asset).strip().upper()
+        where[asset] = "own" if key in own else ("global" if has_global else "-")
+    dates = {k.strip().upper(): (v or {}).get("adopted")
+             for k, v in (record.get("per_asset") or {}).items()
+             if isinstance(v, dict)}
+    dates["_global"] = record.get("adopted")
+    return own, where, dates
+
+
+def run_started():
+    """When this A/B's reference arm can first have run: its config's mtime.
+
+    original() bounds the arm search the same way, so this is the same clock
+    and not a second, drifting opinion about when the run began.
+    """
+    if not os.path.exists(CONFIG):
+        return None
+    return datetime.fromtimestamp(os.path.getmtime(CONFIG),
+                                  timezone.utc).strftime("%Y-%m-%d")  # noqa: UP017
+
+
+def stale_baseline(started, dates):
+    """Adoptions made AFTER the reference arm ran. They invalidate the deltas.
+
+    The reference arm is only "the current adopted state" if it ran under it.
+    Adopt something, then compare a candidate against a baseline measured
+    before that adoption, and the candidate is credited with a gain that was
+    already banked. The eval cache is keyed by data fingerprint and seed, not
+    by genome, so a pre-adoption row survives the adoption and gets reused
+    without saying anything.
+    """
+    if not started:
+        return []
+    return sorted(name for name, when in dates.items()
+                  if when and str(when)[:10] > started)
+
+
 def main():
     assets, deltas, label, result_file, recorded, got = original(verify=False)
     n_seeds = deltas.shape[1]
@@ -268,6 +323,14 @@ def main():
     if recorded is None or abs(got - recorded) > TOL:
         sys.exit("MISMATCH: the arms were not identified correctly; refusing to report.")
     print("               match, the arms are the ones the verdict was computed from")
+
+    # Which genome each asset's REFERENCE arm was running, and whether anything
+    # was adopted after that arm was measured.
+    _own, where, dates = adoption_state(assets)
+    stale = stale_baseline(run_started(), dates)
+    n_own = sum(1 for a in assets if where.get(a) == "own")
+    print(f"adoption     : {n_own} of {len(assets)} holdout assets are on a "
+          f"genome of their own; the rest on the global one")
 
     # Per-asset paired statistics. se is the standard error of THIS asset's own
     # mean, so it says how much of that asset's delta is the seed re-roll.
@@ -299,18 +362,63 @@ def main():
     print()
     print(f"Benjamini-Hochberg at q={FDR_Q:.2f}, one-sided:")
     order = np.argsort(-per_asset)
-    print(f"  {'asset':<12}{'delta':>9}{'se':>8}{'t':>7}{'p':>9}   verdict")
+    print(f"  {'asset':<12}{'on':>7}{'delta':>9}{'se':>8}{'t':>7}{'p':>9}   verdict")
     for i in order:
-        if not (keep[i] or per_asset[i] >= FLOOR or i in order[:5] or i in order[-3:]):
+        if not (keep[i] or per_asset[i] >= FLOOR or i in order[:5] or i in order[-3:]
+                or where.get(assets[i]) == "own"):
             continue
         verdict = "ADOPT" if (keep[i] and per_asset[i] >= FLOOR) else (
             "significant, below floor" if keep[i] else
             "above floor, not significant" if per_asset[i] >= FLOOR else "")
-        print(f"  {assets[i]:<12}{per_asset[i]:+9.3f}{se[i]:8.3f}{t[i]:7.2f}"
+        print(f"  {assets[i]:<12}{where.get(assets[i], '-'):>7}"
+              f"{per_asset[i]:+9.3f}{se[i]:8.3f}{t[i]:7.2f}"
               f"{p_one[i]:9.4f}   {verdict}")
     n_adopt = int(np.sum(keep & (per_asset >= FLOOR)))
     print()
     print(f"assets that would take the genome: {n_adopt} of {len(assets)}")
+
+    # Every asset already on a genome of its own, and what this pass did to it.
+    # This is the question a pass is actually run to answer: the point of an
+    # adoption is that it improves, so a pass that makes an adopted asset worse
+    # is a pass that would undo measured, replicated work.
+    adopted_idx = [i for i in order if where.get(assets[i]) == "own"]
+    if adopted_idx:
+        print()
+        print("Against the genome each asset is ALREADY on:")
+        for i in adopted_idx:
+            gain = per_asset[i]
+            reading = ("improves on it" if gain >= FLOOR and keep[i] else
+                       "improves, but not past the noise" if gain > 0 else
+                       "WOULD UNDO IT" if gain <= -FLOOR else "no change worth the name")
+            print(f"  {assets[i]:<12}{gain:+9.3f}   {reading}"
+                  f"   (adopted {dates.get(assets[i].upper()) or '?'})")
+        harmed = [assets[i] for i in adopted_idx if per_asset[i] <= -FLOOR]
+        if harmed:
+            print()
+            print("  Adopting this candidate GLOBALLY would demote: %s."
+                  % ", ".join(harmed))
+            print("  Those keep their own genome through core/adopted.py, so a")
+            print("  global adoption does not touch them - but the same lever")
+            print("  measured on them is a different lever from the one that won")
+            print("  here, and this is where that shows.")
+    elif where:
+        print()
+        print("No asset in this holdout is on a genome of its own, so every "
+              "delta above is against the global adoption.")
+
+    if stale:
+        print()
+        print("ADOPTED AFTER this run's reference arm was measured: %s."
+              % ", ".join(stale))
+        print("Read it one of two ways, and they are opposites:")
+        print("  If this IS the run those adoptions were made from, the delta")
+        print("  above is the DISCOVERY, not a fresh improvement on top of it.")
+        print("  Reading it as the latter counts the same gain twice.")
+        print("  If it is a LATER run, its baseline predates the adoption and")
+        print("  the candidate is credited with a gain already banked. The eval")
+        print("  cache is keyed by data fingerprint and seed, not by genome, so")
+        print("  the stale row survives the adoption and is reused in silence.")
+        print("  Re-measure the reference arm before believing the number.")
     if not n_adopt:
         print("Nothing survives the correction: at this many seeds the per-asset")
         print("delta cannot be told from its own re-roll, so a per-asset adoption")

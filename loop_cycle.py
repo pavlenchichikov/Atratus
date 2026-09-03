@@ -40,6 +40,23 @@ def run_step(name, fn, fmt=None):
         return {"step": name, "status": "failed", "msg": str(exc)[:200]}
 
 
+def _refresh_macro():
+    """Central bank meeting dates, merged into the calendar. Returns the total.
+
+    Raises when NO source answered, so the cycle reports a failed step rather
+    than an "ok" that quietly left the calendar as it was two months ago.
+    """
+    from core import macro
+
+    fetched, failed = macro.fetch()
+    if not fetched:
+        raise RuntimeError("no macro source answered: %s"
+                           % "; ".join("%s %s" % kv for kv in sorted(failed.items())))
+    merged = macro.merge(macro.load(), fetched)
+    macro.save(merged)
+    return len(merged)
+
+
 def scan_assets(rows):
     """Map pre-fetched per-asset rows through the pure drift classifier."""
     return [
@@ -110,6 +127,13 @@ def main():
     try:
         steps = []
         steps.append(run_step("data_engine", lambda: _run_script("data_engine.py")))
+        # A published schedule goes stale on its own, and a file somebody has to
+        # remember to refresh is the guru_log failure again: 636 verdicts and 14
+        # scored outcomes, because scoring lived in a script nobody ran. Safe to
+        # repeat - a dead source contributes nothing and hand-added events
+        # survive, see core/macro.py.
+        steps.append(run_step("macro_calendar", _refresh_macro,
+                              fmt=lambda n: f"{n} event(s) on file"))
         steps.append(run_step("predict", lambda: _run_script("predict.py")))
         steps.append(run_step("reconcile", lambda: _run_script("performance_tracker.py")))
         steps.append(run_step("analyst_backfill", store.backfill_outcomes,

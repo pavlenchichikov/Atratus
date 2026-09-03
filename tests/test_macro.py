@@ -125,3 +125,27 @@ def test_upcoming_is_bounded_at_both_ends():
               {"date": "2030-01-01", "name": "far"}]
     got = macro.upcoming(events, today="2026-09-03", days=30)
     assert [e["name"] for e in got] == ["soon"]
+
+
+def test_the_daily_cycle_fails_the_step_when_no_source_answers(monkeypatch):
+    """An "ok" that left the calendar as it was two months ago is worse than a
+    failure: the whole reason this became a cycle step is that a file somebody
+    has to remember is a file that goes stale silently."""
+    import loop_cycle
+
+    monkeypatch.setattr(macro, "fetch", lambda: ([], {"CBR": "down"}))
+    step = loop_cycle.run_step("macro_calendar", loop_cycle._refresh_macro)
+    assert step["status"] == "failed" and "CBR" in step["msg"]
+
+
+def test_the_cycle_step_reports_how_many_events_are_on_file(monkeypatch, tmp_path):
+    import loop_cycle
+
+    path = str(tmp_path / "cal.json")
+    monkeypatch.setattr(macro, "PATH", path)
+    monkeypatch.setattr(macro, "fetch",
+                        lambda: (macro.cbr_events(CBR_HTML), {}))
+    step = loop_cycle.run_step("macro_calendar", loop_cycle._refresh_macro,
+                               fmt=lambda n: "%d event(s) on file" % n)
+    assert step["status"] == "ok" and step["msg"] == "2 event(s) on file"
+    assert len(macro.load(path=path)) == 2
