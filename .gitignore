@@ -138,3 +138,4 @@ _search_gate.txt
 # hand once it ends. Local by nature, like the ab_* harnesses.
 *.patch
 
+ab_basis_noise.py

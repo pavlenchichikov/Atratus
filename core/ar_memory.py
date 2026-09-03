@@ -60,7 +60,7 @@ def blob_put(name, obj):
 # Mirrors auto_research._score_basis's accepted set. Kept here rather than
 # imported because auto_research imports THIS module; tests/test_ar_memory.py
 # asserts the two lists still agree, so the copy cannot drift silently.
-SCORE_BASES = ("raw", "neural", "net_auc", "net_gain", "ens_auc")
+SCORE_BASES = ("raw", "neural", "net_auc", "net_gain", "ens_auc", "trade_t")
 
 
 def tried_scope():

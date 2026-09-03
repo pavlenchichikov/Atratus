@@ -257,8 +257,10 @@ from core.backtesting import (
     make_signals,
     make_walk_forward_splits,
     objective_v2_on,
+    pooled_t,
     price_resolution_ok,
     score_strategy,
+    trade_returns,
 )
 from core.calibration import fit_calibrator, save_calibrator
 from core.ensemble import (  # noqa: F401 (re-exported for signal_engine.py)
@@ -1339,6 +1341,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
 
             fold_info = {
                 'fold': k,
+                # The fold's own trade returns, kept so the asset's folds can be
+                # POOLED instead of summarised one by one. Cheap (about 80
+                # floats a fold) and it is the input the Trade_T column needs.
+                'trade_returns': trade_returns(sig_test, test_ret, comm, slip),
                 # The last bar this fold trained on. Without it nothing can say
                 # which of a champion's history it had already seen, and every
                 # offline accuracy is quietly in-sample.
@@ -1369,6 +1375,33 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'val_prob': np.asarray(val_prob, dtype=float),
                 'val_target': np.asarray(val_target_aligned, dtype=int),
             }
+            # GTRADE_FOLD_DUMP=<dir>: the arrays this fold was SCORED from, so
+            # the same trained model can be re-scored under a different
+            # measurement without training it again. That is the only honest way
+            # to compare scoring pipelines - a second training moves the model as
+            # well as the yardstick, and a re-seed alone moves a per-asset Score
+            # by about 2.9 on this box.
+            _dump_dir = (os.getenv("GTRADE_FOLD_DUMP") or "").strip()
+            if _dump_dir:
+                try:
+                    os.makedirs(_dump_dir, exist_ok=True)
+                    np.savez(os.path.join(
+                        _dump_dir, "%s_f%d_s%d.npz" % (table, k, net_hygiene.seed_base())),
+                        test_prob=np.asarray(test_prob, dtype=float),
+                        test_ret=np.asarray(test_ret, dtype=float),
+                        test_close=np.asarray(test_close, dtype=float),
+                        test_sma200=np.asarray(test_sma200, dtype=float),
+                        test_taleb=np.asarray(test_taleb, dtype=float),
+                        buy_thr=float(buy_thr), sell_thr=float(sell_thr),
+                        band=float(band_for(profile)),
+                        regime_cap=float(profile['regime_risk_cap']),
+                        regime_mode=str(_regime_mode), comm=float(comm),
+                        slip=float(slip), adv_weight=float(adv_weight),
+                        min_trades=int(_min_trades),
+                        score=float(test_score_weighted))
+                except Exception as _exc:
+                    logger.warning("fold dump failed for %s fold %d: %s", asset, k, _exc)
+
             fold_metrics.append(fold_info)
 
             # -- EAGER MEMORY MANAGEMENT -------------------------------------
@@ -1512,6 +1545,14 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             # why this is a column to measure with, not a new basis.
             'Fold_Scores': [float(x['score']) for x in fold_metrics
                             if isinstance(x.get('score'), (int, float))],
+            # The same trades the Score is built from, pooled over folds and
+            # read as a t statistic instead of a median of composites. Measured
+            # 2026-09-03: over four seeds on ASML the composite moved 42% and
+            # this moved 11.5%; on a quiet asset the two are the same, because
+            # there is nothing there to stabilise. None when too few trades -
+            # a missing measurement, not a zero.
+            'Trade_T': pooled_t([f.get('trade_returns') for f in valid_folds],
+                                 min_trades=_fold_floor),
             'Score_v2': float(best_fold.get('test_score_v2', 0.0)),
             'Profit': float(best_fold['test_profit']),
             'Trades': int(best_fold['test_trades']),

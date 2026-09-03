@@ -300,7 +300,7 @@ def campaign_problems(env):
                 "illuminated by CatBoost alone, so no net lever can become an "
                 "elite and the basis would only re-score the final gate"
                 % (basis, illum))
-    if basis == "raw" and illum == "full":
+    if basis in ("raw", "trade_t") and illum == "full":
         out.append(
             "GTRADE_AR_ILLUM=full on the raw Score basis: net training does not "
             "reproduce on this GPU (same seed, same config, 0.45 to 1.52 Score "

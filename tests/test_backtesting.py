@@ -6,12 +6,15 @@ import pytest
 from core.backtesting import (
     adaptive_split_params,
     apply_regime_filter,
+    evaluate_signals,
     make_signals,
     make_walk_forward_splits,
     max_drawdown_from_returns,
     pnl_from_signals,
+    pooled_t,
     score_strategy,
     sharpe_from_returns,
+    trade_returns,
 )
 
 
@@ -406,3 +409,40 @@ def test_evaluate_signals_v2_branch(monkeypatch):
     # the always-v2 twin ignores the flag
     monkeypatch.delenv("GTRADE_OBJECTIVE_V2", raising=False)
     assert bt.evaluate_signals_v2(sig, ret, bt.COMMISSION, bt.SLIPPAGE)[:3] == (p2, t2, w2)
+
+# --- the pooled trade statistic ---------------------------------------------
+
+def test_the_trade_stream_is_the_one_evaluate_signals_scores():
+    """Split out of evaluate_signals so folds can be POOLED instead of
+    summarised one by one. If the two ever diverge, the new basis would be
+    measuring a backtest nobody runs."""
+    sig = [1, 0, -1, 1, -1]
+    ret = [0.01, 0.5, -0.02, float("nan"), 0.03]
+    stream = trade_returns(sig, ret, 0.001, 0.001)
+    # sign follows the signal, costs come off both sides, and a NaN bar and a
+    # flat bar are not trades at all
+    assert stream == pytest.approx([0.008, 0.018, -0.032])
+    _p, _t, _w, mdd, sharpe = evaluate_signals(sig, ret, 0.001, 0.001)
+    assert mdd == pytest.approx(max_drawdown_from_returns(stream))
+    assert sharpe == pytest.approx(sharpe_from_returns(stream))
+
+
+def test_the_pooled_t_says_nothing_rather_than_zero_when_it_cannot_measure():
+    """A zero would read as 'no edge' where the truth is 'nothing measured', and
+    the A/B would score that asset as a catastrophic loss against its arm."""
+    assert pooled_t([], min_trades=10) is None
+    assert pooled_t([[0.01, 0.02]], min_trades=10) is None
+    assert pooled_t([[0.01] * 20], min_trades=10) is None, "no spread, no t"
+
+
+def test_the_pooled_t_grows_with_evidence_not_with_the_size_of_a_win():
+    """The point of the statistic: the composite it replaces is dominated by a
+    maximum drawdown over ~80 trades, so one lucky window moves it more than a
+    consistent edge does."""
+    steady = [0.004, 0.005, 0.003, 0.004] * 10
+    lucky = [0.0] * 39 + [0.16]
+    assert sum(steady) == pytest.approx(sum(lucky), rel=0.05), "same total profit"
+    assert pooled_t([steady]) > 10 * pooled_t([lucky])
+    # and folds pool: twice the same evidence is a bigger t, on the same mean
+    one, two = pooled_t([steady]), pooled_t([steady, steady])
+    assert two > one * 1.3

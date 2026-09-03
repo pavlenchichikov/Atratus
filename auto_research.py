@@ -240,11 +240,21 @@ def _adopt_floor(objective="mean", basis=None):
     `basis` defaults to the SEARCH basis, which is what every search-time caller
     wants. An adoption passes decision_basis() so the floor is in the units the
     verdict is actually read in."""
-    if (basis or _score_basis()) in ("net_auc", "net_gain", "ens_auc"):
+    b = basis or _score_basis()
+    if b in ("net_auc", "net_gain", "ens_auc"):
         try:
             return float(os.getenv("GTRADE_AR_ADOPT_AUC") or "0.005")
         except ValueError:
             return 0.005
+    if b == "trade_t":
+        # A t, not a Score: the same trades summarised on a different scale, so
+        # inheriting the Score floor would be a units error in the other
+        # direction from the AUC one. Set deliberately, because nothing has yet
+        # measured what a worthwhile move in t is worth in money.
+        try:
+            return float(os.getenv("GTRADE_AR_ADOPT_TRADE_T") or "0.5")
+        except ValueError:
+            return 0.5
     if objective == "sharpe":
         try:
             return float(os.getenv("GTRADE_AR_ADOPT_SHARPE") or "0.5")
@@ -844,9 +854,18 @@ def _score_basis():
              final ensemble end up ranking better - on the same stable scale.
              DIFFERENT UNITS: all three AUC bases live near 0.5 and their deltas
              are thousandths, so their adoption floor is GTRADE_AR_ADOPT_AUC,
-             not the Score floor."""
+             not the Score floor.
+    trade_t  the SAME trades the Score is built from, pooled over the folds and
+             read as a t statistic (train_hybrid writes Trade_T). Not a proxy:
+             it is the identical backtest, summarised without the two steps
+             measured to carry the instability - a MAXIMUM drawdown over ~80
+             trades at weight 0.5, and a median of five such composites. On a
+             noisy asset four seeds moved the composite by 42% and this by 11.5%
+             (ASML, 2026-09-03); on a quiet one the two agree, there being
+             nothing to stabilise. Its own units again: a t, not a Score, so its
+             adoption floor has to be set for it rather than inherited."""
     b = (os.getenv("GTRADE_AR_SCORE_BASIS") or "raw").strip().lower()
-    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc"):
+    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "trade_t"):
         logger.warning("unknown GTRADE_AR_SCORE_BASIS %r, using raw", b)
         return "raw"
     return b
@@ -943,6 +962,32 @@ def score_rows(subset, env, full_fn):
     return rekey_rows(full_fn(subset, env))
 
 
+def trade_t_rows(rows):
+    """Re-key quality rows onto Trade_T: the same trades the Score is built from,
+    pooled over the folds and read as a t statistic.
+
+    Not a proxy for the decision the way net_auc turned out to be - it is the
+    identical backtest, summarised without the two steps measured to carry the
+    instability: a MAXIMUM drawdown over ~80 trades (weight 0.5 in the
+    composite) and a median of five such composites. On ASML the composite moved
+    42% across four seeds and this moved 11.5%; on a quiet asset the two agree,
+    because there is nothing there to stabilise.
+
+    Assets whose training produced too few trades are dropped rather than scored
+    0, which would read as a catastrophic loss instead of a missing measurement.
+    """
+    out = []
+    for r in rows:
+        v = r.get("Trade_T")
+        if v is None:
+            continue
+        try:
+            out.append({"Asset": r["Asset"], "Score": float(v)})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def rekey_rows(rows, basis=None):
     """Re-key already-trained rows onto a basis, the active one by default.
 
@@ -964,6 +1009,8 @@ def rekey_rows(rows, basis=None):
         return net_gain_rows(rows)
     if basis == "ens_auc":
         return ens_auc_rows(rows)
+    if basis == "trade_t":
+        return trade_t_rows(rows)
     return rows
 
 

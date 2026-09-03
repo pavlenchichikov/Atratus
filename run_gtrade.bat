@@ -514,6 +514,11 @@ echo     3 = net_gain ensemble AUC minus CatBoost's: what the nets add. Use when
 echo         the nets are given a target other than direction.
 echo     4 = raw      the ensemble Score (a backtest of discrete signals).
 echo     5 = neural   ensemble Score minus a CatBoost-only run.
+echo     6 = trade_t  the SAME trades the Score is built from, pooled over the
+echo         folds as a t statistic. Not a proxy: the identical backtest without
+echo         the two steps that carry its noise (a MAX drawdown over ~80 trades
+echo         at weight 0.5, and a median of five composites). Measured 2026-09-03
+echo         on ASML: four seeds moved the Score 42 percent and this 11.5.
 set "BAS=1"
 set /p "BAS=    choice [1]: "
 set "GTRADE_AR_SCORE_BASIS=net_auc"
@@ -521,12 +526,13 @@ if "%BAS%"=="2" set "GTRADE_AR_SCORE_BASIS=ens_auc"
 if "%BAS%"=="3" set "GTRADE_AR_SCORE_BASIS=net_gain"
 if "%BAS%"=="4" set "GTRADE_AR_SCORE_BASIS=raw"
 if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=neural"
+if "%BAS%"=="6" set "GTRADE_AR_SCORE_BASIS=trade_t"
 REM  The SCREEN stays derived: on a net basis the CB-only screen stubs every net
 REM  to a constant, so every candidate screens identically and net levers get
 REM  thrown away on CatBoost's opinion. The ILLUMINATION is asked below, but only
 REM  where both answers are real: on a Score basis full illumination would rank
 REM  noise, because net training does not reproduce here, and auto_loop refuses
-REM  that pairing - so 4 and 5 keep cb and skip the question.
+REM  that pairing - so 4, 5 and 6 keep cb and skip the question.
 set "GTRADE_AR_SCREEN=0"
 set "GTRADE_AR_ILLUM=full"
 if "%BAS%"=="4" set "GTRADE_AR_SCREEN=1"

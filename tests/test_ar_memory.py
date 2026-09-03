@@ -183,3 +183,32 @@ def test_score_bases_match_auto_research():
     src = inspect.getsource(ar._score_basis)
     for b in am.SCORE_BASES:
         assert '"%s"' % b in src, "%s is missing from auto_research._score_basis" % b
+
+
+def test_the_pooled_trade_basis_is_accepted_everywhere_it_has_to_be():
+    """A basis the launcher offers but auto_research rejects would silently run
+    the whole campaign on raw while the log said otherwise."""
+    import auto_research as ar
+
+    assert "trade_t" in am.SCORE_BASES
+    rows = [{"Asset": "A", "Trade_T": 2.5, "Score": 9.9},
+            {"Asset": "B", "Score": 1.0}]
+    keyed = ar.rekey_rows(rows, basis="trade_t")
+    assert keyed == [{"Asset": "A", "Score": 2.5}]
+    # An asset with too few trades is DROPPED, not scored 0: a zero reads as
+    # "no edge" where the truth is "nothing was measured".
+    assert [r["Asset"] for r in keyed] == ["A"]
+
+
+def test_the_pooled_trade_basis_has_its_own_floor(monkeypatch):
+    """It is a t, not a Score. Inheriting the Score floor would be the same
+    units error the AUC bases already have a separate floor for."""
+    import auto_research as ar
+
+    monkeypatch.delenv("GTRADE_AR_ADOPT_TRADE_T", raising=False)
+    assert ar._adopt_floor("mean", basis="trade_t") == 0.5
+    monkeypatch.setenv("GTRADE_AR_ADOPT_TRADE_T", "1.5")
+    assert ar._adopt_floor("mean", basis="trade_t") == 1.5
+    # and it did not disturb the two floors that already existed
+    assert ar._adopt_floor("mean", basis="net_auc") == 0.005
+    assert ar._adopt_floor("mean", basis="raw") == 0.5

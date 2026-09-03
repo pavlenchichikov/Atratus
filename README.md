@@ -27,6 +27,7 @@
 - [Web UI](#web-ui)
 - [Screenshots](#screenshots)
 - [Auto-research agent](#auto-research-agent)
+- [Per-asset adoption](#per-asset-adoption)
 - [Analyst agent](#analyst-agent)
 - [Self-maintaining loop](#self-maintaining-loop)
 - [Live-accuracy gate and recalibration](#live-accuracy-gate-and-live-recalibration)
@@ -423,6 +424,66 @@ than asked, since only one pairing of them is coherent with each. Moving a froze
 constant without starting a new campaign refuses the run, and the refusal names
 this way out.
 
+## Per-asset adoption
+
+A genome's effect is not the same on every asset. Measured 2026-09-02: the
+candidate that FAILED its gate at -0.30 over 40 assets was worth **+1.20 on RTX**
+and **-3.84 on ROSN**, both confirmed afterwards on seeds the selection had never
+seen. Adopting it everywhere or nowhere throws away both facts, so an asset can
+keep the genome that was measured on IT while everything else stays on the global
+adoption.
+
+### The three steps
+
+The order is not decoration. Each step answers a question the next one needs.
+
+1. **Look for per-asset differences** (`ab_per_asset.py`, free, trains nothing).
+   It recovers every per-seed arm of the last A/B out of `_ar_eval_cache.json`
+   and prints, per asset, the delta with its OWN standard error, plus how much of
+   the spread is real difference rather than seed noise. Read it by the ratio,
+   not by the size: on the first run the asset with the largest `se` was the one
+   that later flipped sign.
+
+   The arms are identified by time against `gtrade.log`, which is an inference,
+   so the tool checks it: the mean of the recovered deltas has to reproduce the
+   `value_raw` the run recorded, and it refuses to report anything if it does not.
+
+2. **Confirm the picks on fresh seeds** (`ab_confirm.py`, hours, trains). The
+   assets step 1 picks are the extremes of a noisy set, and extremes are
+   overstated by being picked: the three selected on 2026-09-02 kept **30%** of
+   their measured effect when re-measured. This step re-measures exactly what
+   step 1 picked, under seeds outside the A/B's own roll - it refuses a seed the
+   A/B used, because the cache would answer it and the run would confirm its own
+   numbers.
+
+3. **Adopt what survived** (`adopt_genome.py --asset ASSET --evidence TEXT`).
+   Refuses without evidence, without a genome, and without a global adoption to
+   sit beside. The evidence must be the REPLICATION, never the pass that selected
+   the asset.
+
+Yield, over three runs: roughly one of every three picked extremes survives its
+replication. RTX and AUDCAD are the two that did.
+
+### What it costs the rest of the system
+
+Almost nothing, because a genome is already a process-wide environment and the
+trainer already starts one process per chunk:
+
+- `core/adopted.py` gains `per_asset` in `adopted_genome.json`, `genome_for(asset)`
+  for one asset and `genome_for_assets(csv)` for one PROCESS. `specs()` now
+  returns the UNION of DSL specs over every genome in force, because `core.scoring`
+  refuses an asset whose saved feature list names a column the frame does not have.
+- `config.py` resolves the genome from `GTRADE_ASSETS` instead of always taking
+  the global one, and exports the keys it set. Serving names no assets and so
+  still gets the global genome, exactly as before.
+- `train_chunked.py` groups the assets by genome before chunking, so a chunk never
+  mixes two, and strips the parent's resolved keys from the child environment -
+  otherwise every chunk would inherit whichever genome the parent resolved first.
+- `train_hybrid.py` does not change at all.
+
+`[AS]` lists every exception with its genes and its evidence. An exception nobody
+can see is the worst kind.
+
 ## Analyst agent
 
 A second opinion on each asset, formed **without ever seeing the ensemble's own
@@ -751,6 +812,7 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 | `AG` | `adopt_genome.py` | Adopt a genome. |
 | `AS` | `adopt_genome.py --show` | What is adopted right now. |
 | `AR` | `adopt_genome.py --revert` | Revert the adoption. |
+| `PA` | submenu | Per-asset adoption, step by step. See below. |
 | `ABC` | `ab_build.py` | Configures an A/B. |
 | `ABR` | `ab_build.py --run` | Runs the configured one. |
 
@@ -773,6 +835,15 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 The answer that matters most is the score basis. On a net basis (`net_auc`, `net_gain`, `ens_auc`) the screen switches off and the illumination trains real nets, so the basis decides which genomes become elites. On `raw` or `neural` the search illuminates on the CatBoost-only screen and the basis only re-scores the final gate. Load settings are not asked: they are derived from the campaign, and they are not part of the eval-cache key, so changing them between runs would compare a cached base against differently trained candidates.
 
 **`[AL]` autonomous cycle.** Runs search, A/B and adopt until something is adopted or you stop it, and stops before the retrain. It asks whether to continue the current campaign or start a new one; a new one then asks the score basis, the illumination, the objective, the decision basis and the gate size. Those are frozen for the campaign on purpose: choosing them after seeing a verdict is a search for a verdict that passes rather than a measurement. Then the director, the proposer, the wiki, the iterations per cycle, and a deadline in hours.
+
+**`[PA]` per-asset adoption.** Six entries in the order they have to be run, each
+saying what it costs: 1 looks for per-asset differences (free, trains nothing);
+2 confirms what 1 picked, on fresh seeds, after showing the plan and asking
+whether to start; 3 adopts one asset and asks for the replication evidence;
+4 retrains only the assets whose genome moved; 5 shows the adoption with its
+exceptions; 6 puts an asset back on the global genome. Steps 1 and 2 ship with
+the project rather than living beside it - a menu entry pointing at a file that
+is not in the repository is not an offer. See [Per-asset adoption](#per-asset-adoption).
 
 **`[AN]` analyst agent.** Score, backfill outcomes, refit the payoff table, run one judgment per eligible asset, or open the web UI on the analyst page. The run option asks for assets, the LLM provider and model, and a typed `YES`, because it spends one model call per asset.
 
@@ -1084,6 +1155,9 @@ The switches that change what is served, all default to off:
 | `GTRADE_TRAIN_EMBARGO_BARS` | bars dropped from the end of each training fold |
 | `GTRADE_ANALYST=0` | switch the analyst agent off entirely, on the command line and in the web alike |
 | `GTRADE_AR_WIKI_CHARS` | how much research wiki a prompt may carry (default 20000) |
+| `GTRADE_NO_TICKER=1` | the trainer draws no progress bar, for a parent that owns the console |
+| `GTRADE_TF_DETERMINISM=1` | pin the GPU kernels too. Costs nothing measurable (177s against 174s) and is NOT sufficient: two runs under it still scored 0.35 and 0.95 |
+| `GTRADE_FOLD_DUMP=<dir>` | write the arrays each fold was SCORED from, so the same trained model can be re-scored under a different yardstick without training it again |
 
 ## Project layout
 
@@ -1104,12 +1178,14 @@ risk_manager.py       Kelly sizing, loss/drawdown limits, Taleb gate
 guru_report.py        Guru Council fundamentals overlay
 auto_research.py      autonomous research agent (run via auto_research.bat)
 auto_loop.py          unattended search / A/B / adopt cycle, stops before retrain
+ab_per_asset.py       step 1: which assets a genome actually helped, from the cache
+ab_confirm.py         step 2: re-measure those on seeds the selection never saw
 push_signals.py       publish the snapshot to Supabase (web + mobile)
 scheduler.py          daemon: data / predict / DB-check on a schedule
 run_gtrade.bat        Windows text menu over the whole pipeline
 core/                 shared library: features, ensemble, scoring, calibration,
-                      backtesting, risk, live_gate, guru, dashboard, ...
-tests/                pytest suite (1500+ tests)
+                      backtesting, risk, live_gate, console_status, guru, ...
+tests/                pytest suite (1900+ tests)
 supabase/             SQL schema for the mobile/web Supabase backend
 ```
 
@@ -1152,6 +1228,7 @@ Atratus is provided for **research and educational purposes only**. It is not in
 - [Веб-интерфейс](#веб-интерфейс)
 - [Скриншоты](#скриншоты)
 - [Исследовательский агент](#исследовательский-агент)
+- [Поактивное принятие генома](#поактивное-принятие-генома)
 - [Аналитический агент](#аналитический-агент)
 - [Самоподдерживающийся цикл](#самоподдерживающийся-цикл)
 - [Гейт по живой точности и рекалибровка](#гейт-по-живой-точности-и-рекалибровка)
@@ -1755,6 +1832,66 @@ streamlit run app.py          # дашборд
 
 `run_gtrade.bat` открывает текстовое меню над всем вышеперечисленным (полный цикл, дашборд, веб-интерфейс, predict, аудит БД и не только). `python db_check.py` гоняет read-only аудит `market.db` (`--fix` чинит дубликаты и форматы дат). `python scheduler.py` работает демоном: данные каждые 6ч, предсказания каждые 4ч, ежедневная проверка БД.
 
+## Поактивное принятие генома
+
+Эффект генома не одинаков на разных активах. Измерено 02.09.2026: кандидат,
+ПРОВАЛИВШИЙ гейт со средним -0.30 по 40 активам, стоил **+1.20 на RTX** и
+**-3.84 на ROSN**, и оба числа затем подтвердились на сидах, которых отбор не
+видел. Принять его везде или нигде значит выбросить оба факта. Поэтому актив
+может остаться на геноме, измеренном именно НА НЁМ, пока всё остальное живёт на
+глобальном принятии.
+
+### Три шага
+
+Порядок не декоративный: каждый шаг отвечает на вопрос, нужный следующему.
+
+1. **Найти поактивные различия** (`ab_per_asset.py`, бесплатно, ничего не
+   обучает). Восстанавливает по-сидовые плечи последнего A/B из
+   `_ar_eval_cache.json` и печатает по каждому активу дельту с ЕГО СОБСТВЕННОЙ
+   ошибкой плюс долю разброса, которая является настоящим различием, а не шумом
+   пересида. Читать надо по отношению, а не по величине: в первом прогоне актив
+   с самой большой `se` потом и перевернул знак.
+
+   Плечи опознаются по времени против `gtrade.log`, а это вывод, а не факт,
+   поэтому инструмент его проверяет: среднее восстановленных дельт обязано
+   воспроизвести записанное прогоном `value_raw`, иначе он отказывается считать.
+
+2. **Подтвердить отобранное на свежих сидах** (`ab_confirm.py`, часы, обучает).
+   Шаг 1 отбирает экстремумы шумного набора, а экстремумы завышены самим фактом
+   отбора: трое отобранных 02.09.2026 сохранили **30%** измеренного эффекта при
+   повторном замере. Этот шаг перемеряет ровно то, что отобрал шаг 1, на сидах
+   вне собственного ряда A/B, а сид из этого ряда он отвергает, потому что кэш
+   ответил бы сам, и прогон подтвердил бы собственные числа.
+
+3. **Принять то, что выжило** (`adopt_genome.py --asset АКТИВ --evidence ТЕКСТ`).
+   Откажет без доказательства, без генома и без глобального принятия, рядом с
+   которым можно встать. Доказательством должна быть РЕПЛИКА, а не проход,
+   который этот актив отобрал.
+
+Выход по трём прогонам: реплику переживает примерно один отобранный экстремум из
+трёх. Пережили RTX и AUDCAD.
+
+### Во что это обходится остальной системе
+
+Почти ни во что: геном и так является окружением процесса, а тренер и так
+запускает по процессу на чанк.
+
+- `core/adopted.py` получает `per_asset` в `adopted_genome.json`,
+  `genome_for(asset)` для актива и `genome_for_assets(csv)` для ПРОЦЕССА.
+  `specs()` теперь возвращает ОБЪЕДИНЕНИЕ DSL-спецификаций по всем действующим
+  геномам, потому что `core.scoring` отказывает активу, чей сохранённый список
+  признаков называет колонку, которой нет во фрейме.
+- `config.py` разрешает геном по `GTRADE_ASSETS`, а не берёт всегда глобальный,
+  и экспортирует проставленные ключи. Серв активов не называет и потому остаётся
+  на глобальном геноме, ровно как раньше.
+- `train_chunked.py` группирует активы по геному до нарезки, так что чанк никогда
+  не смешивает два, и вычищает разрешённые родителем ключи из окружения ребёнка,
+  иначе каждый чанк унаследовал бы тот геном, который родитель разрешил первым.
+- `train_hybrid.py` не меняется вовсе.
+
+`[AS]` печатает каждое исключение с его генами и доказательством. Исключение,
+которого не видно, это худший вид исключения.
+
 ## Меню лаунчера
 
 `run_gtrade.bat` это главная дверь. Он никогда не активирует GPU-окружение в том окне, где ты сидишь: каждый пункт, который что-то обучает, идёт через `run_in_env.bat` в дочернем процессе, поэтому само меню остаётся на базовом python, и последующая раздача сигналов не потеряет молча нейронных чемпионов.
@@ -1838,6 +1975,7 @@ streamlit run app.py          # дашборд
 | `AG` | `adopt_genome.py` | Принять геном. |
 | `AS` | `adopt_genome.py --show` | Что принято сейчас. |
 | `AR` | `adopt_genome.py --revert` | Откатить принятое. |
+| `PA` | подменю | Поактивное принятие, по шагам. Ниже. |
 | `ABC` | `ab_build.py` | Настраивает A/B. |
 | `ABR` | `ab_build.py --run` | Запускает настроенный. |
 
@@ -1860,6 +1998,8 @@ streamlit run app.py          # дашборд
 Самый важный ответ это базис счёта. На net-базисе (`net_auc`, `net_gain`, `ens_auc`) скрин выключается, а иллюминация тренирует настоящие сети, поэтому базис решает, какие геномы становятся элитами. На `raw` и `neural` поиск иллюминируется CatBoost-скрином, и базис пересчитывает только финальный гейт. Про мощность вопроса нет: она выводится из кампании и не входит в ключ кеша оценок, так что её смена между прогонами сравнивала бы закешированную базу с иначе обученными кандидатами.
 
 **`[AL]` автономный цикл.** Гоняет поиск, A/B и адопт, пока что-то не примется или пока ты не остановишь, и останавливается перед переобучением. Спрашивает, продолжать текущую кампанию или начать новую; для новой затем базис счёта, иллюминацию, целевую функцию, базис решения и размер гейта. Они заморожены на кампанию намеренно: выбирать их после вердикта значит искать вердикт, который пройдёт, а не измерять. Дальше директор, предлагатель, вики, итерации на цикл и дедлайн в часах.
+
+**`[PA]` поактивное принятие.** Шесть пунктов в том порядке, в каком их надо выполнять, и каждый называет свою цену: 1 ищет поактивные различия (бесплатно, ничего не обучает); 2 подтверждает отобранное шагом 1 на свежих сидах, сперва показав план и спросив, запускать ли; 3 принимает один актив и требует доказательство реплики; 4 переобучает только те активы, у которых геном сдвинулся; 5 показывает принятое вместе с исключениями; 6 возвращает актив на глобальный геном. Шаги 1 и 2 поставляются с проектом, а не лежат рядом: пункт меню, указывающий на файл, которого нет в репозитории, это не пункт меню. См. [Поактивное принятие генома](#поактивное-принятие-генома).
 
 **`[AN]` аналитический агент.** Скор, бэкфилл исходов, переобучение таблицы выплат, одно суждение на подходящий актив, или веб-интерфейс на странице аналитика. Пункт запуска спрашивает активы, провайдера и модель LLM и требует набрать `YES`, потому что тратит по одному вызову модели на актив.
 
@@ -2165,6 +2305,9 @@ force-promote при ремонте надо отвечать `y`: без это
 | `GTRADE_TRAIN_EMBARGO_BARS` | сколько баров отрезается с конца каждого обучающего фолда |
 | `GTRADE_ANALYST=0` | полностью выключить аналитического агента, и в консоли, и в вебе |
 | `GTRADE_AR_WIKI_CHARS` | сколько символов вики исследователя влезает в промпт (по умолчанию 20000) |
+| `GTRADE_NO_TICKER=1` | тренер не рисует прогресс-бар: для родителя, который сам владеет консолью |
+| `GTRADE_TF_DETERMINISM=1` | закрепить и ядра GPU. По времени бесплатно (177 с против 174) и НЕ достаточно: два прогона под ним дали 0.35 и 0.95 |
+| `GTRADE_FOLD_DUMP=<dir>` | сохранить массивы, из которых фолд был ОЦЕНЁН, чтобы ту же обученную модель пересчитать другой линейкой без повторного обучения |
 
 ## Структура проекта
 
@@ -2185,12 +2328,14 @@ risk_manager.py       размер по Келли, лимиты убытка/п
 guru_report.py        фундаментальный оверлей "Совет гуру"
 auto_research.py      автономный исследовательский агент (через auto_research.bat)
 auto_loop.py          цикл поиск / A/B / адопция без человека, стоп до ретрейна
+ab_per_asset.py       шаг 1: каким активам геном реально помог, из кэша
+ab_confirm.py         шаг 2: перемерить их на сидах, которых отбор не видел
 push_signals.py       публикация снимка в Supabase (веб + мобильное)
 scheduler.py          демон: данные / предсказание / проверка БД по расписанию
 run_gtrade.bat        текстовое меню (Windows) над всем пайплайном
 core/                 общая библиотека: признаки, ансамбль, скоринг, калибровка,
-                      бэктест, риск, live_gate, guru, dashboard, ...
-tests/                pytest-набор (1500+ тестов)
+                      бэктест, риск, live_gate, console_status, guru, ...
+tests/                pytest-набор (1900+ тестов)
 supabase/             SQL-схема для Supabase-бэкенда веба/мобильного
 ```
 

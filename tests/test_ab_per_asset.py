@@ -148,3 +148,20 @@ def test_a_broken_recovery_refuses_instead_of_reporting(tmp_path, monkeypatch):
         "results": {"cand": {"value_raw": 1.0}}}), encoding="utf-8")
     assets, _deltas, _label, _file, _rec, got = ab_per_asset.original()
     assert assets == ["A", "B"] and got == 1.0
+
+
+def test_step_two_confirms_what_step_one_picked():
+    """A hardcoded asset list would silently re-confirm the PREVIOUS run's
+    winners against the current run's arms, which replicates nothing."""
+    import ab_confirm
+
+    assets = ["A", "B", "C"]
+    # A is large and consistent, B is large and noisy, C is small.
+    deltas = np.array([[4.0, 4.2, 3.8, 4.1],
+                       [4.0, -3.0, 6.0, -1.0],
+                       [0.1, 0.0, -0.1, 0.2]])
+    picked, why = ab_confirm.picks_from_scan(assets, deltas)
+    assert picked == ["A"] and "correction" in why
+    # and when nothing clears, the extremes are offered with that said out loud
+    picked, why = ab_confirm.picks_from_scan(assets[1:], deltas[1:], limit=1)
+    assert picked == ["B"] and "not for significance" in why

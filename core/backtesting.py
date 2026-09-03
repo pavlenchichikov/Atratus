@@ -353,6 +353,44 @@ def evaluate_signals_v2(sig, ret, comm, slip, sizes=None):
             max_drawdown_from_returns(daily), sharpe_from_returns(daily))
 
 
+def trade_returns(sig, ret, comm, slip):
+    """The per-trade return series a set of signals produces, net of costs.
+
+    Split out of evaluate_signals so a caller can POOL folds instead of
+    summarising each one. Measured 2026-09-03 on three assets, the composite
+    score's instability is concentrated here: it summarises ~80 trades into
+    profit and a MAXIMUM drawdown (an extreme-value statistic carrying weight
+    0.5), then takes the median of five such summaries. On a noisy asset the
+    same four seeds moved the composite by 42% and the pooled t statistic over
+    the same trades by 11.5%.
+    """
+    return [(float(np.clip((r if g > 0 else -r), -MAX_TRADE_RET, MAX_TRADE_RET)) - (comm + slip))
+            for g, r in zip(sig, ret) if g != 0 and not np.isnan(r)]
+
+
+def pooled_t(streams, min_trades: int = 10) -> float | None:
+    """t statistic of every trade in `streams`, pooled: mean / sd * sqrt(n).
+
+    None when there is not enough to say anything, which the caller must treat
+    as a missing measurement rather than a zero - a zero reads as "no edge" when
+    the truth is "nothing was measured".
+    """
+    flat = [float(x) for s in (streams or []) for x in s
+            if x is not None and not np.isnan(x)]
+    if len(flat) < max(2, min_trades):
+        return None
+    arr = np.asarray(flat, dtype=float)
+    sd = float(arr.std(ddof=1))
+    # Not `sd <= 0`: twenty identical returns give sd 1.8e-18 rather than a
+    # clean zero, and the t then comes out at 2.5e16 - one degenerate asset
+    # would outweigh the entire holdout. Trade returns live around 1e-2, so a
+    # floor ten orders below that cannot reject a real one.
+    if not np.isfinite(sd) or sd < 1e-12:
+        return None
+    value = float(arr.mean() / sd * np.sqrt(len(arr)))
+    return value if np.isfinite(value) else None
+
+
 def evaluate_signals(sig, ret, comm, slip):
     """(profit, trades, winrate, mdd, sharpe) under the ACTIVE objective.
 
@@ -361,8 +399,7 @@ def evaluate_signals(sig, ret, comm, slip):
     computation train_hybrid carried before this helper existed."""
     if objective_v2_on():
         return evaluate_signals_v2(sig, ret, comm, slip)
-    ret_stream = [(float(np.clip((r if g > 0 else -r), -MAX_TRADE_RET, MAX_TRADE_RET)) - (comm + slip))
-                  for g, r in zip(sig, ret) if g != 0 and not np.isnan(r)]
+    ret_stream = trade_returns(sig, ret, comm, slip)
     p, t, w = pnl_from_signals(sig, ret, commission=comm, slippage=slip)
     return (p, t, w,
             max_drawdown_from_returns(ret_stream), sharpe_from_returns(ret_stream))

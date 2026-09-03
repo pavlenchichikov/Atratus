@@ -37,10 +37,43 @@ BASE = ab_per_asset.BASE
 # seed must be outside that set or the cache answers it without training and the
 # run "confirms" itself.
 DEFAULT_SEEDS = [11000, 12000, 13000, 14000]
-DEFAULT_ASSETS = "KLAC,EVRG,RTX,ROSN,LTC"
+# No hardcoded list: the assets to confirm are whatever step 1 picked out of the
+# CURRENT A/B. A fixed list silently confirms the previous run's winners against
+# the current run's arms, which is not a replication of anything.
+DEFAULT_ASSETS = ""
 # Measured on the 2026-09-02 A/B: a 7-asset chunk took about 98 min on the
 # candidate arm and 26 on the reference. Per asset, for a rough plan only.
 MIN_PER_ASSET = {"cand": 98 / 7, "ref": 26 / 7}
+
+
+def picks_from_scan(assets, deltas, limit=5):
+    """The assets step 1 would put forward: FDR-corrected first, else the extremes.
+
+    Falling back to the extremes matters - a run can be too small for anything to
+    clear the correction while still having one asset worth re-measuring - but the
+    fallback is named in the output, because "selected by a test" and "selected
+    for being biggest" are not the same claim.
+    """
+    import numpy as _np
+    from scipy import stats as _st
+
+    mean = deltas.mean(axis=1)
+    se = deltas.std(axis=1, ddof=1) / _np.sqrt(deltas.shape[1])
+    with _np.errstate(divide="ignore", invalid="ignore"):
+        t = _np.where(se > 0, mean / se, 0.0)
+    # One-sided in the direction each asset itself claims, which is the rule
+    # step 1 applies and the rule the replication is later read by. A two-sided
+    # p here would disagree with the screen that produced these numbers.
+    keep = ab_per_asset.bh(_st.t.sf(_np.abs(t), df=deltas.shape[1] - 1),
+                           ab_per_asset.FDR_Q)
+    chosen = [a for a, k, m in zip(assets, keep, mean)
+              if k and abs(m) >= ab_per_asset.FLOOR]
+    if chosen:
+        return chosen[:limit], "picked by the correction"
+    order = _np.argsort(-_np.abs(mean))[:limit]
+    return [assets[i] for i in order], ("nothing cleared the correction, so the "
+                                        "largest deltas instead - selected for "
+                                        "size, not for significance")
 
 
 def _arms(cfg):
@@ -83,10 +116,9 @@ def main():
                     help="run every guard and print the plan, train nothing")
     args = ap.parse_args()
 
-    assets = [a.strip().upper() for a in args.assets.split(",") if a.strip()]
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
-    if not assets or not seeds:
-        sys.exit("need at least one asset and one seed")
+    if not seeds:
+        sys.exit("need at least one seed")
 
     cfg = ab_per_asset._load(ab_per_asset.CONFIG)
     original_seeds = set()
@@ -98,9 +130,15 @@ def main():
                  "answer them and the run would confirm its own numbers. "
                  "Pick seeds outside {}.".format(sorted(original_seeds)))
 
-    # What the original run measured for these assets, with its own control.
+    # What the original run measured, with its own control.
     o_assets, o_deltas, label, result_file, _rec, _got = ab_per_asset.original()
     idx = {a: i for i, a in enumerate(o_assets)}
+    assets = [a.strip().upper() for a in args.assets.split(",") if a.strip()]
+    why = "named on the command line"
+    if not assets:
+        assets, why = picks_from_scan(o_assets, o_deltas)
+    if not assets:
+        sys.exit("nothing to confirm")
     missing = [a for a in assets if a not in idx]
     if missing:
         sys.exit(f"not in the A/B holdout, nothing to confirm: {', '.join(missing)}")
@@ -114,7 +152,7 @@ def main():
         MIN_PER_ASSET["cand"] + MIN_PER_ASSET["ref"])
 
     print(f"confirming   : {label} vs {ref_label}   from {result_file}")
-    print(f"assets       : {', '.join(assets)}")
+    print(f"assets       : {', '.join(assets)}  ({why})")
     print(f"seeds        : {seeds}   (A/B used {sorted(original_seeds)})")
     print(f"chunk        : {chunk} assets, so both training processes are used")
     print(f"rough cost   : {est / 60:.1f} h  ({len(seeds) * len(assets) * 2} trainings)")
