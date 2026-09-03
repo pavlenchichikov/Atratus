@@ -163,6 +163,11 @@ def load_macro(path=None):
             "date": date.isoformat(),
             "name": name,
             "importance": entry.get("importance") or None,
+            # Carried through, not dropped. The validator used to keep only
+            # name/date/importance, so a consumer had nothing to filter on and
+            # every Moscow name was handed the FOMC calendar while every US
+            # name got the Bank of Russia's. Absent reads as global.
+            "region": (str(entry.get("region") or "").strip().upper() or None),
             # Macro dates are published schedules, not estimates.
             "confirmed": True,
         })

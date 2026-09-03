@@ -63,9 +63,55 @@ def _context(asset):
         "guru_verdict": verdict.get("verdict"),
         "guru_pct": verdict.get("pct"),
         "next_earnings": earnings.get(asset),
-        "macro_events": _safe(lambda: [e["name"] for e in events.load_macro()],
-                              default=[]),
+        "macro_events": _safe(lambda: _macro_for(asset), default=[]),
     }
+
+
+# The Fed sets the price of risk everywhere, so its meetings reach every asset.
+# The Bank of Russia sets the rouble's, so its meetings reach Moscow names only.
+# Without this SBER carried the FOMC calendar and NVDA carried the CBR's.
+_GLOBAL_REGIONS = frozenset({"US", "GLOBAL", ""})
+
+
+def _macro_for(asset, today=None, horizon_days=None):
+    """Calendar entries that are NEAR and that APPLY, with how near.
+
+    Every part of this was missing until the calendar file first existed, and
+    nothing showed it: the field read the whole file, so the day it was filled
+    a dossier gained 134 events reaching back to 2019, with the Fed's schedule
+    on a Moscow bank. A blank source hides its consumer's bugs.
+
+    Carries the date and the distance rather than the bare name, because an
+    event in two days and one in thirteen are different facts and the model was
+    given no way to tell them apart.
+    """
+    from config import radar_category
+    from core.events import HORIZON_DAYS, days_until, load_macro
+
+    today = _date(today) or datetime.date.today()
+    horizon = HORIZON_DAYS if horizon_days is None else horizon_days
+    klass = (radar_category(asset) or "").lower()
+    out = []
+    for entry in load_macro():
+        region = str(entry.get("region") or "").upper()
+        if region not in _GLOBAL_REGIONS and region.lower() != klass:
+            continue
+        away = days_until(entry.get("date"), today)
+        if away is None or not 0 <= away <= horizon:
+            continue
+        out.append({"name": entry.get("name"), "date": str(entry.get("date"))[:10],
+                    "days_away": away,
+                    "importance": entry.get("importance") or "unknown"})
+    return sorted(out, key=lambda e: e["days_away"])
+
+
+def _date(value):
+    if isinstance(value, datetime.date):
+        return value
+    try:
+        return datetime.date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def _atr_distance(price, level, atr):

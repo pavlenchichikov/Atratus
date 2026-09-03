@@ -53,6 +53,7 @@ echo    [C] Correlation     [WL] Watchlist          [P] Paper Trading
 echo    [W1] Top-5 90d      [W2] Top-10 90d         [W3] Top-5 180d
 echo    [W4] Top-5 Kelly    [W5] Custom assets
 echo    [PF] Performance    what an asset returned over a period, vs its index
+echo    [MC] Macro calendar refresh CBR + FOMC dates into macro_calendar.json
 echo.
 echo  RESEARCH
 echo    [RS] Auto-research agent (own menu)         [AN] Analyst agent
@@ -95,6 +96,7 @@ if /i "%choice%"=="D" goto digest
 if /i "%choice%"=="R" goto regime
 if /i "%choice%"=="C" goto corr
 if /i "%choice%"=="PF" goto performance
+if /i "%choice%"=="MC" goto macrocal
 if /i "%choice%"=="WL" goto watchlist
 if /i "%choice%"=="W1" goto whatif_top5
 if /i "%choice%"=="W2" goto whatif_top10
@@ -377,6 +379,15 @@ echo.
 REM train_chunked spawns train_hybrid through sys.executable, so the whole chain
 REM inherits the interpreter this line picks.
 cmd /c ""%~dp0run_in_env.bat" python train_chunked.py"
+pause
+goto menu
+
+:macrocal
+echo.
+echo  Fetches the published schedules of the Bank of Russia and the Fed.
+echo  Nothing is invented: a source that fails is named and contributes
+echo  nothing, and events you added by hand are kept.
+python macro_calendar.py
 pause
 goto menu
 

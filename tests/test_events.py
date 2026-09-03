@@ -67,8 +67,15 @@ def test_macro_loads_and_normalises(tmp_path):
         {"date": "2026-07-29", "name": "FOMC", "importance": "high"}]),
         encoding="utf-8")
     got = events.load_macro(str(path))
+    # region is carried through so a consumer can filter on it; absent means
+    # global, which is how every entry read before the field existed.
     assert got == [{"kind": "macro", "asset": None, "date": "2026-07-29",
-                    "name": "FOMC", "importance": "high", "confirmed": True}]
+                    "name": "FOMC", "importance": "high", "region": None,
+                    "confirmed": True}]
+    path.write_text(json.dumps([
+        {"date": "2026-07-29", "name": "CBR", "region": " ru "}]),
+        encoding="utf-8")
+    assert events.load_macro(str(path))[0]["region"] == "RU"
 
 
 def test_a_missing_macro_file_is_no_events(tmp_path):

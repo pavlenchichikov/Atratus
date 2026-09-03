@@ -1,5 +1,6 @@
 """core.analyst.dossier: what the analyst is allowed to see, and what it is not."""
 
+import datetime
 import json
 import sqlite3
 
@@ -13,6 +14,13 @@ from core.analyst import dossier
 # test that wants to exercise the real one has to ask for it back by name.
 _REAL = {n: getattr(dossier, n)
          for n in ("_regime", "_market_state", "_sector_state", "_profile")}
+
+
+def _soon(days):
+    """An ISO date `days` from now. The macro block is windowed, so a fixture
+    with a hardcoded date silently ages out of the horizon and stops testing
+    anything."""
+    return (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
 
 
 @pytest.fixture()
@@ -322,13 +330,18 @@ def test_context_fields_are_mapped_from_the_real_source_shapes(db, monkeypatch):
             {"SBER": {"date": "2026-09-01", "confirmed": True}})
     monkeypatch.setattr(
         "core.events.load_macro",
-        lambda path=None: [{"kind": "macro", "asset": None, "date": "2026-09-05",
-                            "name": "CPI", "importance": "high", "confirmed": True}])
+        lambda path=None: [{"kind": "macro", "asset": None,
+                            "date": _soon(3), "name": "CPI",
+                            "importance": "high", "region": None,
+                            "confirmed": True}])
     d = dossier.build("SBER", db_path=db)
     assert d["guru_verdict"] == "BUY"
     assert d["guru_pct"] == 75.0
     assert d["next_earnings"] == {"date": "2026-09-01", "confirmed": True}
-    assert d["macro_events"] == ["CPI"]
+    # the entry carries its distance now: an event in two days and one in
+    # thirteen are different facts and the name alone could not say which.
+    assert [e["name"] for e in d["macro_events"]] == ["CPI"]
+    assert d["macro_events"][0]["days_away"] == 3
 
 
 def test_a_dead_context_source_does_not_stop_the_dossier(db, monkeypatch):
@@ -608,3 +621,32 @@ def test_a_loss_making_company_gets_no_leverage_ratio(monkeypatch):
                                      types.SimpleNamespace(info=i))
         monkeypatch.setitem(__import__("sys").modules, "yfinance", fake)
         assert dossier._profile("NVDA")["debt_ebitda"] is None, ebitda
+
+
+def test_only_macro_events_that_are_near_and_that_apply_reach_the_dossier(
+        monkeypatch):
+    """The day the calendar file first existed, every dossier gained 134
+    events reaching back to 2019, with the Fed's schedule on a Moscow bank.
+    The field had read the whole file since it was written and nothing showed
+    it, because the source was empty. A blank source hides its consumer."""
+    # _no_network blanks load_macro for every test in this file, so this one
+    # puts a calendar back rather than reaching the real file.
+    monkeypatch.setattr("core.events.load_macro", lambda path=None: [
+        {"date": "2019-01-01", "name": "ancient", "region": "US"},
+        {"date": "2026-09-11", "name": "CBR key rate decision",
+         "importance": "high", "region": "RU"},
+        {"date": "2026-09-16", "name": "FOMC rate decision",
+         "importance": "high", "region": "US"},
+        {"date": "2027-01-01", "name": "far off", "region": "US"},
+    ])
+    today = datetime.date(2026, 9, 3)
+
+    ru = dossier._macro_for("SBER", today=today)
+    us = dossier._macro_for("NVDA", today=today)
+    assert [e["name"] for e in us] == ["FOMC rate decision"], \
+        "the Bank of Russia does not set the price of a US chipmaker"
+    assert [e["name"] for e in ru] == ["CBR key rate decision",
+                                       "FOMC rate decision"], \
+        "the Fed sets the price of risk everywhere, so it reaches Moscow too"
+    assert ru[0]["days_away"] == 8, "and the model can tell 8 days from 13"
+    assert all(e["name"] not in ("ancient", "far off") for e in ru + us)
