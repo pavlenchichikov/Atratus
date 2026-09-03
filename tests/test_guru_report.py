@@ -103,3 +103,40 @@ def test_resolve_fundamentals_finds_a_renamed_moscow_name():
     ross = gr.resolve_fundamentals("ROSS", "ROST", sl) or {}
     assert ross.get("_source") != "smartlab", ross
     assert ross.get("pe") != -6.4, "a US retailer got Russian fundamentals"
+
+
+# --- the Russian list and the preferred shares -------------------------------
+
+def test_the_russian_list_is_the_asset_map_not_a_second_copy():
+    """It used to be 51 tickers written down here while the map carried 181, so
+    130 Russian names were sent to yfinance, answered 404 three times each, and
+    ended with no fundamentals at all."""
+    from config import MOEX_ASSETS
+
+    assert gr.MOEX_ASSETS == set(MOEX_ASSETS)
+    assert len(gr.MOEX_ASSETS) > 100
+    for late_addition in ("BANEP", "CNTLP", "NKNCP"):
+        assert late_addition in gr.MOEX_ASSETS
+
+
+def test_a_russian_preferred_takes_the_company_numbers_from_its_ordinary():
+    """Smart-Lab publishes a COMPANY under its ordinary ticker, so NKNCP came
+    back blank while NKNC was right there. Fourteen assets were in that state."""
+    sl = {"NKNC": {"pe": 5.5, "debt": 1.2, "div": 9.9, "roe": 0}}
+    d = gr.resolve_fundamentals("NKNCP", "NKNCP", sl)
+    assert d["pe"] == 5.5 and d["debt_equity"] == 1.2
+    assert "NKNC" in d["_source"], "the source has to say whose numbers these are"
+    # The dividend yield is the ORDINARY share's ("ДД ао, %") and a preferred
+    # pays differently, so it is dropped rather than borrowed.
+    assert d["dividend_yield"] == 0
+    assert gr.resolve_fundamentals("NKNC", "NKNC", sl)["dividend_yield"] == 9.9
+
+
+def test_the_fallback_needs_the_ordinary_to_actually_exist():
+    """Otherwise any Russian ticker ending in P would silently pick up whatever
+    happened to be listed one letter shorter."""
+    assert gr.resolve_fundamentals("NKNCP", "NKNCP", {}) is None
+    # and a non-Russian name is never remapped at all
+    sl = {"AD": {"pe": 1.0, "debt": 0, "div": 0, "roe": 0}}
+    d = gr.resolve_fundamentals("ADP", "ADP", sl)
+    assert d is None or "AD" not in str(d.get("_source", ""))

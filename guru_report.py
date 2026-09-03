@@ -29,6 +29,7 @@ if BASE_DIR not in sys.path:
 from sqlalchemy import create_engine
 
 from config import FULL_ASSET_MAP
+from config import MOEX_ASSETS as _CONFIG_MOEX
 from core.features import compute_rsi
 from core.guru import calc_graham_number, get_guru_analysis, technical_context
 from net import ssl_verify, yf_session
@@ -36,18 +37,14 @@ from net import ssl_verify, yf_session
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 _engine = create_engine(f"sqlite:///{DB_PATH}")
 
-# -- MOEX list (no yfinance fundamentals) --
-MOEX_ASSETS = {
-    "IMOEX", "SBER", "GAZP", "LKOH", "ROSN", "NVTK", "TATN", "SNGS",
-    "PLZL", "SIBN", "MGNT", "TCSG", "VTBR", "BSPB", "MOEX_EX", "CBOM",
-    "YNDX", "OZON", "VKCO", "POSI", "MTSS", "RTKM",
-    "HHRU", "SOFL", "ASTR", "WUSH",
-    "CHMF", "NLMK", "MAGN", "RUAL", "ALRS", "TRMK", "MTLR", "RASP",
-    "IRAO", "HYDR", "FLOT", "AFLT", "PIKK",
-    "FEES", "UPRO", "MSNG", "NMTP",
-    "PHOR", "SGZH", "FIVE", "FIXP", "LENT", "MVID",
-    "SMLT", "LSRG",
-}
+# The Russian list, taken from config rather than written down again. It used to
+# be a private set of 51 tickers while the asset map carried 181, so 130 Russian
+# names were not recognised as Russian here: they went to yfinance, answered 404
+# three times each (57 of them in one audit on 2026-09-03), and ended with no
+# fundamentals at all. Exactly the failure the Smart-Lab remap already had, and
+# the one data_engine's own comment warns about - a second copy of what the map
+# knows drifts the moment a ticker is added to only one of them.
+MOEX_ASSETS = set(_CONFIG_MOEX)
 
 CRYPTO_ASSETS = {"BTC", "ETH", "SOL", "XRP", "TON", "DOGE", "BNB",
                  "ADA", "AVAX", "DOT", "LINK", "SHIB", "ATOM", "UNI", "NEAR"}
@@ -325,9 +322,31 @@ def resolve_fundamentals(name, symbol, smartlab):
     """
     clean_name = name.split('.')[0]
     search = smartlab_ticker(name) or clean_name
+    pref_of = None
+    if search not in smartlab and name in MOEX_ASSETS and len(search) > 1             and search.endswith("P") and search[:-1] in smartlab:
+        # Smart-Lab publishes the fundamentals of a COMPANY under its ordinary
+        # ticker, so every Russian preferred came back blank: NKNCP absent while
+        # NKNC is there, and the same for SBERP, TATNP, SNGSP and fifteen more.
+        # P/E and debt/EBITDA belong to the company and carry over; the dividend
+        # yield does NOT - the column is "ДД ао, %", the ORDINARY share's, and a
+        # preferred usually pays differently. It is zeroed rather than borrowed,
+        # and the source says which share the numbers came from.
+        pref_of = search[:-1]
+        search = pref_of
 
     if search in smartlab:
         d = smartlab[search]
+        if pref_of:
+            return {
+                'pe': d.get('pe', 99), 'roe': d.get('roe', 0),
+                'debt_equity': d.get('debt', 0), 'dividend_yield': 0,
+                'growth': 0, 'profit_margin': 0, 'fcf': 0, 'book_value': 0,
+                'eps': 0, 'beta': 1.0, 'current_ratio': 0, 'price': 0,
+                'fwd_pe': 0, 'gross_margin': 0, 'operating_margin': 0,
+                'peg_ratio': 0, 'quick_ratio': 0, 'payout_ratio': 0,
+                'shares': 0, 'market_cap': 0,
+                '_source': 'smartlab:%s (ordinary share; dividend yield not carried)' % pref_of,
+            }
         return {
             'pe': d.get('pe', 99), 'roe': d.get('roe', 0),
             'debt_equity': d.get('debt', 0), 'dividend_yield': d.get('div', 0),
