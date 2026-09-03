@@ -65,6 +65,15 @@ def prompt_for(dossier, depth="full", horizon=1):
     reasoning, which is worth it for one asset a person asked about and not
     worth it for a sweep of the whole watchlist.
 
+    The numbered checklist is not decoration, it is what the model actually
+    reads. Over the first 35 judgments, 16 of the 21 fields the checklist NAMES
+    were cited as evidence, against 9 of the other 39 - and those nine mostly
+    once each. The dossier grew by news, breadth, cross-asset correlation,
+    regime, RSI, sector and the whole flow block in the 2026-08-31 session and
+    this checklist did not, so 33 fields were being fetched over the network,
+    rendered into the prompt and never read. A field nobody is told to use is a
+    field nobody uses.
+
     Note what is absent: the ensemble's probability, signal, timing/shadow
     action - no channel of the model's own opinion reaches this prompt (see
     core/analyst/dossier.py's FORBIDDEN_KEYS, which is what actually
@@ -100,23 +109,47 @@ def prompt_for(dossier, depth="full", horizon=1):
           "ordinary conditions for THIS asset regardless of the absolute "
           "number.\n"
           + ("4. What the fundamentals and the calendar add. guru_verdict "
-             "is a value-investing council and pe, roe and div_yield are "
-             "slow facts. Over %s they are part of the case rather than "
-             "decoration, so weigh them instead of waving them off. "
-             "next_earnings and macro_events matter if they fall inside "
-             "the window.\n" % _span(horizon)
+             "is a value-investing council and pe, roe, div_yield, "
+             "debt_ebitda, market_cap, beta and short_ratio are slow facts. "
+             "Over %s they are part of the case rather than decoration, so "
+             "weigh them instead of waving them off. ex_dividend_date, "
+             "next_earnings and macro_events matter if they fall inside the "
+             "window.\n" % _span(horizon)
              if int(horizon) > 1 else
              "4. What the fundamentals and the calendar add, if anything. "
-             "guru_verdict is a value-investing council, a slow signal; "
-             "say plainly when it is irrelevant to a one-day view rather "
-             "than citing it for the sake of it. next_earnings and "
-             "macro_events matter only if they are close.\n") +
-          "5. Your own record here. past_calls, past_hit_rate and "
+             "guru_verdict is a value-investing council and pe, roe, "
+             "div_yield, debt_ebitda, market_cap, beta and short_ratio are "
+             "slow facts; say plainly when they are irrelevant to a one-day "
+             "view rather than citing them for the sake of it. Two are NOT "
+             "slow: ex_dividend_date, because a dividend gap looks exactly "
+             "like a fall and is not one, and next_earnings. macro_events "
+             "matters only if it is close.\n") +
+          "5. The news. headlines is the actual wire, not a sentiment score. "
+          "Read it. If it says something the numbers do not, say so; if it is "
+          "stale, generic, or about a different part of the business, say "
+          "that instead of passing over it in silence.\n"
+          "6. Whether it moved alone. benchmark_ret_1 and benchmark_ret_20 "
+          "are its index, corr_to_benchmark_60 how tightly it usually "
+          "follows, breadth_above_sma50_pct and breadth_positive_20d_pct how "
+          "much of the whole market is holding up, cross_asset_corr whether "
+          "everything is moving together, and vix_level with vix_chg_20 the "
+          "price of fear. A fall everything shared is a different fact from a "
+          "fall this asset had on its own.\n"
+          "7. Its regime and its sector. regime_trend, regime_vol and "
+          "regime_momentum are this asset classified from its own prices; "
+          "rsi_14 and atr_vs_90d put today against a longer norm than "
+          "vol_20_vs_60 does; sector_momentum and sector_trend say whether "
+          "its neighbours are doing the same thing.\n"
+          "8. What actually traded. volume_vs_20 and turnover say whether "
+          "anyone was there for the move, gap_open how much of it happened "
+          "before the session opened, range_atr how much of its own daily "
+          "range the day used. A move on no volume is a different move.\n"
+          "9. Your own record here. past_calls, past_hit_rate and "
           "past_last_call are YOUR previous judgments on this asset and how "
           "they resolved. If you were recently wrong in the direction you are "
           "about to choose again, say so and justify repeating it.\n"
-          "6. What would change your mind, concretely: a level, a move, or an "
-          "event, not a vague condition.\n"
+          "10. What would change your mind, concretely: a level, a move, or "
+          "an event, not a vague condition.\n"
           "Quote the numbers you use. Name what you are deliberately NOT "
           "leaning on where a reader might assume you did. If the evidence is "
           "thin, say the case is thin and pick conviction 1 or 2 rather than "

@@ -601,3 +601,38 @@ def test_a_discarded_attempt_is_named_in_the_run_summary(monkeypatch, tmp_path,
     out = capsys.readouterr().out
     assert "written=1" in out and "retried=1" in out
     assert "discarded: SBER 1d: no JSON object" in out
+
+
+def test_the_run_says_which_kinds_of_evidence_went_unread(monkeypatch, tmp_path,
+                                                          capsys):
+    """33 of 60 dossier fields went unread for 35 judgments, headlines among
+    them, and the only way to find out was to query the log months later. A
+    count alone would hide the case that matters, so the line names the
+    BLOCKS nothing was cited from."""
+    db = _cli_e2e_db(tmp_path)
+    monkeypatch.setattr(store, "DB_PATH", db)
+    monkeypatch.setattr("core.track_record.DB_PATH", db)
+    monkeypatch.setattr("core.dashboard.guru_for_asset",
+                        lambda asset, db_path=None: None)
+    monkeypatch.setattr("core.events.earnings_for",
+                        lambda symbols_by_asset, session=None, fetch=None: {})
+    monkeypatch.setattr("core.events.load_macro", lambda path=None: [])
+    monkeypatch.setattr(analyst, "_eligible", lambda: ["SBER"])
+    monkeypatch.setattr(
+        analyst, "_load_table",
+        lambda: {"asset": {}, "class": {"ru": {
+            "SELL": {"n": 900, "mean": 1.0, "q10": -1.0, "q90": 3.0}}}})
+    monkeypatch.setattr(analyst, "_provider_call",
+                        lambda: (lambda prompt: json.dumps({
+                            "direction": "down", "conviction": 3,
+                            "vol_regime": "normal", "key_risk": "overbought",
+                            "thesis": "Quiet tape, downside lean.",
+                            "evidence": ["close", "atr_pct"]})))
+
+    assert analyst.cmd_run(None) == 0
+    out = capsys.readouterr().out
+    assert "dossier coverage: 2 fields cited" in out
+    # "close" and "atr_pct" are both the price block, so movement - which the
+    # fixture fills - has to show up as unread.
+    assert "nothing read from" in out and "movement" in out.split(
+        "nothing read from")[1]

@@ -140,3 +140,44 @@ def test_the_fallback_needs_the_ordinary_to_actually_exist():
     sl = {"AD": {"pe": 1.0, "debt": 0, "div": 0, "roe": 0}}
     d = gr.resolve_fundamentals("ADP", "ADP", sl)
     assert d is None or "AD" not in str(d.get("_source", ""))
+
+
+def test_a_smartlab_cell_survives_the_page_it_came_from():
+    """Thousands arrive with a non-breaking space ("6 232"), percentages with
+    a sign, absences as a dash. None rather than 0.0, so a reader can tell
+    "not reported" from "reported as zero"."""
+    from guru_report import _sl_num
+
+    assert _sl_num("6 232") == 6232.0, "narrow no-break space thousands"
+    assert _sl_num("6\u00a0232") == 6232.0, "non-breaking space thousands"
+    assert _sl_num("22.7%") == 22.7
+    assert _sl_num("-") is None
+    assert _sl_num("nan") is None
+    assert _sl_num(float("nan")) is None, "pandas writes an absence this way too"
+    assert _sl_num("") is None
+    # positive control: a plain number is not swallowed by the guards
+    assert _sl_num("3.7") == 3.7
+
+
+def test_each_smartlab_table_contributes_the_ratios_it_actually_has():
+    """Two tables, two universes: 219 non-financial names with EV/EBITDA and
+    an EBITDA margin, 13 banks with RoA and a net interest margin. Reading
+    one table's columns out of the other silently produces None everywhere,
+    which is indistinguishable from a page that changed shape."""
+    from guru_report import _sl_extra
+
+    industrial = _sl_extra({"P/S": "0.2", "P/B": "0.1", "EV/EBITDA": "2.8",
+                            "\u0420\u0435\u043d\u0442\u0430\u0431. EBITDA": "30%",
+                            "\u041a\u0430\u043f\u0438\u0442-\u044f  \u043c\u043b\u0440\u0434 \u0440\u0443\u0431": "2 128",
+                            "\u043e\u0442\u0447\u0435\u0442": "2025-\u041c\u0421\u0424\u041e"},
+                           ebitda=True)
+    assert industrial["ps"] == 0.2 and industrial["ev_ebitda"] == 2.8
+    assert industrial["ebitda_margin"] == 30.0
+    assert industrial["cap"] == 2128.0
+    assert industrial["report"] == "2025-\u041c\u0421\u0424\u041e"
+    assert "roa" not in industrial and "nim" not in industrial
+
+    bank = _sl_extra({"P/B": "0.75", "RoA": "2.70%", "\u0427\u041f\u041c, %": "6.20%",
+                      "\u0414\u0414 \u0430\u043f, %": "13.6%"}, ebitda=False)
+    assert (bank["roa"], bank["nim"], bank["div_pref"]) == (2.7, 6.2, 13.6)
+    assert "ps" not in bank and "ev_ebitda" not in bank

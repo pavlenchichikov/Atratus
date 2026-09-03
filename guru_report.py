@@ -227,6 +227,51 @@ def fetch_yf_deep(symbol):
         return None
 
 
+def _sl_num(value):
+    """One Smart-Lab cell as a float, or None when it is not reported.
+
+    The page writes thousands with a non-breaking space ("6 232"), percentages
+    with a sign, and absences as "-". None rather than 0.0 for the new columns:
+    the four original keys keep their 0.0/99.0 fillers because guru scoring
+    reads them arithmetically, but a reader that cannot tell "not reported"
+    from "reported as zero" is how a blank P/B becomes a value verdict.
+    """
+    text = str(value).replace('%', '').replace('\xa0', '').replace(' ', '').strip()
+    if text in ('-', 'nan', 'None', ''):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _sl_extra(row, ebitda=True):
+    """The columns beyond pe/roe/debt/div, whichever this table carries.
+
+    Smart-Lab serves TWO tables: 219 non-financial names with EV, P/S,
+    EV/EBITDA and EBITDA margin, and 13 banks with RoE, RoA and net interest
+    margin instead. They are different universes, not a table and its
+    correction - SBER appears only in the second - so each contributes the
+    ratios that mean something for what it is, and the rest stay None.
+    """
+    out = {
+        'cap': _sl_num(row.get('Капит-я  млрд руб')),
+        'pb': _sl_num(row.get('P/B')),
+        'div_pref': _sl_num(row.get('ДД ап, %')),
+        'report': (str(row.get('отчет')).strip()
+                   if str(row.get('отчет')).strip() not in ('nan', 'None', '')
+                   else None),
+    }
+    if ebitda:
+        out.update({'ps': _sl_num(row.get('P/S')),
+                    'ev_ebitda': _sl_num(row.get('EV/EBITDA')),
+                    'ebitda_margin': _sl_num(row.get('Рентаб. EBITDA'))})
+    else:
+        out.update({'roa': _sl_num(row.get('RoA')),
+                    'nim': _sl_num(row.get('ЧПМ, %'))})
+    return out
+
+
 def fetch_smartlab_data():
     """Fetch Smart-Lab fundamentals for Russian stocks."""
     url = "https://smart-lab.ru/q/shares_fundamental/"
@@ -256,7 +301,9 @@ def fetch_smartlab_data():
                     div_col = row.get('ДД ао, %', row.get('Див. доход, %'))
                     div_s = str(div_col).replace('%', '').replace('\xa0', '').strip()
                     div = float(div_s) if div_s not in ('-', 'nan', 'None', '') else 0.0
-                    f_map[t] = {'pe': pe, 'roe': 0.0, 'debt': debt, 'div': div, '_source': 'smartlab'}
+                    f_map[t] = {'pe': pe, 'roe': 0.0, 'debt': debt,
+                                'div': div, '_source': 'smartlab',
+                                **_sl_extra(row, ebitda=True)}
                 except Exception:
                     continue
         if len(dfs) > 1:
@@ -275,7 +322,9 @@ def fetch_smartlab_data():
                         div_col = row.get('ДД ао, %', row.get('Див. доход, %'))
                         div_s = str(div_col).replace('%', '').replace('\xa0', '').strip()
                         div = float(div_s) if div_s not in ('-', 'nan', 'None', '') else 0.0
-                        f_map[t] = {'pe': pe, 'roe': roe, 'debt': 0.0, 'div': div, '_source': 'smartlab'}
+                        f_map[t] = {'pe': pe, 'roe': roe, 'debt': 0.0,
+                                    'div': div, '_source': 'smartlab',
+                                    **_sl_extra(row, ebitda=False)}
                     except Exception:
                         continue
         return f_map

@@ -12,7 +12,7 @@ from core.analyst import dossier
 # The fixture has to stub these three for every other test in this file, so a
 # test that wants to exercise the real one has to ask for it back by name.
 _REAL = {n: getattr(dossier, n)
-         for n in ("_regime", "_market_state", "_sector_state")}
+         for n in ("_regime", "_market_state", "_sector_state", "_profile")}
 
 
 @pytest.fixture()
@@ -124,6 +124,15 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # Moscow-listed name until this was wired to the table the guru report
         # already downloads.
         "pe", "roe", "debt_ebitda", "div_yield",
+        # Smart-Lab serves fourteen columns and the project read four of them.
+        # The other eight are ratios that mean different things for the two
+        # tables it publishes - P/S, EV/EBITDA and the EBITDA margin for the
+        # 219 non-financial names, RoA and the net interest margin for the 13
+        # banks - so each name carries whichever of them its own table has.
+        # `fundamentals_asof` is the reporting period the numbers come from,
+        # without which a P/E of 3.7 has no age at all.
+        "ps", "pb", "ev_ebitda", "ebitda_margin", "roa", "nim",
+        "div_yield_pref", "fundamentals_asof",
         # raw headlines, without the sentiment score computed on them
         "headlines",
         # this asset's own regime, classified from prices alone. rsi_14 is new
@@ -148,7 +157,12 @@ def test_a_moscow_name_gets_its_fundamentals_from_smartlab(monkeypatch):
     monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
         "SBER": {"pe": 3.5, "roe": 0.227, "debt": 0.0, "div": 14.0}})
     assert dossier._smartlab_fundamentals("SBER") == {
-        "pe": 3.5, "roe": 0.227, "debt_ebitda": None, "div_yield": 14.0}
+        **dossier._FUNDAMENTALS_BLANK,
+        "pe": 3.5, "roe": 0.227, "debt_ebitda": None, "div_yield": 14.0,
+        # `cap` is transport: _profile pops it and rescales it into market_cap,
+        # so it is present on a hit and absent from the blank, and never
+        # reaches a dossier under this name either way.
+        "cap": None}
     # the remap guru_report applies for the two renamed tickers
     monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
         "YDEX": {"pe": 12.0, "roe": 0.1, "debt": 1.5, "div": 0.0}})
@@ -159,6 +173,65 @@ def test_a_moscow_name_gets_its_fundamentals_from_smartlab(monkeypatch):
     assert dossier._smartlab_fundamentals("GAZP")["pe"] is None
     monkeypatch.setattr(dossier, "_smartlab_map", dict)
     assert dossier._smartlab_fundamentals("SBER") == dossier._FUNDAMENTALS_BLANK
+
+
+def test_the_columns_beyond_the_original_four_reach_the_dossier(monkeypatch):
+    """Smart-Lab serves fourteen columns; four were read and ten thrown away.
+
+    The two tables are different universes rather than a table and its
+    correction: 219 non-financial names carry P/S, EV/EBITDA and an EBITDA
+    margin, 13 banks carry RoA and a net interest margin instead. Each name
+    gets whichever its own table has and None for the rest, which is why this
+    asserts both halves."""
+    dossier._SMARTLAB_CACHE.clear()
+    monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
+        "GAZP": {"pe": 2.0, "roe": 0.0, "debt": 2.1, "div": 0.0, "ps": 0.2,
+                 "pb": 0.1, "ev_ebitda": 2.8, "ebitda_margin": 30.0,
+                 "cap": 2128.0, "report": "2025-\u041c\u0421\u0424\u041e"}})
+    got = dossier._smartlab_fundamentals("GAZP")
+    assert (got["ps"], got["pb"], got["ev_ebitda"]) == (0.2, 0.1, 2.8)
+    # the page writes 30%, the dossier carries margins as fractions
+    assert got["ebitda_margin"] == pytest.approx(0.30)
+    assert got["roa"] is None and got["nim"] is None, "not a bank"
+    assert got["fundamentals_asof"] == "2025-\u041c\u0421\u0424\u041e"
+
+    monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
+        "SBER": {"pe": 3.7, "roe": 0.227, "debt": 0.0, "div": 13.6,
+                 "pb": 0.75, "roa": 2.7, "nim": 6.2, "div_pref": 13.6,
+                 "cap": 6244.0}})
+    got = dossier._smartlab_fundamentals("SBER")
+    assert got["roa"] == pytest.approx(0.027), "fractions"
+    assert got["nim"] == pytest.approx(0.062)
+    assert got["div_yield_pref"] == 13.6, "yields stay percent, like div_yield"
+    assert got["ps"] is None and got["ev_ebitda"] is None, "a bank has neither"
+
+
+def test_moscow_capitalisation_is_rescaled_out_of_billions(monkeypatch):
+    """Smart-Lab publishes it in billions of roubles and Yahoo publishes it
+    absolute. Carried across unconverted, SBER is worth six thousand."""
+    dossier._SMARTLAB_CACHE.clear()
+    monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
+        "SBER": {"pe": 3.7, "roe": 0.227, "debt": 0.0, "div": 13.6,
+                 "cap": 6244.0}})
+    monkeypatch.setattr("core.events.can_have_earnings",
+                        lambda symbol, asset: False)
+    # _no_network stubs _profile for every test in this file; this one is
+    # about _profile itself, so it asks for the real one back the way the
+    # three context sources at the top of the file do.
+    monkeypatch.setattr(dossier, "_profile", _REAL["_profile"])
+    out = dossier._profile("SBER")
+    assert out["market_cap"] == 6244.0 * 1e9
+    assert "cap" not in out, "the transport key must not reach the dossier"
+
+
+def test_a_block_is_unread_only_when_it_had_something_to_read():
+    """A coverage line that counts blank blocks as unread cries wolf on every
+    asset Yahoo cannot resolve."""
+    assert dossier.blocks_of(["headlines", "ret_5"]) == {"news", "movement"}
+    thin = {"asset": "SBER", "ret_5": 0.01, "headlines": [], "pe": None}
+    assert dossier.available_blocks(thin) == {"movement"}
+    fat = {"asset": "SBER", "ret_5": 0.01, "headlines": ["a"], "pe": 3.7}
+    assert dossier.available_blocks(fat) == {"movement", "news", "fundamentals"}
 
 
 def test_a_dead_network_is_visible_block_by_block():
@@ -446,3 +519,85 @@ def test_a_blocked_lookup_returns_the_blank_shape(monkeypatch):
                                           "debt": 2.4, "div": 0.0}})
     assert dossier._smartlab_fundamentals("ROSS") == dossier._FUNDAMENTALS_BLANK
     dossier._SMARTLAB_CACHE.clear()
+
+
+def _yahoo_info():
+    """A trimmed real NVDA payload, in Yahoo's own units."""
+    return {"sector": "Technology", "industry": "Semiconductors",
+            "marketCap": 5418828431360, "floatShares": 2.3e10,
+            "shortRatio": 1.1, "beta": 2.1, "trailingPE": 28.40633,
+            "returnOnEquity": 1.17211, "dividendYield": 0.45,
+            "priceToSalesTrailing12Months": 17.885693,
+            "priceToBook": 23.664454, "enterpriseToEbitda": 26.754,
+            "ebitdaMargins": 0.66431, "returnOnAssets": 0.53572,
+            "totalDebt": 38860001280, "ebitda": 201266003968,
+            "mostRecentQuarter": 1785024000}
+
+
+def test_an_american_name_gets_the_same_block_a_moscow_one_does(monkeypatch):
+    """Widening only the Smart-Lab side left US names with a THINNER
+    fundamentals block than Russian ones, which is backwards. Yahoo carries
+    every one of these except the two with no American analogue."""
+    import types
+
+    monkeypatch.setattr(dossier, "_profile", _REAL["_profile"])
+    monkeypatch.setattr("core.events.can_have_earnings",
+                        lambda symbol, asset: True)
+    fake = types.SimpleNamespace(Ticker=lambda s: types.SimpleNamespace(
+        info=_yahoo_info()))
+    monkeypatch.setitem(__import__("sys").modules, "yfinance", fake)
+
+    out = dossier._profile("NVDA")
+    assert out["ps"] == 17.885693 and out["pb"] == 23.664454
+    assert out["ev_ebitda"] == 26.754
+    assert out["fundamentals_asof"] == "2026-07-26"
+    # the ratio is absent from the payload but both of its parts are there
+    assert out["debt_ebitda"] == pytest.approx(38860001280 / 201266003968)
+    # and the two that only a Moscow bank has stay empty rather than faked
+    assert out["nim"] is None and out["div_yield_pref"] is None
+
+
+def test_a_margin_means_the_same_thing_in_both_sources(monkeypatch):
+    """Smart-Lab writes a margin as "30%" and Yahoo as 0.30. Carried across
+    unconverted, GAZP reads as a hundred times more profitable than NVDA."""
+    import types
+
+    monkeypatch.setattr(dossier, "_profile", _REAL["_profile"])
+    dossier._SMARTLAB_CACHE.clear()
+    monkeypatch.setattr(dossier, "_smartlab_map", lambda: {
+        "GAZP": {"pe": 2.0, "roe": 0.0, "debt": 2.1, "div": 0.0,
+                 "ebitda_margin": 30.0, "roa": 2.7, "nim": 6.2}})
+    monkeypatch.setattr("core.events.can_have_earnings",
+                        lambda symbol, asset: False)
+    ru = dossier._profile("GAZP")
+    assert ru["ebitda_margin"] == pytest.approx(0.30)
+    assert ru["roa"] == pytest.approx(0.027)
+    assert ru["nim"] == pytest.approx(0.062)
+
+    monkeypatch.setattr("core.events.can_have_earnings",
+                        lambda symbol, asset: True)
+    fake = types.SimpleNamespace(Ticker=lambda s: types.SimpleNamespace(
+        info=_yahoo_info()))
+    monkeypatch.setitem(__import__("sys").modules, "yfinance", fake)
+    us = dossier._profile("NVDA")
+    # both fractions now, so the two are on one scale and comparable
+    assert 0 < ru["ebitda_margin"] < 1 and 0 < us["ebitda_margin"] < 1
+    assert 0 < ru["roa"] < 1 and 0 < us["roa"] < 1
+    # the yields are the deliberate exception: percent on both paths
+    assert dossier._smartlab_fundamentals("GAZP")["div_yield"] is None
+
+
+def test_a_loss_making_company_gets_no_leverage_ratio(monkeypatch):
+    """debt/EBITDA on a negative EBITDA is not a small debt load, it is not a
+    debt load at all."""
+    import types
+
+    monkeypatch.setattr(dossier, "_profile", _REAL["_profile"])
+    monkeypatch.setattr("core.events.can_have_earnings",
+                        lambda symbol, asset: True)
+    for ebitda in (-1e9, 0, None):
+        info = dict(_yahoo_info(), ebitda=ebitda)
+        fake = types.SimpleNamespace(Ticker=lambda s, i=info:
+                                     types.SimpleNamespace(info=i))
+        monkeypatch.setitem(__import__("sys").modules, "yfinance", fake)
+        assert dossier._profile("NVDA")["debt_ebitda"] is None, ebitda

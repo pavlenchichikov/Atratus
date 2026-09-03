@@ -281,3 +281,37 @@ def test_model_typography_is_normalised_out_of_the_prose():
 def test_the_sanitiser_leaves_russian_quotation_marks_alone():
     # Guillemets are punctuation in Russian, not typographic decoration.
     assert agent.plain("«ГАЗП»") == "«ГАЗП»"
+
+
+def test_the_checklist_names_the_fields_it_expects_to_be_read():
+    """The measured driver of what the model reads.
+
+    Over the first 35 judgments, 16 of the 21 fields the checklist NAMED were
+    cited, against 9 of the other 39 - mostly once each. News, breadth,
+    cross-asset correlation, regime, sector and the whole flow block reached
+    the prompt in the 2026-08-31 session and the checklist was never extended,
+    so they were fetched, rendered and never read. This pins the blocks back
+    to the instruction that earns them."""
+    from core.analyst import dossier
+
+    d = {k: 1.0 for block in dossier.BLOCKS.values() for k in block}
+    for horizon in (1, 5):
+        instructions = agent.prompt_for(
+            d, depth="full", horizon=horizon).split("in order")[1]
+        for field in ("headlines", "breadth_above_sma50_pct", "cross_asset_corr",
+                      "vix_level", "regime_trend", "rsi_14", "sector_momentum",
+                      "volume_vs_20", "turnover", "gap_open", "range_atr",
+                      "ex_dividend_date", "market_cap"):
+            assert field in instructions, "%s unnamed at horizon %d" % (
+                field, horizon)
+
+
+def test_the_brief_form_stays_brief():
+    """The checklist is what makes the full form cost 3.4x the wall clock.
+    Growing it must not quietly grow the sweep form too."""
+    from core.analyst import dossier
+
+    d = {k: 1.0 for block in dossier.BLOCKS.values() for k in block}
+    brief = agent.prompt_for(d, depth="brief", horizon=1)
+    full = agent.prompt_for(d, depth="full", horizon=1)
+    assert len(brief) < len(full) / 2

@@ -98,7 +98,7 @@ def _eligible(today=None):
 
 
 def _judge_one(d, asset, h, horizon, call, depth, cells, table,
-               written, refused, rejects=None):
+               written, refused, rejects=None, cited=None):
     """One judgment, for one asset over one horizon. Returns the two counters.
 
     Split out of cmd_run when the horizon became a loop: the same dossier over
@@ -106,7 +106,8 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
     rows, which the log's (date, asset, horizon) primary key has always allowed.
 
     `rejects` collects one line per discarded attempt so the run can report the
-    calls it paid for and threw away, not only the ones it kept.
+    calls it paid for and threw away, not only the ones it kept; `cited` collects
+    the dossier fields the judgments actually named.
     """
     on_reject = None if rejects is None else (
         lambda reason: rejects.append("%s %dd: %s" % (asset, horizon, reason)))
@@ -128,6 +129,8 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         "atr_at_signal": d["atr"], "close_at_signal": d["close"],
     })
     _print_judgment(asset, j, fc, horizon=horizon)
+    if cited is not None:
+        cited.update(j["evidence"])
     return written + 1, refused
 
 
@@ -226,6 +229,7 @@ def cmd_run(args):
 
     written = skipped = refused = 0
     rejects = []
+    cited, offered = set(), set()
     # Every network field in the dossier is wrapped in _safe, so a dead source
     # reads as None and the run continues on a quietly thinner dossier. Counting
     # them turns "no internet" from something you notice weeks later in the
@@ -238,6 +242,7 @@ def cmd_run(args):
                 continue
             seen[name][0] += filled
             seen[name][1] += 1
+        offered |= dossier.available_blocks(d)
         if d["close"] is None or d["atr"] is None:
             skipped += 1
             continue
@@ -249,7 +254,7 @@ def cmd_run(args):
             try:
                 written, refused = _judge_one(d, asset, h, horizon, call, depth,
                                               cells, table, written, refused,
-                                              rejects)
+                                              rejects, cited)
             except ProviderUnavailable as exc:
                 # One line, then stop. A sweep of 28 assets would otherwise
                 # print the same missing-package error 28 times and finish
@@ -260,6 +265,16 @@ def cmd_run(args):
                 return 1
     print(f"[analyst] written={written} skipped={skipped} refused={refused} "
           f"retried={len(rejects)}")
+    if written:
+        # A field costs a network call and prompt tokens whether or not it is
+        # read, and for the first 35 judgments 33 of the 60 were fetched,
+        # rendered into the prompt and never cited - the headlines among them.
+        # Printing it per run makes that visible the moment it happens instead
+        # of months later when somebody queries the log.
+        unread = offered - dossier.blocks_of(cited)
+        print("[analyst] dossier coverage: %d fields cited%s"
+              % (len(cited), "" if not unread else
+                 "; nothing read from " + ", ".join(sorted(unread))))
     # Every reject is a paid call whose answer was discarded, and the reason is
     # the whole value of the line: "conviction=2.5 is not an integer 1-5" is a
     # prompt fix, "the call itself failed" is a dead provider, and the two look

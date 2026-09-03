@@ -254,8 +254,24 @@ def _flow(asset, bars, atr, db_path, today):
     return out
 
 
+# The two sources use different units for the same quantity: Smart-Lab writes
+# a margin as "30%" and Yahoo as 0.30. One rule, applied at both boundaries, or
+# the model reads GAZP as a hundred times more profitable than NVDA:
+#
+#   returns and margins (roe, roa, ebitda_margin, nim)  ->  FRACTIONS
+#   yields (div_yield, div_yield_pref)                  ->  PERCENT
+#
+# Yields are the odd one out because div_yield already shipped as a percent on
+# both paths and changing it would silently restate every dividend on the card.
+def _pct_to_frac(value):
+    return None if value is None else value / 100.0
+
+
 _FUNDAMENTALS_BLANK = {"pe": None, "roe": None, "debt_ebitda": None,
-                       "div_yield": None}
+                       "div_yield": None, "ps": None, "pb": None,
+                       "ev_ebitda": None, "ebitda_margin": None, "roa": None,
+                       "nim": None, "div_yield_pref": None,
+                       "fundamentals_asof": None}
 
 # The profile block's shape, in one place. It is a module constant so the test
 # suite's no-network stub can BE this shape instead of restating it: a stub that
@@ -297,12 +313,44 @@ def _smartlab_fundamentals(asset):
     row = _smartlab_map().get(key) if key else None
     if not row:
         return dict(_FUNDAMENTALS_BLANK)
-    # 99.0 is fetch_smartlab_data's "not reported" filler, not a P/E of 99.
+    # 99.0 is fetch_smartlab_data's "not reported" filler, not a P/E of 99,
+    # and 0.0 is its filler for the other three. The columns added later use
+    # None directly and are passed through as they come.
     pe = row.get("pe")
     return {"pe": None if pe in (None, 99.0) else pe,
             "roe": row.get("roe") or None,
             "debt_ebitda": row.get("debt") or None,
-            "div_yield": row.get("div") or None}
+            "div_yield": row.get("div") or None,
+            "ps": row.get("ps"),
+            "pb": row.get("pb"),
+            "ev_ebitda": row.get("ev_ebitda"),
+            "ebitda_margin": _pct_to_frac(row.get("ebitda_margin")),
+            "roa": _pct_to_frac(row.get("roa")),
+            "nim": _pct_to_frac(row.get("nim")),
+            "div_yield_pref": row.get("div_pref"),
+            "fundamentals_asof": row.get("report"),
+            # Transport only: _profile pops this and rescales it into
+            # market_cap, so it never appears in a dossier under this name.
+            "cap": row.get("cap")}
+
+
+def _asof(info):
+    """The quarter Yahoo's fundamentals close on, as an ISO date.
+
+    Smart-Lab states this as "2025-MSFO" and Yahoo as a unix timestamp. Both
+    answer the same question - how old is this P/E - and neither is worth a
+    parser on the reading side, so both arrive as a string.
+    """
+    stamp = info.get("mostRecentQuarter") or info.get("lastFiscalYearEnd")
+    if not stamp:
+        return None
+    try:
+        import datetime as _dt
+
+        return _dt.datetime.fromtimestamp(
+            int(stamp), _dt.UTC).date().isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _profile(asset):
@@ -330,7 +378,14 @@ def _profile(asset):
             # from Smart-Lab for the guru report, so the whole block used to be
             # blank for every Russian name for want of a lookup. SBER read as
             # an instrument with no sector, no size and no dividend at all.
-            return {**blank, **_smartlab_fundamentals(asset)}
+            fund = _smartlab_fundamentals(asset)
+            # Smart-Lab publishes capitalisation in billions of roubles; Yahoo
+            # publishes it absolute. The field means the same thing either way
+            # only if the scale does, so it is converted here rather than left
+            # for a reader to notice that SBER is worth six thousand.
+            cap = fund.pop("cap", None)
+            return {**blank, **fund,
+                    "market_cap": None if cap is None else cap * 1e9}
         import yfinance as yf
 
         info = yf.Ticker(symbol).info or {}
@@ -344,7 +399,18 @@ def _profile(asset):
             ex = _dt.datetime.fromtimestamp(int(ex), _dt.UTC).date().isoformat()
         except Exception:
             ex = None
+    # Spread over `blank` rather than listed alone: the Smart-Lab columns below
+    # exist for Moscow names and not here, and a branch that returns its own
+    # literal dict drops them from the shape instead of carrying them as None.
+    # The RATIO is not in Yahoo's payload but both of its parts are. Guarded on
+    # a non-positive EBITDA, where the quotient is not a leverage measure at
+    # all: a loss-making company would come out with a negative debt load.
+    debt, ebitda = info.get("totalDebt"), info.get("ebitda")
+    debt_ebitda = (debt / ebitda
+                   if debt is not None and ebitda not in (None, 0)
+                   and ebitda > 0 else None)
     return {
+        **blank,
         "sector": info.get("sector"),
         "industry": info.get("industry"),
         "market_cap": info.get("marketCap"),
@@ -354,8 +420,17 @@ def _profile(asset):
         "ex_dividend_date": ex,
         "pe": info.get("trailingPE"),
         "roe": info.get("returnOnEquity"),
-        "debt_ebitda": None,          # not in Yahoo's info payload
+        "debt_ebitda": debt_ebitda,
         "div_yield": info.get("dividendYield"),
+        "ps": info.get("priceToSalesTrailing12Months"),
+        "pb": info.get("priceToBook"),
+        "ev_ebitda": info.get("enterpriseToEbitda"),
+        # already fractions here, unlike Smart-Lab's percents
+        "ebitda_margin": info.get("ebitdaMargins"),
+        "roa": info.get("returnOnAssets"),
+        # nim is a bank measure the Moscow table publishes and Yahoo does not,
+        # and div_yield_pref needs a preferred line most of these do not have.
+        "fundamentals_asof": _asof(info),
     }
 
 
@@ -492,6 +567,50 @@ def _headlines(asset, limit=6):
 # read from a local calendar file, so an empty one says nothing about the
 # connection and gets its own line.
 NETWORK_BLOCKS = ("headlines", "guru", "fundamentals", "earnings")
+
+# What kind of evidence each field is. Used to report, per run, which KINDS of
+# evidence a judgment drew on: a count of cited fields hides the case that
+# matters, which is a model reading nine returns and no news at all. Metadata
+# (asset, date, bars_available) belongs to no block on purpose.
+BLOCKS = {
+    "price": ("close", "atr", "atr_pct"),
+    "movement": ("ret_1", "ret_5", "ret_20", "ret_60", "streak_days"),
+    "position": ("high_20", "low_20", "atr_to_high_20", "atr_to_low_20",
+                 "drawdown_60"),
+    "volatility": ("vol_20", "vol_20_vs_60", "rsi_14", "atr_vs_90d",
+                   "regime_trend", "regime_vol", "regime_momentum"),
+    "flow": ("volume_vs_20", "turnover", "gap_open", "range_atr"),
+    "market": ("benchmark", "benchmark_ret_1", "benchmark_ret_20",
+               "corr_to_benchmark_60", "vix_level", "vix_chg_20",
+               "breadth_above_sma50_pct", "breadth_positive_20d_pct",
+               "cross_asset_corr", "cross_asset_corr_label"),
+    "sector": ("sector", "industry", "sector_group", "sector_momentum",
+               "sector_trend"),
+    "fundamentals": ("pe", "roe", "debt_ebitda", "div_yield", "market_cap",
+                     "float_shares", "short_ratio", "beta", "ps", "pb",
+                     "ev_ebitda", "ebitda_margin", "roa", "nim",
+                     "div_yield_pref", "fundamentals_asof"),
+    "opinion": ("guru_verdict", "guru_pct"),
+    "news": ("headlines",),
+    "calendar": ("next_earnings", "macro_events", "ex_dividend_date"),
+    "own_record": ("past_calls", "past_hit_rate", "past_last_call",
+                   "past_last_outcome"),
+}
+
+
+def blocks_of(fields):
+    """The set of block names the given field names touch."""
+    wanted = set(fields)
+    return {name for name, keys in BLOCKS.items() if wanted & set(keys)}
+
+
+def available_blocks(dossier):
+    """Blocks this dossier could actually be read from: at least one field in
+    the block carried a value. A block that arrived blank is not an unread
+    block, it is an absent one, and calling those the same thing is how a
+    coverage line starts crying wolf on assets Yahoo cannot resolve."""
+    return {name for name, keys in BLOCKS.items()
+            if any(dossier.get(k) not in (None, [], "") for k in keys)}
 
 
 def _applicable(asset):
