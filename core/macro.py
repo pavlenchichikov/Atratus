@@ -190,3 +190,127 @@ def upcoming(events, today=None, days=90):
     until = (datetime.date.fromisoformat(str(today)[:10])
              + datetime.timedelta(days=days)).isoformat()
     return [e for e in events if today <= str(e.get("date", ""))[:10] <= until]
+
+
+# ---------------------------------------------------------------------------
+# The policy rate itself, not just the date of the next meeting.
+#
+# For the Moscow half this is the one macro number that actually moves prices:
+# a bank at a P/E of 3.7 with a 13.6% yield is priced against the key rate, and
+# the dossier could see the MEETING but not the RATE. Kept to the level, the
+# level before the last change, and the direction, because that is what a
+# discount rate does to an equity - the rest is a chart nobody asked for.
+#
+# Both series are dated, so this block REWINDS: `as_of` walks the same series
+# back rather than refetching, which is what lets the backfill use it.
+# ---------------------------------------------------------------------------
+
+# The bare page returns only the last few days, which carries no previous
+# level and cannot be rewound at all. The dated query is the same table over a
+# window wide enough to contain at least one change: two years, because the
+# CBR has never gone that long without moving and a shorter window would
+# report "holding" for a bank that had simply been quiet.
+CBR_RATE_YEARS = 2
+
+
+def cbr_rate_url(today=None):
+    end = today or datetime.date.today()
+    if isinstance(end, str):
+        end = datetime.date.fromisoformat(end[:10])
+    start = end - datetime.timedelta(days=365 * CBR_RATE_YEARS)
+    return ("https://www.cbr.ru/hd_base/KeyRate/?UniDbQuery.Posted=True"
+            "&UniDbQuery.From=%s&UniDbQuery.To=%s"
+            % (start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")))
+# The FOMC sets a target RANGE and the NY Fed publishes it beside the realized
+# rate. The range is the policy decision; EFFR is where the market landed
+# inside it, which is a different quantity and not the one being asked about.
+FED_RATE_URL = "https://markets.newyorkfed.org/api/rates/unsecured/effr/last/400.json"
+
+BANK_BY_REGION = {"ru": ("CBR", "cbr.ru"), "us": ("Fed", "newyorkfed.org")}
+_RATE_CACHE = {}
+
+
+def cbr_rate_series(html):
+    """[(date, percent)] newest first. The page writes 14,00 for 14 percent."""
+    out = []
+    for day, value in re.findall(
+            r"<td>(\d{2}\.\d{2}\.\d{4})</td>\s*<td>([\d,\.]+)</td>", html):
+        try:
+            rate = float(value.replace(",", "."))
+        except ValueError:
+            continue
+        d, m, y = day.split(".")
+        out.append(("%s-%s-%s" % (y, m, d), rate))
+    return sorted(out, reverse=True)
+
+
+def fed_rate_series(payload):
+    """[(date, percent)] newest first, from the FOMC target range's upper bound."""
+    try:
+        rows = json.loads(payload).get("refRates") or []
+    except ValueError:
+        return []
+    out = []
+    for row in rows:
+        top = row.get("targetRateTo")
+        date = row.get("effectiveDate")
+        if top is None or not date:
+            continue
+        out.append((str(date)[:10], float(top)))
+    return sorted(out, reverse=True)
+
+
+# The URL is a callable so a source that needs a window can build one. Both
+# are still fetched ONCE per process; see rate_series.
+RATE_SOURCES = {"ru": (cbr_rate_url, cbr_rate_series),
+                "us": (lambda today=None: FED_RATE_URL, fed_rate_series)}
+
+
+def rate_series(region, refetch=False):
+    """The cached daily series for one region, or [].
+
+    Cached for the life of the process: a sweep touches 200 assets and the key
+    rate does not move between two of them.
+    """
+    key = str(region or "").lower()
+    if key not in RATE_SOURCES:
+        return []
+    if refetch or key not in _RATE_CACHE:
+        build_url, parse = RATE_SOURCES[key]
+        try:
+            _RATE_CACHE[key] = parse(_get(build_url()))
+        except Exception:
+            _RATE_CACHE[key] = []
+    return _RATE_CACHE[key]
+
+
+def policy_rate(region, today=None):
+    """{rate, as_of, previous, changed_on, days_since_change, direction, bank}.
+
+    None when the series is unavailable, never a zero: a policy rate of 0.0 is
+    a real value in some markets and must not be how a dead source reads.
+    """
+    series = rate_series(region)
+    if not series:
+        return None
+    cutoff = str(today)[:10] if today else None
+    usable = [(d, r) for d, r in series if not cutoff or d <= cutoff]
+    if not usable:
+        return None
+    as_of, rate = usable[0]
+    previous, changed_on = None, None
+    for date, value in usable:
+        if value != rate:
+            previous, changed_on = value, date
+            break
+    bank, _source = BANK_BY_REGION.get(str(region).lower(), ("?", "?"))
+    direction = ("holding" if previous is None else
+                 "hiking" if rate > previous else "cutting")
+    return {"rate": rate, "as_of": as_of, "previous": previous,
+            # changed_on is the last day the OLD level was still in force, so
+            # the change itself lands the day after it.
+            "changed_on": changed_on,
+            "days_since_change": (None if changed_on is None else
+                                  (datetime.date.fromisoformat(as_of)
+                                   - datetime.date.fromisoformat(changed_on)).days),
+            "direction": direction, "bank": bank}

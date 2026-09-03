@@ -73,6 +73,42 @@ def _context(asset):
 _GLOBAL_REGIONS = frozenset({"US", "GLOBAL", ""})
 
 
+_RATE_BLANK = {"policy_rate": None, "policy_rate_prev": None,
+               "policy_rate_direction": None,
+               "policy_rate_days_since_change": None, "policy_rate_bank": None}
+
+# Which central bank actually discounts this asset's cash flows. Not the same
+# question as which macro EVENTS reach it: the Fed's meeting moves everything,
+# but a Moscow bank is priced against the key rate and nothing else.
+_RATE_REGION = {"ru": "ru"}
+
+
+def _policy_rate(asset, today=None):
+    """The rate this asset is priced against, and which way it is moving.
+
+    The single macro number that matters for the Moscow half. SBER at a P/E of
+    3.7 with a 13.6 percent yield is a bet on the key rate, and until now the
+    dossier could see the MEETING and not the RATE - which is like being told
+    there is a vote on Tuesday without being told what is being voted on.
+
+    Level, previous level, direction and how long since it moved. Not a series:
+    a chart nobody asked for is the prompt weight that made 33 of 60 fields go
+    unread.
+    """
+    from config import radar_category
+    from core.macro import policy_rate
+
+    klass = (radar_category(asset) or "").lower()
+    got = policy_rate(_RATE_REGION.get(klass, "us"), today=today)
+    if not got:
+        return dict(_RATE_BLANK)
+    return {"policy_rate": got["rate"],
+            "policy_rate_prev": got["previous"],
+            "policy_rate_direction": got["direction"],
+            "policy_rate_days_since_change": got["days_since_change"],
+            "policy_rate_bank": got["bank"]}
+
+
 def _macro_for(asset, today=None, horizon_days=None):
     """Calendar entries that are NEAR and that APPLY, with how near.
 
@@ -720,7 +756,11 @@ BLOCKS = {
                      "div_yield_pref", "fundamentals_asof"),
     "opinion": ("guru_verdict", "guru_pct"),
     "news": ("headlines",),
-    "calendar": ("next_earnings", "macro_events", "ex_dividend_date"),
+    # The bank's calendar and the bank's rate are one subject: when it
+    # decides, and what it decided last time.
+    "calendar": ("next_earnings", "macro_events", "ex_dividend_date",
+                 "policy_rate", "policy_rate_prev", "policy_rate_direction",
+                 "policy_rate_days_since_change", "policy_rate_bank"),
     "own_record": ("past_calls", "past_hit_rate", "past_last_call",
                    "past_last_outcome"),
 }
@@ -829,7 +869,8 @@ def _as_of(asset, today):
     if today is None:
         return {**_profile(asset), **_regime(asset), **_market_state(),
                 **_sector_state(asset), **_headlines(asset), **_context(asset),
-                **_performance(asset), **_own_record(asset)}
+                **_performance(asset), **_policy_rate(asset),
+                **_own_record(asset)}
     # The year block is on the rewinding side with the own record: it is
     # computed from market.db prices, which are dated, and core/performance.py
     # bounds the window at both ends for exactly this call.
@@ -837,6 +878,7 @@ def _as_of(asset, today):
             "headlines": [], "guru_verdict": None, "guru_pct": None,
             "next_earnings": None, "macro_events": [],
             **_performance(asset, today=today),
+            **_policy_rate(asset, today=today),
             **_own_record(asset, before=today)}
 
 

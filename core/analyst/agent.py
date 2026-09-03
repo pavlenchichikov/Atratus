@@ -124,6 +124,13 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu=""):
              "slow: ex_dividend_date, because a dividend gap looks exactly "
              "like a fall and is not one, and next_earnings. macro_events "
              "matters only if it is close.\n") +
+          "4b. The rate everything is discounted against. policy_rate is the "
+          "policy rate of the bank that prices THIS asset (policy_rate_bank), "
+          "policy_rate_prev the level before the last move, policy_rate_direction "
+          "whether it is hiking, cutting or holding, and "
+          "policy_rate_days_since_change how long it has sat there. A bank on "
+          "a P/E of 3.7 with a 13.6 percent yield is a bet on that number, "
+          "and a cutting cycle and a hiking one are opposite cases for it.\n"
           "5. The news. headlines is the actual wire, not a sentiment score. "
           "Read it. If it says something the numbers do not, say so; if it is "
           "stale, generic, or about a different part of the business, say "

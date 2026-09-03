@@ -149,3 +149,67 @@ def test_the_cycle_step_reports_how_many_events_are_on_file(monkeypatch, tmp_pat
                                fmt=lambda n: "%d event(s) on file" % n)
     assert step["status"] == "ok" and step["msg"] == "2 event(s) on file"
     assert len(macro.load(path=path)) == 2
+
+
+CBR_RATE_HTML = """
+<table class="data"><tr><th>Дата</th><th>Ставка</th></tr>
+<tr><td>03.09.2026</td><td>14,00</td></tr>
+<tr><td>02.09.2026</td><td>14,00</td></tr>
+<tr><td>24.07.2026</td><td>14,25</td></tr>
+<tr><td>23.07.2026</td><td>14,25</td></tr>
+</table>
+"""
+
+FED_RATE_JSON = """{"refRates":[
+ {"effectiveDate":"2026-09-02","percentRate":3.63,"targetRateFrom":3.50,"targetRateTo":3.75},
+ {"effectiveDate":"2025-12-10","percentRate":3.88,"targetRateFrom":3.75,"targetRateTo":4.00}]}"""
+
+
+def test_a_comma_decimal_is_a_rate_not_a_thousands_separator():
+    """The CBR page writes 14,00 for fourteen percent. Read as a separator it
+    is fourteen hundred."""
+    got = macro.cbr_rate_series(CBR_RATE_HTML)
+    assert got[0] == ("2026-09-03", 14.0)
+    assert got[-1] == ("2026-07-23", 14.25)
+    assert got == sorted(got, reverse=True), "newest first"
+
+
+def test_the_fed_rate_is_the_target_range_not_where_the_market_landed():
+    """EFFR is where money actually traded inside the range; the range is the
+    decision. They differ by up to a quarter point and only one is policy."""
+    got = macro.fed_rate_series(FED_RATE_JSON)
+    assert got[0] == ("2026-09-02", 3.75), "the upper bound of the target"
+    assert all(r != 3.63 for _d, r in got), "3.63 is the realized rate"
+
+
+def test_the_direction_comes_from_the_last_level_that_differed(monkeypatch):
+    monkeypatch.setattr(macro, "_RATE_CACHE",
+                        {"ru": macro.cbr_rate_series(CBR_RATE_HTML)})
+    got = macro.policy_rate("ru")
+    assert (got["rate"], got["previous"]) == (14.0, 14.25)
+    assert got["direction"] == "cutting" and got["bank"] == "CBR"
+    assert got["changed_on"] == "2026-07-24"
+    assert got["days_since_change"] == 41
+
+
+def test_the_rate_rewinds_because_the_series_is_dated(monkeypatch):
+    """The dossier builds this for old judgments. Unwound, a May judgment
+    would be told about a rate set in September."""
+    monkeypatch.setattr(macro, "_RATE_CACHE",
+                        {"ru": macro.cbr_rate_series(CBR_RATE_HTML)})
+    got = macro.policy_rate("ru", today="2026-08-01")
+    assert got["as_of"] == "2026-07-24" and got["rate"] == 14.25
+    assert got["previous"] is None, "no earlier change inside this fixture"
+    assert got["direction"] == "holding"
+    # and before the series begins there is no rate to report
+    assert macro.policy_rate("ru", today="2020-01-01") is None
+
+
+def test_a_dead_rate_source_is_absent_rather_than_zero(monkeypatch):
+    """A policy rate of 0.0 is a real value in some markets, so it must not be
+    how a failed fetch reads."""
+    monkeypatch.setattr(macro, "_RATE_CACHE", {})
+    monkeypatch.setattr(macro, "_get", lambda url: (_ for _ in ()).throw(
+        OSError("down")))
+    assert macro.policy_rate("ru") is None
+    assert macro.policy_rate("nowhere") is None

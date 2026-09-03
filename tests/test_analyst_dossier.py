@@ -161,6 +161,12 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # would be handed the year that followed it.
         "ret_1y", "ret_ytd", "vol_1y", "max_dd_1y",
         "excess_vs_benchmark_1y", "beta_1y", "off_52w_high",
+        # The rate this asset is discounted against, from the bank that sets
+        # it. For the Moscow half it is the one macro number that moves
+        # prices, and the dossier could see the MEETING without it. Dated
+        # series on both sides, so this block rewinds with the rest.
+        "policy_rate", "policy_rate_prev", "policy_rate_direction",
+        "policy_rate_days_since_change", "policy_rate_bank",
     }
 
 
