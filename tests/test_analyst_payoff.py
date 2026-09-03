@@ -52,10 +52,15 @@ import sqlite3
 import train_payoff
 
 
-def _fixture_db(tmp_path, n_buy=60, move=0.02):
+def _fixture_db(tmp_path, n_buy=60, move=0.02, n_wait=0, wait_move=0.0):
     """A market.db stand-in: one asset, flat bars, and n_buy BUY signals that
     each preceded the same +move day. The expected payoff is therefore exactly
-    move / (atr/close), with no averaging noise to reason about."""
+    move / (atr/close), with no averaging noise to reason about.
+
+    `n_wait` adds unsignalled bars that moved `wait_move`. They exist only to
+    give the drift something to be measured on: it is the whole window, not the
+    bars the ensemble spoke on, and a fixture with no WAIT rows cannot tell a
+    payoff apart from the market that produced it."""
     path = str(tmp_path / "market.db")
     con = sqlite3.connect(path)
     con.execute('CREATE TABLE sber (Date TEXT, Open REAL, Close REAL, '
@@ -69,6 +74,8 @@ def _fixture_db(tmp_path, n_buy=60, move=0.02):
         bars.append((day, price, price, price + 1.0, price - 1.0))
         if 20 <= i < 20 + n_buy:
             preds.append((day, "SBER", "BUY", move))
+        elif 20 + n_buy <= i < 20 + n_buy + n_wait:
+            preds.append((day, "SBER", "WAIT", wait_move))
     con.executemany('INSERT INTO sber VALUES (?,?,?,?,?)', bars)
     con.executemany('INSERT INTO prediction_log VALUES (?,?,?,?)', preds)
     con.commit()
@@ -116,3 +123,58 @@ def test_an_asset_with_no_signals_is_absent_rather_than_zero(tmp_path):
     # An absent key makes the caller fall back to the class prior. A zero cell
     # would look like a measured "no edge" and be indistinguishable from it.
     assert "SBER" not in table["asset"]
+
+
+def test_a_call_that_only_matched_the_market_has_no_excess(tmp_path):
+    """The 2026-09-03 finding, as a fixture.
+
+    Every bar rose 1 ATR and the ensemble called BUY on half of them. The raw
+    payoff is +1.0 and reads like an edge; the excess is zero, because holding
+    the thing over the same window paid exactly the same. This is the shape the
+    RU class was actually in: BUY -0.116 ATR raw, of which -0.101 was a market
+    that fell on every bar, signalled or not."""
+    db = _fixture_db(tmp_path, n_buy=60, move=0.02, n_wait=60, wait_move=0.02)
+    cell = train_payoff.build_table(db_path=db)["asset"]["SBER"]["BUY"]
+    assert cell["mean"] == pytest.approx(1.0, abs=1e-6)
+    assert cell["drift"] == pytest.approx(1.0, abs=1e-6)
+    assert cell["drift_n"] == 120
+    assert cell["excess"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_excess_keeps_the_part_of_the_payoff_the_market_did_not_give(tmp_path):
+    # BUY bars rose 2 ATR, the unsignalled ones 1 ATR. The window average is
+    # 1.5, so half of the raw +2.0 was the market and half was the call.
+    db = _fixture_db(tmp_path, n_buy=60, move=0.04, n_wait=60, wait_move=0.02)
+    cell = train_payoff.build_table(db_path=db)["asset"]["SBER"]["BUY"]
+    assert cell["mean"] == pytest.approx(2.0, abs=1e-6)
+    assert cell["drift"] == pytest.approx(1.5, abs=1e-6)
+    assert cell["excess"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_the_drift_is_signed_by_side(tmp_path):
+    """A rising market is a cost to a short, so subtracting the same number
+    from both sides would credit the short with the loss it just took."""
+    db = _fixture_db(tmp_path, n_buy=60, move=0.02, n_wait=60, wait_move=0.02)
+    con = sqlite3.connect(db)
+    con.execute("UPDATE prediction_log SET signal='SELL' WHERE signal='BUY'")
+    con.commit()
+    con.close()
+    cell = train_payoff.build_table(db_path=db)["asset"]["SBER"]["SELL"]
+    assert cell["mean"] == pytest.approx(-1.0, abs=1e-6)
+    assert cell["drift"] == pytest.approx(-1.0, abs=1e-6)
+    assert cell["excess"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_too_short_a_window_carries_no_drift_key_at_all(tmp_path):
+    """Absent rather than zero, for the same reason an asset with no signals is
+    absent: a zero would be read as a measured "the market gave nothing"."""
+    db = _fixture_db(tmp_path, n_buy=train_payoff.MIN_DRIFT - 1)
+    cell = train_payoff.build_table(db_path=db)["asset"]["SBER"]["BUY"]
+    assert "drift" not in cell and "excess" not in cell
+
+
+def test_wait_rows_never_become_a_payoff_cell(tmp_path):
+    # They inform the drift and nothing else. A WAIT is not a recommendation.
+    db = _fixture_db(tmp_path, n_buy=60, n_wait=60, wait_move=0.02)
+    table = train_payoff.build_table(db_path=db)
+    assert set(table["asset"]["SBER"]) == {"BUY"}

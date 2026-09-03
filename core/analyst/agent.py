@@ -12,6 +12,7 @@ module imports cleanly with no SDK present and every test runs offline.
 """
 
 import json
+import re
 
 DIRECTIONS = ("up", "down", "flat")
 CONVICTIONS = (1, 2, 3, 4, 5)
@@ -123,8 +124,54 @@ def prompt_for(dossier, depth="full", horizon=1):
     )
 
 
-def parse_judgment(text, allowed=None, empty=()):
+# Escapes rather than the characters themselves: a non-breaking space is
+# invisible in source, and a reviewer cannot check a table they cannot see.
+_TYPOGRAPHY = {
+    "\u2018": "'", "\u2019": "'",    # curly single quotes
+    "\u201c": '"', "\u201d": '"',    # curly double quotes
+    "\u00a0": " ",                   # non-breaking space
+    "\u2026": "...",                 # ellipsis
+}
+_DASH = re.compile(r"\s*[\u2014\u2013]\s*")   # em dash, en dash
+
+
+def plain(text):
+    """Model prose with the typography this project does not ship.
+
+    Em and en dashes become " - ", curly quotes become straight ones. Guillemets
+    are left alone: they are Russian punctuation, not decoration.
+
+    Applied to the free text the model writes rather than at the database or at
+    the console, because there are three consumers - the run's own printout, the
+    web card and the store - and sanitising at each of them is how one of them
+    ends up forgotten.
+    """
+    if not text:
+        return text
+    text = _DASH.sub(" - ", text)
+    for bad, good in _TYPOGRAPHY.items():
+        text = text.replace(bad, good)
+    return text.strip()
+
+
+def _no(why, reason):
+    """Record why an answer was thrown away, and throw it away.
+
+    Falls off the end rather than returning None explicitly, which ruff asks
+    for and which is the same thing: every caller writes `return _no(...)` and
+    propagates that None as the rejection.
+    """
+    if why is not None:
+        why.append(reason)
+
+
+def parse_judgment(text, allowed=None, empty=(), why=None):
     """A validated judgment, or None. Never raises.
+
+    `why`, when a list is passed, collects one short line naming the check that
+    failed. Nothing here changes for a caller that does not pass it; the reason
+    exists because a local model can fail this parse three times in an hour and
+    the fix depends entirely on WHICH check it failed.
 
     `allowed`, when given, is the set of dossier field names the model may cite
     as evidence; `empty` is the subset of those that carried no value. An
@@ -142,41 +189,51 @@ def parse_judgment(text, allowed=None, empty=()):
     falls through to the empty-evidence rejection above.
     """
     if not text:
-        return None
+        return _no(why, "the reply was empty")
     data = _first_json_object(text)
     if not isinstance(data, dict):
-        return None
+        return _no(why, "no JSON object in the reply")
 
     if data.get("direction") not in DIRECTIONS:
-        return None
+        return _no(why, "direction=%r is not up/down/flat" % data.get("direction"))
     if data.get("conviction") not in CONVICTIONS:
-        return None
+        return _no(why, "conviction=%r is not an integer 1-5"
+                   % data.get("conviction"))
     if data.get("vol_regime") not in VOL_REGIMES:
-        return None
+        return _no(why, "vol_regime=%r is not calm/normal/elevated"
+                   % data.get("vol_regime"))
     evidence = data.get("evidence")
     if not isinstance(evidence, list) or not evidence or not all(
             isinstance(e, str) for e in evidence):
-        return None
+        return _no(why, "evidence is not a non-empty list of field names")
     if allowed is not None:
-        if not set(evidence) <= set(allowed) | set(empty):
-            return None                      # a field name that does not exist
+        invented = sorted(set(evidence) - set(allowed) - set(empty))
+        if invented:                         # a field name that does not exist
+            return _no(why, "evidence cites fields the dossier does not "
+                       "have: %s" % ", ".join(invented[:4]))
         evidence = [e for e in evidence if e not in set(empty)]
-        if not evidence:
-            return None                      # cited only fields that were empty
+        if not evidence:                     # cited only fields that were empty
+            return _no(why, "evidence cited only fields that were blank")
 
     return {"direction": data["direction"],
             "conviction": int(data["conviction"]),
             "vol_regime": data["vol_regime"],
-            "key_risk": str(data.get("key_risk") or "")[:400],
-            "thesis": str(data.get("thesis") or "")[:2500],
+            "key_risk": plain(str(data.get("key_risk") or ""))[:400],
+            "thesis": plain(str(data.get("thesis") or ""))[:2500],
             "evidence": evidence}
 
 
-def judge(dossier, call=None, depth="full", horizon=1):
+def judge(dossier, call=None, depth="full", horizon=1, on_reject=None):
     """One judgment for one dossier, or None when the model will not produce one.
 
     Returning None rather than a default is the point: a fabricated neutral
     judgment would enter the log, get scored, and dilute every cell it touched.
+
+    `on_reject`, when given, is called once per discarded attempt with a short
+    reason. A retry is otherwise invisible: on 2026-09-03 a run of two assets
+    made three calls and finished saying `written=2 skipped=0 refused=0`, with
+    sixteen minutes of local inference thrown away and nothing anywhere saying
+    so. A retry that succeeds still cost the money.
     """
     if call is None:
         raise ValueError("judge() needs an injected call; see analyst.py")
@@ -195,9 +252,14 @@ def judge(dossier, call=None, depth="full", horizon=1):
             # just as absent next time. Let it out so the caller can say what
             # is missing instead of reporting a model that would not answer.
             raise
-        except Exception:
+        except Exception as exc:
+            if on_reject is not None:
+                on_reject("the call itself failed: %s" % exc)
             continue
-        parsed = parse_judgment(answer, allowed=allowed, empty=empty)
+        why = []
+        parsed = parse_judgment(answer, allowed=allowed, empty=empty, why=why)
         if parsed is not None:
             return parsed
+        if on_reject is not None:
+            on_reject(why[0] if why else "unparseable")
     return None

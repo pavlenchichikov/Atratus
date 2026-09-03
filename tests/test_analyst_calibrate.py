@@ -188,3 +188,55 @@ def test_an_up_call_can_carry_a_negative_number_and_that_is_not_a_bug():
                             "SBER", "ru", 2.0, 100.0, table)
     assert up["pct"] < 0
     assert up["source"] == "prior"
+
+
+def _drifting_table():
+    """The RU class, exaggerated: the real drift is -0.10 ATR and the real
+    excess a fifth of the numbers here. Rounded up so the assertions below read
+    as arithmetic rather than as noise."""
+    return {"asset": {},
+            "class": {"ru": {"BUY": {"n": 730, "mean": -0.23, "drift": -0.30,
+                                     "drift_n": 3755, "excess": 0.07,
+                                     "q10": -1.28, "q90": 0.78},
+                             "SELL": {"n": 839, "mean": 0.20, "drift": 0.30,
+                                      "drift_n": 3755, "excess": -0.10,
+                                      "q10": -0.79, "q90": 1.21}}}}
+
+
+def test_the_prior_is_net_of_the_market_it_was_measured_in():
+    """A negative raw payoff on a falling market is not a verdict on the call.
+
+    Before this, every RU long inherited the class's raw -0.23 ATR and the card
+    stamped "[the payoff table disagrees]" on all of them - a flag that was
+    reporting the direction of the Russian market, not the analyst."""
+    out = calibrate.forecast(_judgment(), {}, "SBER", "ru", atr_today=2.0,
+                             close_today=100.0, payoff_table=_drifting_table())
+    assert out["pct"] == pytest.approx(0.07 * 0.02, abs=1e-6)
+    assert out["pct"] > 0, "the long survives once the market is taken out"
+
+
+def test_the_short_loses_the_credit_the_falling_market_gave_it():
+    # The mirror of the test above, and the reason the drift is signed: +0.20
+    # raw was less than the -(-0.30) a short got for free.
+    out = calibrate.forecast(_judgment(direction="down"), {}, "SBER", "ru",
+                             atr_today=2.0, close_today=100.0,
+                             payoff_table=_drifting_table())
+    assert out["pct"] == pytest.approx(-0.10 * 0.02, abs=1e-6)
+
+
+def test_the_band_moves_with_the_point_estimate():
+    """Shifting the mean and leaving the quantiles would let the forecast sit
+    outside its own 80% band."""
+    out = calibrate.forecast(_judgment(), {}, "SBER", "ru", atr_today=2.0,
+                             close_today=100.0, payoff_table=_drifting_table())
+    assert out["lo"] == pytest.approx((-1.28 + 0.30) * 0.02, abs=1e-6)
+    assert out["hi"] == pytest.approx((0.78 + 0.30) * 0.02, abs=1e-6)
+    assert out["lo"] <= out["pct"] <= out["hi"]
+
+
+def test_a_table_written_before_drift_existed_still_reads():
+    """payoff_stats.json is gitignored and the one on disk predates the change,
+    so a missing `drift` key has to mean "no adjustment", not a KeyError."""
+    out = calibrate.forecast(_judgment(), {}, "SBER", "ru", atr_today=2.0,
+                             close_today=100.0, payoff_table=_table())
+    assert out["pct"] == pytest.approx(0.2091 * 0.02, abs=1e-5)

@@ -11,6 +11,18 @@ only measures bars the ensemble signalled on, so it is the average payoff
 conditional on the ensemble's own choice to call BUY or SELL, not the asset's
 or the class's unconditional payoff for that direction.
 
+What it IS, before adjustment, is that choice plus the market underneath it.
+_net() below removes the drift train_payoff measured over the same rows, so the
+prior states what a side earned beyond simply being open. Without it every RU
+long in 2026-08 inherited a -0.116 ATR prior of which -0.101 belonged to a
+falling market rather than to the call, and the card flagged all of them.
+
+The adjustment is not cosmetic and it does not only forgive. It also takes the
+RU short's +0.087 down to -0.013, because a falling market handed the short
++0.101 for free and the calls gave back a little of it. Both sides of both
+large classes come out slightly negative; crypto BUY, at +0.083 excess, is the
+only cell measured so far that survives its own market.
+
 Nothing here decides that a high conviction means a large move. If conviction 5
 has historically lost money, this file produces a negative number for it. That
 is not a safeguard bolted on; it is what fitting a cell to its outcomes means.
@@ -32,17 +44,35 @@ def cell_key(judgment):
             judgment["vol_regime"])
 
 
+def _net(cell):
+    """(mean, q10, q90) with the window's own market drift removed.
+
+    The quantiles shift by the same constant as the mean. They describe how far
+    an outcome scatters, which the drift does not change; leaving them put would
+    put the point estimate outside its own 80% band.
+
+    A table built before train_payoff learned to measure drift carries no
+    `drift` key, and is returned untouched: an existing payoff_stats.json still
+    reads, it just keeps the old contaminated number until it is refit.
+    """
+    drift = cell.get("drift", 0.0)
+    return cell["mean"] - drift, cell["q10"] - drift, cell["q90"] - drift
+
+
 def _prior(payoff_table, asset, asset_class, side):
-    """The empirical payoff for this side, asset shrunk toward class."""
+    """The empirical payoff for this side, asset shrunk toward class, net of
+    the drift each of them was measured against."""
     cls = (payoff_table.get("class", {}).get(asset_class, {}).get(side)
            or {"n": 0, "mean": 0.0, "q10": -1.0, "q90": 1.0})
+    cls_mean, cls_lo, cls_hi = _net(cls)
     own = payoff_table.get("asset", {}).get(asset, {}).get(side)
     if not own:
-        return cls["mean"], cls["q10"], cls["q90"]
-    mean = shrink(own["n"], own["mean"], cls["mean"])
+        return cls_mean, cls_lo, cls_hi
+    own_mean, own_lo, own_hi = _net(own)
+    mean = shrink(own["n"], own_mean, cls_mean)
     if own["n"] >= MIN_CELL_OWN:
-        return mean, own["q10"], own["q90"]
-    return mean, cls["q10"], cls["q90"]
+        return mean, own_lo, own_hi
+    return mean, cls_lo, cls_hi
 
 
 def fit(scored_rows, payoff_table, asset_class_of):
@@ -50,6 +80,14 @@ def fit(scored_rows, payoff_table, asset_class_of):
 
     Only rows the backfill has scored take part. A judgment without an outcome
     is an opinion, and opinions do not calibrate anything.
+
+    These cells are RAW, unlike the prior they are shrunk toward: a judgment's
+    realized_atr_units carries the same market drift, and there is nothing on
+    the row to subtract it with. Harmless while the log is small - at n=1 a
+    cell's own weight is 1/51 - but the moment any cell approaches MIN_CELL_OWN
+    it starts reintroducing the drift the prior just had removed. Before that
+    happens, store the same-window drift alongside realized_atr_units at
+    backfill time and net it here.
     """
     buckets = {}
     for r in scored_rows:

@@ -257,7 +257,8 @@ def test_a_named_run_bypasses_the_dossier_hash_skip(monkeypatch, tmp_path):
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
     monkeypatch.setattr(analyst.agent, "judge",
-                        lambda d, call=None, depth=None, horizon=1: None)
+                        lambda d, call=None, depth=None, horizon=1,
+                        on_reject=None: None)
     monkeypatch.setenv("GTRADE_ANALYST", "1")
 
     class A:
@@ -300,7 +301,7 @@ def test_depth_defaults_to_full_when_an_asset_is_named(monkeypatch):
                         lambda a, **k: {"asset": a, "date": "2026-01-01",
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
-    def _record(d, call=None, depth=None, horizon=1):
+    def _record(d, call=None, depth=None, horizon=1, on_reject=None):
         # Записываем глубину и отказываемся судить: возврат суждения потянул
         # бы за собой калибровку, а этот тест не про неё. Неявный None здесь и
         # есть отказ, ровно как у настоящего judge.
@@ -336,7 +337,7 @@ def test_an_explicit_depth_overrides_the_default(monkeypatch):
                         lambda a, **k: {"asset": a, "date": "2026-01-01",
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
-    def _record(d, call=None, depth=None, horizon=1):
+    def _record(d, call=None, depth=None, horizon=1, on_reject=None):
         # Записываем глубину и отказываемся судить: возврат суждения потянул
         # бы за собой калибровку, а этот тест не про неё. Неявный None здесь и
         # есть отказ, ровно как у настоящего judge.
@@ -365,8 +366,8 @@ def _stub_run(monkeypatch, calls, build=None):
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
     monkeypatch.setattr(analyst.dossier, "macro_status", lambda: None)
     monkeypatch.setattr(analyst.agent, "judge",
-                        lambda d, call=None, depth=None, horizon=1:
-                        calls.append(horizon) or None)
+                        lambda d, call=None, depth=None, horizon=1,
+                        on_reject=None: calls.append(horizon) or None)
     monkeypatch.setenv("GTRADE_ANALYST", "1")
     return analyst
 
@@ -439,7 +440,7 @@ def test_a_missing_provider_stops_the_sweep_instead_of_refusing_every_asset(
     calls = []
     analyst = _stub_run(monkeypatch, calls)
 
-    def _missing(d, call=None, depth=None, horizon=1):
+    def _missing(d, call=None, depth=None, horizon=1, on_reject=None):
         calls.append(horizon)
         raise ProviderUnavailable("the anthropic provider needs the anthropic "
                                   "package: pip install anthropic")
@@ -568,3 +569,35 @@ def test_recent_dates_on_a_machine_with_no_bars_is_empty(monkeypatch):
 
     monkeypatch.setattr(track_record, "ohlc_series", lambda *a, **k: [])
     assert analyst._recent_dates(5) == []
+
+
+def test_a_discarded_attempt_is_named_in_the_run_summary(monkeypatch, tmp_path,
+                                                         capsys):
+    """A retry costs a full call and used to leave no trace at all: the run
+    that prompted this made three calls for two assets and reported
+    `written=2 skipped=0 refused=0`."""
+    db = _cli_e2e_db(tmp_path)
+    monkeypatch.setattr(store, "DB_PATH", db)
+    monkeypatch.setattr("core.track_record.DB_PATH", db)
+    monkeypatch.setattr("core.dashboard.guru_for_asset",
+                        lambda asset, db_path=None: None)
+    monkeypatch.setattr("core.events.earnings_for",
+                        lambda symbols_by_asset, session=None, fetch=None: {})
+    monkeypatch.setattr("core.events.load_macro", lambda path=None: [])
+    monkeypatch.setattr(analyst, "_eligible", lambda: ["SBER"])
+    monkeypatch.setattr(
+        analyst, "_load_table",
+        lambda: {"asset": {}, "class": {"ru": {
+            "SELL": {"n": 900, "mean": 1.0, "q10": -1.0, "q90": 3.0}}}})
+
+    replies = ["sorry, I cannot help with that", json.dumps({
+        "direction": "down", "conviction": 3, "vol_regime": "normal",
+        "key_risk": "overbought", "thesis": "Quiet tape, downside lean.",
+        "evidence": ["close", "atr_pct"]})]
+    monkeypatch.setattr(analyst, "_provider_call",
+                        lambda: (lambda prompt: replies.pop(0)))
+
+    assert analyst.cmd_run(None) == 0
+    out = capsys.readouterr().out
+    assert "written=1" in out and "retried=1" in out
+    assert "discarded: SBER 1d: no JSON object" in out

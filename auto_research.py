@@ -249,8 +249,20 @@ def _adopt_floor(objective="mean", basis=None):
     if b == "trade_t":
         # A t, not a Score: the same trades summarised on a different scale, so
         # inheriting the Score floor would be a units error in the other
-        # direction from the AUC one. Set deliberately, because nothing has yet
-        # measured what a worthwhile move in t is worth in money.
+        # direction from the AUC one.
+        #
+        # 0.5 was a placeholder when it was written; it is now measured against
+        # the noise it has to clear. Three seeds over the tier unit, 2026-09-03:
+        # the worst seed pair moved the mean by 0.322, per-asset |delta| ran
+        # 0.53 to 0.68, worst single asset 1.155. So 0.5 sits above the seed
+        # noise, if only by 1.55x, and on four assets that ratio is itself a
+        # rough estimate. Raise it before trusting a marginal pass.
+        #
+        # What is still NOT measured is what a +0.5 t is worth in money. The
+        # basis was adopted because it is quiet (a per-asset delta sd near 0.75
+        # against 2.746 on raw Score, which is a ~14-asset holdout instead of
+        # 187), and a quiet yardstick that measures the wrong thing is exactly
+        # the trap net_auc turned out to be - see the 2026-08-18 finding.
         try:
             return float(os.getenv("GTRADE_AR_ADOPT_TRADE_T") or "0.5")
         except ValueError:

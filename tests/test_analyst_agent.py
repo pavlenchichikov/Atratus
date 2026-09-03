@@ -218,3 +218,66 @@ def test_a_missing_provider_is_not_a_refusal():
     assert agent.judge({"asset": "SBER", "close": 1.0}, call=broken,
                        depth="brief") is None
     assert len(flaky) == agent.MAX_ATTEMPTS
+
+
+def test_a_rejection_says_which_check_failed():
+    """A count of discarded calls does not tell you what to fix; the reason
+    does. A local model failing on conviction is a prompt problem, failing on
+    evidence is a dossier problem, and they cost the same nine minutes."""
+    bad = _valid() | {"conviction": 2.5}
+    why = []
+    assert agent.parse_judgment(json.dumps(bad), why=why) is None
+    assert "conviction" in why[0]
+
+    why = []
+    assert agent.parse_judgment("no json here at all", why=why) is None
+    assert "JSON" in why[0]
+
+    why = []
+    bad = _valid() | {"evidence": ["moon_phase"]}
+    assert agent.parse_judgment(json.dumps(bad), allowed=set(_dossier()),
+                                why=why) is None
+    assert "moon_phase" in why[0]
+
+    # positive control: a good answer appends nothing
+    why = []
+    assert agent.parse_judgment(json.dumps(_valid()), why=why) is not None
+    assert why == []
+
+
+def test_a_retry_that_succeeds_is_still_reported():
+    """The run that prompted this made three calls for two assets and finished
+    saying `written=2 skipped=0 refused=0`. Sixteen minutes of local inference
+    were discarded with nothing anywhere recording it."""
+    replies = ["{not json}", json.dumps(_valid())]
+    seen = []
+    out = agent.judge(_dossier(), call=lambda p: replies.pop(0),
+                      on_reject=seen.append)
+    assert out["direction"] == "up", "the second attempt still wins"
+    assert len(seen) == 1 and "JSON" in seen[0]
+
+
+def test_a_provider_that_raises_is_reported_as_such():
+    def boom(prompt):
+        raise RuntimeError("connection reset")
+
+    seen = []
+    assert agent.judge(_dossier(), call=boom, on_reject=seen.append) is None
+    assert len(seen) == agent.MAX_ATTEMPTS
+    assert "connection reset" in seen[0]
+
+
+def test_model_typography_is_normalised_out_of_the_prose():
+    """The thesis reaches three consumers - the console, the store and the web
+    card - so it is cleaned where it is parsed rather than at each of them."""
+    j = _valid() | {
+        "thesis": "I move away from ‘down’—the tape turned…",
+        "key_risk": "A break below “support”"}
+    out = agent.parse_judgment(json.dumps(j))
+    assert out["thesis"] == "I move away from 'down' - the tape turned..."
+    assert out["key_risk"] == 'A break below "support"'
+
+
+def test_the_sanitiser_leaves_russian_quotation_marks_alone():
+    # Guillemets are punctuation in Russian, not typographic decoration.
+    assert agent.plain("«ГАЗП»") == "«ГАЗП»"
