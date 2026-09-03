@@ -25,14 +25,21 @@ CREATE TABLE IF NOT EXISTS analyst_log (
     atr_at_signal REAL, close_at_signal REAL,
     realized_ret REAL, realized_atr_units REAL,
     inside_interval INTEGER, abs_err_atr REAL,
+    tool_calls_json TEXT,
     PRIMARY KEY (date, asset, horizon)
 )
 """
 
+# A judgment that consulted a source nobody recorded cannot be replayed, and an
+# unreplayable judgment is the same defect as an unscored one. ensure_table
+# adds the column to a table written before tools existed, because CREATE TABLE
+# IF NOT EXISTS does not alter one that is already there.
+_ADDED_COLUMNS = (("tool_calls_json", "TEXT"),)
+
 _FIELDS = ["date", "asset", "horizon", "direction", "conviction", "vol_regime",
            "key_risk", "thesis", "evidence_json", "dossier_hash", "llm_model",
            "forecast_pct", "lo_pct", "hi_pct", "atr_at_signal",
-           "close_at_signal"]
+           "close_at_signal", "tool_calls_json"]
 
 # forecast_pct/lo_pct/hi_pct are in PAYOFF space (what the POSITION earned;
 # see core/analyst/payoff.py and train_payoff.py's SIDE map). A `down`
@@ -49,9 +56,24 @@ def _connect(db_path=None):
     return sqlite3.connect(db_path or DB_PATH)
 
 
+def _migrate(con):
+    """Add columns the DDL grew after this table was first written.
+
+    CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so a column
+    added later never appears in a database that predates it and every write
+    fails on an unknown column. Adding it here keeps that from being an
+    operator's problem.
+    """
+    have = {r[1] for r in con.execute("PRAGMA table_info(analyst_log)")}
+    for name, decl in _ADDED_COLUMNS:
+        if name not in have:
+            con.execute("ALTER TABLE analyst_log ADD COLUMN %s %s" % (name, decl))
+
+
 def ensure_table(db_path=None):
     with _connect(db_path) as con:
         con.execute(DDL)
+        _migrate(con)
 
 
 def write_judgment(row, db_path=None):
@@ -64,6 +86,7 @@ def write_judgment(row, db_path=None):
     placeholders = ",".join("?" * len(_FIELDS))
     with _connect(db_path) as con:
         con.execute(DDL)
+        _migrate(con)
         con.execute(
             f'INSERT OR REPLACE INTO analyst_log ({",".join(_FIELDS)}) '
             f'VALUES ({placeholders})', values)

@@ -55,7 +55,7 @@ def _span(horizon):
             else "the next %d trading days" % int(horizon))
 
 
-def prompt_for(dossier, depth="full", horizon=1):
+def prompt_for(dossier, depth="full", horizon=1, tool_menu=""):
     """The judgment prompt. Carries the dossier and nothing else.
 
     `depth` buys substance with time, and on a local model the exchange rate is
@@ -140,20 +140,30 @@ def prompt_for(dossier, depth="full", horizon=1):
           "rsi_14 and atr_vs_90d put today against a longer norm than "
           "vol_20_vs_60 does; sector_momentum and sector_trend say whether "
           "its neighbours are doing the same thing.\n"
-          "8. What actually traded. volume_vs_20 and turnover say whether "
+          "8. The year behind it. ret_1y, ret_ytd and vol_1y are the "
+          "scale ret_60 stops short of, max_dd_1y is the worst it has been "
+          "down over that year, off_52w_high where it sits against its own "
+          "high, and excess_vs_benchmark_1y with beta_1y say whether it beat "
+          "its index and how much of its move was the index in the first "
+          "place. A name down 30% inside an index down 25% is a different "
+          "case from one down 30% on its own.\n"
+          "9. What actually traded. volume_vs_20 and turnover say whether "
           "anyone was there for the move, gap_open how much of it happened "
           "before the session opened, range_atr how much of its own daily "
           "range the day used. A move on no volume is a different move.\n"
-          "9. Your own record here. past_calls, past_hit_rate and "
+          "10. Your own record here. past_calls, past_hit_rate and "
           "past_last_call are YOUR previous judgments on this asset and how "
           "they resolved. If you were recently wrong in the direction you are "
           "about to choose again, say so and justify repeating it.\n"
-          "10. What would change your mind, concretely: a level, a move, or "
+          "11. What would change your mind, concretely: a level, a move, or "
           "an event, not a vague condition.\n"
           "Quote the numbers you use. Name what you are deliberately NOT "
           "leaning on where a reader might assume you did. If the evidence is "
           "thin, say the case is thin and pick conviction 1 or 2 rather than "
           "dressing up a guess.")
+        # Last, so the schema above is what the model reads immediately before
+        # answering, and the menu is an aside rather than the instruction.
+        + tool_menu
     )
 
 
@@ -256,7 +266,8 @@ def parse_judgment(text, allowed=None, empty=(), why=None):
             "evidence": evidence}
 
 
-def judge(dossier, call=None, depth="full", horizon=1, on_reject=None):
+def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
+          today=None, tool_calls=None):
     """One judgment for one dossier, or None when the model will not produce one.
 
     Returning None rather than a default is the point: a fabricated neutral
@@ -267,19 +278,34 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None):
     made three calls and finished saying `written=2 skipped=0 refused=0`, with
     sixteen minutes of local inference thrown away and nothing anywhere saying
     so. A retry that succeeds still cost the money.
+
+    `tool_calls`, when a list is passed, collects every source the model asked
+    for and what came back, so the judgment stays replayable. `today` is the
+    rewind date and reaches core/analyst/tools.py, which drops any tool that
+    cannot honour it - otherwise a backfill of May would be answered with
+    September's filings.
+
+    The tool budget is per JUDGMENT, not per attempt, and it is spent before
+    the parse retries: a model that asks for two things and then returns
+    unparseable JSON has cost four calls, and on a local 26b that is an hour.
     """
+    from core.analyst import tools
+
+    budget = tools.max_calls() if tool_calls is not None else 0
+    extra = ""
     if call is None:
         raise ValueError("judge() needs an injected call; see analyst.py")
-    prompt = prompt_for(dossier, depth=depth, horizon=horizon)
+    prompt = prompt_for(dossier, depth=depth, horizon=horizon,
+                        tool_menu=tools.spec_lines(today) if budget else "")
     allowed = set(dossier)
     # A field the dossier carries as None or [] was shown to the model as empty,
     # so citing it is not evidence of anything.
     empty = {k for k, v in dossier.items() if v is None or v == []}
     from core.llm_proposer import ProviderUnavailable
 
-    for _ in range(MAX_ATTEMPTS):
+    for _ in range(MAX_ATTEMPTS + budget):
         try:
-            answer = call(prompt)
+            answer = call(prompt + extra)
         except ProviderUnavailable:
             # Not a refusal and not worth a second attempt: the SDK will be
             # just as absent next time. Let it out so the caller can say what
@@ -289,6 +315,22 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None):
             if on_reject is not None:
                 on_reject("the call itself failed: %s" % exc)
             continue
+        # A request for evidence is not a failed judgment, so it is checked
+        # first and does not spend a parse attempt.
+        if budget > 0:
+            request = tools.parse_request(_first_json_object(answer))
+            if request is not None:
+                budget -= 1
+                entry = tools.call(request, asset=dossier.get("asset"),
+                                   today=today)
+                tool_calls.append(entry)
+                extra += ("\n\nYou asked for %s and received:\n%s\n"
+                          "Now return the judgment JSON."
+                          % (request["tool"],
+                             json.dumps(entry.get("result", entry.get("error")),
+                                        ensure_ascii=True)[:1800]))
+                continue
+
         why = []
         parsed = parse_judgment(answer, allowed=allowed, empty=empty, why=why)
         if parsed is not None:

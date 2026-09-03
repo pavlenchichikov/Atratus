@@ -98,7 +98,8 @@ def _eligible(today=None):
 
 
 def _judge_one(d, asset, h, horizon, call, depth, cells, table,
-               written, refused, rejects=None, cited=None):
+               written, refused, rejects=None, cited=None, as_of=None,
+               asked=None):
     """One judgment, for one asset over one horizon. Returns the two counters.
 
     Split out of cmd_run when the horizon became a loop: the same dossier over
@@ -107,12 +108,20 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
 
     `rejects` collects one line per discarded attempt so the run can report the
     calls it paid for and threw away, not only the ones it kept; `cited` collects
-    the dossier fields the judgments actually named.
+    the dossier fields the judgments actually named; `asked` collects the extra
+    sources the model requested, which are stored on the row so the judgment can
+    be replayed.
+
+    `as_of` is the rewind date and reaches core/analyst/tools.py, which then
+    refuses any tool that cannot honour it.
     """
     on_reject = None if rejects is None else (
         lambda reason: rejects.append("%s %dd: %s" % (asset, horizon, reason)))
+    tool_calls = []
     j = agent.judge(d, call=call, depth=depth, horizon=horizon,
-                    on_reject=on_reject)
+                    on_reject=on_reject, today=as_of, tool_calls=tool_calls)
+    if asked is not None:
+        asked.extend((asset, horizon, t) for t in tool_calls)
     if j is None:
         return written, refused + 1
 
@@ -125,6 +134,8 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         "thesis": j["thesis"],
         "evidence_json": json.dumps(j["evidence"]),
         "dossier_hash": h, "llm_model": os.getenv("GTRADE_AR_LLM", "default"),
+        # The sources the model asked for, beside the judgment they produced.
+        "tool_calls_json": json.dumps(tool_calls, ensure_ascii=False) or None,
         "forecast_pct": fc["pct"], "lo_pct": fc["lo"], "hi_pct": fc["hi"],
         "atr_at_signal": d["atr"], "close_at_signal": d["close"],
     })
@@ -229,7 +240,7 @@ def cmd_run(args):
 
     written = skipped = refused = 0
     rejects = []
-    cited, offered = set(), set()
+    cited, offered, asked = set(), set(), []
     # Every network field in the dossier is wrapped in _safe, so a dead source
     # reads as None and the run continues on a quietly thinner dossier. Counting
     # them turns "no internet" from something you notice weeks later in the
@@ -254,7 +265,7 @@ def cmd_run(args):
             try:
                 written, refused = _judge_one(d, asset, h, horizon, call, depth,
                                               cells, table, written, refused,
-                                              rejects, cited)
+                                              rejects, cited, as_of, asked)
             except ProviderUnavailable as exc:
                 # One line, then stop. A sweep of 28 assets would otherwise
                 # print the same missing-package error 28 times and finish
@@ -265,6 +276,15 @@ def cmd_run(args):
                 return 1
     print(f"[analyst] written={written} skipped={skipped} refused={refused} "
           f"retried={len(rejects)}")
+    for asset_name, horizon, entry in asked:
+        # Each of these was an extra round trip, which on a local model is
+        # another nine to twenty-five minutes. Printing them is how a budget
+        # that quietly doubled the run time becomes visible on the day.
+        outcome = entry.get("error") or "ok"
+        print("[analyst] %s %dd asked %s(%s): %s"
+              % (asset_name, horizon, entry.get("tool"),
+                 ", ".join("%s=%s" % kv for kv in (entry.get("args") or {}).items()),
+                 outcome))
     if written:
         # A field costs a network call and prompt tokens whether or not it is
         # read, and for the first 35 judgments 33 of the 60 were fetched,

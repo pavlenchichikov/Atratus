@@ -10,6 +10,7 @@ opinion built on the first one's output is not a second opinion. FORBIDDEN_KEYS
 and the test over it are what keep that true after this file stops being read.
 """
 
+import datetime
 import hashlib
 import json
 
@@ -434,6 +435,44 @@ def _profile(asset):
     }
 
 
+_PERF_BLANK = {"ret_1y": None, "ret_ytd": None, "vol_1y": None,
+               "max_dd_1y": None, "excess_vs_benchmark_1y": None,
+               "beta_1y": None, "off_52w_high": None}
+
+
+def _performance(asset, today=None):
+    """The year, which the dossier otherwise stops sixty days short of.
+
+    ret_60 and drawdown_60 say what the quarter did. A person reading a
+    research note asks what the YEAR did and whether the index did better,
+    and until this block existed the analyst had no way to answer either.
+    Local: core/performance.py reads market.db and nothing else.
+    """
+    try:
+        from config import radar_category
+        from core.performance import summary
+
+        bmk = BENCHMARK_BY_CLASS.get(radar_category(asset))
+        year = summary(asset, "1Y", benchmark=bmk, today=today)
+        ytd = summary(asset, "YTD", today=today)
+    except Exception:
+        return dict(_PERF_BLANK)
+    if year.get("error"):
+        return dict(_PERF_BLANK)
+    cross = year.get("benchmark") or {}
+    return {"ret_1y": _round(year.get("total_return")),
+            "ret_ytd": None if ytd.get("error") else _round(ytd.get("total_return")),
+            "vol_1y": _round(year.get("volatility")),
+            "max_dd_1y": _round(year.get("max_drawdown")),
+            "excess_vs_benchmark_1y": _round(cross.get("excess")),
+            "beta_1y": _round(cross.get("beta")),
+            "off_52w_high": _round(year.get("off_high"))}
+
+
+def _round(value, places=4):
+    return None if value is None else round(value, places)
+
+
 _REGIME_BLANK = {"regime_trend": None, "regime_vol": None,
                  "regime_momentum": None, "rsi_14": None, "atr_vs_90d": None}
 _MARKET_BLANK = {"breadth_above_sma50_pct": None,
@@ -540,26 +579,67 @@ def _sector_state(asset):
             "sector_trend": trend}
 
 
-def _headlines(asset, limit=6):
-    """Raw headlines, deliberately without the sentiment score computed on them.
+def _headline_age(published, today=None):
+    """Whole days from a feed's timestamp to today, or None if unparseable.
+
+    A three-week-old headline and this morning's are different evidence and
+    were indistinguishable while the block carried bare strings.
+    """
+    if not published:
+        return None
+    text = str(published)
+    for fmt in ("%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S %Z",
+                "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            when = datetime.datetime.strptime(text[:len(text)], fmt)
+        except (ValueError, TypeError):
+            continue
+        base = today or datetime.date.today()
+        return max(0, (base - when.date()).days)
+    try:
+        return max(0, ((today or datetime.date.today())
+                       - datetime.date.fromisoformat(text[:10])).days)
+    except (ValueError, TypeError):
+        return None
+
+
+def _headlines(asset, limit=6, today=None):
+    """Raw headlines with their provenance, and no sentiment score.
 
     A headline is material the analyst can read; a sentiment number is somebody
     else's reading of it, and the whole point of this agent is that it forms
-    its own. news_analyzer caches internally, so repeated calls in one run are
-    cheap.
+    its own. What is NOT somebody's reading is who published it, when, and how
+    much the project already trusts that publisher - news_analyzer keeps a
+    credibility weight per feed (Reuters 1.5, a community board 1.0) and the
+    dossier was throwing all three away and sending bare strings.
+
+    Ordered by AGE, not by news_analyzer's own ranking. That sort is by
+    |weighted_score|, which is sentiment magnitude, so letting it choose the
+    six the analyst sees would be the sentiment model picking the evidence
+    through the back door - the one thing this block exists to avoid.
     """
     try:
         import news_analyzer
 
-        items = news_analyzer.fetch_news(asset, max_articles=limit) or []
+        # asked wider than `limit` because the pick is re-made here by date
+        items = news_analyzer.fetch_news(asset, max_articles=limit * 3) or []
     except Exception:
         return {"headlines": []}
     out = []
-    for it in items[:limit]:
-        title = (it.get("title") or "").strip() if isinstance(it, dict) else ""
-        if title:
-            out.append(title[:180])
-    return {"headlines": out}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        title = (it.get("title") or "").strip()
+        if not title:
+            continue
+        out.append({"title": title[:180],
+                    "source": (it.get("source") or "unknown")[:40],
+                    "age_days": _headline_age(it.get("published"), today=today),
+                    "credibility": it.get("credibility")})
+    # unknown age last rather than first: a headline that would not say when it
+    # was written does not get to lead.
+    out.sort(key=lambda h: (h["age_days"] is None, h["age_days"] or 0))
+    return {"headlines": out[:limit]}
 
 
 # Which dossier blocks come off the network rather than out of market.db.
@@ -577,6 +657,8 @@ BLOCKS = {
     "movement": ("ret_1", "ret_5", "ret_20", "ret_60", "streak_days"),
     "position": ("high_20", "low_20", "atr_to_high_20", "atr_to_low_20",
                  "drawdown_60"),
+    "year": ("ret_1y", "ret_ytd", "vol_1y", "max_dd_1y",
+             "excess_vs_benchmark_1y", "beta_1y", "off_52w_high"),
     "volatility": ("vol_20", "vol_20_vs_60", "rsi_14", "atr_vs_90d",
                    "regime_trend", "regime_vol", "regime_momentum"),
     "flow": ("volume_vs_20", "turnover", "gap_open", "range_atr"),
@@ -701,10 +783,14 @@ def _as_of(asset, today):
     if today is None:
         return {**_profile(asset), **_regime(asset), **_market_state(),
                 **_sector_state(asset), **_headlines(asset), **_context(asset),
-                **_own_record(asset)}
+                **_performance(asset), **_own_record(asset)}
+    # The year block is on the rewinding side with the own record: it is
+    # computed from market.db prices, which are dated, and core/performance.py
+    # bounds the window at both ends for exactly this call.
     return {**PROFILE_BLANK, **_REGIME_BLANK, **_MARKET_BLANK, **_SECTOR_BLANK,
             "headlines": [], "guru_verdict": None, "guru_pct": None,
             "next_earnings": None, "macro_events": [],
+            **_performance(asset, today=today),
             **_own_record(asset, before=today)}
 
 

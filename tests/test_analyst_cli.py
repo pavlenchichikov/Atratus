@@ -257,8 +257,7 @@ def test_a_named_run_bypasses_the_dossier_hash_skip(monkeypatch, tmp_path):
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
     monkeypatch.setattr(analyst.agent, "judge",
-                        lambda d, call=None, depth=None, horizon=1,
-                        on_reject=None: None)
+                        lambda d, **kw: None)
     monkeypatch.setenv("GTRADE_ANALYST", "1")
 
     class A:
@@ -301,7 +300,7 @@ def test_depth_defaults_to_full_when_an_asset_is_named(monkeypatch):
                         lambda a, **k: {"asset": a, "date": "2026-01-01",
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
-    def _record(d, call=None, depth=None, horizon=1, on_reject=None):
+    def _record(d, call=None, depth=None, horizon=1, **kw):
         # Записываем глубину и отказываемся судить: возврат суждения потянул
         # бы за собой калибровку, а этот тест не про неё. Неявный None здесь и
         # есть отказ, ровно как у настоящего judge.
@@ -337,7 +336,7 @@ def test_an_explicit_depth_overrides_the_default(monkeypatch):
                         lambda a, **k: {"asset": a, "date": "2026-01-01",
                                         "close": 100.0, "atr": 2.0})
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
-    def _record(d, call=None, depth=None, horizon=1, on_reject=None):
+    def _record(d, call=None, depth=None, horizon=1, **kw):
         # Записываем глубину и отказываемся судить: возврат суждения потянул
         # бы за собой калибровку, а этот тест не про неё. Неявный None здесь и
         # есть отказ, ровно как у настоящего judge.
@@ -366,8 +365,7 @@ def _stub_run(monkeypatch, calls, build=None):
     monkeypatch.setattr(analyst.dossier, "dossier_hash", lambda d: "h")
     monkeypatch.setattr(analyst.dossier, "macro_status", lambda: None)
     monkeypatch.setattr(analyst.agent, "judge",
-                        lambda d, call=None, depth=None, horizon=1,
-                        on_reject=None: calls.append(horizon) or None)
+                        lambda d, **kw: calls.append(kw.get("horizon")) or None)
     monkeypatch.setenv("GTRADE_ANALYST", "1")
     return analyst
 
@@ -440,7 +438,7 @@ def test_a_missing_provider_stops_the_sweep_instead_of_refusing_every_asset(
     calls = []
     analyst = _stub_run(monkeypatch, calls)
 
-    def _missing(d, call=None, depth=None, horizon=1, on_reject=None):
+    def _missing(d, call=None, depth=None, horizon=1, **kw):
         calls.append(horizon)
         raise ProviderUnavailable("the anthropic provider needs the anthropic "
                                   "package: pip install anthropic")

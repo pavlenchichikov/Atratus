@@ -1154,6 +1154,8 @@ The switches that change what is served, all default to off:
 | `GTRADE_AB_HOLDOUT_N` | how many assets a verdict is measured over |
 | `GTRADE_TRAIN_EMBARGO_BARS` | bars dropped from the end of each training fold |
 | `GTRADE_ANALYST=0` | switch the analyst agent off entirely, on the command line and in the web alike |
+| `GTRADE_ANALYST_TOOL_CALLS` | how many extra sources one judgment may ask for (default 2, `0` disables asking). Each one is another full model round trip, so on a local 26b it is another 9 to 25 minutes |
+| `GTRADE_SEC_CONTACT` | an email for the User-Agent SEC requires; without it `insider_filings` returns the instruction instead of a 403. Never committed: it is your address, not the project's |
 | `GTRADE_AR_WIKI_CHARS` | how much research wiki a prompt may carry (default 20000) |
 | `GTRADE_NO_TICKER=1` | the trainer draws no progress bar, for a parent that owns the console |
 | `GTRADE_TF_DETERMINISM=1` | pin the GPU kernels too. Costs nothing measurable (177s against 174s) and is NOT sufficient: two runs under it still scored 0.35 and 0.95 |
@@ -2304,6 +2306,8 @@ force-promote при ремонте надо отвечать `y`: без это
 | `GTRADE_AB_HOLDOUT_N` | на скольких активах меряется вердикт |
 | `GTRADE_TRAIN_EMBARGO_BARS` | сколько баров отрезается с конца каждого обучающего фолда |
 | `GTRADE_ANALYST=0` | полностью выключить аналитического агента, и в консоли, и в вебе |
+| `GTRADE_ANALYST_TOOL_CALLS` | сколько дополнительных источников одно суждение вправе запросить (по умолчанию 2, `0` запрещает запросы). Каждый - это ещё один полный круг к модели, то есть на локальной 26b ещё 9-25 минут |
+| `GTRADE_SEC_CONTACT` | почта для User-Agent, которую требует SEC; без неё `insider_filings` возвращает инструкцию, а не 403. В репозиторий не попадает: адрес ваш, а не проекта |
 | `GTRADE_AR_WIKI_CHARS` | сколько символов вики исследователя влезает в промпт (по умолчанию 20000) |
 | `GTRADE_NO_TICKER=1` | тренер не рисует прогресс-бар: для родителя, который сам владеет консолью |
 | `GTRADE_TF_DETERMINISM=1` | закрепить и ядра GPU. По времени бесплатно (177 с против 174) и НЕ достаточно: два прогона под ним дали 0.35 и 0.95 |

@@ -52,6 +52,7 @@ echo    [N] News Analyzer   [D] News Digest         [R] Regime Detector
 echo    [C] Correlation     [WL] Watchlist          [P] Paper Trading
 echo    [W1] Top-5 90d      [W2] Top-10 90d         [W3] Top-5 180d
 echo    [W4] Top-5 Kelly    [W5] Custom assets
+echo    [PF] Performance    what an asset returned over a period, vs its index
 echo.
 echo  RESEARCH
 echo    [RS] Auto-research agent (own menu)         [AN] Analyst agent
@@ -93,6 +94,7 @@ if /i "%choice%"=="N" goto news
 if /i "%choice%"=="D" goto digest
 if /i "%choice%"=="R" goto regime
 if /i "%choice%"=="C" goto corr
+if /i "%choice%"=="PF" goto performance
 if /i "%choice%"=="WL" goto watchlist
 if /i "%choice%"=="W1" goto whatif_top5
 if /i "%choice%"=="W2" goto whatif_top10
@@ -375,6 +377,17 @@ echo.
 REM train_chunked spawns train_hybrid through sys.executable, so the whole chain
 REM inherits the interpreter this line picks.
 cmd /c ""%~dp0run_in_env.bat" python train_chunked.py"
+pause
+goto menu
+
+:performance
+echo.
+set /p pf_asset="Asset (e.g. SBER), Enter = back: "
+if "%pf_asset%"=="" goto menu
+echo.
+echo  Windows: 1M,3M,6M,YTD,1Y,3Y,5Y,MAX or a plain day count like 90.
+set /p pf_win="Windows, Enter = all of them: "
+if "%pf_win%"=="" (python performance.py --asset "%pf_asset%") else (python performance.py --asset "%pf_asset%" --windows "%pf_win%")
 pause
 goto menu
 

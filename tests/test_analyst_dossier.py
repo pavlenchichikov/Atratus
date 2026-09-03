@@ -146,6 +146,13 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # and of its sector, from config.SECTOR_MAP rather than from Yahoo, so
         # Moscow-listed names are covered too
         "sector_group", "sector_momentum", "sector_trend",
+        # the year, which ret_60 and drawdown_60 stop a quarter short of. Every
+        # one is computed from market.db prices by core/performance.py, so this
+        # block genuinely rewinds and sits on the rewinding side of _as_of -
+        # with the window bounded at BOTH ends, or a judgment dated in May
+        # would be handed the year that followed it.
+        "ret_1y", "ret_ytd", "vol_1y", "max_dd_1y",
+        "excess_vs_benchmark_1y", "beta_1y", "off_52w_high",
     }
 
 
