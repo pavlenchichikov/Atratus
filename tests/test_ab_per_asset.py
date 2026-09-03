@@ -12,6 +12,7 @@ import sys
 from datetime import datetime, timedelta
 
 import numpy as np
+import pytest
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE)
@@ -198,3 +199,42 @@ def test_an_adoption_made_after_the_baseline_ran_is_flagged():
     assert ab_per_asset.stale_baseline("2026-09-05", dates) == []
     # and with no run date there is nothing to compare against, so no claim
     assert ab_per_asset.stale_baseline(None, dates) == []
+
+
+def test_the_refusal_says_which_floor_this_holdout_could_resolve(monkeypatch):
+    """Telling the operator how many assets a floor needs answers only half the
+    question. The other half - given the assets I have, what can I ask - is
+    what sent them to the console to guess at a variable name."""
+    import ab_build
+
+    monkeypatch.setattr(ab_build, "last_spread", lambda base=None: 2.4272)
+    assert ab_build.resolvable_floor(40) == pytest.approx(0.954, abs=0.002)
+    assert ab_build.resolvable_floor(146) == pytest.approx(0.5, abs=0.01)
+
+    rows = ab_build.power_table(40)
+    assert "floor +0.50  needs  146 assets" in rows[0]
+    assert "is not enough" in rows[0]
+    assert "this holdout of 40 answers it" in rows[2], "floor 1.00 clears"
+
+
+def test_no_banked_spread_means_no_claim_about_power(monkeypatch):
+    """Before any A/B has run there is nothing to project from, and inventing a
+    spread would refuse runs on an imagined number."""
+    import ab_build
+
+    monkeypatch.setattr(ab_build, "last_spread", lambda base=None: None)
+    assert ab_build.resolvable_floor(40) is None
+    assert ab_build.power_table(40) == []
+
+
+def test_the_chosen_floor_is_what_gets_frozen_into_the_config():
+    """The verdict is read months after the environment that produced it moved
+    on, so the floor travels in the config rather than being re-derived."""
+    import types
+
+    import ab_build
+
+    args = types.SimpleNamespace(floor=1.25, objective="mean")
+    assert ab_build._floor_for(args) == 1.25
+    args.floor = None
+    assert ab_build._floor_for(args) > 0, "falls back to the basis default"

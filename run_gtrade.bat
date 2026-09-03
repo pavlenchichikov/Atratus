@@ -943,9 +943,27 @@ goto menu
 
 :ab_configure
 cls
+echo.
+echo  The FLOOR is the smallest effect worth adopting. It decides whether
+echo  this holdout can answer at all: the assets needed grow with the
+echo  SQUARE of the floor, so halving it costs four times the assets.
+echo.
+echo  Leave it blank for the adoption floor of the decision basis. Raise it
+echo  only when the effect you are chasing is well above it - a floor picked
+echo  to make a run start is a floor that answers a question nobody asked.
+echo.
+echo  If the run refuses on power, it prints which floors this holdout CAN
+echo  resolve. Come back here and type one of them.
+echo.
+set "ab_floor="
+set /p ab_floor="Floor, Enter = basis default: "
 REM Same environment as the run below, so the picker and the measurement agree
 REM about the feature space and the training cache.
-cmd /c ""%~dp0run_in_env.bat" python ab_build.py"
+if "%ab_floor%"=="" (
+  cmd /c ""%~dp0run_in_env.bat" python ab_build.py"
+) else (
+  cmd /c ""%~dp0run_in_env.bat" python ab_build.py --floor %ab_floor%"
+)
 pause
 goto menu
 

@@ -210,6 +210,53 @@ def projected_power(n, floor, base=None):
             % (sd, n, mde, floor, needed))
 
 
+def _floor_for(args):
+    """The floor this config will be judged on: --floor, else the basis default.
+
+    Frozen into the config either way, because the verdict is read months after
+    the environment that produced it has moved on.
+    """
+    import auto_research as ar
+
+    if getattr(args, "floor", None):
+        return float(args.floor)
+    return ar._adopt_floor(args.objective, basis=ar.decision_basis())
+
+
+def resolvable_floor(n, base=None):
+    """The smallest floor a holdout of `n` assets could actually resolve.
+
+    The refusal says how many assets a floor needs. The operator's real
+    question is the inverse - "given the assets I have, what question can I
+    ask" - and answering only the first sends them to the console to guess at
+    a variable name.
+    """
+    sd = last_spread(base)
+    if not sd or not n:
+        return None
+    return Z_SUM * sd / (n ** 0.5)
+
+
+def power_table(n, floors=(0.5, 0.75, 1.0, 1.5), base=None):
+    """One line per candidate floor: what it needs, and whether `n` supplies it.
+
+    Printed at the refusal so the choice is made against the arithmetic rather
+    than against a memory of which variable to set. Raising the floor is honest
+    when the effect being chased is far above it and dishonest when it is
+    chosen to make a run start, and only the operator knows which this is,
+    which is exactly why this prints instead of deciding.
+    """
+    sd = last_spread(base)
+    if not sd or not n:
+        return []
+    mde = Z_SUM * sd / (n ** 0.5)
+    return ["    floor %+.2f  needs %4d assets  %s"
+            % (f, int((Z_SUM * sd / f) ** 2 + 0.999),
+               "this holdout of %d answers it" % n if mde <= f
+               else "%d is not enough" % n)
+            for f in floors]
+
+
 def write_config(cfg, path=None):
     with open(path or CONFIG_PATH, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, ensure_ascii=False, indent=2)
@@ -467,7 +514,6 @@ def _holdout_default_n():
 
 def _configure(args):
     import adopt_genome
-    import auto_research as ar
     from core import holdout
 
     ref = reference()
@@ -495,8 +541,7 @@ def _configure(args):
             for p in problems:
                 print(f"  - {p}")
             return
-        cfg = build_config(chosen, assets, ref,
-                           ar._adopt_floor(args.objective, basis=ar.decision_basis()),
+        cfg = build_config(chosen, assets, ref, _floor_for(args),
                            args.alpha, args.seed, args.objective)
         write_config(cfg)
         print(f"\nWrote {os.path.basename(CONFIG_PATH)}")
@@ -552,8 +597,7 @@ def _configure(args):
             print(f"  - {p}")
         return
 
-    cfg = build_config(chosen, assets, ref,
-                           ar._adopt_floor(args.objective, basis=ar.decision_basis()),
+    cfg = build_config(chosen, assets, ref, _floor_for(args),
                        args.alpha, args.seed, args.objective)
     write_config(cfg)
     print(f"\nWrote {os.path.basename(CONFIG_PATH)}")
@@ -895,9 +939,24 @@ def run(cfg):
     # are the same whether the question is answerable or not.
     pw = projected_power(len(subset.split(",")), cfg["floor"])
     if pw and "cannot answer" in pw and not _allow_underpowered():
+        n_sub = len(subset.split(","))
         print(pw)
-        print("Refusing to start. Add assets, raise the floor, or set "
-              "GTRADE_AB_ALLOW_UNDERPOWERED=1 to run it anyway.")
+        rows = power_table(n_sub)
+        if rows:
+            print("  what this holdout could answer instead:")
+            for line in rows:
+                print(line)
+        can = resolvable_floor(n_sub)
+        print("Refusing to start: the hours are the same whether the question "
+              "is answerable or not.")
+        if can:
+            print("Rebuild with a floor this holdout resolves (%+.2f or higher):"
+                  % can)
+            print("    python ab_build.py --floor %.2f" % (round(can + 0.05, 1)))
+        print("[ABC] in the launcher now asks for the floor and shows this "
+              "table, so nothing has to be exported. The floor says what is "
+              "worth adopting: raise it only when the effect you are after is "
+              "well above it.")
         return
     fp_start = ar_memory.data_fingerprint(subset)
     print("Reference: {}   holdout: {}   data {}".format(ref["label"], subset, fp_start))
@@ -1011,6 +1070,10 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--objective", default="mean")
+    ap.add_argument("--floor", type=float, default=None,
+                    help="practical-effect floor for the verdict. Default: the "
+                         "adoption floor of the decision basis. Recorded in the "
+                         "config, so the run and the verdict read the same one.")
     ap.add_argument("--auto", action="store_true",
                     help="pick the gate-adoptable elites and the suggested "
                          "holdout without asking; for auto_loop.py")
