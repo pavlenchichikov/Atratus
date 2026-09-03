@@ -2699,3 +2699,84 @@ def test_the_disabled_flag_is_saved_so_the_next_run_can_see_it(monkeypatch):
     ctl.save()
     assert saved["disabled"] is True
     ar._rl_controller_reset_for_tests()
+
+
+def test_a_refused_genome_still_names_the_assets_it_helped():
+    """A verdict is one number over a holdout that is not homogeneous.
+
+    Measured 2026-09-03: a refused elite ran from +7.20 on ADA to -6.37 on
+    CAC40, and its neural damage sat in four assets while GBPUSD gained +0.062
+    of Net_AUC. "not adoptable" was right about the mean and wrong about
+    GBPUSD, and the run printed only the former.
+    """
+    import auto_research as ar
+
+    base = [{"Asset": "GBPUSD", "Score": 4.38, "Net_AUC": 0.6473},
+            {"Asset": "SILVER", "Score": 1.34, "Net_AUC": 0.5400},
+            {"Asset": "XOM", "Score": 5.17, "Net_AUC": 0.6425},
+            {"Asset": "CAC40", "Score": 12.01, "Net_AUC": 0.6395}]
+    cand = [{"Asset": "GBPUSD", "Score": 10.58, "Net_AUC": 0.7098},
+            {"Asset": "SILVER", "Score": 7.83, "Net_AUC": 0.5605},
+            {"Asset": "XOM", "Score": 8.62, "Net_AUC": 0.5734},
+            {"Asset": "CAC40", "Score": 5.97, "Net_AUC": 0.5314}]
+
+    kept = ar.per_asset_survivors(cand, base)
+    assert [a for a, _s, _u in kept] == ["SILVER", "GBPUSD"], "sorted by gain"
+
+    # XOM is the case the whole clause exists for: Score up, nets paying.
+    # champion-challenger would promote it, because it only reads Score.
+    assert "XOM" not in [a for a, _s, _u in kept]
+    # and CAC40 is down on both, so nothing could rescue it
+    assert "CAC40" not in [a for a, _s, _u in kept]
+
+
+def test_an_asset_below_the_adoption_floor_is_not_offered():
+    """The per-asset line must use the same floor the gate does, or it would
+    advertise a gain too small to act on."""
+    import auto_research as ar
+
+    base = [{"Asset": "A", "Score": 1.00, "Net_AUC": 0.55}]
+    tiny = [{"Asset": "A", "Score": 1.20, "Net_AUC": 0.56}]
+    assert ar.per_asset_survivors(tiny, base) == []
+    big = [{"Asset": "A", "Score": 1.60, "Net_AUC": 0.56}]
+    assert [a for a, _s, _u in ar.per_asset_survivors(big, base)] == ["A"]
+
+
+def test_an_asset_without_a_measured_net_is_skipped_not_assumed():
+    """A CatBoost-screen row carries no usable Net_AUC. Treating a missing
+    number as 'the nets are fine' is how the screen's 0.5 stubs would start
+    recommending adoptions."""
+    import auto_research as ar
+
+    base = [{"Asset": "A", "Score": 1.0, "Net_AUC": None},
+            {"Asset": "B", "Score": 1.0}]
+    cand = [{"Asset": "A", "Score": 9.0, "Net_AUC": None},
+            {"Asset": "B", "Score": 9.0}]
+    assert ar.per_asset_survivors(cand, base) == []
+
+
+def test_the_score_floor_can_be_raised_the_way_every_other_basis_can(monkeypatch):
+    """ab_build's power refusal tells the operator to raise the floor, and on
+    the raw basis there was nothing to raise: net_auc, trade_t and sharpe each
+    had an env knob and Score alone was a constant."""
+    import auto_research as ar
+
+    monkeypatch.delenv("GTRADE_AR_ADOPT_SCORE", raising=False)
+    assert ar._adopt_floor("mean", basis="raw") == ar.ADOPT_MEAN_SCORE_DELTA
+    monkeypatch.setenv("GTRADE_AR_ADOPT_SCORE", "1.0")
+    assert ar._adopt_floor("mean", basis="raw") == 1.0
+    monkeypatch.setenv("GTRADE_AR_ADOPT_SCORE", "not a number")
+    assert ar._adopt_floor("mean", basis="raw") == ar.ADOPT_MEAN_SCORE_DELTA
+
+
+def test_raising_the_score_floor_does_not_loosen_the_neural_floor(monkeypatch):
+    """Tightening what may be adopted must not, as a side effect, widen how far
+    the nets are allowed to fall. A -1.0 neural floor would have let through the
+    2026-09-03 elite that the -0.5 one correctly refused at -0.69."""
+    import auto_research as ar
+
+    monkeypatch.delenv("GTRADE_AR_NEURAL_FLOOR", raising=False)
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    monkeypatch.setenv("GTRADE_AR_ADOPT_SCORE", "1.0")
+    assert ar._adopt_floor("mean", basis="raw") == 1.0
+    assert ar.neural_floor() == -ar.ADOPT_MEAN_SCORE_DELTA

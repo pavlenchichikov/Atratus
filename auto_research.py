@@ -166,6 +166,38 @@ def _objective_delta(var_rows, base_score, objective="mean"):
     return _reduce_deltas(deltas, objective), deltas
 
 
+def per_asset_survivors(var_rows, base_rows, floor=None):
+    """Assets a REFUSED genome still improved, on Score AND on the nets.
+
+    A verdict is one number over the whole holdout, and the holdout is not
+    homogeneous: measured 2026-09-03, one refused elite ran from +7.20 on ADA
+    to -6.37 on CAC40, and its neural damage was concentrated in four assets
+    (CAC40 -0.109, XOM -0.070, USDJPY -0.064, GOLD -0.053) while GBPUSD gained
+    +0.062. "not adoptable" is correct for the mean and wrong for GBPUSD, and
+    without this the run said only the former.
+
+    Both conditions are required. Score alone is what champion-challenger
+    already checks at retrain time, so it adds nothing here; the reason to name
+    an asset is that the nets survive on it, which is exactly what the global
+    floor could not see.
+    """
+    base = {r["Asset"]: r for r in base_rows}
+    floor = _adopt_floor("mean") if floor is None else floor
+    out = []
+    for row in var_rows:
+        ref = base.get(row["Asset"])
+        if not ref:
+            continue
+        d_score = row.get("Score", 0.0) - ref.get("Score", 0.0)
+        auc, auc_ref = row.get("Net_AUC"), ref.get("Net_AUC")
+        if auc is None or auc_ref is None:
+            continue
+        d_auc = auc - auc_ref
+        if d_score >= floor and d_auc >= 0:
+            out.append((row["Asset"], d_score, d_auc))
+    return sorted(out, key=lambda x: -x[1])
+
+
 def _mean_delta(var_rows, base_score):
     """Mean paired Score delta (backward-compatible wrapper over _objective_delta)."""
     return _objective_delta(var_rows, base_score, "mean")
@@ -272,7 +304,22 @@ def _adopt_floor(objective="mean", basis=None):
             return float(os.getenv("GTRADE_AR_ADOPT_SHARPE") or "0.5")
         except ValueError:
             return 0.5
-    return ADOPT_MEAN_SCORE_DELTA
+    # The Score floor was the one basis with no knob, while ab_build's power
+    # refusal tells the operator to "raise the floor": on 2026-09-03 a 40-asset
+    # A/B refused at spread 2.43 (146 assets needed for +0.5) and the advice it
+    # printed could not be followed. The floor states what is worth adopting,
+    # so it belongs to the operator - raising it is honest when the effect
+    # being chased is far above it, and dishonest when it is set to fit a
+    # result that already exists.
+    #
+    # neural_floor() deliberately does NOT follow this: it anchors to the
+    # constant, so raising the Score floor tightens what may be adopted without
+    # also loosening how far the nets are allowed to fall.
+    try:
+        return float(os.getenv("GTRADE_AR_ADOPT_SCORE")
+                     or str(ADOPT_MEAN_SCORE_DELTA))
+    except ValueError:
+        return ADOPT_MEAN_SCORE_DELTA
 
 
 def neural_floor():
@@ -1945,11 +1992,11 @@ def run_qd(train_fn=None):
                           "column for basis %s" % basis)
                     continue
                 p, value, _d, tag = _st
-            results.append((g, p, value, tag, nl))
+            results.append((g, p, value, tag, nl, var_contrib))
         flags = benjamini_hochberg([r[1] for r in results])
         ts_qd = datetime.utcnow().isoformat()
         finding_winners = []
-        for (g, p, value, tag, nl), s in zip(results, flags):
+        for (g, p, value, tag, nl, var_rows), s in zip(results, flags):
             ok = adopt_ok(s, value, obj, nl)
             replicated = clears = None
             if ok:
@@ -1968,6 +2015,23 @@ def run_qd(train_fn=None):
             print("[qd] elite drops=%s label=%s/%d extra=%d: %s | %s%s" % (
                 g.drops, g.label_mode, g.label_window, len(g.extra),
                 _gate_verdict(ok, bool(replicated), clears, nl, s), tag, nl_str))
+            if not ok:
+                # A refusal is about the mean. Naming the assets the mean hid is
+                # the difference between "this run found nothing" and "this run
+                # found something that needs a per-asset adoption".
+                kept = per_asset_survivors(var_rows, ho_base_contrib)
+                if kept:
+                    print("[qd]   per-asset: %d of %d improved on BOTH Score and "
+                          "the nets: %s" % (
+                              len(kept), len(var_rows),
+                              ", ".join("%s %+.2f/%+.3f" % k for k in kept)))
+                    print("[qd]   these are CANDIDATES, not results: one seed, and "
+                          "an extreme is overstated by having been picked. "
+                          "Replicate on fresh seeds before [PA] adopts any.")
+                else:
+                    print("[qd]   per-asset: no asset improved on both Score and "
+                          "the nets, so there is nothing to adopt per-asset "
+                          "either.")
     ar_memory.findings_append({
         # _score_basis(), not the local `basis`: that one is bound only inside the
         # elites branch, and a run with an empty archive still journals.

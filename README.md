@@ -1273,6 +1273,7 @@ The switches that change what is served, all default to off:
 | `GTRADE_AB_HOLDOUT_N` | how many assets a verdict is measured over |
 | `GTRADE_TRAIN_EMBARGO_BARS` | bars dropped from the end of each training fold |
 | `GTRADE_ANALYST=0` | switch the analyst agent off entirely, on the command line and in the web alike |
+| `GTRADE_AR_ADOPT_SCORE` | the practical-effect floor on the raw Score basis (default 0.5). Raise it when the A/B refuses on power and the effect you are chasing is far above it; it does NOT loosen the neural floor |
 | `GTRADE_ANALYST_TOOL_CALLS` | how many extra sources one judgment may ask for (default 2, `0` disables asking). Each one is another full model round trip, so on a local 26b it is another 9 to 25 minutes |
 | `GTRADE_SEC_CONTACT` | an email for the User-Agent SEC requires; without it `insider_filings` returns the instruction instead of a 403. Never committed: it is your address, not the project's |
 | `GTRADE_AR_WIKI_CHARS` | how much research wiki a prompt may carry (default 20000) |
