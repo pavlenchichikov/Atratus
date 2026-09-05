@@ -47,7 +47,9 @@
 
 - **One model per asset, not one model for the market.** Every asset trains its own ensemble of four members (CatBoost, LSTM, Transformer, TCN), and the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage. This is the central design decision, and the counts below are what it costs and what it buys.
 
-  As of 2026-09-03: **847 tickers in `FULL_ASSET_MAP`, 827 of them trained and current, 20 awaiting a first train.** The gap is not decay. A ticker is added to the map the moment it is worth following, and training it is a separate, expensive act, so the map always runs ahead of `models/`. The twenty are recent listings and index additions (`ARB`, `CRWV`, `NBIS`, `SNOW`, `GEV`, `TAO`, `MBNK`, `RENI`, `KLVZ`, `DIAS`, `PRMD`, `EGX30`, `WIG20` and seven more); `[5F] Fill in / repair champions` is the entry that closes it.
+  As of 2026-09-05: **847 tickers in `FULL_ASSET_MAP`, 838 of them trained, 9 awaiting a first train.** The gap is not decay. A ticker is added to the map the moment it is worth following, and training it is a separate, expensive act, so the map always runs ahead of `models/`. The nine are recent listings and index additions; `[5F] Fill in / repair champions` is the entry that closes it.
+
+  Of the 838, **535 were retrained on 2026-09-04 under the adopted genome `4_4_5` and promoted; 303 kept the champion they had**, because champion-challenger only replaces a champion the new model beats by 0.2. That split is the mechanism working, not a failure - and 211 of those 303 are why the section on serving a per-asset genome exists.
 
   There are also **four model sets on disk whose map entry is gone** (`avb`, `eqr`, `wbs`, `brkb`). Three are assets dropped from the map. The fourth is a rename: Berkshire moved from `BRKB` to `BRK-B`, whose model filename is `brk_b`, so a trained model was orphaned and the asset now counts as untrained. Renaming a map key without moving its model files does that silently, and `[M] Model Health` is where it shows.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
@@ -462,6 +464,52 @@ The order is not decoration. Each step answers a question the next one needs.
 
 Yield, over three runs: roughly one of every three picked extremes survives its
 replication. RTX and AUDCAD are the two that did.
+
+### A genome is per process, and serving is one process
+
+Per-asset adoption was, until 2026-09-05, a **training-time** mechanism only.
+`core/adopted.genome_for_assets` resolves one genome per process from
+`GTRADE_ASSETS`, which is right for a trainer: `train_chunked.py` groups assets
+by genome and starts a process per group. Serving names no assets - the radar
+scans the whole map in one process - so it always got the global genome.
+
+That seam had no consequence until an adoption changed the **feature set**. On
+2026-09-04 the global genome moved from `A` (seven engineered features) to
+`4_4_5` (one). Champion-challenger correctly kept the standing champion on 303
+assets, and 211 of those champions are fit on `A`'s features. The next radar run
+skipped every one of them:
+
+```
+[SKIP] CAC40:  feature(s) the champion needs are unavailable: m5851, m51698
+[SKIP] IBEX35: feature(s) the champion needs are unavailable: m5851, m59561, m51698, m77763
+```
+
+The decision was right and unservable at the same time: by Score the old
+champion wins, and by Score alone it is the better model - but it cannot produce
+a prediction at all, which no comparison of scores can see.
+
+**The fix is that serving now re-points the environment per asset.**
+`serving_keys()` says which keys it may touch - everything any adopted genome
+sets, minus whatever was already in the environment when the adoption applied,
+so a value exported in the shell still wins. `apply_for()` puts one asset's
+genome in force and **removes** any key that genome does not set; without the
+removal the first asset processed would fix the genome for every asset after it,
+because `apply()` never overwrites a key that is already there.
+
+The 211 are pinned to `A` with that stated as the reason. It is a servability
+constraint, not a measurement that `A` is better on them, and the evidence
+string says so - a later reader must not mistake it for a replicated win.
+
+**Order matters around an adoption.** `[AG]` changes the feature set the moment
+it runs, so anything that predicts under the old champions has to happen first:
+
+```
+[4] Data Update  ->  [LC] reconcile  ->  [AG] adopt  ->  [5C] retrain
+```
+
+Reconciliation is safe on either side of the line (`performance_tracker.py`
+imports no models; it compares a stored signal against a realized bar), but
+prediction is not.
 
 ### Reading a later run against what is already adopted
 
