@@ -207,7 +207,7 @@ def test_the_refusal_says_which_floor_this_holdout_could_resolve(monkeypatch):
     what sent them to the console to guess at a variable name."""
     import ab_build
 
-    monkeypatch.setattr(ab_build, "last_spread", lambda base=None: 2.4272)
+    monkeypatch.setattr(ab_build, "last_spread", lambda *a, **k: 2.4272)
     assert ab_build.resolvable_floor(40) == pytest.approx(0.954, abs=0.002)
     assert ab_build.resolvable_floor(146) == pytest.approx(0.5, abs=0.01)
 
@@ -222,7 +222,7 @@ def test_no_banked_spread_means_no_claim_about_power(monkeypatch):
     spread would refuse runs on an imagined number."""
     import ab_build
 
-    monkeypatch.setattr(ab_build, "last_spread", lambda base=None: None)
+    monkeypatch.setattr(ab_build, "last_spread", lambda *a, **k: None)
     assert ab_build.resolvable_floor(40) is None
     assert ab_build.power_table(40) == []
 

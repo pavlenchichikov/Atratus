@@ -740,7 +740,7 @@ def test_an_underpowered_gate_is_refused_rather_than_warned_about(monkeypatch, c
     """The warning existed since 2026-08-21 and was printed at configure time.
     On 2026-09-02 a 12-asset run started anyway, spent nine hours, and reported
     that it could resolve +1.74 against a floor of +0.5."""
-    monkeypatch.setattr(ab_build, "last_spread", lambda base=None: 2.43)
+    monkeypatch.setattr(ab_build, "last_spread", lambda *a, **k: 2.43)
     monkeypatch.delenv("GTRADE_AB_ALLOW_UNDERPOWERED", raising=False)
     assert "cannot answer" in ab_build.projected_power(12, 0.5)
     assert ab_build._allow_underpowered() is False

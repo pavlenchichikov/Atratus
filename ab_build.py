@@ -160,11 +160,25 @@ def build_config(candidates, assets, ref, floor, alpha, seed, objective):
     }
 
 
-def last_spread(base=None):
-    """The per-asset spread the most recent A/B actually observed, or None.
+def last_spread(base=None, basis=None):
+    """The per-asset spread the most recent COMPARABLE A/B observed, or None.
 
     Recorded from 2026-08-21 onward as `sd_raw`. Older runs did not keep it, so
     a repository with only those answers None rather than a guess.
+
+    Comparable means two things, and both are units.
+
+    Seeds: only runs averaged the same number of times, because an r=4 spread is
+    half an r=1 spread on the same genome and projecting one from the other
+    promises power the run will not have.
+
+    Basis: `sd_raw` is a spread in the units of the DECISION basis, and the floor
+    it will be compared against is in those units too. A raw-Score spread of 2.43
+    projected onto a trade_t floor of 0.5 would refuse every run that could
+    answer and start the ones that cannot - the same units error the frozen floor
+    in build_config exists to prevent, on the other side of the comparison. A
+    file written before 2026-09-05 does not say which basis it measured, so it
+    answers a `raw` request only: that is what every run before then was.
     """
     import glob
     want = len(seed_roll())
@@ -172,9 +186,9 @@ def last_spread(base=None):
                                               "_ab_genomes_*.json")),
                        reverse=True):
         data = _read_json(path) or {}
-        # Only runs averaged the same number of times. Projecting an r=1 run
-        # from an r=4 spread promises power the run will not have.
         if int(data.get("ab_seeds") or 1) != want:
+            continue
+        if basis is not None and (data.get("basis") or "raw") != basis:
             continue
         for res in (data.get("results") or {}).values():
             if isinstance(res, dict) and res.get("sd_raw"):
@@ -186,7 +200,7 @@ def _allow_underpowered():
     return (os.getenv("GTRADE_AB_ALLOW_UNDERPOWERED") or "").strip() in ("1", "true", "True")
 
 
-def projected_power(n, floor, base=None):
+def projected_power(n, floor, base=None, basis=None):
     """What a run of `n` assets could resolve, before it is paid for.
 
     The point of doing this at configure time: a holdout that cannot resolve
@@ -195,7 +209,14 @@ def projected_power(n, floor, base=None):
     the whole 207-asset universe resolves only about +0.65, so the honest move
     is to raise the floor or lower the noise rather than to spend the hours.
     """
-    sd = last_spread(base)
+    sd = last_spread(base, basis)
+    if not sd and basis and n and floor > 0:
+        # Silence here would start an unchecked run and look like a pass. The
+        # first run on a new basis genuinely cannot be power-checked - there is
+        # nothing measured in its units yet - and that is worth one line.
+        return ("  power: not checked. No spread has been banked on basis %s at "
+                "%d seeds yet, and one measured on another basis is in different "
+                "units. This run is what banks it." % (basis, len(seed_roll())))
     if not sd or not n or floor <= 0:
         return ""
     mde = Z_SUM * sd / (n ** 0.5)
@@ -223,7 +244,7 @@ def _floor_for(args):
     return ar._adopt_floor(args.objective, basis=ar.decision_basis())
 
 
-def resolvable_floor(n, base=None):
+def resolvable_floor(n, base=None, basis=None):
     """The smallest floor a holdout of `n` assets could actually resolve.
 
     The refusal says how many assets a floor needs. The operator's real
@@ -231,13 +252,13 @@ def resolvable_floor(n, base=None):
     ask" - and answering only the first sends them to the console to guess at
     a variable name.
     """
-    sd = last_spread(base)
+    sd = last_spread(base, basis)
     if not sd or not n:
         return None
     return Z_SUM * sd / (n ** 0.5)
 
 
-def power_table(n, floors=(0.5, 0.75, 1.0, 1.5), base=None):
+def power_table(n, floors=(0.5, 0.75, 1.0, 1.5), base=None, basis=None):
     """One line per candidate floor: what it needs, and whether `n` supplies it.
 
     Printed at the refusal so the choice is made against the arithmetic rather
@@ -246,7 +267,7 @@ def power_table(n, floors=(0.5, 0.75, 1.0, 1.5), base=None):
     chosen to make a run start, and only the operator knows which this is,
     which is exactly why this prints instead of deciding.
     """
-    sd = last_spread(base)
+    sd = last_spread(base, basis)
     if not sd or not n:
         return []
     mde = Z_SUM * sd / (n ** 0.5)
@@ -619,7 +640,8 @@ def _print_config(cfg):
                  g.get("label_window", 30)))
     # Said BEFORE the hours are spent. A holdout that cannot resolve its own
     # floor costs exactly as much to run as one that can, and answers nothing.
-    pw = projected_power(len((cfg["holdout"] or "").split(",")), cfg["floor"])
+    pw = projected_power(len((cfg["holdout"] or "").split(",")), cfg["floor"],
+                         basis=cfg.get("basis"))
     if pw:
         print(pw)
 
@@ -888,6 +910,10 @@ def write_result(cfg, results, base=None):
         # on the same genome, and a reader comparing the two across files would
         # read the reseeding as an effect.
         "ab_seeds": len(seed_roll()),
+        # sd_raw is a spread in the units of the DECISION basis, so a later run
+        # cannot tell whether it may project from this one without knowing which
+        # basis produced it. Recorded from 2026-09-05; see last_spread.
+        "basis": cfg.get("basis"),
         "floor": cfg["floor"],
         "alpha": cfg["alpha"],
         "reference": cfg["reference"],
@@ -937,16 +963,19 @@ def run(cfg):
     # 2026-09-02 a 12-asset run was started anyway, spent nine hours, and
     # reported that it could resolve +1.74 against a floor of +0.5. The hours
     # are the same whether the question is answerable or not.
-    pw = projected_power(len(subset.split(",")), cfg["floor"])
+    # The config's own basis, not the live one: the floor was frozen with it,
+    # and a spread has to be in the units of the floor it is compared against.
+    pw = projected_power(len(subset.split(",")), cfg["floor"],
+                         basis=cfg.get("basis"))
     if pw and "cannot answer" in pw and not _allow_underpowered():
         n_sub = len(subset.split(","))
         print(pw)
-        rows = power_table(n_sub)
+        rows = power_table(n_sub, basis=cfg.get("basis"))
         if rows:
             print("  what this holdout could answer instead:")
             for line in rows:
                 print(line)
-        can = resolvable_floor(n_sub)
+        can = resolvable_floor(n_sub, basis=cfg.get("basis"))
         print("Refusing to start: the hours are the same whether the question "
               "is answerable or not.")
         if can:

@@ -410,3 +410,53 @@ def test_a_spread_measured_at_another_r_is_not_projected_onto_this_run(
     assert ab_build.last_spread(base=str(tmp_path)) is None
     monkeypatch.setenv("GTRADE_AB_SEEDS", "4")
     assert ab_build.last_spread(base=str(tmp_path)) == 1.87
+
+
+def test_a_spread_is_not_projected_across_decision_bases(tmp_path, monkeypatch):
+    """sd_raw is a spread in the units of the DECISION basis, and the floor it
+    gets compared against is in those units too. A raw-Score spread of 2.43 laid
+    against a trade_t floor of 0.5 would refuse every run that could answer and
+    start the ones that cannot - the same units error the frozen floor in
+    build_config exists to prevent, on the other side of the comparison."""
+    import json
+
+    import ab_build
+
+    monkeypatch.setattr(ab_build, "seed_roll", lambda: [1, 2, 3, 4])
+    (tmp_path / "_ab_genomes_20260905-0000.json").write_text(json.dumps({
+        "ab_seeds": 4, "basis": "raw",
+        "results": {"cand": {"sd_raw": 2.43}}}), encoding="utf-8")
+
+    assert ab_build.last_spread(str(tmp_path), basis="raw") == 2.43
+    assert ab_build.last_spread(str(tmp_path), basis="trade_t") is None, (
+        "a Score spread answered a trade_t question")
+    # no basis asked for keeps the old behaviour, so nothing that worked breaks
+    assert ab_build.last_spread(str(tmp_path)) == 2.43
+
+
+def test_a_file_from_before_the_basis_was_recorded_answers_raw_only(tmp_path,
+                                                                    monkeypatch):
+    """Every run before 2026-09-05 was on raw and none of them says so. Guessing
+    the other way would silently hand a Score spread to a t-scale floor."""
+    import json
+
+    import ab_build
+
+    monkeypatch.setattr(ab_build, "seed_roll", lambda: [1, 2, 3, 4])
+    (tmp_path / "_ab_genomes_20260821-0000.json").write_text(json.dumps({
+        "ab_seeds": 4, "results": {"cand": {"sd_raw": 3.74}}}), encoding="utf-8")
+
+    assert ab_build.last_spread(str(tmp_path), basis="raw") == 3.74
+    assert ab_build.last_spread(str(tmp_path), basis="trade_t") is None
+
+
+def test_an_unbankable_basis_says_so_instead_of_going_quiet(tmp_path, monkeypatch):
+    """An empty power line reads exactly like a pass, and would start an
+    unchecked run. The first run on a new basis genuinely cannot be checked;
+    that is worth one line rather than silence."""
+    import ab_build
+
+    monkeypatch.setattr(ab_build, "seed_roll", lambda: [1, 2, 3, 4])
+    line = ab_build.projected_power(40, 0.5, base=str(tmp_path), basis="trade_t")
+    assert "not checked" in line and "trade_t" in line
+    assert "cannot answer" not in line, "this must not trigger the refusal"
