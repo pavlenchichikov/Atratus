@@ -39,6 +39,22 @@ from core.scoring import score_asset
 
 logger = get_logger("predict")
 
+# Serving scans the whole map in one process, so config resolved the GLOBAL
+# genome at import. An asset adopted onto a genome of its own needs ITS genome
+# in force while its features are built, or its champion asks for columns that
+# no longer exist and the asset is skipped - which is what happened to 211
+# assets on 2026-09-05 after a global adoption changed the feature set.
+try:
+    import config as _config
+    from core import adopted as _adopted
+
+    _ADOPT_RECORD = getattr(_config, "_ADOPTED", None)
+    _SERVE_KEYS = _adopted.serving_keys(
+        _ADOPT_RECORD, getattr(_config, "ADOPTED_ENV_KEYS", []))
+except Exception as _exc:  # never let this stop a scan
+    print(f"[adopt] per-asset serving disabled: {_exc}")
+    _ADOPT_RECORD, _SERVE_KEYS, _adopted = None, [], None
+
 DB_PATH = os.path.join(BASE_DIR, "market.db")
 engine = create_engine(f"sqlite:///{DB_PATH}")
 MODEL_DIR = os.path.join(BASE_DIR, "models")
@@ -84,6 +100,9 @@ def _predict_asset(name, registry, thresholds):
     cb_path = os.path.join(MODEL_DIR, f"{table}_cb.cbm")
     if not os.path.exists(cb_path):
         return None
+
+    if _SERVE_KEYS:
+        _adopted.apply_for(name, _ADOPT_RECORD, _SERVE_KEYS)
 
     try:
         df_raw = pd.read_sql(f"SELECT * FROM {table}", engine,

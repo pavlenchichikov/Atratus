@@ -72,6 +72,52 @@ def genome_for(asset, record):
         or (record or {}).get("genome") or {}
 
 
+def serving_keys(record, already_set=()):
+    """The env keys a serving process may swap between assets.
+
+    Serving runs ONE process over the whole map, so unlike a trainer it cannot
+    be handed a single genome - genome_for_assets says as much, and hands it the
+    global one. That is why a per-asset adoption used to be a decision the
+    system could take and could not honour: measured 2026-09-05, 211 assets kept
+    a champion trained under the previous genome, correctly, and then could not
+    be served at all because the features that champion needs had stopped being
+    built.
+
+    This is the set serving may re-point per asset: everything any adopted
+    genome sets, minus whatever was already in the environment when the adoption
+    applied. That exclusion keeps apply()'s promise - a value exported in the
+    shell still wins - and it is why `already_set` (config.ADOPTED_ENV_KEYS, the
+    keys apply actually set) has to be passed in rather than guessed.
+    """
+    genomes = [(record or {}).get("genome") or {}]
+    genomes += list(per_asset(record).values())
+    wanted = set()
+    for genome in genomes:
+        wanted |= set(env_overrides(genome))
+    preset = set(env_overrides((record or {}).get("genome") or {})) - set(already_set)
+    return sorted(wanted - preset)
+
+
+def apply_for(asset, record, keys, environ=None):
+    """Point `keys` at ONE asset's genome. Returns the genome now in force.
+
+    A key this asset's genome does not set is REMOVED, not left alone, and the
+    removal is the whole point: apply() never overwrites a key that is already
+    there, so without it the first asset processed would fix the genome for
+    every asset after it - the same leak config.py strips the environment to
+    avoid when it starts one trainer per genome.
+    """
+    target = os.environ if environ is None else environ
+    genome = genome_for(asset, record)
+    want = env_overrides(genome)
+    for key in keys:
+        if key in want:
+            target[key] = want[key]
+        else:
+            target.pop(key, None)
+    return genome
+
+
 def genome_for_assets(assets, record):
     """The genome a PROCESS should run under, given the assets it was handed.
 

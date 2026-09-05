@@ -180,3 +180,83 @@ def test_a_record_without_the_map_behaves_exactly_as_before():
     assert adopted.genome_for_assets("RTX", plain) == GENOME_A
     assert [s["name"] for s in adopted.specs(plain)] == \
         [s["name"] for s in GENOME_A["extra"]]
+
+
+def _record():
+    return {
+        "genome": {"extra": [{"name": "mNEW", "op": "interaction",
+                              "inputs": ["a", "b"], "params": {}}],
+                   "label_mode": "direction", "label_window": 30},
+        "per_asset": {"CAC40": {"genome": {
+            "extra": [{"name": "mOLD", "op": "lag", "inputs": ["x"],
+                       "params": {"k": 3}}],
+            "label_mode": "rel_median", "label_window": 30}}},
+    }
+
+
+def test_serving_can_swap_the_genome_between_assets():
+    """Serving scans the whole map in ONE process, so config resolved the global
+    genome at import and a per-asset adoption was a decision the system took and
+    could not honour. Measured 2026-09-05: 211 assets kept a champion trained
+    under the previous genome, correctly, and every one of them was skipped
+    because the features that champion needs had stopped being built."""
+    from core import adopted
+
+    rec = _record()
+    keys = adopted.serving_keys(rec, already_set=adopted.env_overrides(rec["genome"]))
+    env = {}
+    adopted.apply_for("SBER", rec, keys, environ=env)
+    assert env["GTRADE_EXTRA_FEATURES"] == "mNEW", "an unpinned asset gets the global genome"
+    adopted.apply_for("CAC40", rec, keys, environ=env)
+    assert env["GTRADE_EXTRA_FEATURES"] == "mOLD", "a pinned asset gets its own"
+
+
+def test_a_genome_does_not_leak_into_the_next_asset():
+    """apply() never overwrites a key that is already set, so without an explicit
+    removal the first asset processed would fix the genome for every asset after
+    it - the same leak config.py strips the environment to avoid when it starts
+    one trainer per genome."""
+    from core import adopted
+
+    rec = _record()
+    keys = adopted.serving_keys(rec, already_set=adopted.env_overrides(rec["genome"]))
+    env = {}
+    adopted.apply_for("CAC40", rec, keys, environ=env)
+    assert env.get("GTRADE_LABEL_MODE") == "rel_median"
+    adopted.apply_for("SBER", rec, keys, environ=env)
+    assert env["GTRADE_EXTRA_FEATURES"] == "mNEW", "did not swap back"
+    assert "GTRADE_LABEL_MODE" not in env, (
+        "the pinned asset's label mode survived into an unpinned one; the global "
+        "genome does not set it, so it has to be REMOVED, not left behind")
+
+
+def test_a_value_set_in_the_shell_is_never_swapped_away(monkeypatch):
+    """apply()'s promise is that an existing value wins, so a one-off experiment
+    exported in the shell beats the adoption. Serving swaps keys per asset and
+    must not quietly break that: anything the adoption did not set is not ours."""
+    from core import adopted
+
+    rec = _record()
+    # config applied the global genome but did NOT set EXTRA_FEATURES, which is
+    # what it looks like when the operator exported that key themselves.
+    already = [k for k in adopted.env_overrides(rec["genome"])
+               if k != "GTRADE_EXTRA_FEATURES"]
+    keys = adopted.serving_keys(rec, already_set=already)
+    assert "GTRADE_EXTRA_FEATURES" not in keys
+
+    env = {"GTRADE_EXTRA_FEATURES": "mHAND"}
+    adopted.apply_for("CAC40", rec, keys, environ=env)
+    assert env["GTRADE_EXTRA_FEATURES"] == "mHAND"
+
+
+def test_with_no_per_asset_adoption_serving_changes_nothing():
+    """The common case has to stay a no-op, or every scan pays for a mechanism
+    that has nothing to do."""
+    from core import adopted
+
+    rec = {"genome": {"extra": [], "label_mode": "direction", "label_window": 30}}
+    keys = adopted.serving_keys(rec, already_set=adopted.env_overrides(rec["genome"]))
+    env = {}
+    for asset in ("SBER", "CAC40", "BTC"):
+        adopted.apply_for(asset, rec, keys, environ=env)
+    assert all(v == adopted.env_overrides(rec["genome"]).get(k) for k, v in env.items())
