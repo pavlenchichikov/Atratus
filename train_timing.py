@@ -27,9 +27,12 @@ from core.backtesting import (
     FOREX_SLIPPAGE,
     SLIPPAGE,
     UNRELIABLE_SCORE,
-    evaluate_signals_v2,
+    max_drawdown_from_returns,
     price_resolution_ok,
     score_strategy,
+    sharpe_from_returns,
+    simulate_positions,
+    vol_cap,
 )
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +41,39 @@ DB_PATH = os.path.join(BASE, "market.db")
 THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
 
 MIN_PROB_ROWS = 300
+
+# WHICH NUMBER the ES maximizes and the gate judges. They have to be the same
+# number: until 2026-09-05 the Stage-B reward was discounted net return while
+# the gate ranked `score_strategy`, so the fitter optimized one quantity and the
+# selection kept another. That is the 2026-08-18 proxy-vs-target mistake one
+# floor up, and it is why a fitted timing policy could pass its own fit and mean
+# nothing about what it earns.
+#
+#   net     net return per BAR of the slice, the unit core/levels.py's own gate
+#           already measures and the unit an account actually accrues. A policy
+#           that trades less is not penalized for it.
+#   score   the old composite, profit - 0.5*maxDD + 0.1*winrate + 2.0*Sharpe.
+#           Kept reachable so any pre-09-05 number can be reproduced, and
+#           because a rate cannot see drawdown at all.
+OBJECTIVES = ("net", "score")
+OBJECTIVE = os.getenv("GTRADE_TIMING_OBJECTIVE", "net")
+
+# One floor per objective, in the units that objective measures. Reusing 0.5
+# against a rate would adopt nothing forever; reusing 0.0002 against a score
+# would adopt everything.
+ADOPT_FLOOR_NET = 0.0002
+ADOPT_FLOOR_SCORE = 0.5
+
+
+def adopt_floor(objective=None):
+    """The practical-effect floor in the units `objective` measures."""
+    return (ADOPT_FLOOR_SCORE if (objective or OBJECTIVE) == "score"
+            else ADOPT_FLOOR_NET)
+
+
+def objective_of(stats, objective=None):
+    """The one number both the ES and the gate read off an eval_policy dict."""
+    return stats["score" if (objective or OBJECTIVE) == "score" else "rate"]
 
 
 def _costs(series):
@@ -48,12 +84,27 @@ def _costs(series):
 
 
 def _run_sides(series, sides):
+    """Both objectives off ONE simulation pass.
+
+    Deliberately calls simulate_positions rather than evaluate_signals_v2: the
+    per-bar `daily` array is what the rate is the mean of, and the wrapper drops
+    it. Running the wrapper as well would simulate every candidate twice, which
+    on a 300-evaluation ES over 200 assets is not free. The cap argument is
+    copied from the wrapper and has to stay copied.
+    """
     comm, slip = _costs(series)
-    profit, n_trades, win_rate, max_dd, sharpe = evaluate_signals_v2(
-        sides, series["next_ret"], comm, slip)
+    ret_arr = np.asarray(series["next_ret"], dtype=float)
+    profit, n_trades, win_rate, daily = simulate_positions(
+        sides, ret_arr, commission=comm, slippage=slip, cap=vol_cap(ret_arr))
+    max_dd = max_drawdown_from_returns(daily)
+    sharpe = sharpe_from_returns(daily)
     score = score_strategy(profit, max_dd, win_rate, n_trades, sharpe,
                            min_trades=5)
-    return {"score": score, "profit": profit, "sharpe": sharpe,
+    # A rate over zero bars is not zero, it is unmeasured; but an empty slice
+    # never reaches here (require_scorable drops it), so mean of an empty array
+    # is the only case left and numpy would warn rather than raise.
+    rate = float(np.mean(daily)) if len(daily) else 0.0
+    return {"score": score, "rate": rate, "profit": profit, "sharpe": sharpe,
             "n_trades": n_trades, "win_rate": win_rate, "max_dd": max_dd}
 
 
@@ -316,12 +367,46 @@ def _params_of(obj):
     return {name: getattr(obj, name) for name, _, _, _ in tp.PARAM_SPECS}
 
 
-def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
-    """Separable-ES fit of the 8 timing params over `train_by_asset`.
+# How many evaluations without a new best on VAL before the search is restarted,
+# and how wide sigma is re-opened to. Both are CmaEmitter's own numbers: 0.25 of
+# each parameter's span is what it initialises sigma to, and its rank-mu update
+# floors sigma at 0.01 of the span.
+RESTART_PATIENCE = 40
+RESTART_SIGMA_FRAC = 0.25
+
+
+def _reopen(es, around):
+    """Re-inflate a collapsed search around the best vector found so far.
+
+    Measured 2026-09-06, and the reason this exists: on a flat, noisy landscape
+    the rank-mu update ranks NOISE, so the mean random-walks while sigma shrinks
+    to its 0.01-of-span floor - reached by evaluation 60 of 400. Everything after
+    that resamples one point. The 2026-09-05 fit of 400 evaluations therefore
+    returned its 6th candidate, a draw made BEFORE the first adaptation and
+    identical to the one a 12-asset run produced, because the search that was
+    supposed to improve on it had stopped moving.
+
+    Restarting is the boring fix and it reuses the budget instead of burning it.
+    Kept here rather than in CmaEmitter because that emitter is also the
+    auto-research scheduler's, and its behaviour must not change underneath a
+    campaign that is mid-flight.
+    """
+    es.seed_from(_P(dict(around)))
+    es.sigma = [RESTART_SIGMA_FRAC * (hi - lo) for _, lo, hi, _ in es.dims]
+    es.evals = []
+
+
+def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None,
+               patience=RESTART_PATIENCE):
+    """Separable-ES fit of the timing params over `train_by_asset`.
 
     Each candidate is scored on TRAIN (drives the ES) and on VAL (drives
     model selection, i.e. the returned params are the best-on-VAL vector
     seen across the whole budget, not just the ES's final mean).
+
+    The search restarts around the incumbent best whenever VAL has not improved
+    for `patience` evaluations; see _reopen for what that is repairing. Pass
+    patience=0 to reproduce the single-shot search used before 2026-09-06.
     """
     import random as _random
     rng = _random.Random(seed)
@@ -329,27 +414,42 @@ def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
     es.seed_from(_P(dict(tp.DEFAULT_PARAMS)))
     best_params, best_val = dict(tp.DEFAULT_PARAMS), float("-inf")
     val_by_asset = val_by_asset or train_by_asset
+    stale = restarts = 0
     for it in range(budget):
         cand = es.ask(_P(dict(tp.DEFAULT_PARAMS)))
         params = _params_of(cand)
         pol = tp.RulesPolicy(params)
-        train_fit = fitness([eval_policy(s, pol)["score"]
+        train_fit = fitness([objective_of(eval_policy(s, pol))
                              for s in train_by_asset.values()])
         es.tell(es.vector_of(cand), train_fit)
-        val_fit = fitness([eval_policy(s, pol)["score"]
+        val_fit = fitness([objective_of(eval_policy(s, pol))
                            for s in val_by_asset.values()])
         if it % 10 == 0 or it == budget - 1:
-            print(f"[timing]   ES {it + 1}/{budget}  train={train_fit:+.2f}  "
-                  f"val={val_fit:+.2f}  best_val={max(best_val, val_fit):+.2f}",
-                  flush=True)
+            # 6 decimals, not 2: under the net objective a fitness is a rate
+            # near 1e-3, and %.2f printed "+0.00" for every line of a
+            # three-hour run, which is the same as printing nothing.
+            print(f"[timing]   ES {it + 1}/{budget}  train={train_fit:+.6f}  "
+                  f"val={val_fit:+.6f}  best_val={max(best_val, val_fit):+.6f}"
+                  f"  restarts={restarts}", flush=True)
         if val_fit > best_val:
             best_val, best_params = val_fit, params
+            stale = 0
+        else:
+            stale += 1
+            if patience and stale >= patience:
+                _reopen(es, best_params)
+                restarts += 1
+                stale = 0
+                print(f"[timing]   ES restart {restarts} at {it + 1}/{budget} "
+                      f"- no VAL gain in {patience}; sigma reopened around "
+                      f"best_val={best_val:+.6f}", flush=True)
     return best_params
 
 
 def gate_policy(test_by_asset, params, reference=None):
     """Policy-vs-reference verdict on TEST: one-sided Wilcoxon over per-asset
-    score deltas. ADOPT requires n >= 8 assets, p < 0.05, and mean_d > 0.5.
+    objective deltas. ADOPT requires n >= 8 assets, p < 0.05, and a mean
+    delta above adopt_floor(), which is in the units OBJECTIVE measures.
 
     `params` is a parameter dict for Stage A or a policy object for Stage B.
     `reference` defaults to the production baseline, which is what Stage A is
@@ -360,17 +460,27 @@ def gate_policy(test_by_asset, params, reference=None):
     # Any policy object passes through; only a parameter dict is wrapped.
     pol = (params if hasattr(params, "apply_series") or hasattr(params, "apply")
            else tp.RulesPolicy(params))
+    floor = adopt_floor()
     per_asset, deltas, unscorable = {}, [], []
+    cand_trades = base_trades = 0
     for asset, s in test_by_asset.items():
-        base = (eval_baseline(s)["score"] if reference is None
-                else eval_policy(s, reference)["score"])
-        cand = eval_policy(s, pol)["score"]
+        base_stats = (eval_baseline(s) if reference is None
+                      else eval_policy(s, reference))
+        cand_stats = eval_policy(s, pol)
+        base_trades += base_stats["n_trades"]
+        cand_trades += cand_stats["n_trades"]
+        base, cand = objective_of(base_stats), objective_of(cand_stats)
         # UNRELIABLE_SCORE is not a score, it is "this arm made too few trades
         # to judge". Subtracting it produces a delta near -999 that the rank
         # test cannot see and the mean cannot survive: one short asset out of
         # twenty moved mean_d from +18.5 to -29.4 and flipped ADOPT to HOLD
         # while p stayed at 0.0002. Drop the pair and say how many were dropped.
-        if UNRELIABLE_SCORE in (base, cand) or not (np.isfinite(base) and np.isfinite(cand)):
+        # UNRELIABLE_SCORE is a score-mode sentinel only. Under `net` a policy
+        # that made too few trades has a perfectly defined rate (standing aside
+        # earns zero per bar), and dropping it would hide exactly the arm the
+        # live evidence says might win.
+        if not (np.isfinite(base) and np.isfinite(cand)) or (
+                OBJECTIVE == "score" and UNRELIABLE_SCORE in (base, cand)):
             unscorable.append(asset)
             continue
         d = cand - base
@@ -385,8 +495,14 @@ def gate_policy(test_by_asset, params, reference=None):
     else:
         p = 1.0
     mean_d = float(np.mean(deltas)) if deltas else 0.0
-    verdict = "ADOPT" if (n >= 8 and p < 0.05 and mean_d > 0.5) else "HOLD"
+    verdict = "ADOPT" if (n >= 8 and p < 0.05 and mean_d > floor) else "HOLD"
+    # Trade counts travel with the verdict because a rate objective can be won
+    # by NOT TRADING, and that is a real answer the reader has to see rather
+    # than discover in production. train_direction.py learned this the hard way:
+    # its ADOPT suppressed 100% of the signals and the report did not say so.
     return {"verdict": verdict, "p": p, "mean_d": mean_d, "n": n,
+            "floor": floor, "objective": OBJECTIVE,
+            "cand_trades": cand_trades, "base_trades": base_trades,
             "n_unscorable": len(unscorable), "unscorable": unscorable,
             "per_asset": per_asset}
 
@@ -450,6 +566,13 @@ def main():
                     help="stage b: discount per bar")
     ap.add_argument("--epsilon", type=float, default=0.1,
                     help="stage b: exploration rate when logging transitions")
+    ap.add_argument("--rounds", type=int, default=3,
+                    help="stage b: data-collection rounds; round 1 runs under "
+                         "the incumbent, each later one under the Q the "
+                         "previous round fitted")
+    ap.add_argument("--single-q", action="store_true",
+                    help="stage b: one regressor instead of the double "
+                         "estimator (reproduces pre-2026-09-05 fits)")
     args = ap.parse_args()
     import config
     assets = ([a.strip() for a in args.assets.split(",") if a.strip()]
@@ -494,7 +617,8 @@ def main():
 
     if args.stage == "b":
         out = stage_b(series, iters=args.iters, gamma=args.gamma,
-                      epsilon=args.epsilon, seed=args.seed)
+                      epsilon=args.epsilon, seed=args.seed,
+                      rounds=args.rounds, double=not args.single_q)
         print("[timing-b] reference stage_a | assets %d | selected on val: %s"
               % (out["assets"], out["selected_on_val"]))
         for r in out["rows"]:
@@ -521,8 +645,13 @@ def main():
     gate = gate_policy(te, params)
     save_policy(params, gate)
     print(f"[timing] params: {params}")
+    print(f"[timing] objective: {gate.get('objective', OBJECTIVE)}  "
+          f"floor={gate.get('floor', 0.0):+.6f}")
     print(f"[timing] verdict: {gate['verdict']}  p={gate['p']:.4f}  "
-          f"mean_d={gate['mean_d']:+.2f}  n={gate['n']}")
+          f"mean_d={gate['mean_d']:+.6f}  n={gate['n']}")
+    # Say out loud when the winner won by trading less, and by how much.
+    print(f"[timing] trades: candidate {gate.get('cand_trades', 0)} vs "
+          f"reference {gate.get('base_trades', 0)}")
     if gate["n_unscorable"]:
         print("[timing] %d asset(s) dropped as unscorable (an arm traded fewer "
               "than the minimum): %s"
@@ -533,7 +662,9 @@ def main():
 
 
 
-MIN_EFFECT = 0.5          # Score units, the same bar Stage A cleared
+# The same practical-effect bar Stage A clears, in whatever units the
+# objective measures. It was a hardcoded 0.5 in Score units until
+# 2026-09-05, which under a rate objective is a bar nothing can ever clear.
 
 
 def bh_rows(rows, alpha=0.05):
@@ -560,7 +691,7 @@ def gate_challenger(test_by_asset, candidates, reference):
     """Gate every candidate Q against the incumbent, corrected together.
 
     candidates is [(name, policy)]. A candidate adopts only with a BH-adjusted
-    p below alpha AND a mean delta above MIN_EFFECT. Lose or draw and the
+    p below alpha AND a mean delta above adopt_floor(). Lose or draw and the
     rules stay, which is the spec's rule and also the safe direction: Stage A
     is interpretable and already live.
     """
@@ -576,7 +707,7 @@ def gate_challenger(test_by_asset, candidates, reference):
                  time.time() - _t0), flush=True)
     rows = bh_rows(rows)
     for r in rows:
-        r["adopt"] = bool(r["bh_flag"] and r["mean_d"] > MIN_EFFECT
+        r["adopt"] = bool(r["bh_flag"] and r["mean_d"] > adopt_floor()
                           and r["n"] >= 8)
     winners = [r for r in rows if r["adopt"]]
     best = max(winners, key=lambda r: r["mean_d"], default=None)
@@ -601,7 +732,7 @@ def objective_vs_gate(test_by_asset, policy, reference):
         a = eval_policy(s, policy)
         b = eval_policy(s, reference)
         d_obj.append(a["profit"] - b["profit"])
-        d_gate.append(a["score"] - b["score"])
+        d_gate.append(objective_of(a) - objective_of(b))
     if len(d_obj) < 3:
         return {"rho": 0.0, "p": 1.0, "sign_agree": 0, "n": len(d_obj)}
     r = spearmanr(d_obj, d_gate)
@@ -611,7 +742,7 @@ def objective_vs_gate(test_by_asset, policy, reference):
 
 
 def stage_b(by_asset, iters=6, gamma=0.97, epsilon=0.1, seed=0,
-            challenger_factory=None, reference=None):
+            challenger_factory=None, reference=None, rounds=1, double=True):
     """Fit a Q challenger on TRAIN, pick the horizon on VAL, gate on TEST.
 
     The incumbent is the ADOPTED Stage-A policy when timing_policy.json exists,
@@ -632,9 +763,31 @@ def stage_b(by_asset, iters=6, gamma=0.97, epsilon=0.1, seed=0,
     test = {a: v[2] for a, v in splits.items()}
 
     rng = _random.Random(seed)
-    batches = [fq.rollout(s, incumbent, rng, epsilon=epsilon,
-                          costs=_costs(s)) for s in train.values()]
-    models = fq.fit_q(batches, iters=iters, gamma=gamma, seed=seed)
+    # ROUND 1 collects under the incumbent, every later round under the Q the
+    # previous round produced. This is the one thing the environment here makes
+    # free and most offline settings do not: `advance` is a deterministic replay
+    # over fixed bars with no market impact, so a policy that never ran can be
+    # rolled out exactly rather than estimated conservatively. The states a
+    # trained Q actually visits are therefore IN the training data by round two,
+    # instead of being extrapolated from the states the rules happened to visit.
+    #
+    # Data accumulates across rounds rather than replacing: the incumbent's
+    # states are still states, and throwing them away would trade one narrow
+    # distribution for another.
+    behaviour = incumbent
+    batches, models = [], None
+    for r in range(max(1, int(rounds))):
+        batches += [fq.rollout(s, behaviour, rng, epsilon=epsilon,
+                               costs=_costs(s)) for s in train.values()]
+        print("[stage-b] round %d/%d  behaviour=%s  %d batches"
+              % (r + 1, rounds, type(behaviour).__name__, len(batches)),
+              flush=True)
+        models = fq.fit_q(batches, iters=iters, gamma=gamma, seed=seed + r,
+                          double=double)
+        # The deepest rung is the behaviour for the next round, not the rung VAL
+        # will eventually pick: VAL has not been consulted yet, and picking on
+        # it here would let the selection set steer data collection.
+        behaviour = fq.FqiPolicy(models[-1])
 
     if challenger_factory is not None:
         candidates = challenger_factory(models)
@@ -652,9 +805,9 @@ def stage_b(by_asset, iters=6, gamma=0.97, epsilon=0.1, seed=0,
     val_scores = []
     for _i, (name, pol) in enumerate(candidates, 1):
         _t0 = time.time()
-        val_scores.append((name, fitness([eval_policy(s, pol)["score"]
+        val_scores.append((name, fitness([objective_of(eval_policy(s, pol))
                                           for s in val.values()])))
-        print("[stage-b] val  %d/%d  %s  %+.2f  %.0fs"
+        print("[stage-b] val  %d/%d  %s  %+.6f  %.0fs"
               % (_i, len(candidates), name, val_scores[-1][1],
                  time.time() - _t0), flush=True)
     best_name = max(val_scores, key=lambda kv: kv[1])[0]
@@ -669,6 +822,8 @@ def stage_b(by_asset, iters=6, gamma=0.97, epsilon=0.1, seed=0,
             "best": gate["best"], "val": dict(val_scores),
             "selected_on_val": best_name, "proxy": proxy,
             "reference": "stage_a", "assets": len(by_asset),
+            "rounds": int(rounds), "double": bool(double),
+            "objective": OBJECTIVE,
             # The fitted models ride along so saving does not mean fitting the
             # whole ladder a second time. Stripped before the report is written.
             "_models": models}

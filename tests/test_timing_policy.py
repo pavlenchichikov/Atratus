@@ -303,3 +303,49 @@ class TestDisplayLabel:
 
     def test_none_action_is_blank(self):
         assert display_label(None, None) == (None, False)
+
+
+class TestMinHoldDays:
+    """The floor under a position's life.
+
+    Motivated by the live journal, not by taste: 677 of the 1113 closed trades
+    in level_log were held exactly one bar and lost 0.867% each, because a round
+    trip costs about 0.5% and one bar of edge is worth about 0.0001. The floor
+    prices that. It suppresses the three DISCRETIONARY exits and never the flip,
+    because holding against your own reversed signal is not a timing choice.
+    """
+
+    def _walk(self, params, probs):
+        pol = tp.RulesPolicy(params)
+        st = dict(tp.FRESH_STATE)
+        out = []
+        for p in probs:
+            action, reason, st = tp.policy_step(
+                pol, p, 0.55, 0.45, 0.01, False, False, st)
+            out.append((action, reason))
+        return out
+
+    def test_a_discretionary_exit_waits_for_the_floor(self):
+        probs = [0.70, 0.50, 0.50, 0.50, 0.50]
+        base = self._walk({**tp.DEFAULT_PARAMS, "exit_hysteresis": 0.0}, probs)
+        held = self._walk({**tp.DEFAULT_PARAMS, "exit_hysteresis": 0.0,
+                           "min_hold_days": 3}, probs)
+        assert base[1] == ("EXIT", "hysteresis")
+        assert held[1] == ("HOLD", "min_hold")
+        assert held[2] == ("HOLD", "min_hold")
+        assert held[3][0] == "EXIT", "the floor delays an exit, it never cancels it"
+
+    def test_a_flip_still_closes_inside_the_floor(self):
+        probs = [0.70, 0.30]
+        held = self._walk({**tp.DEFAULT_PARAMS, "min_hold_days": 5}, probs)
+        assert held[0][0] == "ENTER"
+        assert held[1] == ("EXIT", "flip")
+
+    def test_zero_reproduces_the_policy_that_never_heard_of_it(self):
+        probs = [0.70, 0.50, 0.62, 0.30, 0.70, 0.70]
+        assert (self._walk(dict(tp.DEFAULT_PARAMS), probs)
+                == self._walk({**tp.DEFAULT_PARAMS, "min_hold_days": 0}, probs))
+
+    def test_the_fitter_can_reach_it(self):
+        assert "min_hold_days" in {n for n, _lo, _hi, _i in tp.PARAM_SPECS}
+        assert tp.DEFAULT_PARAMS["min_hold_days"] == 0

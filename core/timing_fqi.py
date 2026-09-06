@@ -254,19 +254,87 @@ def _q_max(model, next_rows):
     return vals.max(axis=1)
 
 
-def fit_q(batches, iters=6, gamma=0.97, seed=0):
+class DoubleQ:
+    """Two regressors fitted on disjoint halves of the assets, acting as one.
+
+    Duck-types a CatBoost regressor for everything downstream: predict and
+    save_model are the only methods q_value, _q_max, FqiPolicy and
+    train_timing.save_stage_b ever call, so the policy, the gate and the
+    serving path do not know the difference.
+    """
+
+    def __init__(self, a, b):
+        self.a, self.b = a, b
+
+    def predict(self, x):
+        return 0.5 * (self.a.predict(x) + self.b.predict(x))
+
+    @staticmethod
+    def sibling_path(path):
+        """Where the second half lives, given the first half path."""
+        root, ext = os.path.splitext(path)
+        return root + "_b" + ext
+
+    def save_model(self, path):
+        """The same call save_stage_b already makes on a CatBoost model.
+
+        Two .cbm files rather than one pickle: each half stays loadable by any
+        catboost, and a half that fails to write leaves the pair visibly
+        incomplete instead of a file that loads and quietly means something
+        else.
+        """
+        self.a.save_model(path)
+        self.b.save_model(self.sibling_path(path))
+
+
+def _q_max_double(a, b, next_rows):
+    """The Bellman target without the max operator believing its own noise.
+
+    A single Q picks the next action AND scores it, so a state where noise
+    happened to inflate one action is both chosen and believed, and the error
+    compounds up the ladder. Here one model picks and the OTHER one values,
+    averaged in both directions so neither half is privileged.
+
+    It matters more here than in most applications because of what the reward
+    is: about one basis point of edge per bar under a daily return whose sd is
+    two orders of magnitude larger. Nearly every difference the max operator
+    finds between two actions is sampling error, which is exactly the regime
+    where overestimation is worst.
+    """
+    m, _a, f = next_rows.shape
+    flat = next_rows.reshape(m * 2, f)
+    va = a.predict(flat).reshape(m, 2)
+    vb = b.predict(flat).reshape(m, 2)
+    idx = np.arange(m)
+    return 0.5 * (vb[idx, va.argmax(axis=1)] + va[idx, vb.argmax(axis=1)])
+
+
+def fit_q(batches, iters=6, gamma=0.97, seed=0, double=True):
     """Fitted Q-iteration. Returns the model after each iteration.
 
     Q_0 is the immediate reward, which is the honest starting point: with no
     model yet, the value of a state IS what it paid. Each later iteration adds
     one bar of lookahead, so the list is a ladder of horizons and VAL picks the
     rung, instead of a fixed depth chosen because it sounded right.
+
+    `double` splits the ASSETS (not the rows) into two halves and takes the
+    Bellman target from _q_max_double. Splitting by asset rather than by row is
+    the point: two rows of one trajectory are neighbours in state and in bar, so
+    a row-wise split leaks exactly the thing the second model exists to be
+    independent of. Passing double=False reproduces every fit made before
+    2026-09-05.
     """
     from catboost import CatBoostRegressor
     rows = np.concatenate([b["rows"] for b in batches])
     rewards = np.concatenate([b["rewards"] for b in batches])
     next_rows = np.concatenate([b["next_rows"] for b in batches])
     terminal = np.concatenate([b["terminal"] for b in batches])
+    # Which half of the assets each transition came from. One batch cannot be
+    # split into two independent halves, so a single-asset call stays single-Q
+    # rather than pretending otherwise.
+    double = bool(double) and len(batches) >= 2
+    half = np.concatenate([np.full(len(b["rows"]), i % 2, dtype=int)
+                           for i, b in enumerate(batches)])
 
     # One line per rung. CB_PARAMS carries verbose=0 and allow_writing_files=0,
     # so a pooled fit over every asset is an hour of total silence with nothing
@@ -276,11 +344,20 @@ def fit_q(batches, iters=6, gamma=0.97, seed=0):
     models, targets = [], rewards.copy()
     for k in range(iters):
         t0 = time.time()
-        model = CatBoostRegressor(random_seed=seed + k, **CB_PARAMS)
-        model.fit(rows, targets)
+        if double:
+            fits = []
+            for h in (0, 1):
+                m = CatBoostRegressor(random_seed=seed + k + 100 * h, **CB_PARAMS)
+                m.fit(rows[half == h], targets[half == h])
+                fits.append(m)
+            model = DoubleQ(*fits)
+        else:
+            model = CatBoostRegressor(random_seed=seed + k, **CB_PARAMS)
+            model.fit(rows, targets)
         models.append(model)
         if k + 1 < iters:
-            bootstrap = _q_max(model, next_rows)
+            bootstrap = (_q_max_double(model.a, model.b, next_rows) if double
+                         else _q_max(model, next_rows))
             bootstrap[terminal] = 0.0
             targets = rewards + gamma * bootstrap
         print("[fqi]   iter %d/%d  %.0fs" % (k + 1, iters, time.time() - t0),
@@ -386,12 +463,25 @@ def load_served_policy(path=None):
     """
     from catboost import CatBoostRegressor
 
+    path = path or MODEL_PATH
     try:
         model = CatBoostRegressor()
-        model.load_model(path or MODEL_PATH)
+        model.load_model(path)
     except Exception as exc:
         _logger.debug("Stage-B model not loaded: %s", exc)
         return None
+    # A double fit writes both halves. Serving the first half alone would be a
+    # different policy from the one the gate passed, so a present-but-broken
+    # sibling falls back to the rules rather than to half a model.
+    sibling = DoubleQ.sibling_path(path)
+    if os.path.exists(sibling):
+        try:
+            other = CatBoostRegressor()
+            other.load_model(sibling)
+        except Exception as exc:
+            _logger.debug("Stage-B second half not loaded: %s", exc)
+            return None
+        return FqiPolicy(DoubleQ(model, other))
     return FqiPolicy(model)
 
 

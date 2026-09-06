@@ -139,3 +139,7 @@ _search_gate.txt
 *.patch
 
 ab_basis_noise.py
+
+# Local-only harness, same rule as the other ab_* tools
+ab_timing_ceiling.py
+ab_per_asset.py

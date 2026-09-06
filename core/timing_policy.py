@@ -23,13 +23,19 @@ PARAM_SPECS = (
     ("max_hold_days", 2, 60, True),
     ("trail_atr", 1.0, 8.0, False),
     ("cooldown_days", 0, 10, True),
+    # Added 2026-09-05. 677 of the 1113 closed trades in level_log were held
+    # exactly one bar and lost 0.867% each: a round trip costs 0.5% and one
+    # bar of edge is worth about 0.0001, so a one-bar trade cannot pay for
+    # itself whatever the signal says. This is the parameter that can price
+    # that, and the fit is free to leave it at 0 if the evidence disagrees.
+    ("min_hold_days", 0, 10, True),
 )
 
 DEFAULT_PARAMS = {
     "entry_margin": 0.0, "entry_margin_hi_taleb": 0.0,
     "entry_margin_risky": 0.0, "confirm_days": 0,
     "exit_hysteresis": 0.0, "max_hold_days": 60,
-    "trail_atr": 8.0, "cooldown_days": 0,
+    "trail_atr": 8.0, "cooldown_days": 0, "min_hold_days": 0,
 }
 
 FRESH_STATE = {"pos": 0, "days_held": 0, "seg_peak": 0.0, "seg_ret": 0.0,
@@ -70,6 +76,7 @@ _TIMING_LABELS = {
     ("EXIT", "hysteresis"): ("policy: exit - momentum faded", True),
     ("EXIT", "max_hold"): ("policy: exit - max hold reached", True),
     ("EXIT", "trail_stop"): ("policy: exit - trailing stop", True),
+    ("HOLD", "min_hold"): ("policy: holding - too early to exit", False),
 }
 
 
@@ -163,6 +170,12 @@ def policy_step(policy, prob, buy_thr, sell_thr, atr_now, taleb_hi_now,
         exit_reason = "trail_stop"
     else:
         exit_reason = None
+
+    # A flip is the signal itself reversing, so it closes whatever min_hold
+    # says: holding a position against your own model is not a timing choice.
+    # The three DISCRETIONARY exits are the ones the floor suppresses.
+    if exit_reason and exit_reason != "flip" and st["days_held"] < int(p["min_hold_days"]):
+        return "HOLD", "min_hold", st
 
     if exit_reason:
         st.update(pos=0, days_held=0, seg_peak=0.0, seg_ret=0.0,

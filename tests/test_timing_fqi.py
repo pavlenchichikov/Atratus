@@ -460,3 +460,58 @@ def test_the_ladder_reports_every_rung_it_climbs(capsys):
     out = capsys.readouterr().out
     assert out.count("[fqi]   iter") == 3, out
     assert "iter 3/3" in out and "transitions" in out
+
+
+def test_double_q_does_not_believe_its_own_maximum():
+    """The point of the double estimator, on the case that motivates it.
+
+    Rewards here are pure noise, so the true value of both actions is zero and
+    every difference a max operator finds is sampling error. A single Q picks
+    and scores that error with the same model and keeps it; the double one
+    picks with one half and scores with the other, so an inflated action is
+    valued by a model that was not fooled by the same draw. The double backup
+    must therefore sit BELOW the single one on average.
+    """
+    rng = np.random.default_rng(3)
+    batches = [fq.rollout(_series(200, seed=s), tp.RulesPolicy(dict(tp.DEFAULT_PARAMS)),
+                          __import__("random").Random(s), epsilon=0.3)
+               for s in range(6)]
+    for b in batches:                      # a reward with no structure at all
+        b["rewards"] = rng.normal(0, 0.01, len(b["rewards"]))
+
+    single = fq.fit_q(batches, iters=1, seed=0, double=False)[0]
+    dbl = fq.fit_q(batches, iters=1, seed=0, double=True)[0]
+    next_rows = np.concatenate([b["next_rows"] for b in batches])
+
+    assert isinstance(dbl, fq.DoubleQ)
+    assert (fq._q_max_double(dbl.a, dbl.b, next_rows).mean()
+            < fq._q_max(single, next_rows).mean())
+
+
+def test_a_single_asset_stays_single_q_rather_than_splitting_itself():
+    """Two halves of one trajectory are not two independent samples, and a
+    second model fitted on one of them would only look independent."""
+    batches = [fq.rollout(_series(150, seed=1),
+                          tp.RulesPolicy(dict(tp.DEFAULT_PARAMS)),
+                          __import__("random").Random(1), epsilon=0.2)]
+    assert not isinstance(fq.fit_q(batches, iters=1, double=True)[0], fq.DoubleQ)
+
+
+def test_both_halves_survive_a_save_and_a_load(tmp_path):
+    batches = [fq.rollout(_series(150, seed=s),
+                          tp.RulesPolicy(dict(tp.DEFAULT_PARAMS)),
+                          __import__("random").Random(s), epsilon=0.2)
+               for s in range(4)]
+    model = fq.fit_q(batches, iters=1, double=True)[0]
+    path = str(tmp_path / "timing_fqi.cbm")
+    model.save_model(path)
+    assert os.path.exists(fq.DoubleQ.sibling_path(path))
+
+    served = fq.load_served_policy(path)
+    assert isinstance(served.model, fq.DoubleQ)
+    row = batches[0]["rows"][0]
+    assert fq.q_value(served.model, row) == fq.q_value(model, row)
+
+    # half a model is not the model the gate passed
+    os.remove(fq.DoubleQ.sibling_path(path))
+    assert not isinstance(fq.load_served_policy(path).model, fq.DoubleQ)

@@ -560,6 +560,7 @@ def levels_sheet(equity=0.0):
     deposit forever. Zero means the account was never declared, and the caller
     shows percentages instead of money.
     """
+    from core import fills as fills_mod
     from core import levels as levels_mod
     from core import positions as positions_mod
     from core import timing_policy, track_record
@@ -593,6 +594,15 @@ def levels_sheet(equity=0.0):
             if segs and segs[-1]["open"]:
                 segment = segs[-1]
                 held = segment["bars"]
+        # A REAL fill outranks the reconstruction. The trailing stop is the best
+        # close - k*ATR since the segment started, so a segment that starts on
+        # the bar the signal turned prices a trade nobody took: the order was
+        # placed by hand, on a later day, at a different price. Only an open
+        # fill overrides; absent one, nothing changes.
+        filled = fills_mod.open_segment(asset)
+        if filled:
+            segment = filled
+            held = filled["bars"]
         taleb_hi, risky = regime_flags(asset)
         lv = levels_mod.levels(bars, side, segment=segment,
                                taleb_hi=taleb_hi, risky=risky)
@@ -609,7 +619,13 @@ def levels_sheet(equity=0.0):
             badge = text if is_div else None
         # `side`, not the raw call: a position held through a quiet bar would
         # otherwise print WAIT beside a live entry and stop.
+        # Which entry the stop was measured from travels with the row, because
+        # the two answers differ and a reader cannot tell them apart by looking
+        # at a price.
         rows.append({"asset": asset, "signal": side, "date": s["date"],
-                     "held_days": held, "timing_badge": badge, **lv, **sz})
+                     "held_days": held, "timing_badge": badge,
+                     "entry_source": (segment or {}).get("source", "signal"),
+                     "fill_price": (segment or {}).get("entry_price"),
+                     **lv, **sz})
     rows.sort(key=lambda r: (r["status"] != "ok", r["asset"]))
     return rows

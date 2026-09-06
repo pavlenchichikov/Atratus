@@ -121,7 +121,16 @@ class TestUnscorableAssetsAreNotAveraged:
     moves the effect size by tens of points while the rank test, which cannot
     see magnitude, keeps reporting the same p. Short-history assets are what
     make this reachable, and the asset list grew by 116 of them on 2026-08-21.
+
+    Pinned to the score objective, because that is the only place the sentinel
+    exists: the default `net` objective measures a rate, a thin asset has a
+    perfectly defined one, so there is nothing to drop. Both halves are worth
+    keeping - the score path is still reachable and still carries the hazard.
     """
+
+    @pytest.fixture(autouse=True)
+    def _score_objective(self, monkeypatch):
+        monkeypatch.setattr(tt, "OBJECTIVE", "score")
 
     def _healthy(self, k=20, n=500):
         return {"A%d" % i: _series(n, seed=i) for i in range(k)}
@@ -169,6 +178,35 @@ class TestUnscorableAssetsAreNotAveraged:
         assert out["n"] == len(healthy)
         assert out["n_unscorable"] == 0
         assert out["mean_d"] == pytest.approx(float(np.mean(deltas)))
+
+
+class TestNetObjectiveHasNoSentinel:
+    """Under the default objective a thin asset is measured, not discarded.
+
+    The positive control for the class above: the same asset that is unscorable
+    in score units carries a finite rate, so it enters the mean instead of being
+    dropped, and no -999 can reach mean_d in the first place.
+    """
+
+    def test_thin_asset_is_scorable_as_a_rate(self):
+        cand = tp.RulesPolicy({**tp.DEFAULT_PARAMS, "entry_margin": 0.06})
+        thin = _quiet_series(70, seed=7, spread=0.05)
+        assert (tt.eval_policy(thin, cand)["score"]
+                == pytest.approx(bt.UNRELIABLE_SCORE))
+        assert np.isfinite(tt.eval_policy(thin, cand)["rate"])
+
+        healthy = {"A%d" % i: _series(500, seed=i) for i in range(20)}
+        both = dict(healthy, NEW_SHORT=thin)
+        out = tt.gate_policy(both, cand)
+        assert out["objective"] == "net"
+        assert out["n_unscorable"] == 0
+        assert out["n"] == len(both)
+        assert "NEW_SHORT" in out["per_asset"]
+
+    def test_floor_is_in_the_units_the_gate_measures(self):
+        assert tt.adopt_floor("net") == tt.ADOPT_FLOOR_NET
+        assert tt.adopt_floor("score") == tt.ADOPT_FLOOR_SCORE
+        assert tt.adopt_floor("net") < tt.adopt_floor("score")
 
 
 class TestRefusesToGateNothing:
@@ -252,3 +290,54 @@ class _ConstQ:
         import numpy as _np
 
         return _np.full(len(rows), self.value, dtype=float)
+
+
+class TestTheSearchRestartsInsteadOfStalling:
+    """A collapsed ES must be reopened, not resampled 340 more times.
+
+    Measured 2026-09-06: CmaEmitter's rank-mu update ranks noise on a flat
+    landscape, so sigma falls from 0.25 of each span to its 0.01 floor by
+    evaluation 60. The 400-evaluation fit of 2026-09-05 consequently returned
+    its SIXTH candidate - a draw made before the first adaptation, identical to
+    the one a 12-asset run of the same seed produced.
+    """
+
+    def test_a_collapsed_sigma_is_reopened_around_the_best(self):
+        import random
+
+        from core.ar_rl import CmaEmitter
+        es = CmaEmitter(rng=random.Random(0), dims=tp.PARAM_SPECS)
+        es.seed_from(tt._P(dict(tp.DEFAULT_PARAMS)))
+        spans = [hi - lo for _n, lo, hi, _i in tp.PARAM_SPECS]
+
+        es.sigma = [0.01 * s for s in spans]      # the collapsed state
+        best = {**tp.DEFAULT_PARAMS, "min_hold_days": 4}
+        tt._reopen(es, best)
+
+        assert es.sigma == [tt.RESTART_SIGMA_FRAC * s for s in spans]
+        assert es.evals == []
+        assert dict(zip([n for n, _l, _h, _i in tp.PARAM_SPECS], es.mean)
+                    )["min_hold_days"] == 4
+
+    def test_a_stalled_search_actually_restarts(self, monkeypatch):
+        """Fitness that never improves must trigger restarts, not silence."""
+        calls = []
+        monkeypatch.setattr(tt, "_reopen",
+                            lambda es, around: calls.append(dict(around)))
+        monkeypatch.setattr(tt, "eval_policy", lambda s, p: {"rate": 0.0, "score": 0.0})
+        monkeypatch.setattr(tt, "objective_of", lambda stats, objective=None: 0.0)
+
+        tt.fit_policy({"A": {}}, budget=25, patience=10, val_by_asset={"A": {}})
+        assert len(calls) == 2, "25 evaluations at patience 10 is two restarts"
+
+    def test_patience_zero_reproduces_the_old_single_shot_search(self, monkeypatch):
+        """The control: every measurement made before 2026-09-06 must still be
+        reachable, so a run that never restarts must never call _reopen."""
+        calls = []
+        monkeypatch.setattr(tt, "_reopen",
+                            lambda es, around: calls.append(around))
+        monkeypatch.setattr(tt, "eval_policy", lambda s, p: {"rate": 0.0, "score": 0.0})
+        monkeypatch.setattr(tt, "objective_of", lambda stats, objective=None: 0.0)
+
+        tt.fit_policy({"A": {}}, budget=25, patience=0, val_by_asset={"A": {}})
+        assert calls == []
