@@ -961,8 +961,8 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 
 | Key | Runs | Notes |
 | --- | --- | --- |
-| `TP` | `train_timing.py` | Fits the Stage-A timing rules. |
-| `TB` | `train_timing.py --stage b` | The fitted-Q challenger. Asks the number of Q iterations. |
+| `TP` | `train_timing.py` | Fits the Stage-A timing rules. Asks the search budget, the restart patience and the objective. |
+| `TB` | `train_timing.py --stage b` | The fitted-Q challenger. Asks the Q iterations, the collection rounds and single or double Q. |
 | `TO` | `train_timing_online.py` | One online tick. Asks the self-collection share. |
 | `TL` | `train_levels.py` | Entry zone and stop. Asks the search budget. |
 | `SZ` | `train_sizing.py` | Position sizing at matched exposure. Asks the budget. |
@@ -1090,6 +1090,29 @@ blow through on an ordinary day.
   the `/risk` limits. The row names whichever limit bound it.
 - **`past its stop`** - the price has already gone through the trailing stop, so
   the position should already be closed. These rows are not new setups.
+- **`entry_source`** - which entry the stop was measured from, `fill` or
+  `signal`. The two differ and no price on the row reveals which one you are
+  looking at, so the sheet says it.
+
+**Tell it where you actually got in.** Orders are placed by hand, so until a
+fill is recorded the trailing stop is measured from the bar the SIGNAL turned,
+at that bar's close. A hand-placed order fills on another day at another price,
+and the stop is the best `close - k * ATR` seen SINCE the entry, so an entry
+three days later cannot claim the high the reconstruction claims.
+
+```bash
+python fills.py add SBER BUY 100 315.4 --date 2026-09-03
+python fills.py close SBER 322.1
+python fills.py list
+```
+
+One open position per asset, enforced by a partial unique index rather than by
+every caller remembering to check. An open fill replaces the reconstructed
+segment on the sheet; with none recorded nothing changes, so the journal is
+additive and an install that never uses it behaves as it always did. It is
+deliberately not a position manager: no P&L, no sizing, no reconciliation
+against the risk book. It answers one question, what is open and since when,
+because that is the one the levels need.
 
 **Where those two multipliers come from, and whether they work.** They shipped as
 constants (`0.5 ATR` for the zone, `2 ATR` for the stop) that nobody had ever
@@ -1112,6 +1135,49 @@ fitted or measured. Three things changed that:
   if a held-out slice agrees. Every run writes `_levels_report.txt` either way,
   including the per-asset breakdown of who carried the result and who argued
   against it.
+
+### One number for the fit and the gate
+
+`GTRADE_TIMING_OBJECTIVE` decides what a timing fit maximises AND what its gate
+judges, and the point is that those are one setting and not two.
+
+| value | what it measures | adopt floor |
+| --- | --- | --- |
+| `net` (default) | net return per BAR of the slice, what an account accrues | 0.0002 |
+| `score` | `profit - 0.5 maxDD + 0.1 winrate + 2.0 Sharpe` | 0.5 |
+
+Until 2026-09-05 the search maximised net return while the gate ranked the
+composite, so the fitter climbed one hill and the selection kept another. That
+is the same mistake the search basis made in August, one floor up, and it is
+why a fitted timing policy could pass its own fit and mean nothing about what it
+earns. `score` remains reachable because a rate cannot see drawdown at all, and
+because every measurement recorded before that date was made on it.
+
+A rate objective can be won by NOT TRADING, so the verdict now prints the trade
+count of both arms beside it. A policy that wins by standing aside is a real
+answer, but it has to be visible in the report rather than discovered in
+production.
+
+### Why the search restarts
+
+`[TP]` asks for a restart patience, 40 by default, and 0 reproduces the
+single-shot search used before 2026-09-06. It exists because of what the
+single-shot one was measured doing.
+
+The separable ES ranks its candidates and shrinks sigma toward the winners. On
+a flat, noisy landscape it therefore ranks NOISE, and sigma falls from 0.25 of
+each parameter's span to its 0.01 floor **by evaluation 60 of 400**, after which
+every remaining candidate resamples one point. A 400-evaluation fit over 418
+assets consequently returned its SIXTH candidate - a draw made before the first
+adaptation, byte-identical to what a 12-asset run of the same seed produced,
+because the emitter buffers its first six evaluations without adapting. The
+other 394 bought nothing.
+
+With a patience the search is reopened around its best-known vector whenever
+the validation slice has not improved for that many evaluations, which reuses
+the budget instead of burning it. The restart lives in `train_timing.py` and
+not in `core/ar_rl.py` on purpose: that emitter is also the research agent's,
+and its behaviour must not change underneath a campaign that is mid-flight.
 
 ### The timing layer, and watching a challenger
 
@@ -1144,6 +1210,32 @@ actually served.
 Stage B is fitted by `[TB]` in the launcher, or
 `python train_timing.py --stage b --iters N`. Nothing needs to be run to serve
 it: the Q is evaluated inside every radar pass.
+
+Two things about HOW it is fitted are worth knowing, because both are asked
+for by `[TB]` and both can be turned off to reproduce any earlier fit.
+
+**Collection rounds** (`--rounds`, 3 by default). Round one logs transitions
+under the adopted rules; every later round logs them under the Q the previous
+round produced, and the data accumulates rather than being replaced. This is
+cheap here for a reason that does not hold in most reinforcement learning: the
+environment is a deterministic replay over fixed bars with no market impact, so
+a policy that never ran can be rolled out EXACTLY rather than estimated. The
+states a trained Q actually visits are therefore in its own training data by
+round two, instead of being extrapolated from the states the rules happened to
+visit. `--rounds 1` is the single-collection fit used before 2026-09-05.
+
+**A double estimator** (`--single-q` turns it off). Two regressors are fitted
+on disjoint halves of the ASSETS, and the Bellman target has one of them pick
+the next action while the other values it, averaged both ways round. Splitting
+by asset and not by row is the point: two rows of one trajectory are neighbours
+in state and in bar, so a row-wise split leaks exactly what the second model
+exists to be independent of. It matters more here than in most applications
+because of the size of the reward - about one basis point of edge per bar under
+a daily return whose spread is two orders of magnitude larger, so nearly every
+difference a plain maximum finds between two actions is sampling noise, and a
+single Q both picks that noise and believes it. A double fit writes two files,
+`timing_fqi.cbm` and `timing_fqi_b.cbm`; if the second is missing or unreadable
+serving falls back to the rules rather than to half a model.
 
 ### Fitting the levels policy
 
@@ -1316,6 +1408,7 @@ The switches that change what is served, all default to off:
 | variable | effect |
 | --- | --- |
 | `GTRADE_TIMING_POLICY=1` | run a timing layer at all |
+| `GTRADE_TIMING_OBJECTIVE` | what a timing fit maximises and its gate judges: `net` (default) or `score` |
 | `GTRADE_TIMING_STAGE` | which one: unset/`a` rules, `b` the Q, `shadow` rules served and the Q watched |
 | `GTRADE_LEVELS_OBJECTIVE` | `equity` (default) or `rate` for the levels fit |
 | `GTRADE_AB_HOLDOUT_N` | how many assets a verdict is measured over |
@@ -1337,6 +1430,7 @@ train_hybrid.py       train the per-asset ensemble + walk-forward selection
 train_chunked.py      RAM-safe full retrain (fresh process per chunk)
 train_timing.py       fit + gate the entry-timing policy (when to act on a side)
 train_levels.py       fit + gate the trade-levels policy (entry zone, stop)
+fills.py              record what you actually filled at the broker
 predict.py            console signal radar
 backtest.py           held-out evaluation (PnL, Sharpe, Brier, alpha)
 webapp.py             FastAPI dashboard (app.py = Streamlit)
@@ -1360,7 +1454,7 @@ scheduler.py          daemon: data / predict / DB-check on a schedule
 run_gtrade.bat        Windows text menu over the whole pipeline
 core/                 shared library: features, ensemble, scoring, calibration,
                       backtesting, risk, live_gate, console_status, guru, ...
-tests/                pytest suite (1986 tests, ~2 min)
+tests/                pytest suite (1994 tests, ~2 min)
 supabase/             SQL schema for the mobile/web Supabase backend
 ```
 

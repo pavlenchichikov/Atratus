@@ -247,8 +247,8 @@ streamlit run app.py          # tableau de bord
 
 | Touche | Lance | Notes |
 | --- | --- | --- |
-| `TP` | `train_timing.py` | Ajuste les règles de timing de l'étape A. |
-| `TB` | `train_timing.py --stage b` | Le challenger fitted-Q. Demande le nombre d'itérations. |
+| `TP` | `train_timing.py` | Ajuste les règles de timing de l'étape A. Demande le budget de recherche, la patience de redémarrage et l'objectif. |
+| `TB` | `train_timing.py --stage b` | Le challenger fitted-Q. Demande les itérations Q, les tours de collecte et Q simple ou double. |
 | `TO` | `train_timing_online.py` | Un tic en ligne. Demande la part d'auto-collecte. |
 | `TL` | `train_levels.py` | Zone d'entrée et stop. Demande le budget de recherche. |
 | `SZ` | `train_sizing.py` | Dimensionnement à exposition égalisée. Demande le budget. |
@@ -349,8 +349,9 @@ auto_loop.py          cycle non surveillé recherche / A-B / adoption
 ab_per_asset.py       étape 1 : quels actifs un génome a réellement aidés
 ab_confirm.py         étape 2 : les remesurer sur des graines inédites
 run_gtrade.bat        menu texte Windows sur tout le pipeline
+fills.py              enregistre ce qui a réellement été exécuté chez le courtier
 core/                 bibliothèque partagée
-tests/                suite pytest (1986 tests, ~2 min)
+tests/                suite pytest (1994 tests, ~2 min)
 ```
 
 ## Tests

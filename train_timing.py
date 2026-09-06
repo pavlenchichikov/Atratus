@@ -552,6 +552,13 @@ def main():
     ap.add_argument("--assets", default="")
     ap.add_argument("--budget", type=int, default=300)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--patience", type=int, default=RESTART_PATIENCE,
+                    help="stage a: reopen the search after this many "
+                         "evaluations with no gain on VAL; 0 disables the "
+                         "restart and reproduces the pre-2026-09-06 search")
+    ap.add_argument("--objective", choices=OBJECTIVES, default=None,
+                    help="what the fit maximises AND the gate judges; "
+                         "default from GTRADE_TIMING_OBJECTIVE, else net")
     ap.add_argument("--replay", action="store_true",
                     help="do not fit anything: walk the baseline, the adopted "
                          "Stage-A rules and the adopted Stage-B Q over the "
@@ -574,6 +581,9 @@ def main():
                     help="stage b: one regressor instead of the double "
                          "estimator (reproduces pre-2026-09-05 fits)")
     args = ap.parse_args()
+    if args.objective:
+        global OBJECTIVE
+        OBJECTIVE = args.objective
     import config
     assets = ([a.strip() for a in args.assets.split(",") if a.strip()]
               # dict.fromkeys, not a set: six assets sit in TOP SIGNALS as well
@@ -641,7 +651,7 @@ def main():
     va = {a: split_series(s)[1] for a, s in series.items()}
     te = {a: split_series(s)[2] for a, s in series.items()}
     params = fit_policy(tr, budget=args.budget, seed=args.seed,
-                        val_by_asset=va)
+                        val_by_asset=va, patience=args.patience)
     gate = gate_policy(te, params)
     save_policy(params, gate)
     print(f"[timing] params: {params}")

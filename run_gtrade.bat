@@ -842,8 +842,32 @@ echo correlation is a coincidence until it replicates.
 echo.
 set /p TB_ITERS="Q iterations, one horizon rung each (Enter = 6): "
 if "%TB_ITERS%"=="" set TB_ITERS=6
-cmd /c ""%~dp0run_in_env.bat" python train_timing.py --stage b --iters %TB_ITERS%"
+echo.
+echo Rounds of data collection. Round 1 logs transitions under the ADOPTED
+echo rules; each later round logs them under the Q the previous round fitted,
+echo and the data accumulates. The environment is a deterministic replay with
+echo no market impact, so a policy that never ran can be rolled out exactly -
+echo which is why the states a trained Q actually visits are in the training
+echo data by round two instead of being extrapolated from the rules' states.
+set /p TB_ROUNDS="Collection rounds (Enter = 3, 1 = as before): "
+if "%TB_ROUNDS%"=="" set TB_ROUNDS=3
+echo.
+echo Double estimator: two regressors on disjoint halves of the ASSETS, one
+echo picking the next action and the other valuing it. The reward here is about
+echo one basis point per bar under a daily return two orders of magnitude
+echo larger, so nearly every difference a plain max finds between two actions
+echo is noise, and a single Q both picks and believes it.
+echo   1 = double (default)   2 = single Q (reproduces pre-2026-09-05 fits)
+set "TB_DQ=1"
+set /p "TB_DQ=    choice [1]: "
+set "TB_SINGLE="
+if "%TB_DQ%"=="2" set "TB_SINGLE=--single-q"
+echo.
+cmd /c ""%~dp0run_in_env.bat" python train_timing.py --stage b --iters %TB_ITERS% --rounds %TB_ROUNDS% %TB_SINGLE%"
 set "TB_ITERS="
+set "TB_ROUNDS="
+set "TB_DQ="
+set "TB_SINGLE="
 pause
 goto menu
 
@@ -937,7 +961,31 @@ cls
 echo Fits the entry-timing policy from the live track record and writes
 echo timing_policy.json. It only takes effect when GTRADE_TIMING_POLICY=1.
 echo.
-python train_timing.py
+echo The search RESTARTS around its best whenever VAL has not improved for
+echo N evaluations. Without that it stalls: measured 2026-09-06, sigma
+echo falls to its floor by evaluation 60 of 400 and the rest resample one point,
+echo so a 400-evaluation fit returned its 6th candidate. 0 = the old behaviour.
+echo.
+set /p TP_BUDGET="Search iterations (Enter = 300): "
+if "%TP_BUDGET%"=="" set TP_BUDGET=300
+set /p TP_PATIENCE="Restart after N stale evaluations (Enter = 40, 0 = never): "
+if "%TP_PATIENCE%"=="" set TP_PATIENCE=40
+echo.
+echo Objective: what the fit maximises AND the gate judges. They must be the
+echo same number; until 2026-09-05 they were not.
+echo   1 = net   (net return per BAR, floor 0.0002 - what an account accrues)
+echo   2 = score (profit - 0.5 maxDD + 0.1 winrate + 2.0 Sharpe, floor 0.5;
+echo       reproduces every measurement made before 2026-09-05)
+set "TP_OBJ=1"
+set /p "TP_OBJ=    choice [1]: "
+set "TP_OBJECTIVE=net"
+if "%TP_OBJ%"=="2" set "TP_OBJECTIVE=score"
+echo.
+python train_timing.py --budget %TP_BUDGET% --patience %TP_PATIENCE% --objective %TP_OBJECTIVE%
+set "TP_BUDGET="
+set "TP_PATIENCE="
+set "TP_OBJ="
+set "TP_OBJECTIVE="
 pause
 goto menu
 

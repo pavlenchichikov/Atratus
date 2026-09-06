@@ -247,8 +247,8 @@ streamlit run app.py          # Dashboard
 
 | Taste | Startet | Anmerkungen |
 | --- | --- | --- |
-| `TP` | `train_timing.py` | Passt die Timing-Regeln der Stufe A an. |
-| `TB` | `train_timing.py --stage b` | Der Fitted-Q-Herausforderer. Fragt nach der Zahl der Iterationen. |
+| `TP` | `train_timing.py` | Passt die Timing-Regeln der Stufe A an. Fragt nach Suchbudget, Neustart-Geduld und Zielgröße. |
+| `TB` | `train_timing.py --stage b` | Der Fitted-Q-Herausforderer. Fragt nach den Q-Iterationen, den Erhebungsrunden und einfachem oder doppeltem Q. |
 | `TO` | `train_timing_online.py` | Ein Online-Takt. Fragt nach dem Anteil der Selbsterhebung. |
 | `TL` | `train_levels.py` | Einstiegszone und Stopp. Fragt nach dem Suchbudget. |
 | `SZ` | `train_sizing.py` | Positionsgröße bei angeglichenem Risiko. Fragt nach dem Budget. |
@@ -349,8 +349,9 @@ auto_loop.py          unbeaufsichtigter Zyklus aus Suche / A-B / Adoption
 ab_per_asset.py       Schritt 1: welchen Werten ein Genom wirklich geholfen hat
 ab_confirm.py         Schritt 2: diese auf ungesehenen Seeds nachmessen
 run_gtrade.bat        Windows-Textmenü über die gesamte Pipeline
+fills.py              erfasst, was beim Broker tatsächlich ausgeführt wurde
 core/                 gemeinsame Bibliothek
-tests/                pytest-Suite (1986 Tests, ~2 min)
+tests/                pytest-Suite (1994 Tests, ~2 min)
 ```
 
 ## Tests
