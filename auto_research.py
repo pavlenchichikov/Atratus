@@ -127,6 +127,51 @@ LIGHT_ENV = {
 }
 
 
+# The rank-mu update in ar_rl.CmaEmitter shrinks sigma toward whatever its top
+# mu candidates happened to be, and on a flat, noisy landscape those are NOISE.
+# Sigma therefore walks down to its 0.01-of-span floor and the arm spends the
+# rest of its life resampling a 1%-radius ball around a mean that noise chose.
+#
+# Measured 2026-09-07 on the persisted controller: ALL SIX genes were at the
+# floor - thr_margin, band_delta, cb_lr_mult, cb_iter_mult, cb_depth_delta,
+# lookback_delta - and the blob survives restarts, so every run reloaded the
+# collapsed emitter. The Thompson bandit had already learned the arm was barren
+# (fill rate 0.07, joint lowest) without being able to know why, and 6 of the
+# 100 steps in that run ended in "dedup: no unseen child", which is what an
+# emitter stuck in one place produces.
+#
+# Deliberately here and not in ar_rl.CmaEmitter: that class is also
+# train_timing's, and its behaviour must not change under a fit in flight.
+CMA_REOPEN_SIGMA_FRAC = 0.25
+
+
+def cma_collapsed(emitter):
+    """True when every gene has shrunk to the emitter's own sigma floor.
+
+    Reads the floor from the emitter rather than restating 0.01, so the two
+    cannot drift apart.
+    """
+    sigma = emitter.to_state().get("sigma") or []
+    if not sigma:
+        return False
+    return all(sg <= 1.01 * ar_rl.SIGMA_FLOOR_FRAC * (hi - lo)
+               for sg, (_n, lo, hi, _i) in zip(sigma, emitter.dims))
+
+
+def cma_reopen(emitter, genome):
+    """Re-centre on `genome` and re-inflate sigma to its initial width.
+
+    Self-limiting rather than periodic: a reopened emitter takes roughly sixty
+    evaluations to collapse again, and by then the elite it re-centres on is
+    usually a different one, so the arm keeps moving instead of converging once
+    and stopping forever.
+    """
+    emitter.seed_from(genome)
+    emitter.sigma = [CMA_REOPEN_SIGMA_FRAC * (hi - lo)
+                     for _n, lo, hi, _i in emitter.dims]
+    emitter.evals = []
+
+
 def _reduce_deltas(deltas, objective):
     """Reduce per-asset Score deltas to one objective value. 'mean' (average lift) and
     'min' (lift-the-floor) are the originals; the diversifiers are 'median' (robust
@@ -1718,8 +1763,8 @@ class _RlController:
                 return None
         if arm == "cma":
             best = max(elites, key=lambda e: e["fitness"])
-            if not self.cma.to_state()["evals"]:
-                self.cma.seed_from(best["genome"])
+            if not self.cma.to_state()["evals"] or cma_collapsed(self.cma):
+                cma_reopen(self.cma, best["genome"])
             return self.cma.ask(parent)
         if arm == "novelty":
             emitter = ar_rl.NoveltyEmitter(
@@ -2611,8 +2656,26 @@ def illum_full():
             or default_illum(_score_basis())).strip().lower() == "full"
 
 
+# A STRICT SUBSET of SELECTION_ASSETS, one per class: index, crypto, forex,
+# commodity. The subset property is the point, not a coincidence.
+#
+# It was SP500,BTC,EURUSD,GOLD until 2026-09-07, and GOLD is the only asset that
+# was ever in neither of the two sets it sat between: absent from
+# SELECTION_ASSETS, present in PROD_HELDOUT. A candidate therefore had to please
+# GOLD to survive the tier veto, and was then judged on a holdout that counts
+# GOLD as 1 of its 14. `ab_build` already refuses to draw a fresh holdout
+# overlapping tier_assets (holdout.excluded takes tier_assets() explicitly); the
+# hardcoded PROD_HELDOUT predates that rule and quietly broke it.
+#
+# GAS is the commodity slot GOLD held, and it comes from SELECTION_ASSETS, so
+# tier stays disjoint from every holdout BY CONSTRUCTION rather than by anyone
+# remembering. Same history depth (6379 bars against GOLD's 6373) and a live
+# champion. The 2026-09-06 run is also the argument on the merits: GOLD logged
+# "no robust folds" or "unstable folds" on a large share of its screens - fewer
+# than 45% of its walk-forward folds were profitable - and twice force-promoted
+# with a NEGATIVE score, so one of only four veto votes was regularly noise.
 def tier_assets():
-    return os.getenv("GTRADE_AR_TIER_ASSETS") or "SP500,BTC,EURUSD,GOLD"
+    return os.getenv("GTRADE_AR_TIER_ASSETS") or "SP500,BTC,EURUSD,GAS"
 
 
 def tier_env(env):

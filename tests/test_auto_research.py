@@ -1842,7 +1842,7 @@ def test_tier_env_and_assets_defaults(monkeypatch):
     monkeypatch.delenv("GTRADE_AR_TIER_ASSETS", raising=False)
     monkeypatch.delenv("GTRADE_AR_TIER", raising=False)
     assert ar.tier_on()
-    assert ar.tier_assets() == "SP500,BTC,EURUSD,GOLD"
+    assert ar.tier_assets() == "SP500,BTC,EURUSD,GAS"
     env = ar.tier_env({"X": "1"})
     assert env["X"] == "1"
     assert env["GTRADE_EPOCHS_LSTM"] == "45"
@@ -2780,3 +2780,114 @@ def test_raising_the_score_floor_does_not_loosen_the_neural_floor(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_ADOPT_SCORE", "1.0")
     assert ar._adopt_floor("mean", basis="raw") == 1.0
     assert ar.neural_floor() == -ar.ADOPT_MEAN_SCORE_DELTA
+
+
+class TestTheTierCannotContaminateAGate:
+    """The cheap 4-asset veto must never share an asset with an adoption gate.
+
+    Found 2026-09-07. The tier was SP500,BTC,EURUSD,GOLD, and GOLD sat in
+    PROD_HELDOUT while being absent from SELECTION_ASSETS - the only asset in
+    neither set it stood between. A candidate therefore had to please GOLD to
+    survive the veto and was then judged on a holdout counting GOLD as 1 of 14.
+    `ab_build` already refuses to draw a fresh holdout overlapping tier_assets;
+    the hardcoded PROD_HELDOUT predates that rule and broke it silently.
+
+    Making the tier a strict subset of the search set is what makes this
+    impossible by construction rather than by anyone remembering.
+    """
+
+    @staticmethod
+    def _set(spec):
+        return {a.strip() for a in spec.split(",") if a.strip()}
+
+    def test_the_tier_is_drawn_from_the_search_set(self):
+        assert self._set(ar.tier_assets()) <= self._set(ar.SELECTION_ASSETS)
+
+    def test_the_tier_never_touches_the_production_holdout(self):
+        assert not (self._set(ar.tier_assets()) & self._set(ar.PROD_HELDOUT))
+
+    def test_the_search_set_never_touches_the_production_holdout(self):
+        assert not (self._set(ar.SELECTION_ASSETS) & self._set(ar.PROD_HELDOUT))
+
+    def test_an_override_is_still_honoured(self, monkeypatch):
+        """The invariants above are about the DEFAULT. An operator who names a
+        set on purpose gets it, because a diagnostic run may want the overlap."""
+        monkeypatch.setenv("GTRADE_AR_TIER_ASSETS", "GOLD,SILVER")
+        assert ar.tier_assets() == "GOLD,SILVER"
+
+
+class TestTheCmaArmReopensInsteadOfDying:
+    """A collapsed emitter must be re-inflated, not reloaded collapsed forever.
+
+    Measured 2026-09-07 on the persisted controller blob: all six genes sat at
+    the 0.01-of-span floor, and the blob outlives the process, so every run
+    reloaded an emitter that could only resample a 1%-radius ball around a mean
+    that noise had chosen. The bandit had already starved the arm (fill 0.07)
+    without being able to see the cause.
+    """
+
+    @staticmethod
+    def _emitter(frac):
+        import random
+        e = ar.ar_rl.CmaEmitter(rng=random.Random(0))
+        e.sigma = [frac * (hi - lo) for _n, lo, hi, _i in e.dims]
+        return e
+
+    def test_a_floored_emitter_reads_as_collapsed(self):
+        assert ar.cma_collapsed(self._emitter(ar.ar_rl.SIGMA_FLOOR_FRAC))
+
+    def test_a_healthy_emitter_does_not(self):
+        """The negative control: a fresh emitter must never look collapsed, or
+        the reopen would fire every ask and the search would never converge."""
+        assert not ar.cma_collapsed(self._emitter(ar.CMA_REOPEN_SIGMA_FRAC))
+
+    def test_a_partly_shrunk_emitter_does_not(self):
+        e = self._emitter(ar.ar_rl.SIGMA_FLOOR_FRAC)
+        _n, lo, hi, _i = e.dims[0]
+        e.sigma[0] = 0.2 * (hi - lo)          # one gene still has room
+        assert not ar.cma_collapsed(e)
+
+    def test_reopening_restores_the_initial_width_and_recentres(self):
+        e = self._emitter(ar.ar_rl.SIGMA_FLOOR_FRAC)
+        e.evals = [([0.0] * len(e.dims), 1.0)]
+
+        class _G:
+            pass
+        g = _G()
+        for name, lo, hi, is_int in e.dims:
+            setattr(g, name, hi if not is_int else int(hi))
+
+        ar.cma_reopen(e, g)
+        assert not ar.cma_collapsed(e)
+        assert e.sigma == [ar.CMA_REOPEN_SIGMA_FRAC * (hi - lo)
+                           for _n, lo, hi, _i in e.dims]
+        assert e.evals == []
+        assert e.mean == [float(getattr(g, n)) for n, _l, _h, _i in e.dims]
+
+
+def test_the_cma_arm_actually_reopens_when_asked(monkeypatch):
+    """The WIRING, not the helpers: _emit must detect the floor and re-inflate.
+
+    Written because the helper tests above pass even with the check removed from
+    _emit, so they could not have caught a collapsed emitter still being used.
+    """
+    import auto_research as ar
+    monkeypatch.setenv("GTRADE_AR_RL", "1")
+    monkeypatch.setattr(ar.ar_memory, "blob_get", lambda *a, **k: None)
+    monkeypatch.setattr(ar.ar_memory, "blob_put", lambda *a, **k: None)
+    ar._rl_controller_reset_for_tests()
+    ctl = ar._rl_controller()
+
+    import random as _r
+    _r.seed(0)
+    genome = ar.random_genome(_ACTIVE, ["ret_1", "ret_5", "rsi"])
+    archive = {"cell": {"genome": genome, "fitness": 1.0, "rows": []}}
+    # a collapsed emitter that has already been told something, so the
+    # "no evals yet" branch cannot be what reopens it
+    ctl.cma.sigma = [ar.ar_rl.SIGMA_FLOOR_FRAC * (hi - lo)
+                     for _n, lo, hi, _i in ctl.cma.dims]
+    ctl.cma.evals = [([0.0] * len(ctl.cma.dims), 1.0)]
+    assert ar.cma_collapsed(ctl.cma)
+
+    ctl._emit("cma", archive, _ACTIVE, ["ret_1", "ret_5", "rsi"])
+    assert not ar.cma_collapsed(ctl.cma), "a floored emitter must be reopened"

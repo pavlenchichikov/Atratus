@@ -234,6 +234,11 @@ CMA_DIMS = (
     ("cb_depth_delta", -2, 2, True),
     ("lookback_delta", -10, 10, True),
 )
+# The narrowest the rank-mu update may shrink a gene, as a fraction of its
+# span. Named 2026-09-07 so a caller can ASK whether an emitter has bottomed
+# out; the value is what it has always been and no behaviour changes here.
+SIGMA_FLOOR_FRAC = 0.01
+
 _CMA_LAMBDA = 6
 _CMA_MU = 3
 
@@ -292,7 +297,7 @@ class CmaEmitter:
             var = sum(w * (e[0][j] - new_mean[j]) ** 2
                       for w, e in zip(weights, ranked))
             self.sigma[j] = min(0.5 * span,
-                                max(0.01 * span, math.sqrt(var) * 1.1))
+                                max(SIGMA_FLOOR_FRAC * span, math.sqrt(var) * 1.1))
             self.mean[j] = min(hi, max(lo, new_mean[j]))
         self.evals = []
 

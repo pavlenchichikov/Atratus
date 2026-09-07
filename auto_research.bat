@@ -295,6 +295,26 @@ REM  present in the environment, so load_dotenv leaves it alone.
 set "GTRADE_AR_WIKI=0"
 if "%WIKI%"=="2" set "GTRADE_AR_WIKI=1"
 
+REM  The token cap is asked in [2] ONLY when the PROPOSER is an LLM - but the
+REM  wiki is an LLM call too, so an evolutionary run with the wiki on never saw
+REM  the one knob its own failure message names. Measured 2026-09-06: the wiki
+REM  spent 1980 seconds and returned ZERO characters, because a reasoning model
+REM  spends the cap thinking before it answers. So ask here as well, and default
+REM  higher than the proposer's 8000: the local model costs only wall-clock, and
+REM  GTRADE_AR_LLM_TIMEOUT still bounds one call.
+if not "%GTRADE_AR_WIKI%"=="1" goto :nowikitoks
+if "%GTRADE_AR_PROPOSER%"=="llm" goto :nowikitoks
+echo.
+echo     The wiki calls the LLM. Its cap (0 = no cap; a reasoning model that
+echo     runs out mid-thought returns an empty reply and the wiki stays as it was).
+set "GTRADE_AR_LLM_MAX_TOKENS=24000"
+set /p "GTRADE_AR_LLM_MAX_TOKENS=    max tokens [24000]: "
+echo.
+echo     Seconds allowed for ONE call. 0 = no limit.
+set "GTRADE_AR_LLM_TIMEOUT=3600"
+set /p "GTRADE_AR_LLM_TIMEOUT=    timeout seconds [3600]: "
+:nowikitoks
+
 echo.
 echo [6] RL scheduler?  (learned budget allocation over the QD child sources;
 echo     Thompson bandit + CMA/novelty emitters; the adoption gate is untouched)
