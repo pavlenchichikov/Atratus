@@ -27,6 +27,8 @@ index_models/
 *.db-journal
 *.db-wal
 *.db-shm
+# database backups taken before a repair; *.db does not match these
+*.db.pre-*
 market_data/
 
 # Logs

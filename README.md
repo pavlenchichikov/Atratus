@@ -315,6 +315,35 @@ visible rather than silent. A model that does not fit in RAM will be slow enough
 to hit the timeout; if it does, the run says so once and finishes on the
 evolutionary operators.
 
+### How wide the gate is measured
+
+Menu item `[4c]`, `GTRADE_AR_HELDOUT`. Three values: `prod` (the default
+14-asset production holdout), `neural` (14 assets whose stacker leans on the
+nets, a diagnostic and biased by construction), and `all`.
+
+`all` is every asset that already carries a complete champion, minus every asset
+the search itself used. Measured 2026-09-08 that is 823 of the 847 assets in
+`FULL_ASSET_MAP`; `selection_assets()` and `tier_assets()` are subtracted inside
+`all_trained_assets`, so the disjointness the tier ladder needs is enforced
+rather than remembered.
+
+It exists because the gate, not the search, is the binding constraint. The
+dScore spread across the 14-asset holdout is 3.74, so a +0.5 effect needs 439
+assets before it clears the noise, and nothing has adopted in months. 823 assets
+shrink that noise by `sqrt(823/14)`, a factor of 7.7, and cost nothing to train
+because the champions are already on disk.
+
+What they cost to measure is the catch, and the wall times are in
+`PROGRESS_SEED`. One 14-asset holdout unit is about 35000s, which is 2555s per
+asset, so 823 assets on the full four-member config is roughly 24 days per arm.
+The CatBoost-only screen is about 12s per asset, so the same 823 assets cost
+about 2.7 hours per arm. The menu therefore asks a second question when `all` is
+chosen and defaults to `GTRADE_SCREEN_ONLY=1`.
+
+So `all` is an overnight run for one finalist at the end of a campaign, on a
+CatBoost-side candidate. On a neural candidate the CatBoost-only arm measures
+nothing, and the full config is not affordable at that width.
+
 ### Running the whole cycle unattended
 
 `auto_loop.py` runs search, gate, A/B and adoption in sequence with no prompt,

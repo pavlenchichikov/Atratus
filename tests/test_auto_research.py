@@ -2116,6 +2116,63 @@ def test_the_two_heldout_sets_are_actually_different(monkeypatch):
         assert a in neural and a not in prod
 
 
+def _champion(dirpath, table, missing=()):
+    for suffix in ar.CHAMPION_FILES:
+        if suffix in missing:
+            continue
+        (dirpath / (table + suffix)).write_text("x", encoding="utf-8")
+
+
+def test_all_trained_assets_needs_every_member_not_just_catboost(tmp_path):
+    """Counting *_cb.cbm alone overstates the trained universe: a champion is
+    four members plus the stacker, and a half-trained asset in the gate is an
+    asset the gate cannot score."""
+    _champion(tmp_path, "aapl")
+    _champion(tmp_path, "msft", missing=("_tcn.keras",))
+    got = ar.all_trained_assets(model_dir=str(tmp_path),
+                                universe=["AAPL", "MSFT"], excluded="")
+    assert got == "AAPL"
+
+
+def test_all_trained_assets_removes_what_the_search_already_saw(tmp_path):
+    """A candidate searched on an asset and then judged on it is judged on its
+    own training set. GOLD sat in exactly that gap until 2026-09-07."""
+    # MSFT is in neither search set; SP500 is in both, GAS is the tier commodity.
+    for t in ("msft", "sp500", "gas"):
+        _champion(tmp_path, t)
+    universe = ["MSFT", "SP500", "GAS"]
+    wide = ar.all_trained_assets(model_dir=str(tmp_path), universe=universe)
+    assert wide == "MSFT"
+    # Positive control: all three survive when nothing is excluded, so it is the
+    # exclusion that removes them and not the file check.
+    assert ar.all_trained_assets(model_dir=str(tmp_path), universe=universe,
+                                 excluded="") == "GAS,MSFT,SP500"
+
+
+def test_all_trained_assets_is_disjoint_from_both_search_sets(tmp_path):
+    for t in ("aapl", "sp500", "btc", "eurusd", "gas", "nvda"):
+        _champion(tmp_path, t)
+    wide = set(ar.all_trained_assets(
+        model_dir=str(tmp_path),
+        universe=["AAPL", "SP500", "BTC", "EURUSD", "GAS", "NVDA"]).split(","))
+    assert not (wide & {a.strip() for a in ar.selection_assets().split(",")})
+    assert not (wide & {a.strip() for a in ar.tier_assets().split(",")})
+
+
+def test_heldout_all_routes_to_the_wide_set(monkeypatch):
+    monkeypatch.setattr(ar, "all_trained_assets", lambda: "AAPL,MSFT")
+    monkeypatch.setenv("GTRADE_AR_HELDOUT", "all")
+    assert ar.heldout_assets() == "AAPL,MSFT"
+    # and it stays an opt-in: the default is still the 14-asset production set
+    monkeypatch.setenv("GTRADE_AR_HELDOUT", "prod")
+    assert ar.heldout_assets() == ar.PROD_HELDOUT
+
+
+def test_a_missing_model_directory_is_empty_not_an_exception(tmp_path):
+    assert ar.all_trained_assets(model_dir=str(tmp_path / "nope"),
+                                 universe=["AAPL"]) == ""
+
+
 def test_net_auc_basis_rekeys_rows_and_drops_unmeasured(monkeypatch):
     monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
     rows = [{"Asset": "A", "Score": 9.9, "Net_AUC": 0.61},

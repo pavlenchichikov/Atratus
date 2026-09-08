@@ -283,6 +283,44 @@ if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=ens_auc"
 
 
 echo.
+echo [4c] Gate width (how many assets the FINAL adoption gate is measured on):
+echo     1 = prod, the 14-asset production holdout (default)
+echo     2 = neural, 14 assets whose stacker leans on the nets. A diagnostic:
+echo         biased by construction, so a winner here still has to clear 1.
+echo     3 = all, every asset that already has a full champion (823 today),
+echo         minus every asset the search itself used.
+echo.
+echo     Why 3 exists. The dScore spread across the 14-asset holdout is 3.74,
+echo     so a +0.5 effect needs 439 assets before it clears the noise. That is
+echo     the measured reason nothing adopts: the search is not failing to find
+echo     improvements, the gate cannot see them. 823 assets shrink the noise by
+echo     sqrt(823/14), a factor of 7.7. Nothing has to be trained first, the
+echo     champions are already on disk.
+echo.
+echo     What 3 costs, from the measured wall times in PROGRESS_SEED. One
+echo     14-asset holdout unit is about 35000s, which is 2555s per asset, so
+echo     823 assets on the FULL four-member config is roughly 24 DAYS per arm.
+echo     Do not start that. The CatBoost-only screen is about 12s per asset,
+echo     so the same 823 assets cost about 2.7 hours per arm and run overnight.
+echo.
+echo     So 3 is an overnight job with GTRADE_SCREEN_ONLY=1 and basis 1, for a
+echo     CatBoost-side finalist at the END of a campaign. It is not a setting
+echo     for the search loop, and on a neural candidate it measures nothing.
+set "WID=1"
+set /p "WID=    choice [1]: "
+set "GTRADE_AR_HELDOUT=prod"
+if "%WID%"=="2" set "GTRADE_AR_HELDOUT=neural"
+if "%WID%"=="3" set "GTRADE_AR_HELDOUT=all"
+if not "%WID%"=="3" goto :nowide
+echo.
+echo     Run this one CatBoost-only?  2 = yes (2.7h per arm, recommended)
+echo     1 = no, full four-member config (about 24 days per arm)
+set "WSC=2"
+set /p "WSC=    choice [2]: "
+if "%WSC%"=="2" set "GTRADE_SCREEN_ONLY=1"
+:nowide
+
+echo.
 echo [5] Research wiki?  (compounding findings; uses the LLM backend)
 echo     1 = off (default)   2 = on
 set "WIKI=1"
@@ -331,7 +369,7 @@ echo   proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
 echo   model=%GTRADE_AR_LLM_MODEL%  maxtok=%GTRADE_AR_LLM_MAX_TOKENS%  timeout=%GTRADE_AR_LLM_TIMEOUT%
 echo   wiki=%GTRADE_AR_WIKI%  reflect=%GTRADE_AR_REFLECT%
 echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%  basis=%GTRADE_AR_SCORE_BASIS%  rl=%GTRADE_AR_RL%
-echo   heldout=%GTRADE_AR_HELDOUT%  train_seed=%GTRADE_SEED%
+echo   heldout=%GTRADE_AR_HELDOUT%  cb_only=%GTRADE_SCREEN_ONLY%  train_seed=%GTRADE_SEED%
 echo ------------------------------------------------------------
 set "GO=Y"
 set /p "GO=Start? [Y/n]: "
