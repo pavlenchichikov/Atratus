@@ -384,13 +384,30 @@ set "TC_FORCE=n"
 set /p TC_FORCE="   force promote? y/N: "
 set "TC_ARGS="
 if /i "%TC_FORCE%"=="y" set "TC_ARGS=--force-promote"
+REM Flat, not a parenthesized block: inside ( ) every %VAR% is expanded once
+REM before the block runs, so a set /p answer would be read as its OLD value.
+REM The same trap is commented at the label prompt further up this file.
+set "TC_REDO=n"
+if /i not "%TC_FORCE%"=="y" goto :tcgo
 echo.
-echo [Chunked] force-promote: %TC_FORCE%
+echo Start over as well?  _chunk_progress.txt records every asset already
+echo trained, and a rerun only trains what is MISSING from it - so after a
+echo feature change force-promote on its own trains nothing at all, which is
+echo what the "Nothing to do" line means. Answering y moves that ledger aside.
+echo It is renamed to _chunk_progress.prev.txt, not deleted.
+set /p TC_REDO="   retrain every asset from scratch? y/N: "
+if /i not "%TC_REDO%"=="y" goto :tcgo
+if exist "%~dp0_chunk_progress.txt" move /y "%~dp0_chunk_progress.txt" "%~dp0_chunk_progress.prev.txt" >nul
+echo    ledger moved aside; every asset will be retrained.
+:tcgo
+echo.
+echo [Chunked] force-promote: %TC_FORCE%  start-over: %TC_REDO%
 REM train_chunked spawns train_hybrid through sys.executable, so the whole chain
 REM inherits the interpreter this line picks.
 cmd /c ""%~dp0run_in_env.bat" python train_chunked.py %TC_ARGS%"
 set "TC_ARGS="
 set "TC_FORCE="
+set "TC_REDO="
 pause
 goto menu
 

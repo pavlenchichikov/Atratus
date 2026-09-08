@@ -149,24 +149,41 @@ def _weekly_payload(dates, closes=None):
                                   "volume": [1.0] * n}]}}]}}
 
 
-def test_the_partial_week_in_progress_is_not_stored(monkeypatch):
-    """Yahoo appends a bar for the week in progress, stamped with TODAY instead
-    of the week's start, at every window length. A daily update therefore wrote
-    one row per day into the weekly table: measured 2026-09-08, 665 of the 850
-    weekly tables carried daily-spaced rows dated after 2026-03-04."""
-    payload = _weekly_payload(["2026-08-17", "2026-08-24", "2026-08-31",
-                               "2026-09-07", "2026-09-08"])
+def test_the_week_in_progress_is_not_stored(monkeypatch):
+    """Yahoo appends a bar for the week IN PROGRESS, stamped with the day of the
+    request rather than the week's start. A daily update wrote one such row per
+    day: measured 2026-09-08, 665 of the 850 weekly tables carried daily-spaced
+    rows dated after 2026-03-04."""
+    import datetime as dt
+    today = dt.date.today()
+    days = [today - dt.timedelta(days=d) for d in (21, 14, 7, 0)]
+    payload = _weekly_payload([d.isoformat() for d in days])
     monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(payload))
     got = de.fetch_yahoo_weekly("AAPL", None)
     assert got is not None
-    assert str(got.index[-1].date()) == "2026-09-07", "kept the week in progress"
-    assert len(got) == 4
+    assert got.index[-1].date() == days[-2], "kept a week that has not finished"
+    assert len(got) == 3
 
 
-def test_a_completed_final_week_is_kept(monkeypatch):
-    """Positive control: the rule is the gap, not "drop the last row"."""
-    payload = _weekly_payload(["2026-08-17", "2026-08-24", "2026-08-31",
-                               "2026-09-07"])
+def test_a_week_that_finished_is_kept(monkeypatch):
+    """Positive control: the rule is the bar's AGE, not "drop the last row"."""
+    import datetime as dt
+    today = dt.date.today()
+    days = [today - dt.timedelta(days=d) for d in (28, 21, 14, 8)]
+    payload = _weekly_payload([d.isoformat() for d in days])
     monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(payload))
     got = de.fetch_yahoo_weekly("AAPL", None)
-    assert len(got) == 4 and str(got.index[-1].date()) == "2026-09-07"
+    assert len(got) == 4 and got.index[-1].date() == days[-1]
+
+
+def test_an_eight_day_gap_does_not_hide_an_unfinished_week(monkeypatch):
+    """The rule this replaced compared the last two stamps and required a gap
+    under seven days. aapl_weekly held 08-17, 08-24, 08-31 and then 09-08: an
+    8-day gap, so the in-progress bar sailed straight through it."""
+    import datetime as dt
+    today = dt.date.today()
+    days = [today - dt.timedelta(days=d) for d in (22, 15, 8, 0)]
+    payload = _weekly_payload([d.isoformat() for d in days])
+    monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(payload))
+    got = de.fetch_yahoo_weekly("AAPL", None)
+    assert len(got) == 3 and got.index[-1].date() == days[-2]

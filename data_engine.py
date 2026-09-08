@@ -354,21 +354,31 @@ def fetch_yahoo_weekly(symbol, last_date):
     }).dropna()
     df['Date'] = pd.to_datetime(df['Date']).sort_values()
 
-    # DROP THE TRAILING PARTIAL WEEK. Measured 2026-09-08: interval=1wk appends
-    # a bar for the week in progress, stamped with TODAY rather than with the
-    # week's start, at every window length:
+    # DROP EVERY WEEK THAT HAS NOT FINISHED. Measured 2026-09-08: interval=1wk
+    # appends a bar for the week in progress, stamped with the day of the
+    # request rather than the week's start, at every window length:
     #
     #     20-day window -> Mon 08-17, Mon 08-24, Mon 08-31, Mon 09-07, Tue 09-08
     #
-    # A daily update therefore wrote one row stamped today, every day, and the
-    # weekly table filled up with daily-spaced rows: 665 of the 850 weekly
-    # tables carry them, all dated after 2026-03-04, and aapl_weekly went from a
-    # 7-day median step to a 1-day one. The rule is the gap, not the weekday,
-    # because MOEX and crypto weeks do not all start on a Monday.
-    if len(df) >= 2:
-        gap = (df['Date'].iloc[-1] - df['Date'].iloc[-2]).days
-        if gap < 7:
-            df = df.iloc[:-1]
+    # A daily update wrote one such row per day, and 665 of the 850 weekly
+    # tables filled with daily-spaced rows dated after 2026-03-04.
+    #
+    # The rule is AGE, not the gap between the last two stamps and not the
+    # weekday. A gap rule was tried first and is wrong twice over: the bar above
+    # sits 8 days after its predecessor and slips through, while legitimate
+    # holes of 8, 14 and 35 days exist all over the history (969 rows before
+    # 2026 alone). And when the fetch happens to run ON the grid weekday, the
+    # partial bar carries a perfectly ordinary stamp - it would be stored with
+    # one day's data as the week's close, and never overwritten afterwards,
+    # because the incremental filter only takes dates AFTER the newest row.
+    #
+    # A bar stamped at the start of week W is complete once seven days have
+    # passed. Anything younger is still being written.
+    cutoff = pd.Timestamp(datetime.fromtimestamp(now_ts)) - pd.Timedelta(days=7)
+    df = df[df['Date'] <= cutoff]
+    if df.empty:
+        print("[OK] (no completed week yet)")
+        return None
     if _orig_last_date is not None:
         df = df[df['Date'] > _orig_last_date]
     if df.empty:
