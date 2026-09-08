@@ -317,32 +317,37 @@ evolutionary operators.
 
 ### How wide the gate is measured
 
-Menu item `[4c]`, `GTRADE_AR_HELDOUT`. Three values: `prod` (the default
-14-asset production holdout), `neural` (14 assets whose stacker leans on the
-nets, a diagnostic and biased by construction), and `all`.
+Menu item `[4c]`. The final gate ran on a hardcoded fourteen assets for months,
+and the width was selectable only from the campaign launcher `[AL]`, never from
+`[RS]` itself.
 
-`all` is every asset that already carries a complete champion, minus every asset
-the search itself used. Measured 2026-09-08 that is 823 of the 847 assets in
-`FULL_ASSET_MAP`; `selection_assets()` and `tier_assets()` are subtracted inside
-`all_trained_assets`, so the disjointness the tier ladder needs is enforced
-rather than remembered.
+Width is the lever because the gate, not the search, is the binding constraint.
+Held-out Score deltas carry a spread of about 3.74, so the smallest effect a
+gate can resolve is `2.8 * 3.74 / sqrt(n)` against an adoption floor of 0.5:
 
-It exists because the gate, not the search, is the binding constraint. The
-dScore spread across the 14-asset holdout is 3.74, so a +0.5 effect needs 439
-assets before it clears the noise, and nothing has adopted in months. 823 assets
-shrink that noise by `sqrt(823/14)`, a factor of 7.7, and cost nothing to train
-because the champions are already on disk.
+```
+n =  14   resolves 2.80      n =  80   resolves 1.17
+n =  40   resolves 1.66      n = 440   resolves 0.50
+```
 
-What they cost to measure is the catch, and the wall times are in
-`PROGRESS_SEED`. One 14-asset holdout unit is about 35000s, which is 2555s per
-asset, so 823 assets on the full four-member config is roughly 24 days per arm.
-The CatBoost-only screen is about 12s per asset, so the same 823 assets cost
-about 2.7 hours per arm. The menu therefore asks a second question when `all` is
-chosen and defaults to `GTRADE_SCREEN_ONLY=1`.
+Below roughly 440 assets the gate cannot see an effect the size of its own
+adoption floor, which is why a null verdict from it was never a null result.
+Every verdict prints its own power line with the `n` it would have needed; take
+that number rather than guessing one.
 
-So `all` is an overnight run for one finalist at the end of a campaign, on a
-CatBoost-side candidate. On a neural candidate the CatBoost-only arm measures
-nothing, and the full config is not affordable at that width.
+The list is built by `ab_build.py --search-gate N`, the same call `[AL]` makes.
+It GROWS the current gate instead of replacing it, so earlier measurements stay
+comparable, and it drops what a gate cannot score honestly: assets with too
+little history, and assets whose price is quoted too coarsely to carry a one-bar
+sign. Of the 847 assets in `FULL_ASSET_MAP`, 743 are eligible.
+
+The cost is the four members. Measured per arm, a 14-asset gate is 33 minutes
+and 40 assets about 95, while the older `PROGRESS_SEED` figure is an order of
+magnitude higher, so treat several hundred assets as an overnight-to-days run
+and read the real time off the progress console. The CatBoost-only screen is
+about 12s per asset, and `[4c]` offers it as a second question, but it sets
+every net probability to a constant 0.5: a candidate that helps only the nets
+reads as exactly zero on it.
 
 ### Running the whole cycle unattended
 

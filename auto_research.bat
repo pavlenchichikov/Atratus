@@ -283,42 +283,52 @@ if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=ens_auc"
 
 
 echo.
-echo [4c] Gate width (how many assets the FINAL adoption gate is measured on):
-echo     1 = prod, the 14-asset production holdout (default)
-echo     2 = neural, 14 assets whose stacker leans on the nets. A diagnostic:
-echo         biased by construction, so a winner here still has to clear 1.
-echo     3 = all, every asset that already has a full champion (823 today),
-echo         minus every asset the search itself used.
+echo [4c] Gate width (how many assets the FINAL gate is measured on):
+echo     The same list a campaign builds in [AL], which [RS] could not choose.
+echo     ab_build --search-gate GROWS the current gate rather than replacing it,
+echo     so earlier measurements stay comparable, drops assets with too little
+echo     history or a price quoted too coarsely to carry a one-bar sign, and
+echo     excludes the search and tier sets so the gate never scores an asset the
+echo     search selected on. 743 of the 847 assets are eligible today.
 echo.
-echo     Why 3 exists. The dScore spread across the 14-asset holdout is 3.74,
-echo     so a +0.5 effect needs 439 assets before it clears the noise. That is
-echo     the measured reason nothing adopts: the search is not failing to find
-echo     improvements, the gate cannot see them. 823 assets shrink the noise by
-echo     sqrt(823/14), a factor of 7.7. Nothing has to be trained first, the
-echo     champions are already on disk.
+echo     Why width is the lever: held-out Score deltas carry a spread of about
+echo     3.74, so the smallest effect a gate can resolve is 2.8 * 3.74 / sqrt(n)
+echo     against an adoption floor of 0.5. That is 2.80 at n=14, 1.66 at 40,
+echo     1.17 at 80, and only n=440 reaches the floor itself. Every verdict
+echo     prints its own power line: take the n it says was needed.
+echo     1 = 14, leave the gate alone (default)   2 = 40   3 = 80   4 = other
+echo     5 = neural: the 14 assets whose stacker leans on the nets. A
+echo         diagnostic, biased by construction, not an adoption gate.
+set "GS=1"
+set /p "GS=    choice [1]: "
+if "%GS%"=="5" set "GTRADE_AR_HELDOUT=neural"
+if "%GS%"=="5" goto :gatewidthdone
+if "%GS%"=="1" goto :gatewidthdone
+set "GATE_N=40"
+if "%GS%"=="3" set "GATE_N=80"
+if "%GS%"=="4" set /p "GATE_N=    assets [40]: "
+if "%GATE_N%"=="" set "GATE_N=40"
+set "GTRADE_AB_HOLDOUT_N=%GATE_N%"
+echo     building the gate list for %GATE_N% assets...
+python ab_build.py --search-gate %GATE_N% --out _search_gate.txt
+if errorlevel 1 (
+  echo     could not build it; leaving the gate as it was.
+) else (
+  set /p GTRADE_AR_HELDOUT=<_search_gate.txt
+)
 echo.
-echo     What 3 costs, from the measured wall times in PROGRESS_SEED. One
-echo     14-asset holdout unit is about 35000s, which is 2555s per asset, so
-echo     823 assets on the FULL four-member config is roughly 24 DAYS per arm.
-echo     Do not start that. The CatBoost-only screen is about 12s per asset,
-echo     so the same 823 assets cost about 2.7 hours per arm and run overnight.
-echo.
-echo     So 3 is an overnight job with GTRADE_SCREEN_ONLY=1 and basis 1, for a
-echo     CatBoost-side finalist at the END of a campaign. It is not a setting
-echo     for the search loop, and on a neural candidate it measures nothing.
-set "WID=1"
-set /p "WID=    choice [1]: "
-set "GTRADE_AR_HELDOUT=prod"
-if "%WID%"=="2" set "GTRADE_AR_HELDOUT=neural"
-if "%WID%"=="3" set "GTRADE_AR_HELDOUT=all"
-if not "%WID%"=="3" goto :nowide
-echo.
-echo     Run this one CatBoost-only?  2 = yes (2.7h per arm, recommended)
-echo     1 = no, full four-member config (about 24 days per arm)
-set "WSC=2"
-set /p "WSC=    choice [2]: "
+echo     The full four-member config is the expensive half. Measured per arm:
+echo     33 min at 14 assets, so about 95 min at 40. The older seed in
+echo     PROGRESS_SEED puts it an order of magnitude higher, so treat several
+echo     hundred assets as overnight-to-days and read the real time off the
+echo     progress console. The CatBoost-only screen is about 12s per asset.
+echo     1 = full four members (default)   2 = CatBoost only
+echo     CatBoost only sets every net probability to a constant 0.5, so a
+echo     candidate that helps only the nets reads as exactly zero on it.
+set "WSC=1"
+set /p "WSC=    choice [1]: "
 if "%WSC%"=="2" set "GTRADE_SCREEN_ONLY=1"
-:nowide
+:gatewidthdone
 
 echo.
 echo [5] Research wiki?  (compounding findings; uses the LLM backend)

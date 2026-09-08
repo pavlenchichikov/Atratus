@@ -89,64 +89,19 @@ PROD_HELDOUT = "MSFT,GOLD,USDJPY,ADA,CAC40,XOM,GOOGL,SOL,SILVER,GBPUSD,NASDAQ,DX
 NEURAL_HELDOUT = "AFLT,IMOEX,LKOH,SBER,DOW,SILVER,XOM,GBPUSD,NASDAQ,BTC,EURUSD,AAPL,GAS,SOL"
 
 
-# The four members plus the stacker. A champion missing one of these is not a
-# champion, and counting *_cb.cbm alone overstates the trained universe by three.
-CHAMPION_FILES = ("_cb.cbm", "_lstm.keras", "_transformer.keras", "_tcn.keras",
-                  "_meta.pkl")
-
-
-def all_trained_assets(model_dir=None, universe=None, excluded=None):
-    """Every asset that already has a complete champion, minus the search sets.
-
-    The 14-asset production holdout is the measured reason nothing adopts: the
-    dScore spread across it is 3.74, so a +0.5 effect needs 439 assets to clear
-    the noise. Measured 2026-09-08, 835 of the 847 assets in FULL_ASSET_MAP
-    already carry a full champion, so the sample exists and only the gate is
-    narrow. Going from 14 to that set shrinks the noise by sqrt(835/14), a
-    factor of 7.7, and it costs nothing to train because the models are there.
-
-    Disjointness is enforced here rather than remembered. Anything the search
-    saw is removed, because a candidate searched on an asset and then judged on
-    it is judged on its own training set. GOLD sat in exactly that gap until
-    2026-09-07 and quietly broke the rule for months.
-
-    Expensive BY CONSTRUCTION: the 14-asset holdout costs about 2000s per arm,
-    so this set is for one finalist at the end of a campaign, not for a
-    candidate inside the search loop.
-    """
-    # Both imports are local. This module deliberately does not import config at
-    # module level, and reading FULL_ASSET_MAP here is the one place it needs the
-    # asset universe. Deriving it from the model filenames instead would rename
-    # BRK-B to BRKB, the single asset whose table name does not round-trip.
-    import config
-    from core import model_io
-    root = model_dir or model_io.MODEL_DIR
-    try:
-        files = set(os.listdir(root))
-    except OSError:
-        return ""
-    keep = set()
-    for asset in (universe if universe is not None else config.FULL_ASSET_MAP):
-        table = asset.lower().replace("^", "").replace(".", "").replace("-", "")
-        if all(table + suffix in files for suffix in CHAMPION_FILES):
-            keep.add(asset)
-    if excluded is None:
-        excluded = selection_assets() + "," + tier_assets()
-    keep -= {a.strip().upper() for a in excluded.split(",") if a.strip()}
-    return ",".join(sorted(keep))
-
-
 def heldout_assets():
-    """GTRADE_AR_HELDOUT: 'prod' (default), 'neural' or 'all' - see the lists
-    above and all_trained_assets. Anything else is taken verbatim as a
-    comma-separated asset list."""
+    """GTRADE_AR_HELDOUT: 'prod' (default) or 'neural' - see the two lists above.
+    Anything else is taken verbatim as a comma-separated asset list.
+
+    A WIDER gate is built by `ab_build.py --search-gate N`, which grows this
+    list rather than replacing it and drops assets the gate cannot score
+    honestly. Both launchers write its output straight into this variable, so
+    there is no third keyword here on purpose."""
     v = (os.getenv("GTRADE_AR_HELDOUT") or "prod").strip()
     if v.lower() == "prod":
         return PROD_HELDOUT
     if v.lower() == "neural":
         return NEURAL_HELDOUT
-    if v.lower() == "all":
-        return all_trained_assets()
     return v
 
 
