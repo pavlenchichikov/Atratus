@@ -299,6 +299,17 @@ def fetch_moex_weekly(symbol, last_date):
     })
     df['Date'] = pd.to_datetime(df['Date'])
 
+    # Same rule as the Yahoo weekly fetch, and it belongs here too: ISS also
+    # serves the week IN PROGRESS, so a daily update stored a bar whose close
+    # was that day rather than the week's. Measured 2026-09-09, after the Yahoo
+    # side was fixed, exactly 181 tables still carried one - the 181 MOEX names,
+    # which is how this second copy of the defect announced itself.
+    #
+    # A bar stamped at the start of week W is complete once seven days have
+    # passed. Age, not the gap to the previous bar: legitimate holes of 8, 14
+    # and 35 days exist all over the history.
+    df = df[df['Date'] <= pd.Timestamp(datetime.now()) - pd.Timedelta(days=7)]
+
     if last_date:
         df = df[df['Date'] > last_date]
 

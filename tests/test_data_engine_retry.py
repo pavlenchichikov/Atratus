@@ -187,3 +187,25 @@ def test_an_eight_day_gap_does_not_hide_an_unfinished_week(monkeypatch):
     monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(payload))
     got = de.fetch_yahoo_weekly("AAPL", None)
     assert len(got) == 3 and got.index[-1].date() == days[-2]
+
+
+def _moex_payload(dates):
+    cols = ["open", "close", "high", "low", "value", "volume", "begin", "end"]
+    data = [[1.0, 1.0, 1.0, 1.0, 0.0, 5.0, d + " 00:00:00", d + " 23:59:59"]
+            for d in dates]
+    return {"candles": {"columns": cols, "data": data}}
+
+
+def test_the_moex_weekly_fetch_also_refuses_the_week_in_progress(monkeypatch):
+    """The Yahoo fix left this second copy of the defect in place, and it said so
+    plainly: after that fix exactly 181 tables still carried an unfinished week,
+    and there are exactly 181 MOEX names."""
+    import datetime as dt
+    today = dt.date.today()
+    days = [(today - dt.timedelta(days=d)).isoformat() for d in (21, 14, 7, 0)]
+    monkeypatch.setattr(net, "http_get",
+                        lambda url, **kw: _Resp(_moex_payload(days)))
+    got = de.fetch_moex_weekly("SBER", None)
+    assert got is not None
+    assert str(got.index[-1].date()) == days[-2], "kept the week in progress"
+    assert len(got) == 3
