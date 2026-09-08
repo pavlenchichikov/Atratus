@@ -319,15 +319,14 @@ def fetch_yahoo_weekly(symbol, last_date):
     now_ts = int(datetime.now().timestamp())
     _orig_last_date = last_date  # saved for filtering
 
-    if last_date is not None:
-        # Shift by 1 day (not a week) so we don't skip the current week
-        start_ts = int(last_date.timestamp()) + 86400
-        if start_ts >= now_ts:
-            # Data is already up to date
-            print(f"   - [WEEKLY] {y_sym:<12} [OK] (UP_TO_DATE)")
-            return None
-    else:
-        start_ts = now_ts - HISTORY_DAYS * 86400
+    # A long window even for a one-day top-up: a three-day window returns a
+    # single bar and nothing to align it against, so the partial-bar rule below
+    # would have no previous stamp to measure. _orig_last_date still decides
+    # what gets written, so this costs one call and no duplicate rows.
+    start_ts = now_ts - HISTORY_DAYS * 86400
+    if last_date is not None and int(last_date.timestamp()) + 86400 >= now_ts:
+        print(f"   - [WEEKLY] {y_sym:<12} [OK] (UP_TO_DATE)")
+        return None
 
     base_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{y_sym}?interval=1wk"
     url = f"{base_url}&period1={start_ts}&period2={now_ts}"
@@ -353,7 +352,23 @@ def fetch_yahoo_weekly(symbol, last_date):
         'High':   q['high'], 'Low':   q['low'],
         'Volume': q['volume'],
     }).dropna()
-    df['Date'] = pd.to_datetime(df['Date'])
+    df['Date'] = pd.to_datetime(df['Date']).sort_values()
+
+    # DROP THE TRAILING PARTIAL WEEK. Measured 2026-09-08: interval=1wk appends
+    # a bar for the week in progress, stamped with TODAY rather than with the
+    # week's start, at every window length:
+    #
+    #     20-day window -> Mon 08-17, Mon 08-24, Mon 08-31, Mon 09-07, Tue 09-08
+    #
+    # A daily update therefore wrote one row stamped today, every day, and the
+    # weekly table filled up with daily-spaced rows: 665 of the 850 weekly
+    # tables carry them, all dated after 2026-03-04, and aapl_weekly went from a
+    # 7-day median step to a 1-day one. The rule is the gap, not the weekday,
+    # because MOEX and crypto weeks do not all start on a Monday.
+    if len(df) >= 2:
+        gap = (df['Date'].iloc[-1] - df['Date'].iloc[-2]).days
+        if gap < 7:
+            df = df.iloc[:-1]
     if _orig_last_date is not None:
         df = df[df['Date'] > _orig_last_date]
     if df.empty:

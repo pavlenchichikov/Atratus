@@ -127,3 +127,46 @@ def test_moex_fetches_when_stale(monkeypatch):
     monkeypatch.setattr(net, "http_get", fake)
     de.fetch_moex_smart("SBER", _dt.datetime.now() - _dt.timedelta(days=7))
     assert called  # stale data: network attempted
+
+
+class _Resp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def json(self):
+        return self._p
+
+
+def _weekly_payload(dates, closes=None):
+    import datetime as dt
+    ts = [int(dt.datetime.strptime(d, "%Y-%m-%d").timestamp()) for d in dates]
+    n = len(ts)
+    closes = closes or [100.0 + i for i in range(n)]
+    return {"chart": {"result": [{
+        "timestamp": ts,
+        "indicators": {"quote": [{"open": closes, "close": closes,
+                                  "high": closes, "low": closes,
+                                  "volume": [1.0] * n}]}}]}}
+
+
+def test_the_partial_week_in_progress_is_not_stored(monkeypatch):
+    """Yahoo appends a bar for the week in progress, stamped with TODAY instead
+    of the week's start, at every window length. A daily update therefore wrote
+    one row per day into the weekly table: measured 2026-09-08, 665 of the 850
+    weekly tables carried daily-spaced rows dated after 2026-03-04."""
+    payload = _weekly_payload(["2026-08-17", "2026-08-24", "2026-08-31",
+                               "2026-09-07", "2026-09-08"])
+    monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(payload))
+    got = de.fetch_yahoo_weekly("AAPL", None)
+    assert got is not None
+    assert str(got.index[-1].date()) == "2026-09-07", "kept the week in progress"
+    assert len(got) == 4
+
+
+def test_a_completed_final_week_is_kept(monkeypatch):
+    """Positive control: the rule is the gap, not "drop the last row"."""
+    payload = _weekly_payload(["2026-08-17", "2026-08-24", "2026-08-31",
+                               "2026-09-07"])
+    monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(payload))
+    got = de.fetch_yahoo_weekly("AAPL", None)
+    assert len(got) == 4 and str(got.index[-1].date()) == "2026-09-07"

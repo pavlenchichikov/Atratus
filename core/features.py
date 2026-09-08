@@ -313,6 +313,23 @@ def add_weekly_features(df: pd.DataFrame, table: str, engine) -> pd.DataFrame:
         weekly_cols = ['w_ret', 'w_rsi', 'w_trend']
         df_w = df_w[weekly_cols].dropna()
 
+        # THE LEAK. Yahoo stamps a weekly bar on the week's FIRST day, and its
+        # close is the week's LAST close. Joined as-is, the Monday row carries
+        # the coming Friday, and the target on that Monday is Tuesday. Proven on
+        # AAPL 2024-03-04: the feature row holds w_ret -0.049705, which is
+        # exactly Friday 03-08 over Friday 03-01, four days ahead of itself.
+        #
+        # Measured 2026-09-08 on a 21-asset panel, dropping these three columns:
+        # pooled out-of-sample AUC 0.7075 -> 0.5245, the same CatBoost fitted per
+        # asset 0.6754 -> 0.5340, IC +0.397 -> +0.046. That 0.18 of AUC was the
+        # gap between an offline CB_Acc of 0.60-0.78 and 48.3% live.
+        #
+        # Shifting the index by a week makes each day read the last COMPLETED
+        # week. It costs two days of freshness (a week ending Friday only
+        # becomes visible the following Monday), which is the price of a feature
+        # that means the same thing in training and at serve.
+        df_w.index = df_w.index + pd.Timedelta(days=7)
+
         # Find date column for join
         date_col = None
         if isinstance(df.index, pd.DatetimeIndex):

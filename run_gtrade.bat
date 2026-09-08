@@ -376,9 +376,21 @@ echo.
 echo Runs in the GPU environment. Serving still reads the OLD weights until this
 echo finishes for every asset, so let it complete before switching predict over.
 echo.
+echo Force promote? Needed when the champions were fitted on a DIFFERENT
+echo feature definition or on data since repaired: their recorded score was
+echo measured on numbers that no longer exist, so a challenger trained on the
+echo current chain loses a comparison that means nothing. Otherwise leave it off.
+set "TC_FORCE=n"
+set /p TC_FORCE="   force promote? y/N: "
+set "TC_ARGS="
+if /i "%TC_FORCE%"=="y" set "TC_ARGS=--force-promote"
+echo.
+echo [Chunked] force-promote: %TC_FORCE%
 REM train_chunked spawns train_hybrid through sys.executable, so the whole chain
 REM inherits the interpreter this line picks.
-cmd /c ""%~dp0run_in_env.bat" python train_chunked.py"
+cmd /c ""%~dp0run_in_env.bat" python train_chunked.py %TC_ARGS%"
+set "TC_ARGS="
+set "TC_FORCE="
 pause
 goto menu
 
