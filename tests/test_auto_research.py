@@ -2891,3 +2891,130 @@ def test_the_cma_arm_actually_reopens_when_asked(monkeypatch):
 
     ctl._emit("cma", archive, _ACTIVE, ["ret_1", "ret_5", "rsi"])
     assert not ar.cma_collapsed(ctl.cma), "a floored emitter must be reopened"
+
+
+class TestTheIncumbentIsNotGatedAgainstItself:
+    """A gate on the adopted genome measures its own gain against a base that
+    lacks it, and can never adopt.
+
+    Measured 2026-09-07: a run reported +2.983 (p=0.0083, 12 of 14 assets up)
+    for a genome byte-identical to the adopted one, because `_train` points
+    research children at `_no_adoption.json` - correct for training, but it
+    makes every dScore a comparison with VANILLA rather than with production.
+    Before the first adoption those coincided; after it they do not, and the
+    search mutates from its own elites, so the incumbent sits in the archive
+    and is re-gated forever.
+    """
+
+    @staticmethod
+    def _genome():
+        import random as _r
+        _r.seed(3)
+        return ar.random_genome(_ACTIVE, ["ret_1", "ret_5", "rsi"])
+
+    def test_the_adopted_genome_is_recognised(self, monkeypatch, tmp_path):
+        g = self._genome()
+        rec = {"adopted": "2026-09-04", "label": "x", "genome": ar.asdict(g)}
+        path = tmp_path / "adopted_genome.json"
+        path.write_text(__import__("json").dumps(rec), encoding="utf-8")
+        from core import adopted as _adopted
+        monkeypatch.setattr(_adopted, "PATH", str(path))
+        assert ar.is_incumbent(g)
+
+    def test_a_different_genome_is_not(self, monkeypatch, tmp_path):
+        """The negative control: without it the skip would swallow every elite."""
+        g = self._genome()
+        other = ar.mutate(g, _ACTIVE, ["ret_1", "ret_5", "rsi"], ops=["hyper"])
+        rec = {"adopted": "2026-09-04", "label": "x", "genome": ar.asdict(g)}
+        path = tmp_path / "adopted_genome.json"
+        path.write_text(__import__("json").dumps(rec), encoding="utf-8")
+        from core import adopted as _adopted
+        monkeypatch.setattr(_adopted, "PATH", str(path))
+        assert ar.is_incumbent(g)
+        assert not ar.is_incumbent(other)
+
+    def test_no_adoption_file_means_nothing_is_skipped(self, monkeypatch, tmp_path):
+        """An install that has never adopted must behave exactly as before."""
+        from core import adopted as _adopted
+        monkeypatch.setattr(_adopted, "PATH", str(tmp_path / "absent.json"))
+        assert ar.adopted_sig() is None
+        assert not ar.is_incumbent(self._genome())
+
+    def test_an_unreadable_adoption_costs_the_run_nothing(self, monkeypatch, tmp_path):
+        path = tmp_path / "adopted_genome.json"
+        path.write_text("{ this is not json", encoding="utf-8")
+        from core import adopted as _adopted
+        monkeypatch.setattr(_adopted, "PATH", str(path))
+        assert ar.adopted_sig() is None
+        assert not ar.is_incumbent(self._genome())
+
+    def test_the_verdict_says_what_it_was_measured_against(self):
+        assert "no-adoption base" in ar.REFERENCE_NOTE
+
+    def test_the_incumbent_loses_its_gate_slot_to_a_real_candidate(self, monkeypatch, tmp_path):
+        """The point of filtering at SELECTION and not inside the loop.
+
+        The gate takes the top GTRADE_AR_QD_FINAL elites, so an incumbent inside
+        that slice does not merely waste a step: it DENIES the slot. Measured
+        2026-09-07 on the live archive - 17 niches, the adopted genome ranked
+        3rd of 3 by fitness, so the fourth-best genome was never gated at all.
+        """
+        import json as _json
+        adopted = self._genome()
+        rival = ar.mutate(adopted, _ACTIVE, ["ret_1", "ret_5", "rsi"], ops=["hyper"])
+        path = tmp_path / "adopted_genome.json"
+        path.write_text(_json.dumps({"adopted": "2026-09-04", "label": "x",
+                                     "genome": ar.asdict(adopted)}), encoding="utf-8")
+        from core import adopted as _adopted
+        monkeypatch.setattr(_adopted, "PATH", str(path))
+
+        archive = {"a": {"genome": adopted, "fitness": 9.0},
+                   "b": {"genome": rival, "fitness": 1.0}}
+        kept = ar.drop_incumbent(archive)
+        assert list(kept) == ["b"], "the incumbent must not occupy a slot"
+        assert kept["b"]["fitness"] == 1.0
+
+    def test_nothing_adopted_leaves_the_archive_alone(self, monkeypatch, tmp_path):
+        from core import adopted as _adopted
+        monkeypatch.setattr(_adopted, "PATH", str(tmp_path / "absent.json"))
+        archive = {"a": {"genome": self._genome(), "fitness": 9.0}}
+        assert ar.drop_incumbent(archive) is archive
+
+
+
+def test_run_qd_actually_filters_the_incumbent_out_of_the_gate(monkeypatch, tmp_path, capsys):
+    """The WIRING, not the helper.
+
+    The helper tests above all pass with `gateable = archive` substituted back
+    in, so none of them could catch the filter being unwired. This one drives
+    run_qd with a pre-seeded archive holding the adopted genome and asserts the
+    gate said so.
+    """
+    import json as _json
+    import random as _r
+    _r.seed(0)
+    monkeypatch.setenv("GTRADE_AR_BUDGET", "0")        # no search, gate only
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "2")
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.delenv("GTRADE_AR_OBJECTIVE", raising=False)
+
+    adopted = ar.random_genome(_ACTIVE, ["ret_1", "ret_5", "rsi"])
+    rival = ar.mutate(adopted, _ACTIVE, ["ret_1", "ret_5", "rsi"], ops=["hyper"])
+    path = tmp_path / "adopted_genome.json"
+    path.write_text(_json.dumps({"adopted": "2026-09-04", "label": "x",
+                                 "genome": ar.asdict(adopted)}), encoding="utf-8")
+    from core import adopted as _adopted
+    monkeypatch.setattr(_adopted, "PATH", str(path))
+
+    # the incumbent ranks FIRST, so an unfiltered gate would spend a slot on it
+    monkeypatch.setattr(ar, "_qd_load", lambda: {
+        "hi": {"genome": adopted, "fitness": 9.0, "rows": []},
+        "lo": {"genome": rival, "fitness": 1.0, "rows": []}})
+
+    def fake_train(subset, env):
+        return [{"Asset": a, "Score": 1.0} for a in subset.split(",")]
+
+    ar.run_qd(train_fn=fake_train)
+    out = capsys.readouterr().out
+    assert "hold the ADOPTED genome" in out, \
+        "run_qd must filter the incumbent before taking its top-n_final slice"

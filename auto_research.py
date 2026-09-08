@@ -172,6 +172,77 @@ def cma_reopen(emitter, genome):
     emitter.evals = []
 
 
+# What every research number is measured AGAINST, spelled out because it stopped
+# being obvious on 2026-09-04.
+#
+# `_train` deliberately points research children at `_no_adoption.json`: a genome
+# is an ABSOLUTE specification, so a child must not silently be trained as
+# "candidate plus whatever production adopted" while genome_sig records the
+# candidate alone. Correct - and it means a dScore here is measured against
+# VANILLA, not against what is running.
+#
+# Before the first adoption those were the same thing. After it they are not,
+# and since the search mutates from its own elites, most candidates are the
+# incumbent plus a jiggle - so they are handed the incumbent's whole gain and
+# report it as their own. Measured 2026-09-07: a run reported +2.98 (p=0.008,
+# 12 of 14 assets up) for a genome BYTE-IDENTICAL to the adopted one, and +3.37
+# for one differing only in five hyperparameters. Nothing false can be adopted
+# from that - `ab_genomes` always measures against `adopted:<label>` and
+# `adopt_genome` only reads a PASS from such a file - but a run spends a
+# training step on it and the console reads like a discovery.
+REFERENCE_NOTE = "vs no-adoption base"
+
+
+def adopted_sig():
+    """Canonical signature of the genome production is running, or None.
+
+    None on any failure on purpose: this exists to SKIP work, and an unreadable
+    adoption file must cost the run nothing more than the old behaviour.
+    """
+    try:
+        from core import adopted as _adopted
+        g = (_adopted.load() or {}).get("genome")
+        if not g:
+            return None
+        import types
+        return genome_sig(_canon_genome(types.SimpleNamespace(**g)))
+    except Exception:
+        return None
+
+
+def is_incumbent(genome, sig=None):
+    """True when `genome` IS what production already runs.
+
+    Gating it can only re-measure the incumbent's own gain against a base that
+    lacks it, and it can never adopt, because the A/B that decides adoption
+    compares against this very genome and would score a flat zero.
+    """
+    ref = adopted_sig() if sig is None else sig
+    return bool(ref) and genome_sig(genome) == ref
+
+
+def drop_incumbent(archive):
+    """`archive` without the niche holding the genome production already runs.
+
+    Returns the archive unchanged when nothing is adopted or the record cannot
+    be read, so an install that has never adopted behaves exactly as before.
+    Says what it dropped: an operator comparing two runs needs to know why the
+    gate looked at a different set.
+    """
+    ref = adopted_sig()
+    if not ref:
+        return archive
+    kept = {k: e for k, e in archive.items()
+            if not (e.get("genome") is not None
+                    and is_incumbent(e["genome"], ref))}
+    dropped = len(archive) - len(kept)
+    if dropped:
+        print("[qd] %d archive niche(s) hold the ADOPTED genome; not gating it "
+              "against a base that lacks it, so the slot goes to a real "
+              "candidate." % dropped)
+    return kept
+
+
 def _reduce_deltas(deltas, objective):
     """Reduce per-asset Score deltas to one objective value. 'mean' (average lift) and
     'min' (lift-the-floor) are the originals; the diversifiers are 'median' (robust
@@ -1865,6 +1936,14 @@ def run_qd(train_fn=None):
     active = active_candidate_features()
     init = int(os.getenv("GTRADE_AR_QD_INIT", "8"))
     n_final = int(os.getenv("GTRADE_AR_QD_FINAL", "3"))
+    # The genome production already runs is dropped BEFORE the top-n_final slice
+    # rather than inside the gate loop. Gating it can only re-measure its own
+    # gain against a base that lacks it, and it can never adopt - but the
+    # expensive half of that is not the wasted step, it is the SLOT: with the
+    # default n_final of 3 an incumbent ranked third pushed the fourth-best
+    # genome out of the gate entirely. Measured 2026-09-07: the archive held 17
+    # niches, the adopted genome ranked 3rd by fitness, and 9 of the 17 sat
+    # within five genes of it.
 
     # Derived, not hardcoded, so a changed SELECTION_ASSETS still finds its own
     # seeded/measured history bucket (see PROGRESS_SEED's "screen_10").
@@ -1958,19 +2037,28 @@ def run_qd(train_fn=None):
                 ctl.save()
         _qd_save(archive)
 
+    # The genome production already runs is dropped BEFORE the top-n_final slice
+    # rather than inside the gate loop. Gating it can only re-measure its own
+    # gain against a base that lacks it, and it can never adopt - but the
+    # expensive half is not the wasted step, it is the SLOT: with the default
+    # n_final of 3 an incumbent ranked third pushed the fourth-best genome out
+    # of the gate entirely. Measured 2026-09-07: 17 niches, the adopted genome
+    # 3rd by fitness, and 9 of the 17 within five genes of it.
+    gateable = drop_incumbent(archive)
+
     if ar_rl.rl_on():
         ctl = _rl_controller()
         ctl.report("run start")
-        fits = [e["fitness"] for e in archive.values()]
+        fits = [e["fitness"] for e in gateable.values()]
         mu = sum(fits) / len(fits) if fits else 0.0
         sd = (sum((f - mu) ** 2 for f in fits) / len(fits)) ** 0.5 if fits else 1.0
         sd = sd or 1.0
         elites = sorted(
-            archive.values(),
+            gateable.values(),
             key=lambda e: (e["fitness"] - mu) / sd + ctl.rank_bonus(e),
             reverse=True)[:n_final]
     else:
-        elites = sorted(archive.values(),
+        elites = sorted(gateable.values(),
                         key=lambda e: e["fitness"], reverse=True)[:n_final]
     if not elites:
         print("[qd] no elites in the archive.")
@@ -2057,9 +2145,10 @@ def run_qd(train_fn=None):
                                     "neural_lift": nl, "replicated": bool(replicated),
                                     "clears": clears or 0})
             nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
-            print("[qd] elite drops=%s label=%s/%d extra=%d: %s | %s%s" % (
+            print("[qd] elite drops=%s label=%s/%d extra=%d: %s | %s %s%s" % (
                 g.drops, g.label_mode, g.label_window, len(g.extra),
-                _gate_verdict(ok, bool(replicated), clears, nl, s), tag, nl_str))
+                _gate_verdict(ok, bool(replicated), clears, nl, s), tag,
+                REFERENCE_NOTE, nl_str))
             if not ok:
                 # A refusal is about the mean. Naming the assets the mean hid is
                 # the difference between "this run found nothing" and "this run
