@@ -1312,7 +1312,56 @@ goto menu
 
 :db_fix
 cls
+echo Three different illnesses of market.db, three tools. Each SCANS first and
+echo changes nothing until you say so.
+echo.
+echo NOT WHILE TRAINING OR FETCHING. These rewrite the bars a running trainer
+echo is reading, and a half-repaired history is worse than an unrepaired one.
+echo.
+echo [1] Structural check: missing columns, broken indices, orphan tables.
+echo     This is what this menu item used to do on its own.
+echo [2] Aggregated daily rows. An old range=max backfill stored a whole
+echo     MONTH as one daily bar - AAPL 2025-12-01 claimed a 17.1%% range where
+echo     the session was 2.6%%. Rows on days the exchange was shut are deleted
+echo     rather than rewritten: they are not wrong bars, they are days that
+echo     never traded. The filter is RELATIVE to each asset's own median, so
+echo     removing the worst rows exposes the next layer; it repeats until a
+echo     scan finds nothing, which took four passes on 2026-09-08.
+echo [3] Weekly tables. interval=1wk also returns the week IN PROGRESS,
+echo     stamped with the day of the request, so a daily update wrote one row
+echo     per day: 665 of 850 weekly tables filled with daily-spaced rows.
+echo     Deletes them; run [4] Data Update afterwards to refill the weeks.
+echo.
+set "DBF=1"
+set /p "DBF=    choice [1]: "
+if "%DBF%"=="2" goto :dbf_agg
+if "%DBF%"=="3" goto :dbf_week
 python db_check.py --fix
+pause
+goto menu
+
+:dbf_agg
+python repair_aggregated_bars.py
+echo.
+set "DBF_GO=n"
+set /p "DBF_GO=    apply the repair above? y/N: "
+if /i "%DBF_GO%"=="y" python repair_aggregated_bars.py --apply
+set "DBF_GO="
+pause
+goto menu
+
+:dbf_week
+python repair_weekly_tables.py
+echo.
+set "DBF_GO=n"
+set /p "DBF_GO=    apply the repair above? y/N: "
+if /i not "%DBF_GO%"=="y" goto :dbf_week_done
+python repair_weekly_tables.py --apply
+echo.
+echo    Now run [4] Data Update: the weekly tables are short until the fetch
+echo    refills them, and nothing trains correctly in between.
+:dbf_week_done
+set "DBF_GO="
 pause
 goto menu
 
