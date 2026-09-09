@@ -608,6 +608,109 @@ def _retry_failed(fetch_fn, sym_for, results, *, sweeps, workers, label):
     return results
 
 
+
+# Repairing BEFORE the fetch, not after, is the whole point: the weekly repair
+# deletes rows and the fetch that follows in this same run is what refills them.
+# Run afterwards, the tables would stay short until tomorrow, and a trainer
+# started in between would read the hole. Set GTRADE_AUTO_REPAIR=0 to skip.
+MARKET_DB = os.path.join(BASE_DIR, "market.db")
+AUTO_REPAIR = (os.getenv("GTRADE_AUTO_REPAIR") or "1").strip() not in (
+    "0", "false", "False", "no")
+REPAIR_PASSES = 8
+
+# A repair rewrites and deletes the very bars a running trainer is reading, and
+# a half-repaired history is worse than an unrepaired one. train_chunked touches
+# both of these while it works, so a recent stamp means hands off. Skipping a
+# repair costs one day; corrupting a 24-hour training run costs the day and the
+# champions. Deliberately a file stamp and not a process scan: psutil has not
+# been present in every environment this runs in, and a process scan that
+# answers wrongly fails in the dangerous direction.
+TRAINING_MARKERS = ("_chunk_progress.txt", "_chunk_logs")
+TRAINING_QUIET_MINUTES = 30
+
+
+def _training_looks_active():
+    """(True, minutes) when a chunked training run touched its files recently."""
+    newest = None
+    for name in TRAINING_MARKERS:
+        path = os.path.join(BASE_DIR, name)
+        if not os.path.exists(path):
+            continue
+        stamps = [os.path.getmtime(path)]
+        if os.path.isdir(path):
+            stamps += [os.path.getmtime(os.path.join(path, f))
+                       for f in os.listdir(path)]
+        newest = max(stamps) if newest is None else max(newest, max(stamps))
+    if newest is None:
+        return False, None
+    age = (time.time() - newest) / 60.0
+    return age < TRAINING_QUIET_MINUTES, age
+
+
+def _preflight_repair(width):
+    """Scan market.db for the two known defects, fix them, and say what it did.
+
+    Both scans are cheap enough to run every time: measured 2026-09-09, 6.8s for
+    the daily scan over 850 tables and 0.7s for the weekly one, against a fetch
+    that takes minutes. The alternative is what happened before: the defects sat
+    in the database for months and training kept reading them.
+
+    See core/features.py and fetch_yahoo_weekly for what each defect is.
+    """
+    print()
+    print('  DATA HEALTH')
+    print('  ' + '-' * (width - 2))
+    if not AUTO_REPAIR:
+        print('  skipped (GTRADE_AUTO_REPAIR=0)')
+        return
+    active, age = _training_looks_active()
+    if active:
+        print('  SKIPPED: a training run touched its files %.0f minute(s) ago.'
+              % age)
+        print('  Repairing now would rewrite bars it is reading. Fetching is')
+        print('  safe and continues; run [F] DB Fix once training is done.')
+        return
+    try:
+        import repair_aggregated_bars as agg
+        import repair_weekly_tables as wk
+    except Exception as exc:                       # never block a data update
+        print('  unavailable: %s' % str(exc)[:60])
+        return
+
+    try:
+        plan = wk.cut_plan(MARKET_DB)
+        if plan:
+            gone = wk.apply_cuts(MARKET_DB, plan)
+            print('  Weekly  : %d table(s) cut, %d row(s) removed - the fetch '
+                  'below refills them' % (len(plan), gone))
+        else:
+            print('  Weekly  : clean')
+    except Exception as exc:
+        print('  Weekly  : scan failed: %s' % str(exc)[:60])
+
+    try:
+        fixed = dropped = 0
+        for n in range(REPAIR_PASSES):
+            # The filter is relative to each asset's own median, so removing the
+            # worst rows exposes the next layer. Four passes were needed on
+            # 2026-09-08; it settles when a scan finds nothing left to move.
+            f, d, skipped, confirmed = agg.one_pass(MARKET_DB, apply=True, quiet=True)
+            fixed += f
+            dropped += d
+            if not f and not d:
+                break
+        if fixed or dropped:
+            print('  Daily   : %d aggregated row(s) rewritten, %d phantom day(s) '
+                  'dropped, in %d pass(es)' % (fixed, dropped, n + 1))
+        else:
+            print('  Daily   : clean')
+        if confirmed or skipped:
+            print('            (%d confirmed wide, %d left alone - MOEX or no '
+                  'vendor cover)' % (confirmed, skipped))
+    except Exception as exc:
+        print('  Daily   : scan failed: %s' % str(exc)[:60])
+
+
 def main():
     global _real_stdout
     _real_stdout = sys.stdout
@@ -622,6 +725,8 @@ def main():
     print(f'  {datetime.now().strftime("%Y-%m-%d  %H:%M:%S")}')
     print('=' * W)
     print(route_status_line())
+
+    _preflight_repair(W)
 
     assets = list(FULL_ASSET_MAP.items())
     total = len(assets)

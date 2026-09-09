@@ -68,6 +68,37 @@ def first_bad_date(con, table, today=None):
     return None
 
 
+def cut_plan(db_path, today=None):
+    """[(table, cut date, rows from there on)] for every table needing a cut."""
+    read = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+    try:
+        plan = []
+        for t in sorted(r[0] for r in read.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name LIKE '%_weekly'")):
+            cut = first_bad_date(read, t, today=today)
+            if not cut:
+                continue
+            n = read.execute('SELECT count(*) FROM "%s" WHERE Date >= ?' % t,
+                             (cut,)).fetchone()[0]
+            plan.append((t, cut, n))
+        return plan
+    finally:
+        read.close()
+
+
+def apply_cuts(db_path, plan):
+    """Delete what cut_plan found. Returns rows removed."""
+    write = sqlite3.connect(db_path)
+    try:
+        gone = sum(write.execute('DELETE FROM "%s" WHERE Date >= ?' % t,
+                                 (cut,)).rowcount for t, cut, _n in plan)
+        write.commit()
+        return gone
+    finally:
+        write.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true",
@@ -76,28 +107,20 @@ def main():
     args = ap.parse_args()
 
     read = sqlite3.connect("file:%s?mode=ro" % args.db, uri=True)
-    tables = [r[0] for r in read.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_weekly'")]
-    plan = []
-    for t in sorted(tables):
-        cut = first_bad_date(read, t)
-        if not cut:
-            continue
-        n = read.execute('SELECT count(*) FROM "%s" WHERE Date >= ?' % t,
-                         (cut,)).fetchone()[0]
-        plan.append((t, cut, n))
+    total = len([r[0] for r in read.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_weekly'")])
+    read.close()
+    plan = cut_plan(args.db)
 
     print("SCAN of %s" % args.db)
-    print("  weekly tables            : %d" % len(tables))
-    print("  tables needing a cut    : %d" % len(plan))
+    print("  weekly tables            : %d" % total)
+    print("  tables needing a cut     : %d" % len(plan))
     print("  rows to delete           : %d" % sum(n for _t, _c, n in plan))
     if plan:
-        earliest = min(c for _t, c, _n in plan)
-        print("  earliest cut date        : %s" % earliest)
+        print("  earliest cut date        : %s" % min(c for _t, c, _n in plan))
         print("  worst tables:")
         for t, c, n in sorted(plan, key=lambda x: -x[2])[:8]:
             print("     %-22s from %s, %d rows" % (t, c, n))
-    read.close()
 
     if not args.apply:
         print()
@@ -105,15 +128,7 @@ def main():
               "so the fixed fetch refills the weeks.")
         return 0
 
-    write = sqlite3.connect(args.db)
-    try:
-        gone = 0
-        for t, cut, _n in plan:
-            gone += write.execute('DELETE FROM "%s" WHERE Date >= ?' % t,
-                                  (cut,)).rowcount
-        write.commit()
-    finally:
-        write.close()
+    gone = apply_cuts(args.db, plan)
     print()
     print("deleted %d rows from %d tables." % (gone, len(plan)))
     print("NOW RUN [4] Data Update: the tables are short by design until the "

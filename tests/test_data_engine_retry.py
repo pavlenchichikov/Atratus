@@ -209,3 +209,94 @@ def test_the_moex_weekly_fetch_also_refuses_the_week_in_progress(monkeypatch):
     assert got is not None
     assert str(got.index[-1].date()) == days[-2], "kept the week in progress"
     assert len(got) == 3
+
+
+def test_preflight_repairs_the_weekly_tables_and_says_so(monkeypatch, capsys):
+    """The repair runs BEFORE the fetch so the same run refills what it deleted.
+    Run afterwards, the tables stay short until tomorrow and a trainer started in
+    between reads the hole."""
+    import repair_aggregated_bars as agg
+    import repair_weekly_tables as wk
+    monkeypatch.setattr(de, "AUTO_REPAIR", True)
+    monkeypatch.setattr(de, "_training_looks_active", lambda: (False, None))
+    monkeypatch.setattr(wk, "cut_plan", lambda db, **kw: [("a_weekly", "2026-01-01", 3)])
+    monkeypatch.setattr(wk, "apply_cuts", lambda db, plan: 3)
+    monkeypatch.setattr(agg, "one_pass", lambda db, **kw: (0, 0, 0, 0))
+    de._preflight_repair(60)
+    out = capsys.readouterr().out
+    assert "1 table(s) cut, 3 row(s) removed" in out
+
+
+def test_preflight_says_clean_when_it_is(monkeypatch, capsys):
+    """Positive control for the test above: the same code path with nothing to
+    do must report nothing, not the same line."""
+    import repair_aggregated_bars as agg
+    import repair_weekly_tables as wk
+    monkeypatch.setattr(de, "AUTO_REPAIR", True)
+    monkeypatch.setattr(de, "_training_looks_active", lambda: (False, None))
+    monkeypatch.setattr(wk, "cut_plan", lambda db, **kw: [])
+    monkeypatch.setattr(agg, "one_pass", lambda db, **kw: (0, 0, 0, 0))
+    de._preflight_repair(60)
+    out = capsys.readouterr().out
+    assert "Weekly  : clean" in out and "row(s) removed" not in out
+
+
+def test_preflight_repeats_until_the_daily_scan_settles(monkeypatch, capsys):
+    """The daily filter is relative to each asset's own median, so removing the
+    worst rows exposes the next layer. One pass is never enough: four were
+    needed on 2026-09-08."""
+    import repair_aggregated_bars as agg
+    import repair_weekly_tables as wk
+    monkeypatch.setattr(de, "AUTO_REPAIR", True)
+    monkeypatch.setattr(de, "_training_looks_active", lambda: (False, None))
+    monkeypatch.setattr(wk, "cut_plan", lambda db, **kw: [])
+    passes = iter([(5, 1, 0, 0), (2, 0, 0, 0), (0, 0, 0, 0)])
+    monkeypatch.setattr(agg, "one_pass", lambda db, **kw: next(passes))
+    de._preflight_repair(60)
+    out = capsys.readouterr().out
+    assert "7 aggregated row(s) rewritten, 1 phantom day(s) dropped, in 3 pass(es)" in out
+
+
+def test_a_broken_repair_never_blocks_the_data_update(monkeypatch, capsys):
+    import repair_weekly_tables as wk
+    monkeypatch.setattr(de, "AUTO_REPAIR", True)
+    monkeypatch.setattr(de, "_training_looks_active", lambda: (False, None))
+
+    def boom(*a, **kw):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(wk, "cut_plan", boom)
+    de._preflight_repair(60)          # must not raise
+    assert "scan failed" in capsys.readouterr().out
+
+
+def test_preflight_can_be_switched_off(monkeypatch, capsys):
+    monkeypatch.setattr(de, "AUTO_REPAIR", False)
+    de._preflight_repair(60)
+    assert "GTRADE_AUTO_REPAIR=0" in capsys.readouterr().out
+
+
+def test_training_activity_is_seen_on_either_marker(tmp_path, monkeypatch):
+    """Both markers must count. The first version folded them with an expression
+    that kept only the first one it found and silently ignored the rest."""
+    import os
+    import time
+    monkeypatch.setattr(de, "BASE_DIR", str(tmp_path))
+    (tmp_path / "_chunk_progress.txt").write_text("old", encoding="utf-8")
+    os.utime(tmp_path / "_chunk_progress.txt", (time.time() - 7200,) * 2)
+    assert de._training_looks_active()[0] is False
+
+    logs = tmp_path / "_chunk_logs"
+    logs.mkdir()
+    (logs / "chunk_01.log").write_text("fresh", encoding="utf-8")
+    assert de._training_looks_active()[0] is True
+
+
+def test_the_repair_stands_down_while_training_runs(monkeypatch, capsys):
+    """Skipping a repair costs a day. Rewriting the bars a 24-hour training run
+    is reading costs the day and the champions."""
+    monkeypatch.setattr(de, "AUTO_REPAIR", True)
+    monkeypatch.setattr(de, "_training_looks_active", lambda: (True, 3.0))
+    de._preflight_repair(60)
+    out = capsys.readouterr().out
+    assert "SKIPPED" in out and "3 minute(s) ago" in out
+    assert "clean" not in out

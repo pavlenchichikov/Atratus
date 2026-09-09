@@ -163,9 +163,9 @@ def selftest():
 MAX_PASSES = 8
 
 
-def one_pass(args, quiet=False):
+def one_pass(db, apply=False, sample=0, quiet=False):
     """Scan, repair, and report what moved. (fixed, dropped, skipped, confirmed)."""
-    found = suspects(args.db)
+    found = suspects(db)
     if not quiet:
         by_asset = Counter(t for t, _d, _m in found)
         print("  rows meeting all three conditions : %d" % len(found))
@@ -181,11 +181,11 @@ def one_pass(args, quiet=False):
     for table, date, _mult in found:
         per_asset[table].append(date)
     tables = sorted(per_asset)
-    if args.sample:
-        tables = tables[:args.sample]
+    if sample:
+        tables = tables[:sample]
 
-    write = sqlite3.connect(args.db) if args.apply else None
-    read = sqlite3.connect("file:%s?mode=ro" % args.db, uri=True)
+    write = sqlite3.connect(db) if apply else None
+    read = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
     fixed = dropped = skipped = confirmed = 0
     try:
         for table in tables:
@@ -207,7 +207,7 @@ def one_pass(args, quiet=False):
                 good = hist.get(date)
                 if good is None:
                     if is_phantom(hist, date):
-                        if args.apply:
+                        if apply:
                             write.execute('DELETE FROM "%s" WHERE Date LIKE ?'
                                           % table, (date + "%",))
                         gone += 1
@@ -230,14 +230,14 @@ def one_pass(args, quiet=False):
                 before = 100 * (old[1] - old[2]) / old[3]
                 after = 100 * (good["high"] - good["low"]) / good["close"]
                 worst = max(worst, before - after)
-                if args.apply:
+                if apply:
                     write.execute(
                         'UPDATE "%s" SET open=?, high=?, low=?, close=? '
                         'WHERE Date LIKE ?' % table,
                         (good["open"], good["high"], good["low"],
                          good["close"], date + "%"))
                 done += 1
-            if args.apply:
+            if apply:
                 write.commit()
             fixed += done
             dropped += gone
@@ -267,7 +267,7 @@ def main():
 
     print("SCAN of %s" % args.db)
     if not args.apply:
-        f, d, sk, cf = one_pass(args)
+        f, d, sk, cf = one_pass(args.db, sample=args.sample)
         print()
         print("would rewrite %d rows and drop %d phantom rows; %d confirmed wide, "
               "%d skipped (MOEX or no vendor cover)" % (f, d, cf, sk))
@@ -279,7 +279,8 @@ def main():
     for n in range(1, MAX_PASSES + 1):
         print()
         print("PASS %d" % n)
-        f, d, sk, cf = one_pass(args, quiet=(n > 1))
+        f, d, sk, cf = one_pass(args.db, apply=True, sample=args.sample,
+                                quiet=(n > 1))
         total_f += f
         total_d += d
         print("  pass %d: rewrote %d, dropped %d, confirmed wide %d, skipped %d"

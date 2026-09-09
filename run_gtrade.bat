@@ -190,6 +190,15 @@ goto menu
 
 :data_only
 cls
+echo Fetches daily and weekly bars, and FIRST scans market.db for the two
+echo known defects and repairs them - before the fetch, so this same run
+echo refills the weekly rows the repair deletes. The block is printed as
+echo DATA HEALTH at the top.
+echo.
+echo Safe to run during training: the repair half stands down on its own if
+echo a chunked run has touched its files in the last 30 minutes, and says so.
+echo Only the fetch runs then; do the repair from [F] afterwards.
+echo.
 python data_engine.py
 pause
 goto menu
