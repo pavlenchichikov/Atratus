@@ -626,7 +626,13 @@ REPAIR_PASSES = 8
 # been present in every environment this runs in, and a process scan that
 # answers wrongly fails in the dangerous direction.
 TRAINING_MARKERS = ("_chunk_progress.txt", "_chunk_logs")
-TRAINING_QUIET_MINUTES = 30
+# Measured on the 847-asset run of 2026-09-09: the ledger is written once per
+# finished chunk and gaps between chunks ran 0.7, 17, 21, 22, 23, 33 and 61
+# minutes. The per-chunk log is touched continuously and is what actually keeps
+# this fresh, but the window has to cover a stalled writer too, and the two
+# errors are not symmetric: a false "busy" costs a deferred repair, a false
+# "quiet" costs the training run.
+TRAINING_QUIET_MINUTES = 60
 
 
 def _training_looks_active():
