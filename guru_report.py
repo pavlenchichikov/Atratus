@@ -17,7 +17,6 @@ import time
 import warnings
 
 import pandas as pd
-import requests
 import yfinance as yf
 
 warnings.filterwarnings("ignore")
@@ -272,17 +271,63 @@ def _sl_extra(row, ebitda=True):
     return out
 
 
+SMARTLAB_CACHE_PATH = os.path.join(BASE_DIR, "_smartlab_cache.json")
+SMARTLAB_CACHE_STALE_DAYS = 30
+
+
+def _smartlab_cached(store=None):
+    """Read or write the last good Smart-Lab table.
+
+    Without this a single failed request blanks the fundamentals of every
+    Russian name for the whole run, silently. Measured 2026-09-10: the analyst
+    judged SBER with no P/E, no ROE and no dividend yield and said so only in a
+    footer, while the numbers were on disk minutes later. Fundamentals change
+    quarterly; yesterday's copy is a far better answer than none.
+    """
+    import json
+    if store is not None:
+        try:
+            with open(SMARTLAB_CACHE_PATH, "w", encoding="utf-8") as fh:
+                json.dump({"fetched": time.time(), "map": store}, fh)
+        except OSError:
+            pass
+        return store
+    try:
+        with open(SMARTLAB_CACHE_PATH, encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    age = (time.time() - float(blob.get("fetched") or 0)) / 86400.0
+    got = blob.get("map") or {}
+    if got:
+        print("   - [SMARTLAB] live fetch failed; using the cached table, "
+              "%.1f day(s) old%s" % (age, "" if age <= SMARTLAB_CACHE_STALE_DAYS
+                                     else " - STALE, check the VPN route"))
+    return got
+
+
 def fetch_smartlab_data():
-    """Fetch Smart-Lab fundamentals for Russian stocks."""
+    """Fetch Smart-Lab fundamentals for Russian stocks.
+
+    Through net.http_get rather than requests.get: that is the transport that
+    carries this project's route selection and SOCKS5 failover, and Smart-Lab is
+    reachable on one route and not the other depending on how the VPN is
+    pointing. A bare requests.get sees only whichever route happens to be
+    default, which is how the analyst came to judge Russian names with no
+    fundamentals at all.
+    """
+    import net
+
     url = "https://smart-lab.ru/q/shares_fundamental/"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'text/html,application/xhtml+xml',
     }
     try:
-        r = requests.get(url, headers=headers, timeout=10, verify=ssl_verify())
+        r = net.http_get(url, route="auto", headers=headers, timeout=(10, 30),
+                         retries=2, verify=ssl_verify())
         if r.status_code != 200:
-            return {}
+            return _smartlab_cached()
         import io
         dfs = pd.read_html(io.StringIO(r.text))
         if not dfs:
@@ -327,9 +372,9 @@ def fetch_smartlab_data():
                                     **_sl_extra(row, ebitda=False)}
                     except Exception:
                         continue
-        return f_map
+        return _smartlab_cached(store=f_map) if f_map else _smartlab_cached()
     except Exception:
-        return {}
+        return _smartlab_cached()
 
 
 def smartlab_ticker(asset):
