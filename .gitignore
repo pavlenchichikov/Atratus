@@ -145,3 +145,13 @@ ab_basis_noise.py
 # Local-only harness, same rule as the other ab_* tools
 ab_timing_ceiling.py
 ab_per_asset.py
+
+# Tools that exist to answer a question, not to serve the product. Both were
+# measured on 2026-09-10 and both failed their gate (breadth p 0.26, CFTC
+# positioning p 0.61 at h=1 and p 0.50 at h=20), so nothing reads the tables
+# they build. Same rule as the ab_* harnesses: in the repo is for what the
+# product uses.
+build_breadth.py
+cot_fetch.py
+tests/test_breadth.py
+tests/test_cot_fetch.py

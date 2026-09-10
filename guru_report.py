@@ -275,6 +275,47 @@ SMARTLAB_CACHE_PATH = os.path.join(BASE_DIR, "_smartlab_cache.json")
 SMARTLAB_CACHE_STALE_DAYS = 30
 
 
+def _archive_smartlab(f_map):
+    """Append today's snapshot to market.db as a POINT-IN-TIME row per ticker.
+
+    Smart-Lab publishes the CURRENT table and no history, which is why these
+    numbers cannot be used as model features today: joining a 2025 P/E onto a
+    2015 training row is a leak of ten years, and a large one for a bank.
+
+    Archiving costs nothing and is the only way the history ever exists. A year
+    of this is a year of usable cross-sectional fundamentals; not starting is
+    how a project still has none in 2027. The table is written and never read
+    by anything yet, on purpose.
+    """
+    import sqlite3
+    if not f_map:
+        return 0
+    import datetime as _dt
+    today = _dt.datetime.now().strftime("%Y-%m-%d")
+    cols = ("pe", "roe", "debt", "div", "ps", "pb", "ev_ebitda",
+            "ebitda_margin", "roa", "nim", "div_pref", "cap", "report")
+    try:
+        con = sqlite3.connect(os.path.join(BASE_DIR, "market.db"))
+    except sqlite3.Error:
+        return 0
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS fundamentals_history ("
+                    "date TEXT NOT NULL, ticker TEXT NOT NULL, "
+                    + ", ".join("%s %s" % (c, "TEXT" if c == "report" else "REAL")
+                                for c in cols)
+                    + ", PRIMARY KEY (date, ticker))")
+        con.executemany(
+            "INSERT OR REPLACE INTO fundamentals_history (date, ticker, %s) "
+            "VALUES (?, ?, %s)" % (", ".join(cols), ", ".join("?" * len(cols))),
+            [(today, t, *[row.get(c) for c in cols]) for t, row in f_map.items()])
+        con.commit()
+        return len(f_map)
+    except sqlite3.Error:
+        return 0
+    finally:
+        con.close()
+
+
 def _smartlab_cached(store=None):
     """Read or write the last good Smart-Lab table.
 
@@ -372,7 +413,10 @@ def fetch_smartlab_data():
                                     **_sl_extra(row, ebitda=False)}
                     except Exception:
                         continue
-        return _smartlab_cached(store=f_map) if f_map else _smartlab_cached()
+        if f_map:
+            _archive_smartlab(f_map)
+            return _smartlab_cached(store=f_map)
+        return _smartlab_cached()
     except Exception:
         return _smartlab_cached()
 

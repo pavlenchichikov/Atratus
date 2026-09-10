@@ -81,3 +81,53 @@ def test_it_goes_through_the_project_router(monkeypatch, tmp_path):
     monkeypatch.setattr(net, "http_get", spy)
     G.fetch_smartlab_data()
     assert "smart-lab.ru" in seen["url"] and seen["route"] == "auto"
+
+
+def test_a_good_fetch_is_archived_point_in_time(monkeypatch, tmp_path):
+    """Smart-Lab publishes the CURRENT table and no history, so these numbers
+    cannot be model features today: joining a 2025 P/E onto a 2015 row leaks ten
+    years. Archiving is the only way the history ever exists."""
+    import sqlite3
+    _point_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(G, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(net, "http_get", lambda *a, **k: _Resp())
+    G.fetch_smartlab_data()
+    con = sqlite3.connect(str(tmp_path / "market.db"))
+    rows = con.execute("SELECT ticker, pe FROM fundamentals_history").fetchall()
+    con.close()
+    assert ("SBER", 3.7) in rows
+
+
+def test_the_archive_keeps_one_row_per_ticker_per_day(monkeypatch, tmp_path):
+    import sqlite3
+    _point_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(G, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(net, "http_get", lambda *a, **k: _Resp())
+    G.fetch_smartlab_data()
+    G.fetch_smartlab_data()
+    con = sqlite3.connect(str(tmp_path / "market.db"))
+    n = con.execute("SELECT count(*) FROM fundamentals_history").fetchone()[0]
+    con.close()
+    assert n == 1
+
+
+def test_a_failed_fetch_archives_nothing(monkeypatch, tmp_path):
+    """Positive control: an empty map must not write a row of nulls that a
+    future feature would read as a real observation."""
+    import sqlite3
+    _point_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(G, "BASE_DIR", str(tmp_path))
+
+    def dead(*a, **k):
+        raise RuntimeError("no route")
+    monkeypatch.setattr(net, "http_get", dead)
+    G.fetch_smartlab_data()
+    db = tmp_path / "market.db"
+    if db.exists():
+        con = sqlite3.connect(str(db))
+        try:
+            n = con.execute("SELECT count(*) FROM fundamentals_history").fetchone()[0]
+        except sqlite3.Error:
+            n = 0
+        con.close()
+        assert n == 0
