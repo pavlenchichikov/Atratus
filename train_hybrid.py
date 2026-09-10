@@ -469,7 +469,39 @@ def _fold_mean(folds, key):
     return float(np.mean(vals)) if vals else None
 
 
+def top_k_features(profile_k):
+    """How many features to keep. GTRADE_TOP_K_FEATURES=0 keeps ALL of them.
+
+    Measured 2026-09-10, and the default is the worse option. The selection ranks
+    features by CatBoost importance on ONE window and freezes the top 12 of 34
+    for every fold and for serving. That ranking is not stable: two windows from
+    the SAME era agree on only 7-8 of the 12, which is the same disagreement as
+    between windows a decade apart. So the ranking is noise, not drift, and a
+    third of every model's inputs is arbitrary - the nets inherit the same
+    subset, since _net_feat_dim is len(selected).
+
+    Dropping the selection entirely, on 20 assets over a 70/30 split:
+
+        mean AUC delta +0.0088, median +0.0088, 14 of 20 assets better,
+        wilcoxon p = 0.036
+
+    CatBoost does not need the help: it handles irrelevant features natively at
+    this row count. The default stays 12 only because changing it invalidates
+    every champion on disk and costs a full retrain; flip it with the next one.
+    """
+    raw = (os.getenv("GTRADE_TOP_K_FEATURES") or "").strip()
+    if not raw:
+        return profile_k
+    try:
+        k = int(raw)
+    except ValueError:
+        return profile_k
+    return None if k <= 0 else k
+
+
 def derive_feature_set(df, train_idx, candidate_features, top_k):
+    if top_k is None:
+        return list(candidate_features)
     X = df.loc[train_idx, candidate_features].values
     y = df.loc[train_idx, 'target'].values
     # Seeded because this one picks WHICH features the asset trains on: an
@@ -828,10 +860,12 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             selected = [f for f in opt['selected_features'] if f in available_features]
             if len(selected) < 4:  # fallback if features changed
                 selected = derive_feature_set(df, slice(0, sp['min_train']),
-                                              available_features, profile['top_k_features'])
+                                              available_features,
+                                              top_k_features(profile['top_k_features']))
         else:
             selected = derive_feature_set(df, slice(0, sp['min_train']),
-                                          available_features, profile['top_k_features'])
+                                          available_features,
+                                          top_k_features(profile['top_k_features']))
         # Optuna lookback overrides profile default (plus the relative delta knob)
         lookback = lookback_for(opt, profile)
 
