@@ -38,6 +38,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -241,6 +242,49 @@ def _chunk_env(chunk, force_promote, jobs, progress_dir=None):
     return env
 
 
+# STOPPING NOW, not eventually. Ctrl+C used to take up to an hour: this module
+# installed no handler at all, so the interrupt reached the ThreadPoolExecutor,
+# whose context manager WAITS for every running future, while each child
+# train_hybrid answered the same Ctrl+C by finishing the assets it had started.
+#
+# An immediate kill is safe here precisely because the run is resumable: the
+# ledger records finished chunks only, so an interrupted chunk is simply
+# retrained next time. Losing it costs one chunk; waiting costs the hour.
+_stop = threading.Event()
+_live = []
+_live_lock = threading.Lock()
+
+
+def _stop_now(_sig, _frame):
+    """First Ctrl+C kills the children. There is no second, gentler stage."""
+    if _stop.is_set():
+        return
+    _stop.set()
+    with _live_lock:
+        procs = list(_live)
+    print()
+    print("  [STOP] Ctrl+C - terminating %d running chunk(s). Finished "
+          "chunks are recorded; rerun to continue." % len(procs), flush=True)
+    for pr in procs:
+        try:
+            pr.terminate()
+        except Exception:
+            pass
+
+
+def _spawn(cmd, **kw):
+    """subprocess.run, but the child is reachable by the handler above."""
+    proc = subprocess.Popen(cmd, **kw)
+    with _live_lock:
+        _live.append(proc)
+    try:
+        return proc.wait()
+    finally:
+        with _live_lock:
+            if proc in _live:
+                _live.remove(proc)
+
+
 def _run_chunk(ci, total, chunk, force_promote, jobs, progress_dir=None):
     """Train one chunk. Returns (ci, chunk, returncode).
 
@@ -248,12 +292,13 @@ def _run_chunk(ci, total, chunk, force_promote, jobs, progress_dir=None):
     trainers interleaving into one console is unreadable, and the sequential run
     is something a human watches.
     """
+    if _stop.is_set():
+        return ci, chunk, -2          # never started; nothing to record
     env = _chunk_env(chunk, force_promote, jobs, progress_dir)
     print(f"\n===== CHUNK {ci}/{total}  ({len(chunk)} assets) =====")
     print("  " + ", ".join(chunk))
     if jobs <= 1:
-        rc = subprocess.run([sys.executable, "train_hybrid.py"], cwd=BASE,
-                            env=env, check=False).returncode
+        rc = _spawn([sys.executable, "train_hybrid.py"], cwd=BASE, env=env)
         return ci, chunk, rc
     os.makedirs(LOG_DIR, exist_ok=True)
     path = os.path.join(LOG_DIR, f"chunk_{ci:02d}.log")
@@ -266,9 +311,8 @@ def _run_chunk(ci, total, chunk, force_promote, jobs, progress_dir=None):
                   % (ci, total, datetime.now().isoformat(timespec="seconds"),
                      ", ".join(chunk)))
         log.flush()
-        rc = subprocess.run([sys.executable, "train_hybrid.py"], cwd=BASE,
-                            env=env, stdout=log, check=False,
-                            stderr=subprocess.STDOUT).returncode
+        rc = _spawn([sys.executable, "train_hybrid.py"], cwd=BASE, env=env,
+                    stdout=log, stderr=subprocess.STDOUT)
         log.write("\n[chunked] chunk %d/%d  finished %s  rc=%d\n"
                   % (ci, total, datetime.now().isoformat(timespec="seconds"), rc))
     console_status.emit(f"[chunked] chunk {ci}/{total} finished rc={rc}  ->  "
@@ -294,6 +338,7 @@ def main():
                          "training count nor the memory demand goes up. Use 1 "
                          "if a chunk dies out of memory.")
     args = ap.parse_args()
+    signal.signal(signal.SIGINT, _stop_now)
     # Ask the card before committing to the second process. Without this the
     # menu could still reach the 2026-08-24 stall that the research path was
     # already protected from.
@@ -363,6 +408,11 @@ def main():
     completed = []
 
     def _finish(ci, chunk, rc):
+        if _stop.is_set():
+            # An interrupted chunk is not a failure and not a success: rc is
+            # nonzero, so it is never recorded as done and the rerun picks it
+            # up. Saying "lower CHUNK_SIZE" here would blame the wrong thing.
+            return
         if rc != 0:
             failed.append(ci)
             console_status.emit(f"\n[chunked] chunk {ci} exited with code {rc}.")
