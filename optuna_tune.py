@@ -68,6 +68,7 @@ from train_hybrid import (
     pnl_from_signals,
     score_strategy,
 )
+from train_hybrid import top_k_features as train_hybrid_top_k
 
 DB_PATH    = os.path.join(BASE_DIR, "market.db")
 MODEL_DIR  = os.path.join(BASE_DIR, "models")
@@ -205,9 +206,13 @@ def tune_asset(asset, n_trials=20, fast_mode=True):
         cb_sel.fit(X_sel, y_sel)
         imps = cb_sel.get_feature_importance()
         ranked = [f for _, f in sorted(zip(imps, available), reverse=True)]
-        selected = ranked[:min(profile['top_k_features'], len(ranked))]
+        # top_k_features is 0 for "no cap"; slicing to [:0] would hand the
+        # study an empty feature set and every trial would score identically.
+        _k = train_hybrid_top_k(profile['top_k_features'])
+        selected = ranked if _k is None else ranked[:min(_k, len(ranked))]
     except Exception:
-        selected = available[:profile['top_k_features']]
+        _k = train_hybrid_top_k(profile['top_k_features'])
+        selected = available if _k is None else available[:_k]
 
     study = optuna.create_study(direction='maximize',
                                 sampler=optuna.samplers.TPESampler(seed=42))

@@ -34,7 +34,15 @@ PROFILE_DEFAULT = {
     "no_trade_band": 0.02,
     "regime_risk_cap": 5.0,
     "trend_gate": 0.01,
-    "top_k_features": 12,
+    # 0 = no cap, keep every candidate feature. It was 12 until 2026-09-10, when
+    # the selection was measured and found to be noise: ranking 34 features by
+    # CatBoost importance on ONE window and freezing the top 12 gives a set that
+    # two windows from the SAME era agree on only 7-8 of 12 - the same
+    # disagreement as between windows a decade apart. A third of every model's
+    # inputs was arbitrary, and the neural members inherited the same subset.
+    # Removing the cap: mean AUC +0.0088 over 20 assets, 14 of them better,
+    # wilcoxon p 0.036. See train_hybrid.top_k_features.
+    "top_k_features": 0,
 }
 
 PROFILE_TRENDY = {

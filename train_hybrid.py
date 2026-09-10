@@ -491,7 +491,7 @@ def top_k_features(profile_k):
     """
     raw = (os.getenv("GTRADE_TOP_K_FEATURES") or "").strip()
     if not raw:
-        return profile_k
+        return None if not profile_k or profile_k <= 0 else profile_k
     try:
         k = int(raw)
     except ValueError:
