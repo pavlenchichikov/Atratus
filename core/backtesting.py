@@ -5,11 +5,33 @@ import os
 import numpy as np
 import pandas as pd
 
-# Trading cost defaults
-COMMISSION = 0.001
-SLIPPAGE = 0.0015
-FOREX_COMMISSION = 0.0003
-FOREX_SLIPPAGE = 0.0002
+
+def _cost(name, default):
+    """A trading cost, overridable so a MEASURED one can replace a guessed one.
+
+    These four numbers decide more than any model does. At 0.5% round trip the
+    daily horizon needs 87.6% accuracy to pay and the weekly 64.6%, against the
+    52.6% the feature set actually delivers; at 0.1% the weekly needs 52.9% and
+    the monthly 51.3%. Measured 2026-09-10 over 40 assets, that is the whole
+    difference between a system that cannot work and one that already does.
+
+    Nobody has measured them here. The defaults below are a guess, and the live
+    risk config says fee_rate 0.0, so the backtest and the sizing disagree by a
+    factor of infinity. cost_report.py turns recorded fills into the real
+    figure; set it here through the environment once it is known.
+    """
+    raw = (os.getenv(name) or "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        return default
+
+
+# Trading cost defaults, per LEG
+COMMISSION = _cost("GTRADE_COMMISSION", 0.001)
+SLIPPAGE = _cost("GTRADE_SLIPPAGE", 0.0015)
+FOREX_COMMISSION = _cost("GTRADE_FOREX_COMMISSION", 0.0003)
+FOREX_SLIPPAGE = _cost("GTRADE_FOREX_SLIPPAGE", 0.0002)
 MAX_TRADE_RET = 0.04
 INITIAL_CAPITAL = 1000.0
 POSITION_FRACTION = 0.10
