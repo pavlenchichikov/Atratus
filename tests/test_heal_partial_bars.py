@@ -78,10 +78,21 @@ def test_a_bar_newer_than_the_last_finished_session_is_removed(tmp_path):
     con = _db(tmp_path)
     con.execute("INSERT INTO sber VALUES ('2026-07-04', 104, 104.2, 104.5, 103.9, 1)")
     con.commit()
-    assert H.unfinished_dates(con, "sber", _fresh()) == ["2026-07-04"]
+    assert H.unfinished_dates(con, "sber", _fresh(), today="2026-07-04") == ["2026-07-04"]
     H.heal_asset(con, "SBER", "sber", _fresh(), ["2026-07-02"], drop=["2026-07-04"])
     dates = [r[0] for r in con.execute("SELECT Date FROM sber ORDER BY Date")]
     assert dates == ["2026-07-01", "2026-07-02", "2026-07-03"]
+
+
+def test_a_source_with_a_hole_does_not_erase_what_we_stored(tmp_path):
+    """TON: Yahoo now serves 2026-06-16 onward empty. Its last bar looked like
+    the last finished session, and 62 real stored bars were dropped as
+    unfinished. A source that has stopped is a vendor gap, not a live session."""
+    con = _db(tmp_path)
+    con.execute("INSERT INTO sber VALUES ('2026-07-20', 104, 104.2, 104.5, 103.9, 1)")
+    con.commit()
+    assert H.unfinished_dates(con, "sber", _fresh(), today="2026-07-20") == []
+    assert H.unfinished_dates(con, "sber", _fresh(), today="2026-07-04") == ["2026-07-20"]
 
 
 def test_apply_refuses_while_training_runs(monkeypatch):

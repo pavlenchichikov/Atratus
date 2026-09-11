@@ -423,7 +423,9 @@ def fetch_yahoo_weekly(symbol, last_date):
     empty = raw['Close'].isna()
     df = raw[~empty].dropna()
     if empty.any():
-        df = pd.concat([df, _weekly_from_daily(_daily_table(symbol), raw.loc[empty, 'Date'])])
+        rebuilt = _weekly_from_daily(_daily_table(symbol), raw.loc[empty, 'Date'])
+        if not rebuilt.empty:
+            df = pd.concat([df, rebuilt])
     df['Date'] = pd.to_datetime(df['Date'])
     df = df.sort_values('Date')
 

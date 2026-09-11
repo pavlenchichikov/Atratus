@@ -70,11 +70,22 @@ def partial_dates(con, table, fresh):
     return sorted(common[off.to_numpy()])
 
 
-def unfinished_dates(con, table, fresh):
+SOURCE_CURRENT_DAYS = 7
+
+
+def unfinished_dates(con, table, fresh, today=None):
     """Stored dates after the source's last FINISHED session: snapshots of a
     session still running. Comparing prices cannot find them (there is no fresh
-    bar yet) and data_engine resumes from the day after, so they would stay."""
+    bar yet) and data_engine resumes from the day after, so they would stay.
+
+    Only while the source is CURRENT. A source whose last bar is older than
+    SOURCE_CURRENT_DAYS has a hole, not a live session: TON is served empty
+    from 2026-06-16, and treating that as unfinished dropped 62 real bars.
+    """
     last = fresh.index.max()
+    today = pd.Timestamp(today) if today else pd.Timestamp.now().normalize()
+    if (today - pd.Timestamp(last)).days > SOURCE_CURRENT_DAYS:
+        return []
     return [r[0] for r in con.execute(
         f'SELECT substr(Date, 1, 10) FROM "{table}" WHERE substr(Date, 1, 10) > ? '
         f"ORDER BY 1", (last,))]

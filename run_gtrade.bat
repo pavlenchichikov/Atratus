@@ -1321,7 +1321,7 @@ goto menu
 
 :db_fix
 cls
-echo Three different illnesses of market.db, three tools. Each SCANS first and
+echo Four different illnesses of market.db, four tools. Each SCANS first and
 echo changes nothing until you say so.
 echo.
 echo NOT WHILE TRAINING OR FETCHING. These rewrite the bars a running trainer
@@ -1340,11 +1340,17 @@ echo [3] Weekly tables. interval=1wk also returns the week IN PROGRESS,
 echo     stamped with the day of the request, so a daily update wrote one row
 echo     per day: 665 of 850 weekly tables filled with daily-spaced rows.
 echo     Deletes them; run [4] Data Update afterwards to refill the weeks.
+echo [4] Partial daily bars. Until 2026-09-11 a data update stored the bar of a
+echo     session still in progress and never replaced it: the close was the
+echo     price at fetch time. Replaces those bars from the source, removes
+echo     today's unfinished ones and resets the prediction and level outcomes
+echo     computed from them. Run [3] Predict afterwards to recompute them.
 echo.
 set "DBF=1"
 set /p "DBF=    choice [1]: "
 if "%DBF%"=="2" goto :dbf_agg
 if "%DBF%"=="3" goto :dbf_week
+if "%DBF%"=="4" goto :dbf_partial
 python db_check.py --fix
 pause
 goto menu
@@ -1370,6 +1376,20 @@ echo.
 echo    Now run [4] Data Update: the weekly tables are short until the fetch
 echo    refills them, and nothing trains correctly in between.
 :dbf_week_done
+set "DBF_GO="
+pause
+goto menu
+
+:dbf_partial
+python heal_partial_bars.py
+echo.
+set "DBF_GO=n"
+set /p "DBF_GO=    apply the repair above? y/N: "
+if /i not "%DBF_GO%"=="y" goto :dbf_partial_done
+python heal_partial_bars.py --apply
+echo.
+echo    Now run [3] Predict: it recomputes the outcomes reset above.
+:dbf_partial_done
 set "DBF_GO="
 pause
 goto menu
