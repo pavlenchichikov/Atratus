@@ -515,6 +515,18 @@ def derive_feature_set(df, train_idx, candidate_features, top_k):
     ranked = [f for _, f in sorted(zip(imps, candidate_features), reverse=True)]
     return ranked[:min(top_k, len(ranked))]
 
+
+def pick_features(df, train_idx, available, opt, top_k):
+    """Optuna's stored list is a top-k selection too, so it only applies while a
+    cap is in force. Without this guard it outranked the cap: the 2026-09-11
+    uncapped retrain still gave 68 assets (VIX, SP500...) the 10-12 features
+    optuna_params.json picked in March on the leaky weekly chain."""
+    if top_k is not None and opt.get('selected_features'):
+        selected = [f for f in opt['selected_features'] if f in available]
+        if len(selected) >= 4:  # fewer means the features changed under it
+            return selected
+    return derive_feature_set(df, train_idx, available, top_k)
+
 # ensemble_with_gating, tune_ensemble_weights - core.ensemble (imported above)
 # make_signals, apply_regime_filter - core.backtesting (imported above)
 
@@ -778,6 +790,31 @@ def band_for(profile):
 import gc as _gc
 
 
+def choose_champion_fold(fold_metrics, fold_floor, force):
+    """(champion fold as a COPY, admitted folds).
+
+    A fold is admitted when its trading Score can be trusted: at least
+    `fold_floor` test trades. The best admitted fold is the champion, as before.
+
+    With none admitted, force-promote takes the LATEST fold. The floor says
+    whether a Score is reliable, not whether the model is accurate, and
+    force-promote exists for a changed feature chain. Returning nothing there
+    kept the old champion, fitted on inputs that no longer exist: after the
+    2026-09-08 weekly-leak fix 369 of 847 assets stayed on leak-trained models,
+    because an honest model near 0.5 rarely crosses a threshold ten times in
+    121 bars. Without force the old behaviour stands.
+
+    A copy, because the caller writes the median into it and fold_metrics
+    must keep that fold's own score for Fold_Scores and the journal.
+    """
+    valid = [f for f in fold_metrics if f['score'] > -999 and f['test_trades'] >= fold_floor]
+    if valid:
+        return dict(max(valid, key=lambda x: x['score'])), valid
+    if force and fold_metrics:
+        return dict(fold_metrics[-1]), []
+    return None, []
+
+
 def _free_keras_from_fold(fold_info):
     """Drop the heavy Keras models from fold_info['models'] to free GPU/RAM.
     Keeps CatBoost (small) and the scaler for stats. Call right after scoring."""
@@ -854,18 +891,9 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         # Filter candidate_features to those present in df
         available_features = [f for f in candidate_features if f in df.columns]
 
-        # Feature selection (CatBoost CPU, half cores)
-        # Use Optuna features if available, else derive from CatBoost importance
-        if opt.get('selected_features'):
-            selected = [f for f in opt['selected_features'] if f in available_features]
-            if len(selected) < 4:  # fallback if features changed
-                selected = derive_feature_set(df, slice(0, sp['min_train']),
-                                              available_features,
-                                              top_k_features(profile['top_k_features']))
-        else:
-            selected = derive_feature_set(df, slice(0, sp['min_train']),
-                                          available_features,
-                                          top_k_features(profile['top_k_features']))
+        # Feature selection: Optuna's list under a cap, else CatBoost importance
+        selected = pick_features(df, slice(0, sp['min_train']), available_features,
+                                 opt, top_k_features(profile['top_k_features']))
         # Optuna lookback overrides profile default (plus the relative delta knob)
         lookback = lookback_for(opt, profile)
 
@@ -1442,13 +1470,17 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             # Keep Keras models ONLY for the running-best fold (by weighted score).
             # All other folds: strip lstm/tf_enc/tcn immediately to prevent VRAM accumulation.
             # Root cause of OOM crash: 60 folds x 4 workers x 3 models = hundreds of objects.
+            # The LAST fold's models are kept too: choose_champion_fold promotes
+            # it when no fold is admitted under force-promote, and a freed fold
+            # cannot be saved. One extra set of three nets per asset.
+            is_last = k == len(precomputed)
             if test_score_weighted > best_fold_score:
                 # This fold is new best - free previous best's Keras models
                 if best_fold is not None:
                     _free_keras_from_fold(best_fold)
                 best_fold_score = test_score_weighted
                 best_fold = fold_info          # keep this fold's models intact
-            else:
+            elif not is_last:
                 # Not best - free Keras models immediately
                 _free_keras_from_fold(fold_info)
 
@@ -1458,29 +1490,23 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         # flag - otherwise v2 would spuriously drop folds/assets and bias any
         # objective A/B toward HOLD.
         _fold_floor, _trusted_floor = (5, 10) if objective_v2_on() else (10, 20)
-        valid_folds = [f for f in fold_metrics if f['score'] > -999 and f['test_trades'] >= _fold_floor]
-        if not valid_folds:
+        best_fold, valid_folds = choose_champion_fold(fold_metrics, _fold_floor, _FORCE_PROMOTE)
+        if best_fold is None:
             _safe_print(f"  [WARN] {asset:<12} no robust folds")
             return None
 
-        pos_ratio = sum(1 for f in valid_folds if f['test_profit'] > 0) / len(valid_folds)
-        median_score = float(np.median([f['score'] for f in valid_folds]))
-        median_profit = float(np.median([f['test_profit'] for f in valid_folds]))
-
-        if pos_ratio < 0.45:
-            _safe_print(f"  [WARN] {asset:<12} unstable folds (pos_ratio={pos_ratio:.2f})")
-
-        # dict(), not the element itself. This assigned the median INTO the
-        # champion's own entry in fold_metrics, so Fold_Scores and the
-        # experiments journal printed the median in place of that fold's score
-        # (two equal numbers in a three-fold row, which reads as a fold that
-        # reproduced) and the champion fold's own score was never written down
-        # anywhere. It is the first number you want when asking why two runs of
-        # one config disagree. The median still travels on, into the registry
-        # and the quality row, exactly as before.
-        best_fold = dict(max(valid_folds, key=lambda x: x['score']))
-        best_fold['score'] = median_score
-        best_fold['test_profit'] = median_profit
+        if valid_folds:
+            pos_ratio = sum(1 for f in valid_folds if f['test_profit'] > 0) / len(valid_folds)
+            if pos_ratio < 0.45:
+                _safe_print(f"  [WARN] {asset:<12} unstable folds (pos_ratio={pos_ratio:.2f})")
+            # The median travels on, into the registry and the quality row;
+            # best_fold is a copy, so the fold's own score stays in fold_metrics
+            # for Fold_Scores and the experiments journal.
+            best_fold['score'] = float(np.median([f['score'] for f in valid_folds]))
+            best_fold['test_profit'] = float(np.median([f['test_profit'] for f in valid_folds]))
+        else:
+            _safe_print(f"  [WARN] {asset:<12} no robust folds - latest fold force-promoted, "
+                        f"Score unreliable")
 
         # Save models
         cb_out = os.path.join(MODEL_DIR, f"{table}_cb.cbm")

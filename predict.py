@@ -119,7 +119,14 @@ def _predict_asset(name, registry, thresholds):
     reg_entry = registry.get(name)
     # Model scoring is shared with alert_bot.py through core.scoring so the two
     # serve paths cannot drift apart (see core/scoring.py).
-    return score_asset(df, name, table, reg_entry, thresholds, MODEL_DIR)
+    res = score_asset(df, name, table, reg_entry, thresholds, MODEL_DIR)
+    if res:
+        # The bar this prediction was scored from keys the journal, not the wall
+        # clock. A morning run scores the US session from yesterday's close and
+        # today's US bar does not exist until the evening, so clock-keyed rows
+        # were dropped: no US or EU asset was logged 2026-09-04..09-11.
+        res["bar_date"] = df_raw.index[-1].strftime("%Y-%m-%d")
+    return res
 
 
 def run_radar():
@@ -174,7 +181,8 @@ def run_radar():
                                    timing_action=res.get("timing_action"),
                                    timing_stage=res.get("timing_stage"),
                                    timing_reason=res.get("timing_reason"),
-                                   shadow_action=res.get("shadow_action"))
+                                   shadow_action=res.get("shadow_action"),
+                                   date=res["bar_date"])
                     logged += 1
                     # The side the TIMING LAYER is on, which is the side
                     # train_levels fits against: the journal has to record what
@@ -191,7 +199,8 @@ def run_radar():
                     # to key on, so that case keeps issuing as it always did.
                     act = res.get("timing_action")
                     if issues_levels(act):
-                        log_levels(name, acting_side(res["sig"], name, act))
+                        log_levels(name, acting_side(res["sig"], name, act),
+                                   date=res["bar_date"])
                 except Exception as e:
                     logger.debug("Log prediction failed for %s: %s", name, e)
 

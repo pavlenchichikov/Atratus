@@ -44,6 +44,15 @@ def test_predict_delegates_to_shared_scoring():
     assert "build_stacking_features" not in src
 
 
+def test_predict_keys_the_journal_by_the_bar_it_scored_not_the_clock():
+    """A morning run scores the US session from yesterday's close; today's US
+    bar does not exist until the evening. Keyed by the wall clock, no US or EU
+    asset reached the journal on 2026-09-04..09-11 (GOOGL's last row: 09-03)."""
+    src = _read(PREDICT_SRC)
+    assert 'res["bar_date"] = df_raw.index[-1]' in src
+    assert src.count('date=res["bar_date"]') == 2     # log_prediction and log_levels
+
+
 def test_alert_bot_delegates_to_shared_scoring():
     src = _read(ALERT_SRC)
     assert "from core.scoring import score_asset" in src

@@ -117,6 +117,7 @@ tests/test_ab_noise.py
 levels_policy.json
 _levels_report.txt
 _chunk_progress.txt
+_chunk_progress.prev.txt
 _chunk_quality.json
 _auto_features.json
 _auto_research_log.json

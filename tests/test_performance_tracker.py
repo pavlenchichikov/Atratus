@@ -93,6 +93,27 @@ def test_log_prediction_skips_when_no_bar_for_that_day(tmp_path, monkeypatch):
     con.close()
 
 
+def test_a_prediction_from_yesterdays_close_logs_under_that_bar(tmp_path, monkeypatch):
+    """The morning case: the last bar is yesterday's, today's has not printed.
+    Passing the scored bar's date logs it, once, and it reconciles against the
+    next bar like any other row."""
+    import performance_tracker as pt
+    db = str(tmp_path / "am.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE googl (Date TEXT, close REAL)")
+    con.execute("INSERT INTO googl VALUES ('2026-09-10', 100.0)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+
+    pt.log_prediction("GOOGL", "BUY", 0.7, date="2026-09-10")
+    pt.log_prediction("GOOGL", "BUY", 0.7, date="2026-09-10")    # a second run: no dup
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT date FROM prediction_log").fetchall() == [("2026-09-10",)]
+    con.close()
+
+
 def test_migrate_adds_column_and_keeps_old_rows_legacy(tmp_path, monkeypatch):
     import performance_tracker as pt
     db = str(tmp_path / "legacy.db")

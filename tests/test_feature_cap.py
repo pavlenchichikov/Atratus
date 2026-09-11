@@ -36,6 +36,17 @@ def test_none_returns_the_candidates_untouched_and_trains_nothing():
     assert got == ["a", "b", "c", "d"]
 
 
+def test_optuna_list_is_ignored_without_a_cap_and_used_under_one():
+    df = _frame()
+    cands = ["a", "b", "c", "d"]
+    opt = {"selected_features": ["d", "c", "b", "a"]}
+    assert T.pick_features(df, slice(0, 300), cands, opt, None) == cands
+    assert T.pick_features(df, slice(0, 300), cands, opt, 3) == ["d", "c", "b", "a"]
+    # three survivors is below the floor, so the cap's own ranking decides
+    short = {"selected_features": ["a", "b", "c", "zz"]}
+    assert len(T.pick_features(df, slice(0, 300), cands, short, 2)) == 2
+
+
 def test_a_cap_still_selects_and_still_shortens():
     df = _frame()
     got = T.derive_feature_set(df, slice(0, 300), ["a", "b", "c", "d"], 2)

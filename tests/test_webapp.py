@@ -693,6 +693,19 @@ def test_radar_shows_live_gate_badge(client, monkeypatch):
     assert "gated" in html and "live-gate" in html
 
 
+def test_radar_tags_a_low_q_call_without_calling_it_gated(client, monkeypatch):
+    """A negative walk-forward Score is shown as the call plus a low-q chip;
+    "gated" would claim a suppression that did not happen."""
+    import core.dashboard as dash
+    dash.cache_clear()
+    sig = {"asset": "GOOGL", "date": "2026-09-10", "signal": "BUY", "signal_raw": "BUY",
+           "gate_reason": "low-q: walk-forward Score -2.40 < 0.0, shown, not suppressed",
+           "probability": 0.61, "acc": {"n": 0, "correct": 0, "acc": None}}
+    monkeypatch.setattr(track_record, "latest_signals", lambda *a, **k: [sig])
+    html = client.get("/").text
+    assert ">low-q</span>" in html and ">gated</span>" not in html
+
+
 def test_api_guru_recalculate_all_starts_and_reports(client, monkeypatch):
     """One POST kicks off the batch in a real (daemon) thread; polling status
     reflects the finished counts. The stub returns instantly - no threading

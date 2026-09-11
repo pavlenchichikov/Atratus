@@ -34,9 +34,12 @@ from core.scaling import load_or_fit_scaler
 
 logger = get_logger("scoring")
 
-# A champion whose walk-forward score is below this cannot be trusted for
-# direction (a negative score is worse than the baseline). Its BUY/SELL is
-# suppressed to WAIT and tagged "low-q" so the suppression is visible.
+# A champion whose walk-forward Score is below this has a trading result that
+# cannot be trusted. Its call is SHOWN and tagged "low-q", not suppressed: the
+# Score (profit after an assumed 0.5% round trip, drawdown, Sharpe) says
+# whether the trading result is reliable, not whether the model's direction is.
+# Suppressing it turned 76% of the honest post-leak champions into WAIT on
+# 2026-09-11, before sig_raw was taken, so their accuracy was never measured.
 MIN_TRUST_SCORE = 0.0
 
 
@@ -228,12 +231,13 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
         else:
             sig = "WAIT"
 
-        # Quality gate: an untrustworthy champion (score < MIN_TRUST_SCORE) may
-        # not emit a directional call; surface it as WAIT, tagged "low-q".
+        # Quality tag, not a gate: see MIN_TRUST_SCORE.
         score = (reg_entry or {}).get("score")
-        if sig != "WAIT" and score is not None and score < MIN_TRUST_SCORE:
-            sig = "WAIT"
+        low_q = None
+        if score is not None and score < MIN_TRUST_SCORE:
             mode = f"{mode} low-q"
+            low_q = "low-q: walk-forward Score %.2f < %.1f, shown, not suppressed" % (
+                score, MIN_TRUST_SCORE)
 
         # Optional meta-sizing gate (GTRADE_META_SIZING; default off = no-op).
         meta_p = None
@@ -254,6 +258,8 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
         # rehabilitate itself with fresh statistics.
         sig_raw = sig
         sig, gate_reason = live_gate.gate(name, prob, sig)
+        if low_q:
+            gate_reason = "%s; %s" % (gate_reason, low_q) if gate_reason else low_q
 
         # Timing-policy shadow (GTRADE_TIMING_POLICY; default off = no-op). Never
         # allowed to affect sig/prob/gate_reason above, and any failure here must

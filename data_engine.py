@@ -5,6 +5,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -100,6 +101,59 @@ def _drop_existing_dates(df, table_name):
     except Exception:
         return df  # on error - write as-is
 
+def _daily_table(name):
+    """The daily table an asset key is stored in."""
+    return name.lower().replace("^", "").replace(".", "").replace("-", "")
+
+
+# A bar is stored only once its session has closed. The fetchers used to store
+# the bar of a session in progress and then resume from the NEXT day, so the
+# snapshot was never replaced: measured 2026-09-11 against a fresh fetch,
+# stored closes were off by more than 0.1% on 38 of 60 recent days for SBER,
+# 43 of 59 for BTC, 40 of 52 for GOLD, in every month of daily runs since March
+# 2026 and in none of the bulk-fetched months before it.
+def _drop_unfinished_session(df, meta, now_ts):
+    """Drop Yahoo daily bars that belong to the trading period still running.
+
+    Yahoo says when the current regular session starts and ends; any bar
+    stamped at or after that start, while it has not ended, is still being
+    written. Without the metadata nothing is dropped.
+    """
+    reg = ((meta or {}).get("currentTradingPeriod") or {}).get("regular") or {}
+    start, end = reg.get("start"), reg.get("end")
+    if start is None or end is None or now_ts >= end:
+        return df
+    return df[df["Date"] < pd.Timestamp(datetime.fromtimestamp(start))]
+
+
+def _moex_today():
+    """The Moscow calendar date. A MOEX candle for this date is still being
+    written until the evening session closes."""
+    return datetime.now(ZoneInfo("Europe/Moscow")).date()
+
+
+def _weekly_from_daily(table, stamps):
+    """Weekly bars built from our own daily rows, for weeks the vendor returned
+    empty. Yahoo serves TON's weeks after 2026-06-15 with every field null while
+    its daily series is intact; dropping them froze TON's weekly table."""
+    try:
+        daily = pd.read_sql(f'SELECT Date, open, high, low, close, volume FROM "{table}"',
+                            engine, parse_dates=["Date"])
+    except Exception:
+        return pd.DataFrame(columns=["Date", "Open", "Close", "High", "Low", "Volume"])
+    rows = []
+    for stamp in stamps:
+        start = pd.Timestamp(stamp).normalize()
+        wk = daily[(daily["Date"] >= start) & (daily["Date"] < start + pd.Timedelta(days=7))]
+        wk = wk.sort_values("Date")
+        if wk.empty:
+            continue
+        rows.append({"Date": stamp, "Open": wk["open"].iloc[0], "Close": wk["close"].iloc[-1],
+                     "High": wk["high"].max(), "Low": wk["low"].min(),
+                     "Volume": wk["volume"].sum()})
+    return pd.DataFrame(rows, columns=["Date", "Open", "Close", "High", "Low", "Volume"])
+
+
 def _yahoo_chart_ok(r) -> bool:
     """True only for a valid Yahoo response. A 200 with error/no result means the
     route landed on the wrong endpoint, so net.http_get tries another one. An empty
@@ -165,6 +219,7 @@ def fetch_yahoo_smart(symbol, last_date):
         }).dropna()
 
         df['Date'] = pd.to_datetime(df['Date'])
+        df = _drop_unfinished_session(df, res.get('meta'), now_ts)
         if _orig_last_date is not None:
             df = df[df['Date'] > _orig_last_date]
 
@@ -243,6 +298,8 @@ def fetch_moex_smart(symbol, last_date):
 
     df = pd.DataFrame(all_data, columns=cols).rename(columns={'begin': 'Date', 'open': 'Open', 'close': 'Close', 'high': 'High', 'low': 'Low', 'volume': 'Volume'})
     df['Date'] = pd.to_datetime(df['Date'])
+    # Today's candle is still being written: see _drop_unfinished_session.
+    df = df[df['Date'].dt.date < _moex_today()]
 
     if last_date:
         df = df[df['Date'] > last_date]
@@ -357,13 +414,18 @@ def fetch_yahoo_weekly(symbol, last_date):
         print("[OK] (UP_TO_DATE)")
         return None
     q = res['indicators']['quote'][0]
-    df = pd.DataFrame({
+    raw = pd.DataFrame({
         'Date':   [datetime.fromtimestamp(ts) for ts in res['timestamp']],
         'Open':   q['open'], 'Close': q['close'],
         'High':   q['high'], 'Low':   q['low'],
         'Volume': q['volume'],
-    }).dropna()
-    df['Date'] = pd.to_datetime(df['Date']).sort_values()
+    })
+    empty = raw['Close'].isna()
+    df = raw[~empty].dropna()
+    if empty.any():
+        df = pd.concat([df, _weekly_from_daily(_daily_table(symbol), raw.loc[empty, 'Date'])])
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values('Date')
 
     # DROP EVERY WEEK THAT HAS NOT FINISHED. Measured 2026-09-08: interval=1wk
     # appends a bar for the week in progress, stamped with the day of the
@@ -391,7 +453,9 @@ def fetch_yahoo_weekly(symbol, last_date):
         print("[OK] (no completed week yet)")
         return None
     if _orig_last_date is not None:
-        df = df[df['Date'] > _orig_last_date]
+        # By date: the stored row is a bare date, the vendor stamp carries a
+        # time of day, and 03:00 compared raw is "later" than the row it is.
+        df = df[df['Date'].dt.normalize() > pd.Timestamp(_orig_last_date).normalize()]
     if df.empty:
         print("[OK] (No new data)")
         return None
@@ -539,7 +603,7 @@ class _StdoutProxy:
 
 def _fetch_and_save_daily(n, s):
     """Fetch one asset (daily) and save to DB. Thread-safe."""
-    table_name = n.lower().replace("^","").replace(".","").replace("-","")
+    table_name = _daily_table(n)
     last_dt = None if BACKFILL else get_last_date(table_name)
     _tls.buf = io.StringIO()
     try:
@@ -564,7 +628,7 @@ def _fetch_and_save_daily(n, s):
 
 def _fetch_and_save_weekly(n, s):
     """Fetch one asset (weekly) and save to DB. Thread-safe."""
-    table_name = n.lower().replace("^","").replace(".","").replace("-","") + "_weekly"
+    table_name = _daily_table(n) + "_weekly"
     last_dt = None if BACKFILL else get_last_date(table_name)
     _tls.buf = io.StringIO()
     try:
