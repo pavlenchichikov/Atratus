@@ -212,3 +212,51 @@ def test_the_pooled_trade_basis_has_its_own_floor(monkeypatch):
     # and it did not disturb the two floors that already existed
     assert ar._adopt_floor("mean", basis="net_auc") == 0.005
     assert ar._adopt_floor("mean", basis="raw") == 0.5
+
+
+def test_the_accuracy_basis_is_accepted_everywhere_it_has_to_be():
+    """Accuracy is the quantity this system is actually asked for, so the search
+    has to be able to run on it. A basis the launcher offers but auto_research
+    rejects would silently run the campaign on raw while the log said otherwise."""
+    import auto_research as ar
+
+    assert "ens_acc" in am.SCORE_BASES
+    rows = [{"Asset": "A", "Ens_Acc": 0.54, "Score": 9.9},
+            {"Asset": "B", "Score": 1.0, "Ens_AUC": 0.61}]
+    keyed = ar.rekey_rows(rows, basis="ens_acc")
+    assert keyed == [{"Asset": "A", "Score": 0.54}]
+    # B carries an AUC but no accuracy: DROPPED, never quietly scored off the
+    # neighbouring column, which would compare two different statistics.
+    assert [r["Asset"] for r in keyed] == ["A"]
+
+
+def test_the_accuracy_basis_shares_the_auc_floor(monkeypatch):
+    """Same near-0.5 scale, so the same practical-effect floor. Inheriting the
+    Score floor of 0.5 would demand an accuracy gain of fifty points."""
+    import auto_research as ar
+
+    monkeypatch.delenv("GTRADE_AR_ADOPT_AUC", raising=False)
+    assert ar._adopt_floor("mean", basis="ens_acc") == 0.005
+    monkeypatch.setenv("GTRADE_AR_ADOPT_AUC", "0.01")
+    assert ar._adopt_floor("mean", basis="ens_acc") == 0.01
+
+
+def test_the_accuracy_basis_is_a_decision_basis_too(monkeypatch):
+    """Searching on accuracy and adopting on something else is the proxy trap of
+    2026-08-18, so accuracy has to be selectable on both sides of the run."""
+    import auto_research as ar
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_acc")
+    monkeypatch.setenv("GTRADE_AR_DECISION_BASIS", "ens_acc")
+    assert ar._score_basis() == "ens_acc"
+    assert ar.decision_basis() == "ens_acc"
+
+
+def test_the_accuracy_basis_turns_the_catboost_screen_off():
+    """It scores the whole ENSEMBLE, so a CatBoost-only screen would stub every
+    neural member to a constant 0.5 and the campaign would throw away exactly
+    the levers it was started to find."""
+    import auto_loop
+
+    assert auto_loop.default_screen("ens_acc") == "0"
+    assert auto_loop.default_illum("ens_acc") == "full"

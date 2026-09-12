@@ -581,6 +581,11 @@ echo         folds as a t statistic. Not a proxy: the identical backtest without
 echo         the two steps that carry its noise (a MAX drawdown over ~80 trades
 echo         at weight 0.5, and a median of five composites). Measured 2026-09-03
 echo         on ASML: four seeds moved the Score 42 percent and this 11.5.
+echo     7 = ens_acc  the ensemble's fold-averaged ACCURACY: how often it is
+echo         right, not how well it ranks. Same near-0.5 scale as the AUC bases,
+echo         so the same adoption floor. Note the CB_Acc column in the quality
+echo         report is NOT this: that one is the champion fold's, an argmax over
+echo         folds, and its top quartile measured 0.6356 offline but 0.4820 live.
 set "BAS=1"
 set /p "BAS=    choice [1]: "
 set "GTRADE_AR_SCORE_BASIS=net_auc"
@@ -589,6 +594,7 @@ if "%BAS%"=="3" set "GTRADE_AR_SCORE_BASIS=net_gain"
 if "%BAS%"=="4" set "GTRADE_AR_SCORE_BASIS=raw"
 if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=neural"
 if "%BAS%"=="6" set "GTRADE_AR_SCORE_BASIS=trade_t"
+if "%BAS%"=="7" set "GTRADE_AR_SCORE_BASIS=ens_acc"
 REM  The SCREEN stays derived: on a net basis the CB-only screen stubs every net
 REM  to a constant, so every candidate screens identically and net levers get
 REM  thrown away on CatBoost's opinion. The ILLUMINATION is asked below, but only

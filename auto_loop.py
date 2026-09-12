@@ -215,7 +215,11 @@ TRAINING_PHASES = ("search", "ab_run")
 FROZEN = ("GTRADE_AR_SCORE_BASIS", "GTRADE_AR_OBJECTIVE",
           "GTRADE_AR_DECISION_BASIS")
 
-NET_BASES = ("net_auc", "net_gain", "ens_auc")
+# ens_acc belongs here for the same reason ens_auc does: it scores the whole
+# ENSEMBLE, so the CatBoost-only screen would stub every neural member to a
+# constant 0.5 and the campaign would throw away the net levers it was started
+# to find. The name is the only thing about it that is not a rank statistic.
+NET_BASES = ("net_auc", "net_gain", "ens_auc", "ens_acc")
 
 
 def default_screen(basis):

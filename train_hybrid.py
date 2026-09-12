@@ -250,6 +250,7 @@ from core.backtesting import (
     FOREX_COMMISSION,
     FOREX_SLIPPAGE,
     SLIPPAGE,
+    UNRELIABLE_SCORE,
     adaptive_split_params,
     apply_regime_filter,
     evaluate_signals,
@@ -391,6 +392,33 @@ def adversarial_fold_weight(X_train, X_test):
     return float(min(1.0, weight))
 
 
+def weighted_score(score, adv_weight):
+    """`score` penalised for distribution shift, with the sentinel left alone.
+
+    score_strategy returns UNRELIABLE_SCORE for a fold that made too few trades
+    to be judged, and core/backtesting.py states the contract for it: missing
+    data wearing a number, which a gate must DROP rather than average.
+
+    Multiplying it by adv_weight broke that contract silently. The weight floors
+    at 0.3, so -999 was stored as -299.7: an ordinary-looking value that passes
+    every `> -999` guard in this repository (choose_champion_fold,
+    ab_basis_noise._valid, ab_objective_v2) and that
+    auto_research._objective_delta averages with no guard at all. Measured on
+    the 2026-09-12 retrain, 3132 of 4052 folds and 345 of 842 assets carried
+    exactly -299.7, which is the whole of the reported mean Score of -123.96
+    against a median of -5.40. On the raw basis a candidate that merely moved
+    one asset across the trade-count threshold gained +299.7 on it, against an
+    adoption floor of 0.5.
+
+    A real score is never below the sentinel in practice, but the comparison is
+    <= rather than == so that a float that arrived by any other route still
+    cannot be scaled into the live range.
+    """
+    if score <= UNRELIABLE_SCORE:
+        return float(score)
+    return float(score * adv_weight)
+
+
 # -- Functions moved to core/ modules (imported above) ------------------------
 # build_stacking_features - core.ensemble
 # get_profile - core.profiles
@@ -455,6 +483,25 @@ def _mean_auc(y, probs):
     """Mean AUC over the members that produced one, or None if none did."""
     vals = [a for a in (_safe_auc(y, p) for p in probs) if a is not None]
     return float(np.mean(vals)) if vals else None
+
+
+def _safe_acc(y, p, thr=0.5):
+    """Accuracy of one member on one fold, or None when the fold cannot support it.
+
+    Mirrors _safe_auc, including the "never raises" contract: a missing accuracy
+    has to skip that fold, not score it zero, which would read as a catastrophe
+    instead of a gap. No single-class guard, unlike AUC - accuracy is defined on
+    a one-class fold, it is just uninformative there, and _fold_mean averaging it
+    is the same trade every other member column already makes."""
+    try:
+        y = np.asarray(y).astype(int)
+        p = np.asarray(p, dtype=float)
+        n = min(len(y), len(p))
+        if n < 10:
+            return None
+        return float(((p[:n] >= thr).astype(int) == y[:n]).mean())
+    except Exception:
+        return None
 
 
 def _fold_mean(folds, key):
@@ -1360,6 +1407,12 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             # are ever given a target other than direction, where net_auc
             # against the direction label stops measuring anything.
             ens_auc = _safe_auc(test_target_aligned, test_prob)
+            # The same ensemble read as ACCURACY rather than rank. Every _Acc
+            # column in the quality report is the CHAMPION fold's, i.e. an argmax
+            # over folds, so the project had no fold-averaged accuracy at all -
+            # only fold-averaged AUCs. This is the per-fold number _fold_mean can
+            # average into one, and the column an accuracy basis is keyed on.
+            ens_acc = _safe_acc(test_target_aligned, test_prob)
 
             # threshold tuning on validation (top-3 averaging for stability)
             comm = FOREX_COMMISSION if asset in FOREX else COMMISSION
@@ -1398,8 +1451,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             _p2, _t2, _w2, _mdd2, _sh2 = evaluate_signals_v2(sig_test, test_ret, comm, slip)
             test_score_v2 = score_strategy(_p2, _mdd2, _w2, _t2, sharpe=_sh2, min_trades=5)
 
-            # Apply adversarial weight to score (penalize distribution-shifted folds)
-            test_score_weighted = test_score * adv_weight
+            # Penalize distribution-shifted folds, leaving the sentinel intact.
+            test_score_weighted = weighted_score(test_score, adv_weight)
 
             fold_info = {
                 'fold': k,
@@ -1419,6 +1472,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'cb_auc': cb_auc,
                 'net_auc': net_auc,
                 'ens_auc': ens_auc,
+                'ens_acc': ens_acc,
                 'buy_thr': buy_thr,
                 'sell_thr': sell_thr,
                 'val_profit': val_profit,
@@ -1584,12 +1638,22 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         _net_auc = _fold_mean(fold_metrics, 'net_auc')
         _cb_auc = _fold_mean(fold_metrics, 'cb_auc')
         _ens_auc = _fold_mean(fold_metrics, 'ens_auc')
+        # Accuracy averaged over EVERY fold, beside the champion-fold ones below.
+        # CB_Acc and the three member _Acc columns are best_fold's, so they are a
+        # selected maximum reported as an estimate - measured 2026-09-12, the
+        # top quartile by CB_Acc averages 0.6356 offline and 0.4820 live. These
+        # two carry no argmax. CB_Acc_Mean sits next to CB_Acc on purpose: the
+        # gap between them IS the selection, readable per asset without a rerun.
+        _ens_acc = _fold_mean(fold_metrics, 'ens_acc')
+        _cb_acc_mean = _fold_mean(fold_metrics, 'cb_acc')
         quality_row = {
             'Asset': asset,
             'CB_Acc': float(best_fold['cb_acc']),
             'LSTM_Acc': float(best_fold['lstm_acc']),
             'TF_Acc': float(best_fold['tf_acc']),
             'TCN_Acc': float(best_fold['tcn_acc']),
+            'Ens_Acc': None if _ens_acc is None else float(_ens_acc),
+            'CB_Acc_Mean': None if _cb_acc_mean is None else float(_cb_acc_mean),
             'Net_AUC': None if _net_auc is None else float(_net_auc),
             'CB_AUC': None if _cb_auc is None else float(_cb_auc),
             'Ens_AUC': None if _ens_auc is None else float(_ens_auc),

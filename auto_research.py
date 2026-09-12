@@ -394,7 +394,13 @@ def _adopt_floor(objective="mean", basis=None):
     wants. An adoption passes decision_basis() so the floor is in the units the
     verdict is actually read in."""
     b = basis or _score_basis()
-    if b in ("net_auc", "net_gain", "ens_auc"):
+    # ens_acc shares the AUC floor because it shares the SCALE: a proportion
+    # near 0.5 whose real moves are thousandths. It is not the same statistic,
+    # and if accuracy deltas turn out noisier than AUC deltas here it earns its
+    # own knob - but inventing a second default before measuring one would be
+    # picking a floor to fit a result, which is what the frozen basis exists to
+    # stop.
+    if b in ("net_auc", "net_gain", "ens_auc", "ens_acc"):
         try:
             return float(os.getenv("GTRADE_AR_ADOPT_AUC") or "0.005")
         except ValueError:
@@ -1043,9 +1049,18 @@ def _score_basis():
              noisy asset four seeds moved the composite by 42% and this by 11.5%
              (ASML, 2026-09-03); on a quiet one the two agree, there being
              nothing to stabilise. Its own units again: a t, not a Score, so its
-             adoption floor has to be set for it rather than inherited."""
+             adoption floor has to be set for it rather than inherited.
+    ens_acc  the ensemble's fold-averaged ACCURACY (train_hybrid writes
+             Ens_Acc). The same quantity ens_auc measures, read as "how often
+             is it right" instead of "how well does it rank" - which is the
+             question the owner actually asks of this system. Same near-0.5
+             scale as the AUC bases, so it shares their adoption floor. Note
+             what it is NOT: CB_Acc and the member _Acc columns belong to the
+             champion fold, an argmax, and are unusable as a search target for
+             that reason. Ens_Acc is averaged over every fold."""
     b = (os.getenv("GTRADE_AR_SCORE_BASIS") or "raw").strip().lower()
-    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "trade_t"):
+    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc",
+                 "trade_t"):
         logger.warning("unknown GTRADE_AR_SCORE_BASIS %r, using raw", b)
         return "raw"
     return b
@@ -1070,7 +1085,7 @@ def decision_basis():
     b = (os.getenv("GTRADE_AR_DECISION_BASIS") or "").strip().lower()
     if not b:
         return _score_basis()
-    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc"):
+    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc"):
         logger.warning("unknown GTRADE_AR_DECISION_BASIS %r, using the search "
                        "basis", b)
         return _score_basis()
@@ -1084,6 +1099,37 @@ def ens_auc_rows(rows):
     out = []
     for r in rows:
         v = r.get("Ens_AUC")
+        if v is None:
+            continue
+        try:
+            out.append({"Asset": r["Asset"], "Score": float(v)})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def ens_acc_rows(rows):
+    """Re-key quality rows onto the ensemble's fold-averaged ACCURACY.
+
+    The basis to use when the question is the owner's question - is the model
+    right more often - rather than does it rank better. Ens_Acc is deliberately
+    the only accuracy column here that is fold-AVERAGED: CB_Acc and the three
+    member columns come from the champion fold, which is an argmax over folds,
+    so keying a search on them would optimise the selection as much as the
+    model (measured 2026-09-12: the top CB_Acc quartile averages 0.6356 offline
+    and 0.4820 live, worse than the rest).
+
+    Assets whose training produced no usable accuracy are dropped rather than
+    scored 0, which would read as a catastrophic loss instead of a missing
+    measurement - the same rule every other basis here follows.
+
+    Older reports have no Ens_Acc column, so they yield an EMPTY list rather
+    than a silent fallback to another column: a run comparing this basis
+    against rows that predate it must fail loudly, not quietly measure AUC.
+    """
+    out = []
+    for r in rows:
+        v = r.get("Ens_Acc")
         if v is None:
             continue
         try:
@@ -1189,6 +1235,8 @@ def rekey_rows(rows, basis=None):
         return net_gain_rows(rows)
     if basis == "ens_auc":
         return ens_auc_rows(rows)
+    if basis == "ens_acc":
+        return ens_acc_rows(rows)
     if basis == "trade_t":
         return trade_t_rows(rows)
     return rows
