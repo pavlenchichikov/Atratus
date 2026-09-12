@@ -104,6 +104,61 @@
 </div>
 {% endif %}
 
+{# Intraday levels and the odds of touching them. The odds come from one number,
+   how far the level is in units of the current hourly volatility, so there is no
+   model here to go stale quietly. Direction inside the session is deliberately
+   absent: it measured 0.520 against a 0.515 baseline and the hourly timing
+   policy did not clear its floor, so this says where today can reach, not
+   whether to trade. #}
+{% if intraday and intraday.status == 'ok' %}
+<div class="statgrid">
+  <div class="stat fade">
+    <span class="stat-label">Reaches up today</span>
+    {% if intraday.upper %}
+    <span class="stat-value">{{ "%.0f"|format(intraday.upper.probability * 100) }}%</span>
+    <span class="stat-sub">to {{ "%.4g"|format(intraday.upper.level) }}, {{ "%.2g"|format(intraday.upper.k) }} sigma above the open{% if intraday.upper.reached %} &middot; already touched{% endif %}</span>
+    {% else %}
+    <span class="stat-value">-</span>
+    <span class="stat-sub">no level fitted on this side yet</span>
+    {% endif %}
+  </div>
+  <div class="stat fade">
+    <span class="stat-label">Reaches down today</span>
+    {% if intraday.lower %}
+    <span class="stat-value">{{ "%.0f"|format(intraday.lower.probability * 100) }}%</span>
+    <span class="stat-sub">to {{ "%.4g"|format(intraday.lower.level) }}, {{ "%.2g"|format(intraday.lower.k) }} sigma below the open{% if intraday.lower.reached %} &middot; already touched{% endif %}</span>
+    {% else %}
+    <span class="stat-value">-</span>
+    <span class="stat-sub">no level fitted on this side yet</span>
+    {% endif %}
+  </div>
+</div>
+<p class="dim">
+  Session {{ intraday.session }}, computed at its first completed hour, which is
+  where these odds were measured: over a held-out year they scored 0.2286 on the
+  Brier score against 0.2491 for quoting the average rate, and beat the
+  20-session frequency on 486 of 492 assets. Levels are set so each side is
+  reached about half the time, so most days sit near a coin flip and the odds
+  separate at the edges.{% if intraday.cutoff %} Calibration fitted on data to
+  {{ intraday.cutoff }}.{% endif %}
+</p>
+{% else %}
+<div class="statgrid">
+  <div class="stat fade">
+    <span class="stat-label">Intraday levels</span>
+    <span class="stat-value">-</span>
+    <span class="stat-sub">
+      {%- if not intraday or intraday.status == 'unavailable' %}the hourly layer is not wired up here
+      {%- elif intraday.status == 'no_calibration' %}no calibration fitted yet, run the reach fit
+      {%- elif intraday.status == 'no_hourly_bars' %}no hourly bars stored for this asset
+      {%- elif intraday.status == 'no_sessions' %}hourly bars exist but none form a full session
+      {%- elif intraday.status == 'short_history' %}too few sessions to fit this asset's own levels
+      {%- else %}unavailable ({{ intraday.status }}){% endif %}
+    </span>
+  </div>
+</div>
+{% endif %}
+
 {% if analyst %}
 <section class="panel fade">
   <div class="panel-head"><h2>Analyst</h2></div>

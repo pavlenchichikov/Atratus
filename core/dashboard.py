@@ -418,6 +418,25 @@ def taleb_for_asset(asset):
         return None
 
 
+@ttl_cache(300)
+def intraday_for_asset(asset):
+    """Today's intraday levels and the odds of reaching them, or a status.
+
+    Cached like the other per-asset panels: the odds are recomputed from two
+    months of hourly bars and live.js polls the card every 20 seconds. The
+    hourly bars live in their own store, topped up by intraday_fetch, so a
+    store that has fallen behind shows as an old session date on the card
+    rather than as silence.
+    """
+    try:
+        from core import intraday_card
+        from intraday_fetch import load, load_tz
+        return intraday_card.intraday_for_asset(asset, load(asset), load_tz(asset))
+    except Exception:
+        return {"status": "unavailable", "session": None, "upper": None,
+                "lower": None, "cutoff": None}
+
+
 def regime_flags(asset, taleb=None):
     """(taleb_hi, risky) for one asset, the two conditions a levels policy reads.
 

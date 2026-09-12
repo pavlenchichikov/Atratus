@@ -620,6 +620,7 @@ def asset_page(request: Request, name: str):
         "quality": quality,
         "markers_json": json.dumps(markers),
         "guru": dashboard.guru_for_asset(name),
+        "intraday": dashboard.intraday_for_asset(name),
         "payoff": _payoff_context(name, asset_levels.get("atr"),
                                   asset_levels.get("close")),
         "analyst": _analyst_for_asset(name),
