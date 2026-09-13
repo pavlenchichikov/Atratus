@@ -248,7 +248,7 @@ echo         Use 2 to hunt specifically for something that revives the neural
 echo         members, but 2 is a SCORE basis, so the search still
 echo         illuminates on the CatBoost-only screen and 2 re-scores the final
 echo         GATE only; the elites are still picked by CatBoost alone. That is
-echo         why earlier neural runs read flat. Bases 3, 4 and 5 no longer have
+echo         why earlier neural runs read flat. Bases 3 to 6 no longer have
 echo         that problem: on them the illumination trains real nets and the
 echo         basis decides which genomes become elites, at 12x the cost.
 echo         Basis 2 is a DIFFERENCE, so an axis that helps both learners equally
@@ -273,6 +273,19 @@ echo         changes BOTH learners at once. There basis 4 would reward simply
 echo         damaging CatBoost, because its delta is d(Ens_AUC) - d(CB_AUC) and
 echo         anything that hurts CatBoost drives the second term negative.
 echo         Basis 5 asks only: did the ensemble improve.
+echo     6 = ensemble ACCURACY (Ens_Acc as a level: how often the ensemble is
+echo         right about the next bar, averaged over ALL folds). Use it when the
+echo         question is accuracy rather than ranking. Same near-0.5 scale as
+echo         3, 4 and 5, so the same floor GTRADE_AR_ADOPT_AUC. It is also the
+echo         quantity the CHAMPION is selected by since 2026-09-12, so the
+echo         search and the served model agree on what "better" means.
+echo         The CB_Acc column is NOT this number: that one belongs to the
+echo         champion fold, picked by argmax under the score basis, and its top
+echo         quartile read 0.6356 offline against 0.4820 live.
+echo     7 = pooled trade t (Trade_T: the same trades the Score is built from,
+echo         pooled over the folds as a t statistic). The main launcher has
+echo         offered it since September and this menu did not, which is how two
+echo         menus end up disagreeing about what the system can measure.
 set "BAS=1"
 set /p "BAS=    choice [1]: "
 set "GTRADE_AR_SCORE_BASIS="
@@ -280,6 +293,8 @@ if "%BAS%"=="2" set "GTRADE_AR_SCORE_BASIS=neural"
 if "%BAS%"=="3" set "GTRADE_AR_SCORE_BASIS=net_auc"
 if "%BAS%"=="4" set "GTRADE_AR_SCORE_BASIS=net_gain"
 if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=ens_auc"
+if "%BAS%"=="6" set "GTRADE_AR_SCORE_BASIS=ens_acc"
+if "%BAS%"=="7" set "GTRADE_AR_SCORE_BASIS=trade_t"
 
 
 echo.

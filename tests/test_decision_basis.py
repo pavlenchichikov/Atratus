@@ -54,14 +54,21 @@ def test_the_decision_basis_is_frozen_with_the_rest_of_the_campaign():
 def test_a_campaign_frozen_before_the_constant_existed_still_runs():
     """Absent and empty are the same thing, or every older campaign would read
     as having moved a constant nobody touched."""
-    old = {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_OBJECTIVE": "mean"}
+    # Built FROM the campaign, minus the constant under test. Naming a basis
+    # here coupled the test to whatever CAMPAIGN happened to default to, and it
+    # failed the day that default legitimately moved to ens_acc - reporting a
+    # search-basis move that has nothing to do with what this test asks.
+    old = {k: v for k, v in auto_loop.CAMPAIGN.items()
+           if k in auto_loop.FROZEN and k != "GTRADE_AR_DECISION_BASIS"}
     env = dict(auto_loop.CAMPAIGN)
     assert auto_loop.freeze_problems(old, env) == []
 
 
 def test_a_real_move_is_still_refused():
-    old = {"GTRADE_AR_SCORE_BASIS": "net_auc", "GTRADE_AR_OBJECTIVE": "mean",
-           "GTRADE_AR_DECISION_BASIS": "raw"}
+    # Everything frozen agrees with the campaign except the decision basis, so
+    # the refusal being tested is the only one that can fire.
+    old = dict({k: v for k, v in auto_loop.CAMPAIGN.items()
+                if k in auto_loop.FROZEN}, GTRADE_AR_DECISION_BASIS="raw")
     env = dict(auto_loop.CAMPAIGN, GTRADE_AR_DECISION_BASIS="ens_auc")
     problems = auto_loop.freeze_problems(old, env)
     assert problems and "GTRADE_AR_DECISION_BASIS" in problems[0]
@@ -76,9 +83,10 @@ def test_naming_a_decision_basis_does_not_throw_the_search_archive_away(tmp_path
     archive.write_text(json.dumps({"2_4_5": {"fitness": 0.065, "genome": {}}}),
                        encoding="utf-8")
     monkeypatch.setattr(auto_loop, "ARCHIVE_PATH", str(archive))
-    state = {"campaign": {"GTRADE_AR_SCORE_BASIS": "net_auc",
-                          "GTRADE_AR_OBJECTIVE": "mean",
-                          "GTRADE_AR_DECISION_BASIS": ""}}
+    # The frozen campaign IS the current one except for the decision basis, so
+    # the only move on the table is the one that must not touch the archive.
+    state = {"campaign": {k: v for k, v in auto_loop.CAMPAIGN.items()
+                          if k in auto_loop.FROZEN}}
     env = dict(auto_loop.CAMPAIGN, GTRADE_AR_DECISION_BASIS="raw")
     auto_loop.start_campaign(state, env, "split the bases")
     assert archive.exists(), "the archive was set aside for a decision-basis change"

@@ -1,11 +1,13 @@
 """The card block: odds when they can be quoted, a named status when they cannot.
 Synthetic bars only - no intraday.db, no fitted file."""
 import json
+import os
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from core.intraday_card import intraday_for_asset, load_fit
+from core.intraday_card import FIT_PATH, intraday_for_asset, load_fit
 
 FIT = {"w": -0.4098, "b": 0.7770, "offsets": {}, "cutoff": "2025-10-13"}
 
@@ -44,7 +46,9 @@ def test_a_nearer_level_is_quoted_at_better_odds():
 
 def test_without_a_calibration_it_says_so():
     got = intraday_for_asset("BTC", _bars(), "UTC", fit=None)
-    # load_fit() finds the real file in this checkout, so force the absence
+    # Name a path that cannot exist, rather than relying on whether THIS machine
+    # happens to carry a fitted calibration: the checkout that fitted one does,
+    # CI never does, and a test must mean the same thing in both.
     assert load_fit("nowhere.json") is None
     assert got["status"] in ("ok", "no_calibration")
 
@@ -77,10 +81,37 @@ def test_the_cutoff_of_the_fit_travels_to_the_card():
     assert got["cutoff"] == "2025-10-13"
 
 
-def test_the_shipped_calibration_loads():
-    fit = load_fit()
+def test_load_fit_reads_a_calibration(tmp_path):
+    """The loader itself, on a file this test writes.
+
+    This replaces an assertion about the SHIPPED file. intraday_reach.json is a
+    fitted policy and gitignored like levels_policy.json, so it exists in the
+    checkout that fitted it and never in CI, where the old test failed with
+    `assert None is not None`. This module's own docstring already promised
+    "no fitted file"; that one test was the exception to it.
+    """
+    p = tmp_path / "intraday_reach.json"
+    p.write_text(json.dumps({"w": -0.4098, "b": 0.7770, "cutoff": "2025-10-13",
+                             "offsets": {"BTC": 0.1, "SBER": "-0.2"}}),
+                 encoding="utf-8")
+    fit = load_fit(str(p))
     assert fit is not None
     assert fit["w"] < 0                      # further away, lower odds
+    assert fit["cutoff"] == "2025-10-13"
+    # offsets are coerced to float, including one that arrived as a string
+    assert fit["offsets"]["SBER"] == -0.2
+
+
+@pytest.mark.skipif(not os.path.exists(FIT_PATH),
+                    reason="intraday_reach.json is a fitted policy, gitignored "
+                           "like every other one, so it exists only where it was "
+                           "fitted. Absent is correct here, not a failure.")
+def test_the_shipped_calibration_is_sane():
+    """Runs only in a checkout that has actually fitted one, and there it is a
+    real check: a positive w would quote BETTER odds for a FURTHER level."""
+    fit = load_fit()
+    assert fit is not None
+    assert fit["w"] < 0
     assert len(fit["offsets"]) > 100
 
 

@@ -837,23 +837,64 @@ def band_for(profile):
 import gc as _gc
 
 
-def choose_champion_fold(fold_metrics, fold_floor, force):
+def champion_basis():
+    """What decides WHICH fold becomes the champion, and whether it is promoted.
+
+    acc    (default) the fold's ensemble ACCURACY on its own test window: how
+           often it called the next bar correctly. Trade counts play no part.
+    score  the historical behaviour: argmax over the trading Score, among folds
+           that cleared the trade floor.
+
+    The default is `acc` since 2026-09-12, by the owner's decision: accuracy of
+    the next-bar prediction is what this system is for, and profitability is the
+    backtest's question, asked of a model that was already chosen. Set
+    GTRADE_CHAMPION_BASIS=score to restore the previous selection exactly.
+    """
+    b = (os.getenv("GTRADE_CHAMPION_BASIS") or "acc").strip().lower()
+    if b not in ("acc", "score"):
+        logger.warning("unknown GTRADE_CHAMPION_BASIS %r, using acc", b)
+        return "acc"
+    return b
+
+
+def choose_champion_fold(fold_metrics, fold_floor, force, basis=None):
     """(champion fold as a COPY, admitted folds).
 
-    A fold is admitted when its trading Score can be trusted: at least
-    `fold_floor` test trades. The best admitted fold is the champion, as before.
+    Under basis `score` a fold is admitted when its trading Score can be
+    trusted: at least `fold_floor` test trades. The best admitted fold is the
+    champion, which is what every champion before 2026-09-12 was.
 
-    With none admitted, force-promote takes the LATEST fold. The floor says
-    whether a Score is reliable, not whether the model is accurate, and
-    force-promote exists for a changed feature chain. Returning nothing there
-    kept the old champion, fitted on inputs that no longer exist: after the
-    2026-09-08 weekly-leak fix 369 of 847 assets stayed on leak-trained models,
-    because an honest model near 0.5 rarely crosses a threshold ten times in
-    121 bars. Without force the old behaviour stands.
+    Under basis `acc` a fold is admitted when its ACCURACY is measurable, and
+    the trade floor plays no part at all. The count of trades says whether a
+    trading Score can be trusted; it has never said anything about whether a
+    model predicts the next bar. It is also why 383 assets carried no champion:
+    an honest model near 0.5 rarely crosses its threshold ten times in 121 bars.
+
+    The `acc` champion is the LATEST admitted fold, deliberately NOT the most
+    accurate one. Picking the best fold is an argmax over folds, the same
+    selection that makes CB_Acc unusable: measured 2026-09-12, the top quartile
+    of assets by champion-fold accuracy averaged 0.6356 offline and 0.4820 live,
+    WORSE than the rest. The latest fold is the only choice carrying no
+    selection, it has trained on the most history (which fixes a median
+    train_end of 2024-05-03 on champions serving in September), and it is the
+    one fold besides the running-best whose Keras models are still in memory to
+    be saved.
+
+    With none admitted, force-promote takes the LATEST fold. Returning nothing
+    there kept the old champion, fitted on inputs that no longer exist: after
+    the 2026-09-08 weekly-leak fix 369 of 847 assets stayed on leak-trained
+    models. Without force the old behaviour stands.
 
     A copy, because the caller writes the median into it and fold_metrics
     must keep that fold's own score for Fold_Scores and the journal.
     """
+    if (basis or champion_basis()) == "acc":
+        usable = [f for f in fold_metrics if f.get('ens_acc') is not None]
+        if usable:
+            return dict(usable[-1]), usable
+        if force and fold_metrics:
+            return dict(fold_metrics[-1]), []
+        return None, []
     valid = [f for f in fold_metrics if f['score'] > -999 and f['test_trades'] >= fold_floor]
     if valid:
         return dict(max(valid, key=lambda x: x['score'])), valid
@@ -1544,31 +1585,68 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
         # flag - otherwise v2 would spuriously drop folds/assets and bias any
         # objective A/B toward HOLD.
         _fold_floor, _trusted_floor = (5, 10) if objective_v2_on() else (10, 20)
-        best_fold, valid_folds = choose_champion_fold(fold_metrics, _fold_floor, _FORCE_PROMOTE)
+        _champ_basis = champion_basis()
+        best_fold, valid_folds = choose_champion_fold(fold_metrics, _fold_floor,
+                                                      _FORCE_PROMOTE, _champ_basis)
         if best_fold is None:
-            _safe_print(f"  [WARN] {asset:<12} no robust folds")
+            _safe_print(f"  [WARN] {asset:<12} no fold could be measured")
             return None
 
         if valid_folds:
-            pos_ratio = sum(1 for f in valid_folds if f['test_profit'] > 0) / len(valid_folds)
-            if pos_ratio < 0.45:
-                _safe_print(f"  [WARN] {asset:<12} unstable folds (pos_ratio={pos_ratio:.2f})")
+            # Only folds that actually traded can say anything about profit. On
+            # the accuracy basis most admitted folds trade little or not at all,
+            # and counting their zero profit as "not positive" printed the
+            # instability warning for nearly every asset.
+            _traded = [f for f in valid_folds if f['test_trades'] > 0]
+            if _traded:
+                pos_ratio = sum(1 for f in _traded if f['test_profit'] > 0) / len(_traded)
+                if pos_ratio < 0.45:
+                    _safe_print(f"  [WARN] {asset:<12} unstable folds (pos_ratio={pos_ratio:.2f})")
             # The median travels on, into the registry and the quality row;
             # best_fold is a copy, so the fold's own score stays in fold_metrics
             # for Fold_Scores and the experiments journal.
-            best_fold['score'] = float(np.median([f['score'] for f in valid_folds]))
-            best_fold['test_profit'] = float(np.median([f['test_profit'] for f in valid_folds]))
+            #
+            # Sentinels are excluded from it. Under the accuracy basis a fold is
+            # admitted without clearing the trade floor, so UNRELIABLE_SCORE can
+            # now reach this list, and a median taken over it would be the same
+            # missing-data-as-a-number that weighted_score exists to stop. With
+            # every admitted fold unscorable the champion keeps its own sentinel,
+            # which is the honest reading: no trustworthy Score here.
+            _real = [f['score'] for f in valid_folds if f['score'] > UNRELIABLE_SCORE]
+            if _real:
+                best_fold['score'] = float(np.median(_real))
+            _profits = [f['test_profit'] for f in _traded] if _traded else []
+            if _profits:
+                best_fold['test_profit'] = float(np.median(_profits))
         else:
-            _safe_print(f"  [WARN] {asset:<12} no robust folds - latest fold force-promoted, "
-                        f"Score unreliable")
+            _safe_print(f"  [WARN] {asset:<12} nothing admitted - latest fold "
+                        f"force-promoted, Score unreliable")
 
         # Save models
         cb_out = os.path.join(MODEL_DIR, f"{table}_cb.cbm")
         lstm_out = os.path.join(MODEL_DIR, f"{table}_lstm.keras")
 
-        promote = (_FORCE_PROMOTE
-                   or prev_registry_entry is None
-                   or best_fold['score'] > (prev_registry_entry.get('score', -1e9) + 0.2))
+        if _champ_basis == "acc":
+            # Champion-challenger on the quantity the champion was chosen by.
+            # Leaving this on Score would have refused a MORE accurate model for
+            # backtesting worse, which is the whole reason the basis moved.
+            #
+            # A previous entry with no recorded accuracy promotes unconditionally:
+            # every champion stored before 2026-09-12 was selected by Score, so
+            # there is no accuracy of its to compare against, and pretending one
+            # exists would freeze the old selection in place forever.
+            _prev_acc = (prev_registry_entry or {}).get('ens_acc')
+            _this_acc = best_fold.get('ens_acc')
+            promote = (_FORCE_PROMOTE
+                       or prev_registry_entry is None
+                       or _prev_acc is None
+                       or (_this_acc is not None
+                           and _this_acc > _prev_acc
+                           + _env_float("GTRADE_CHAMPION_ACC_MARGIN", 0.005)))
+        else:
+            promote = (_FORCE_PROMOTE
+                       or prev_registry_entry is None
+                       or best_fold['score'] > (prev_registry_entry.get('score', -1e9) + 0.2))
 
         # If final best_fold differs from running best (edge case: adv_weight divergence),
         # its Keras models may have already been freed - fall back to FROZEN_CHAMPION.
@@ -1605,6 +1683,11 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     logger.info("[meta] saved sizing model for %s", asset)
                 registry_update = {
                     'score': best_fold['score'],
+                    # The champion's own fold accuracy. Without it the next run
+                    # has nothing to run champion-challenger against on the
+                    # accuracy basis, and every retrain would promote blindly.
+                    'ens_acc': best_fold.get('ens_acc'),
+                    'champion_basis': _champ_basis,
                     'updated_at': datetime.now().isoformat(),
                     'buy_thr': best_fold['buy_thr'],
                     'sell_thr': best_fold['sell_thr'],
@@ -1633,8 +1716,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 policy_status = "FROZEN_CHAMPION"
 
         status = "TRUSTED" if (best_fold['score'] > 1.5 and best_fold['test_trades'] >= _trusted_floor) else "UNSTABLE"
-        # Averaged over EVERY fold, not the champion one: the champion is picked
-        # by argmax and so inherits the same instability as the Score.
+        # Averaged over EVERY fold, not the champion one. Under the `score`
+        # basis the champion is an argmax and inherits the Score's instability;
+        # under `acc` it is simply the latest fold, so these still answer a
+        # different question than its own numbers do.
         _net_auc = _fold_mean(fold_metrics, 'net_auc')
         _cb_auc = _fold_mean(fold_metrics, 'cb_auc')
         _ens_auc = _fold_mean(fold_metrics, 'ens_auc')

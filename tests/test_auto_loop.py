@@ -246,7 +246,10 @@ def test_every_campaign_key_is_present_even_when_unset():
     env = auto_loop.build_env({})
     for key in auto_loop.CAMPAIGN:
         assert key in env, key
-    assert env["GTRADE_AR_SCORE_BASIS"] == "net_auc"
+    # ens_acc since 2026-09-12: the unattended campaign searches on the same
+    # accuracy the champion is now selected by, so the search, the adoption and
+    # the served model all answer one question instead of three.
+    assert env["GTRADE_AR_SCORE_BASIS"] == "ens_acc"
 
 
 def test_an_explicit_budget_beats_both():
@@ -687,7 +690,8 @@ def test_an_unset_illumination_is_not_a_problem_on_any_basis():
     the basis. Left as it was, a net-basis campaign that simply never sets the
     variable would be refused for a CatBoost illumination it is not going to do.
     """
-    for basis in ("net_auc", "net_gain", "ens_auc", "raw", "neural"):
+    for basis in ("net_auc", "net_gain", "ens_auc", "ens_acc", "trade_t",
+                  "raw", "neural"):
         env = {"GTRADE_AR_SCORE_BASIS": basis, "GTRADE_AR_SCREEN": "0"}
         assert auto_loop.campaign_problems(env) == [], basis
     # and the contradiction it exists for is still caught
@@ -702,17 +706,32 @@ def test_the_campaign_re_arms_the_tier_neural_veto(monkeypatch):
     the nets was off on the campaigns built to hunt net levers.
 
     The first assertion is the positive control: it proves the derived default
-    really is -inf on this campaign's basis, so the second one means something.
+    really is -inf on a basis that switches the veto off, so the second one
+    means something.
+
+    That control is anchored to net_auc by name rather than to the campaign's
+    own basis. neural_floor() returns -inf on net_auc and net_gain ONLY: it
+    stays armed on the ensemble bases on purpose, because Ens_AUC tracks CB_AUC
+    at rho 0.869, so a genome can lift the ensemble while starving the sequence
+    members. Reading the control off CAMPAIGN broke the day the campaign moved
+    to ens_acc - and it broke by asserting something that is no longer true,
+    which is the good kind of breakage.
     """
     import auto_research as ar
 
-    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS",
-                       auto_loop.CAMPAIGN["GTRADE_AR_SCORE_BASIS"])
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
     monkeypatch.delenv("GTRADE_AR_TIER_NEURAL_MIN", raising=False)
     assert ar.tier_neural_floor() == float("-inf")
 
     monkeypatch.setenv("GTRADE_AR_TIER_NEURAL_MIN",
                        auto_loop.CAMPAIGN["GTRADE_AR_TIER_NEURAL_MIN"])
+    assert ar.tier_neural_floor() == -1.0
+
+    # On the campaign's own basis the veto needs no re-arming at all: it is
+    # already on, and the campaign's explicit -1.0 equals the derived default.
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS",
+                       auto_loop.CAMPAIGN["GTRADE_AR_SCORE_BASIS"])
+    monkeypatch.delenv("GTRADE_AR_TIER_NEURAL_MIN", raising=False)
     assert ar.tier_neural_floor() == -1.0
 
     # and it is not in FROZEN, so setting it cannot strand a running campaign
@@ -724,7 +743,8 @@ def test_an_unset_screen_is_not_a_problem_on_any_basis():
     auto_research.bat set both BEFORE asking for the basis, so accepting the
     menu default built raw + full, which the campaign guard refuses outright:
     a default that produces a refused campaign is not a default."""
-    for basis in ("net_auc", "net_gain", "ens_auc", "raw", "neural"):
+    for basis in ("net_auc", "net_gain", "ens_auc", "ens_acc", "trade_t",
+                  "raw", "neural"):
         assert auto_loop.campaign_problems(
             {"GTRADE_AR_SCORE_BASIS": basis}) == [], basis
     assert auto_loop.default_screen("net_auc") == "0"

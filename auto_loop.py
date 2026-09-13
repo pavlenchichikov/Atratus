@@ -61,7 +61,13 @@ ARCHIVE_PATH = os.path.join(BASE, "_qd_archive.json")
 # auto_research, which is how a pinned 17 GB model reached a 15.7 GB machine.
 CAMPAIGN = {
     "GTRADE_AR_AXES": "qd",
-    "GTRADE_AR_SCORE_BASIS": "net_auc",
+    # Accuracy, by the owner's decision of 2026-09-12: an unattended campaign
+    # searches on the same quantity the champion is now selected by
+    # (GTRADE_CHAMPION_BASIS=acc in train_hybrid), so the search, the adoption
+    # and the champion all answer one question instead of three. ens_acc is in
+    # NET_BASES, so SCREEN=0 and ILLUM=full below remain the correct pairing and
+    # campaign_problems still accepts this campaign unchanged.
+    "GTRADE_AR_SCORE_BASIS": "ens_acc",
     # What an ADOPTION is judged on. Empty means "the search basis", which is the
     # behaviour every campaign before 2026-08-18 had. It is separate because the
     # search basis is chosen for measurability and the decision basis for

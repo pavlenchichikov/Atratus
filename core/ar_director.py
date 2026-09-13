@@ -35,7 +35,12 @@ AXES = ("qd", "features", "labeling", "pruning", "hyper", "nets",
         "thresholds", "regime", "weighting")
 LABEL_MODES = ("direction", "triple_barrier")
 PROPOSERS = ("evolutionary", "llm")
-BASES = ("raw", "neural", "net_auc", "net_gain", "ens_auc")
+# Kept in step with auto_research._score_basis. The list had already drifted
+# once: trade_t was added there in September and never here, so the director
+# could not open a campaign on a basis the launcher offered. ens_acc joins them
+# both - it is the accuracy basis, and refusing it here would leave the director
+# unable to ask for the one quantity the system is now selected on.
+BASES = ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc", "trade_t")
 OBJECTIVES = ("mean", "min", "median", "cvar", "sharpe", "trimmed_mean")
 MODES = ("search", "regate")
 ILLUM = ("cb", "full")
