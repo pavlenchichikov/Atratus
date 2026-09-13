@@ -242,3 +242,94 @@ def test_an_unknown_asset_has_no_timezone_rather_than_a_wrong_one(tmp_path):
     it produces plausible sessions that are silently off."""
     import intraday_fetch as f
     assert f.load_tz("NOPE", db_path=str(tmp_path / "absent.db")) is None
+
+
+# --- keeping the store fresh -------------------------------------------------
+
+def _stored(f, db, asset="AAPL", ts="2026-09-04T14:30:00+00:00"):
+    f.store(asset, [{"ts": ts, "open": 1.0, "high": 1.0, "low": 1.0,
+                     "close": 1.0, "volume": 1.0}], db_path=db)
+
+
+def test_last_ts_reads_one_value_and_never_creates_the_store(tmp_path):
+    """fetch_all used to answer "has this asset any bars" by loading every bar
+    it has. Same rule as load(): a reader must not conjure the database."""
+    import os
+
+    import intraday_fetch as f
+    missing = str(tmp_path / "absent.db")
+    assert f.last_ts("AAPL", db_path=missing) is None
+    assert not os.path.exists(missing)
+
+    db = str(tmp_path / "intraday.db")
+    _stored(f, db, ts="2026-09-04T14:30:00+00:00")
+    _stored(f, db, ts="2026-09-05T14:30:00+00:00")
+    assert f.last_ts("AAPL", db_path=db) == "2026-09-05T14:30:00+00:00"
+    assert f.last_ts("NOPE", db_path=db) is None
+
+
+def test_a_top_up_asks_for_a_short_window_and_a_first_fetch_for_the_long_one(tmp_path, monkeypatch):
+    """The positive control for the whole change. A top-up that still requested
+    730d would work and would keep costing 844 full downloads to collect a few
+    days, which is exactly why the store was never refreshed."""
+    import intraday_fetch as f
+    db = str(tmp_path / "intraday.db")
+    monkeypatch.setattr(f, "DB_PATH", db)
+    _stored(f, db)
+
+    http = _FakeHttp({"chart": {"result": []}})
+    f.fetch_all(["AAPL"], http=http, db_path=db, mode="top_up", log=lambda *a: None)
+    assert "range=1mo" in http.calls[0], http.calls[0]
+
+    http2 = _FakeHttp({"chart": {"result": []}})
+    f.fetch_all(["MSFT"], http=http2, db_path=db, mode="top_up", log=lambda *a: None)
+    assert "range=730d" in http2.calls[0], (
+        "an asset with no history must still get the full window")
+
+
+def test_a_moex_top_up_starts_from_the_last_stored_bar_not_2015(tmp_path, monkeypatch):
+    """The expensive half: ISS pages 500 candles at a time from MOEX_START, so
+    a top-up that ignored the stored history re-walked eleven years per asset."""
+    import intraday_fetch as f
+    db = str(tmp_path / "intraday.db")
+    monkeypatch.setattr(f, "DB_PATH", db)
+    _stored(f, db, asset="GAZP", ts="2026-09-05T07:00:00+00:00")
+
+    http = _FakeHttp({"candles": {"columns": [], "data": []}})
+    f.fetch_all(["GAZP"], http=http, db_path=db, mode="top_up", log=lambda *a: None)
+    assert "from=2026-09-05" in http.calls[0], http.calls[0]
+    assert f.MOEX_START not in http.calls[0]
+
+
+def test_the_default_mode_still_skips_a_stored_asset(tmp_path, monkeypatch):
+    """Backwards compatibility is the point: `new` is what every existing
+    caller means, and a mode that quietly started refetching would turn a
+    cheap call into 844 downloads."""
+    import intraday_fetch as f
+    db = str(tmp_path / "intraday.db")
+    monkeypatch.setattr(f, "DB_PATH", db)
+    _stored(f, db)
+    http = _FakeHttp({"chart": {"result": []}})
+    out = f.fetch_all(["AAPL", "MSFT"], http=http, db_path=db, log=lambda *a: None)
+    assert out["AAPL"] == "skip"
+    assert len(http.calls) == 1 and "MSFT" in http.calls[0]
+
+
+def test_refetch_keyword_and_mode_agree(tmp_path, monkeypatch):
+    """`refetch=True` predates `mode`; it must keep meaning exactly what it did."""
+    import intraday_fetch as f
+    db = str(tmp_path / "intraday.db")
+    monkeypatch.setattr(f, "DB_PATH", db)
+    _stored(f, db)
+    http = _FakeHttp({"chart": {"result": []}})
+    f.fetch_all(["AAPL"], http=http, refetch=True, db_path=db, log=lambda *a: None)
+    assert "range=730d" in http.calls[0], "a refetch takes everything, not a window"
+
+
+def test_an_unknown_mode_is_refused_rather_than_guessed(tmp_path, monkeypatch):
+    import pytest
+
+    import intraday_fetch as f
+    monkeypatch.setattr(f, "DB_PATH", str(tmp_path / "intraday.db"))
+    with pytest.raises(ValueError):
+        f.fetch_all(["AAPL"], mode="fresh", log=lambda *a: None)
