@@ -45,11 +45,11 @@
 
 ## Features
 
-- **One model per asset, not one model for the market.** Every asset trains its own ensemble of four members (CatBoost, LSTM, Transformer, TCN), and the champion is chosen by a walk-forward backtest with commissions, slippage and an embargo against leakage. This is the central design decision, and the counts below are what it costs and what it buys.
+- **One model per asset, not one model for the market.** Every asset trains its own ensemble of four members (CatBoost, LSTM, Transformer, TCN), and the champion is chosen by how accurately it calls the NEXT BAR, walk-forward, with an embargo against leakage. Until 2026-09-12 a backtest Score chose it instead; that Score is still computed and still reported, it simply no longer decides, because the prediction is the product and profitability is the backtest's question. `GTRADE_CHAMPION_BASIS=score` restores the old rule exactly. This is the central design decision, and the counts below are what it costs and what it buys.
 
   As of 2026-09-05: **847 tickers in `FULL_ASSET_MAP`, 838 of them trained, 9 awaiting a first train.** The gap is not decay. A ticker is added to the map the moment it is worth following, and training it is a separate, expensive act, so the map always runs ahead of `models/`. The nine are recent listings and index additions; `[5F] Fill in / repair champions` is the entry that closes it.
 
-  Of the 838, **535 were retrained on 2026-09-04 under the adopted genome `4_4_5` and promoted; 303 kept the champion they had**, because champion-challenger only replaces a champion the new model beats by 0.2. That split is the mechanism working, not a failure - and 211 of those 303 are why the section on serving a per-asset genome exists.
+  Of the 838, **535 were retrained on 2026-09-04 under the adopted genome `4_4_5` and promoted; 303 kept the champion they had**, because champion-challenger only replaces a champion the new model beats. The margin is `GTRADE_CHAMPION_ACC_MARGIN` (0.005 of accuracy) since 2026-09-12, and was 0.2 of Score before it; the first retrain on the accuracy basis promotes every asset once, because no champion stored under the old rule carries an accuracy to be compared against. That split is the mechanism working, not a failure - and 211 of those 303 are why the section on serving a per-asset genome exists.
 
   There are also **four model sets on disk whose map entry is gone** (`avb`, `eqr`, `wbs`, `brkb`). Three are assets dropped from the map. The fourth is a rename: Berkshire moved from `BRKB` to `BRK-B`, whose model filename is `brk_b`, so a trained model was orphaned and the asset now counts as untrained. Renaming a map key without moving its model files does that silently, and `[M] Model Health` is where it shows.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
@@ -65,7 +65,7 @@
 ## How it works
 
 1. `data_engine.py` downloads up to 15 years of daily and weekly quotes from Yahoo Finance and MOEX into `market.db` (SQLite).
-2. `train_hybrid.py` builds the features (above), trains the ensemble, and saves the champion together with its scaler and probability calibrator, chosen by walk-forward backtest.
+2. `train_hybrid.py` builds the features (above), trains the ensemble, and saves the champion together with its scaler and probability calibrator, chosen by walk-forward accuracy on the next bar. The quality report carries `Ens_Acc` and `CB_Acc_Mean` beside the older columns: those two are averaged over every fold, while `CB_Acc` belongs to the champion fold alone.
 3. `predict.py` prints BUY / SELL / WAIT with confidence for all assets.
 4. `backtest.py` checks champions on held-out data: PnL, win rate, Sharpe, directional accuracy, Brier, alpha vs buy & hold.
 5. `risk_manager.py` and `portfolio.py` do position sizing, loss limits and correlation checks. Tail risk is gated by the Taleb index: size shrinks above the soft cap, new buys are blocked above the hard cap.
@@ -213,7 +213,7 @@ a working default, so pressing Enter through it is a valid run.
 | LLM only: reflect | `2` makes the model first write one line on why the recent experiments failed, then propose with that in front of it. One extra call per step |
 | `[3]` Budget | How many NEW candidates this run. Past candidates are never re-tested |
 | `[4]` Objective | How per-asset lifts become one number. `mean` by default; `cvar` and `min` optimize the worst assets instead of the average. Six options, table below |
-| `[4b]` Score basis | `1` raw ensemble Score, `2` the neural contribution, `3` the nets' own AUC. See below |
+| `[4b]` Score basis | `1` raw ensemble Score, `2` the neural contribution, `3` the nets' own AUC, `4` net gain, `5` ensemble AUC, `6` ensemble ACCURACY, `7` pooled trade t. See below |
 | `[5]` Research wiki | `2` folds this run's findings into the knowledge base under `_ar_wiki/` and lets the proposer read it. Uses the LLM backend, so it costs one call at the end. Off by default |
 | `[6]` RL scheduler | `2` lets the bandit allocate the budget across child sources instead of drawing uniformly. Off by default; it never affects what passes the gate |
 | Illumination | Not a prompt: `GTRADE_AR_ILLUM` in the launcher's knobs block. `cb` (default) illuminates the QD archive on the CatBoost-only screen, `full` on real nets. See below |

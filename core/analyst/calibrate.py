@@ -114,7 +114,7 @@ def forecast(judgment, cells, asset, asset_class, atr_today, close_today,
     """The percent forecast for one judgment, with its interval and provenance.
 
     `source` has three states, split at the same `MIN_CELL_OWN` that decides
-    whether the interval comes from the cell or the prior — one threshold,
+    whether the interval comes from the cell or the prior - one threshold,
     one story:
       "prior"    the cell has no observations; the number is the prior alone.
       "blended"  the cell has some observations but fewer than MIN_CELL_OWN;
