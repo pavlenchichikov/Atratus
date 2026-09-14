@@ -72,17 +72,28 @@ def test_no_adoption_changes_nothing(tmp_path):
                 "print(len(active_candidate_features()), feature_version())",
                 str(tmp_path / "absent.json"))
     n, ver = line.split()
-    assert int(n) == 34, f"unadopted feature count changed from 34 to {n}"
-    assert ver == "c48ee7bf", f"unadopted feature_version changed to {ver}"
+    # Re-captured 2026-09-14, from 34 / c48ee7bf, when the non-price inputs were
+    # added to CANDIDATE_FEATURES_EXT: three breadth columns and two COT ones.
+    # The baseline moved because the input space did, which is the one reason
+    # this pin may be rewritten - never to make a failure go away.
+    assert int(n) == 39, f"unadopted feature count changed from 39 to {n}"
+    assert ver == "db1ee1dd", f"unadopted feature_version changed to {ver}"
 
 
 def test_an_adoption_changes_the_feature_version(tmp_path):
     # The other side of the same coin: adopting MUST move feature_version, so the
     # live track record cannot blend two model generations.
-    line = _run("import config;"
-                "from core.features import feature_version; print(feature_version())",
-                _write(tmp_path))
-    assert line != "c48ee7bf"
+    #
+    # Compared against the UNADOPTED version computed here, not against a frozen
+    # literal. It used to assert `!= "c48ee7bf"`, and on 2026-09-14 the baseline
+    # moved away from that string on its own: the test would then have passed
+    # even if adoption changed nothing at all, which is the failure mode it
+    # exists to catch.
+    code = ("import config;"
+            "from core.features import feature_version; print(feature_version())")
+    unadopted = _run(code, str(tmp_path / "absent.json"))
+    adopted = _run(code, _write(tmp_path))
+    assert adopted != unadopted, "adoption left the feature version untouched"
 
 
 def test_load_dsl_specs_falls_back_to_the_adopted_specs(tmp_path):

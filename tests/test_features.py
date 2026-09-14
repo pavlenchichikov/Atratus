@@ -201,7 +201,14 @@ def test_candidate_lists_base_and_ext():
     assert "sma_20" in F.CANDIDATE_FEATURES_EXT
     for c in ("macro_tnx", "ret_1_vn", "lead_sp500_ret", "cal_dow"):
         assert c in F.CANDIDATE_FEATURES_EXT
-    assert len(F.CANDIDATE_FEATURES_EXT) == 34
+    # The non-price inputs, added 2026-09-14. Named here and not only counted:
+    # bumping the length alone would relax the pin instead of extending it.
+    for c in ("breadth_above_sma50", "breadth_positive_20d", "breadth_above_chg20",
+              "cot_net_pct", "cot_net_chg4"):
+        assert c in F.CANDIDATE_FEATURES_EXT
+    # base is unchanged by them: breadth and COT belong to the extended set only
+    assert not any(c.startswith(("breadth_", "cot_")) for c in F.CANDIDATE_FEATURES)
+    assert len(F.CANDIDATE_FEATURES_EXT) == 39
 
 
 def test_active_candidate_features_flag(monkeypatch):

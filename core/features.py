@@ -462,6 +462,120 @@ def add_macro_features(df: pd.DataFrame, engine) -> pd.DataFrame:
     return df.reset_index()
 
 
+_BREADTH_FEATURES = ['breadth_above_sma50', 'breadth_positive_20d',
+                     'breadth_above_chg20']
+
+
+def add_breadth_features(df: pd.DataFrame, engine) -> pd.DataFrame:
+    """Merge market breadth (how much of the BOOK is advancing) into a frame.
+
+    The first non-price input this project has used. Breadth is the same value
+    for every asset on a date, so it cannot say which name to hold, only what
+    regime the market is in - which is exactly the information a per-asset
+    price history cannot contain.
+
+    Causal by construction on the producing side: build_breadth measures each
+    asset on its own calendar with rolling(50) and pct_change(20), both strictly
+    backward, then aligns by forward fill with a 5-day limit. A row dated D is
+    built from bars up to and including D, the same contract macro_* already
+    carries, so the as-of join below needs no extra shift.
+
+    The head of the series is BACK-filled rather than zero-filled. market_breadth
+    starts 2001-10-02 and 94 assets have bars before it; zero would mean "none of
+    the book is above its SMA50", which is a crash, not a missing reading. That
+    is 5239 bars of 3140727 (0.2%), IMOEX carrying 1007 of them.
+    """
+    date_col = 'Date' if 'Date' in df.columns else ('date' if 'date' in df.columns else None)
+    if date_col is None:
+        for c in _BREADTH_FEATURES:
+            df[c] = 0.0
+        return df
+    df = df.set_index(date_col)
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    try:
+        b = pd.read_sql("SELECT Date, above_sma50_pct, positive_20d_pct "
+                        "FROM market_breadth", engine,
+                        index_col="Date", parse_dates=["Date"])
+        b.index = pd.to_datetime(b.index).normalize()
+        b = b[~b.index.duplicated(keep='last')].sort_index()
+    except Exception:
+        for c in _BREADTH_FEATURES:
+            df[c] = 0.0
+        return df
+
+    cols = {
+        'breadth_above_sma50': b['above_sma50_pct'],
+        'breadth_positive_20d': b['positive_20d_pct'],
+        'breadth_above_chg20': b['above_sma50_pct'].diff(20),
+    }
+    feats = pd.concat(cols, axis=1).sort_index()
+    for c in _BREADTH_FEATURES:
+        s = feats[c].reindex(df.index, method='ffill')
+        # bfill only reaches rows OLDER than the series, never newer ones, so it
+        # cannot import a future reading; a change column still gets 0.0, where
+        # "no change known" is the honest neutral.
+        if c.endswith('_chg20'):
+            df[c] = s.fillna(0.0).values
+        else:
+            df[c] = s.bfill().fillna(0.0).values
+    return df.reset_index()
+
+
+# Speculative positioning from the CFTC Commitments of Traders. 27 of the 847
+# assets have it; the rest keep the columns at 0.0 so the vector shape is stable.
+# 0.0 on a NET ratio reads as "balanced", which conflates flat with unknown - a
+# presence flag would separate them and is deliberately not added, because the
+# models are per-asset and such a flag is constant inside every one of them.
+_COT_FEATURES = ['cot_net_pct', 'cot_net_chg4']
+# The report is weekly and reaches the public three days later (measured: a lag
+# of exactly 3 days on all 40982 rows). Ten trading days of carry covers the
+# week plus slack; past that a series has stopped, as NZDUSD did in 2022-02 and
+# USDRUB in 2022-03, and it must decay rather than persist for ever.
+_COT_FFILL_LIMIT = 10
+
+
+def add_cot_features(df: pd.DataFrame, asset: str, engine) -> pd.DataFrame:
+    """Merge net speculative positioning for the assets the CFTC covers.
+
+    Joined on available_date, never report_date. The report describes the
+    Tuesday but is published the Friday after, so joining on the date it
+    DESCRIBES would hand every row three days it could not have known - the same
+    shape as the weekly leak that cost this project its offline numbers.
+    """
+    date_col = 'Date' if 'Date' in df.columns else ('date' if 'date' in df.columns else None)
+    if date_col is None:
+        for c in _COT_FEATURES:
+            df[c] = 0.0
+        return df
+    df = df.set_index(date_col)
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    try:
+        c = pd.read_sql(
+            "SELECT available_date, open_interest, noncomm_long, noncomm_short "
+            "FROM cot WHERE asset = '%s'" % asset.replace("'", "''"), engine,
+            index_col="available_date", parse_dates=["available_date"])
+        c.index = pd.to_datetime(c.index).normalize()
+        c = c[~c.index.duplicated(keep='last')].sort_index()
+    except Exception:
+        c = pd.DataFrame()
+
+    if c.empty or 'open_interest' not in c:
+        for name in _COT_FEATURES:
+            df[name] = 0.0
+        return df
+
+    oi = c['open_interest'].replace(0.0, np.nan)
+    net = (c['noncomm_long'] - c['noncomm_short']) / oi
+    cols = {'cot_net_pct': net, 'cot_net_chg4': net.diff(4)}
+    feats = pd.concat(cols, axis=1).sort_index()
+    for name in _COT_FEATURES:
+        s = feats[name].reindex(df.index, method='ffill', limit=_COT_FFILL_LIMIT)
+        df[name] = s.fillna(0.0).values
+    return df.reset_index()
+
+
 _CROSS_LAG_FEATURES = ['lead_sp500_ret', 'lead_vix_ret', 'lead_btc_ret']
 
 
@@ -525,6 +639,11 @@ def build_features(df_raw, table, engine):
     df = add_crossasset_features(df, table, engine)
     df = add_macro_features(df, engine)
     df = add_cross_lag_features(df, engine)
+    # Non-price inputs, added 2026-09-14. Both fill rather than drop, like every
+    # step after engineer_features: a NaN here would shorten the frame and move
+    # the walk-forward grid, which is a silent change to fold geometry.
+    df = add_breadth_features(df, engine)
+    df = add_cot_features(df, table.upper(), engine)
     return add_dsl_features(df, engine, load_dsl_specs())
 
 
@@ -550,6 +669,12 @@ CANDIDATE_FEATURES_EXT = [
     'ret_1_vn', 'ret_5_vn',
     'lead_sp500_ret', 'lead_vix_ret', 'lead_btc_ret',
     'cal_dow', 'cal_mpos',
+    # Non-price, 2026-09-14. Breadth is book-wide and available to every asset;
+    # COT covers 27 of them and sits at 0.0 for the rest. Adding these changes
+    # feature_version(), which is correct: a new input space is a new model
+    # generation and the live journal must not blend it with the old one.
+    'breadth_above_sma50', 'breadth_positive_20d', 'breadth_above_chg20',
+    'cot_net_pct', 'cot_net_chg4',
 ]
 
 
