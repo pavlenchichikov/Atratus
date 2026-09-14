@@ -326,6 +326,33 @@ def test_refetch_keyword_and_mode_agree(tmp_path, monkeypatch):
     assert "range=730d" in http.calls[0], "a refetch takes everything, not a window"
 
 
+def test_a_top_up_with_nothing_new_is_current_not_an_error(tmp_path, monkeypatch):
+    """store() counts rows ADDED, so a top-up that finds only bars it already
+    holds adds zero - the steady state. Reading that as "no bars" labelled 240
+    healthy assets as failures on 2026-09-13, AAPL and BTC among them."""
+    import intraday_fetch as f
+    db = str(tmp_path / "intraday.db")
+    monkeypatch.setattr(f, "DB_PATH", db)
+    # the exact bar parse_yahoo builds from this timestamp, stored in advance
+    _stored(f, db, ts="2026-09-08T13:30:00+00:00")
+    http = _FakeHttp(_payload([1788874200], [10.0]))
+    out = f.fetch_all(["AAPL"], http=http, db_path=db, mode="top_up",
+                      log=lambda *a: None)
+    assert out["AAPL"] == "current", out
+
+
+def test_an_asset_that_never_returns_a_bar_is_still_an_error(tmp_path, monkeypatch):
+    """The other half. DXYZ, GEV and IBIT really do return nothing, and a mode
+    that called every silence "current" would hide a dead ticker forever."""
+    import intraday_fetch as f
+    db = str(tmp_path / "intraday.db")
+    monkeypatch.setattr(f, "DB_PATH", db)
+    http = _FakeHttp({"chart": {"result": []}})
+    out = f.fetch_all(["DXYZ"], http=http, db_path=db, mode="top_up",
+                      log=lambda *a: None)
+    assert out["DXYZ"] == "error: no bars", out
+
+
 def test_an_unknown_mode_is_refused_rather_than_guessed(tmp_path, monkeypatch):
     import pytest
 

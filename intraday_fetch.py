@@ -268,7 +268,19 @@ def fetch_all(assets, http=None, refetch=False, db_path=None, log=print, mode=No
         since = newest[:10] if (mode == "top_up" and newest) else None
         try:
             rows, _tz = fetch_asset(asset, http=http, since=since, db_path=db_path)
-            out[asset] = "%d rows" % rows if rows else "error: no bars"
+            if rows:
+                out[asset] = "%d rows" % rows
+            elif since:
+                # store() counts rows ADDED, and a top-up that finds nothing new
+                # is the steady state, not a failure: the window overlaps bars
+                # already held, which INSERT OR REPLACE refreshes in place. The
+                # old "no rows means no bars" rule was right for a first fetch
+                # and became a lie here - it labelled 240 healthy assets as
+                # errors on 2026-09-13, AAPL and BTC among them, while only
+                # DXYZ, GEV and IBIT had genuinely never returned a bar.
+                out[asset] = "current"
+            else:
+                out[asset] = "error: no bars"
         except Exception as exc:
             out[asset] = "error: %s" % str(exc)[:80]
         log("[%d/%d] %-12s %s" % (i, len(assets), asset, out[asset]))
