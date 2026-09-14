@@ -502,7 +502,12 @@ def add_breadth_features(df: pd.DataFrame, engine) -> pd.DataFrame:
     except Exception:
         for c in _BREADTH_FEATURES:
             df[c] = 0.0
-        return df
+        # reset_index, because Date became the index four lines up. Returning
+        # without it leaves a DatetimeIndex, and make_walk_forward_splits hands
+        # back slice(0, tr_end), an INTEGER slice: "cannot do slice indexing on
+        # DatetimeIndex with these indexers [0] of type int", which killed 9 of
+        # 12 chunks on 2026-09-14.
+        return df.reset_index()
 
     cols = {
         'breadth_above_sma50': b['above_sma50_pct'],
@@ -564,7 +569,10 @@ def add_cot_features(df: pd.DataFrame, asset: str, engine) -> pd.DataFrame:
     if c.empty or 'open_interest' not in c:
         for name in _COT_FEATURES:
             df[name] = 0.0
-        return df
+        # The path 820 of 847 assets take, and the one that broke the retrain:
+        # Date was made the index above, so it has to be given back as a column
+        # here exactly as the normal path does at the end of this function.
+        return df.reset_index()
 
     oi = c['open_interest'].replace(0.0, np.nan)
     net = (c['noncomm_long'] - c['noncomm_short']) / oi

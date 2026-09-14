@@ -116,6 +116,56 @@ def test_an_asset_without_cot_keeps_the_column_shape(monkeypatch):
         assert c in out.columns and float(out[c].iloc[0]) == 0.0
 
 
+def test_every_path_gives_date_back_as_a_column(monkeypatch):
+    """The invariant the chain depends on, and the one my tests missed.
+
+    Both functions make Date the index to join on it. Every exit must undo that,
+    because make_walk_forward_splits returns slice(0, tr_end) and an integer
+    slice against a DatetimeIndex raises "cannot do slice indexing ... [0] of
+    type int". On 2026-09-14 the early return for an asset with no COT rows (820
+    of 847) skipped reset_index and took down 9 of 12 chunks. The old tests
+    checked the VALUES of the new columns and never the index they came back on.
+    """
+    import core.features as F
+
+    def check(out, label):
+        assert "Date" in out.columns, "%s did not return Date as a column" % label
+        assert not isinstance(out.index, pd.DatetimeIndex), \
+            "%s left a DatetimeIndex behind" % label
+
+    # the normal path, with data
+    b = pd.DataFrame({"above_sma50_pct": [0.6] * 5, "positive_20d_pct": [0.5] * 5},
+                     index=pd.date_range("2026-01-05", periods=5, freq="D"))
+    b.index.name = "Date"
+    monkeypatch.setattr(F.pd, "read_sql", lambda sql, engine, **kw: b.copy())
+    check(F.add_breadth_features(_daily(periods=5), engine=None), "breadth with data")
+    check(F.add_cot_features(_daily(periods=5), "GOLD", engine=None), "cot with data")
+
+    # the early return: no rows for this asset, which is the common case
+    monkeypatch.setattr(F.pd, "read_sql", lambda sql, engine, **kw: pd.DataFrame())
+    check(F.add_cot_features(_daily(periods=5), "AAPL", engine=None), "cot, no rows")
+
+    # the early return: the source table cannot be read at all
+    def boom(sql, engine, **kw):
+        raise RuntimeError("no such table")
+
+    monkeypatch.setattr(F.pd, "read_sql", boom)
+    check(F.add_breadth_features(_daily(periods=5), engine=None), "breadth, no table")
+    check(F.add_cot_features(_daily(periods=5), "AAPL", engine=None), "cot, no table")
+
+
+def test_an_integer_slice_still_works_after_the_chain(monkeypatch):
+    """The failure as the trainer meets it, rather than as a type check.
+
+    make_walk_forward_splits hands slice(0, n) to the frame. This asserts the
+    frame can still take one, which is what actually broke."""
+    import core.features as F
+    monkeypatch.setattr(F.pd, "read_sql", lambda sql, engine, **kw: pd.DataFrame())
+    out = F.add_cot_features(_daily(periods=10), "AAPL", engine=None)
+    assert len(out.iloc[slice(0, 5)]) == 5
+    assert str(out["Date"].iloc[0])[:10] == "2026-01-05"
+
+
 def test_a_frame_without_dates_still_keeps_the_column_shape(monkeypatch):
     """Both functions carry a "no date column" branch, and nothing covered it.
     The first version of these very tests fell into it silently and asserted on
