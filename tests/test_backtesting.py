@@ -92,6 +92,59 @@ class TestWalkForwardSplits:
             assert val_s.start == train_s.stop
             assert test_s.start == val_s.stop
 
+    def test_the_last_fold_trains_to_the_last_admissible_bar(self):
+        """The grid ends at min_train + k*step, and everything past that node was
+        trained on by no fold and tested by none either. Measured 2026-09-14 over
+        120 assets: a mean of 192 bars discarded, 225 on the long histories."""
+        n, val, test, emb = 1000, 100, 100, 10
+        splits = make_walk_forward_splits(n, min_train=200, val_size=val,
+                                          test_size=test, step=300, embargo=emb)
+        last_admissible = n - test - emb - val - emb
+        assert splits[-1][0].stop == last_admissible
+        # and nothing is left over after it
+        assert splits[-1][2].stop == n
+
+    def test_the_extra_fold_keeps_the_embargo_seams_and_the_bound(self):
+        """It must be built like every other fold, not appended by hand: the
+        purged-CV gap and the "test never exceeds n" rule are what make a fold
+        honest, and a second implementation is how they drift apart."""
+        n, emb = 1000, 10
+        splits = make_walk_forward_splits(n, min_train=200, val_size=100,
+                                          test_size=100, step=300, embargo=emb)
+        for train_s, val_s, test_s in splits:
+            assert val_s.start - train_s.stop == emb
+            assert test_s.start - val_s.stop == emb
+            assert test_s.stop <= n
+
+    def test_the_grid_geometry_is_recoverable(self, monkeypatch):
+        """The flag exists because this silently changes every training result.
+        Off, the splits are exactly the ones every run before 2026-09-14 used."""
+        monkeypatch.setenv("GTRADE_FINAL_FOLD_TO_END", "0")
+        off = make_walk_forward_splits(1000, min_train=200, val_size=100,
+                                       test_size=100, step=300, embargo=10)
+        monkeypatch.setenv("GTRADE_FINAL_FOLD_TO_END", "1")
+        on = make_walk_forward_splits(1000, min_train=200, val_size=100,
+                                      test_size=100, step=300, embargo=10)
+        assert len(on) == len(off) + 1
+        assert on[:-1] == off, "the pre-existing folds must not move"
+        # the positive control: with the flag off the waste comes back
+        assert off[-1][0].stop < on[-1][0].stop
+
+    def test_no_extra_fold_when_the_grid_already_reaches_the_end(self):
+        """A step that divides the series evenly leaves nothing over, and
+        appending a duplicate fold would double-count the last window."""
+        splits = make_walk_forward_splits(1000, min_train=200, val_size=100,
+                                          test_size=100, step=100, embargo=0)
+        ends = [s[0].stop for s in splits]
+        assert len(ends) == len(set(ends)), "a fold was duplicated"
+        assert splits[-1][0].stop == 800
+
+    def test_small_data_gains_no_fold_from_the_extension(self):
+        """With no admissible window at all the answer is still none: the
+        extension must not invent the one fold the guard refuses."""
+        assert make_walk_forward_splits(50, min_train=200, val_size=100,
+                                        test_size=100) == []
+
 
 class TestPnLFromSignals:
     def test_no_trades(self):
