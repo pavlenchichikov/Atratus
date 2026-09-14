@@ -36,7 +36,7 @@ echo =======================================================
 echo.
 echo  DAILY
 echo    [1] Full Cycle      [3] Predict (Radar)     [4] Data Update
-echo    [2] Dashboard       [WU] Web UI (FastAPI)
+echo    [2] Dashboard       [WU] Web UI (FastAPI)   [4H] Hourly bars
 echo.
 echo  TRAINING
 echo    [5] Train Models    [5C] Chunked            [5R] Chosen assets
@@ -86,6 +86,7 @@ if "%choice%"=="2" goto dashboard
 if /i "%choice%"=="WU" goto webui_root
 if "%choice%"=="3" goto predict
 if "%choice%"=="4" goto data_only
+if /i "%choice%"=="4H" goto intraday_topup
 if "%choice%"=="5" goto train_only
 if "%choice%"=="6" goto backtest
 if "%choice%"=="7" goto telegram_bot
@@ -200,6 +201,25 @@ echo a chunked run has touched its files in the last 30 minutes, and says so.
 echo Only the fetch runs then; do the repair from [F] afterwards.
 echo.
 python data_engine.py
+pause
+goto menu
+
+:intraday_topup
+cls
+echo Hourly bars for intraday.db, which feeds the "Reaches up/down today" block
+echo on the asset card. Nothing else refreshes this store: until 2026-09-13 the
+echo fetcher had no entry point at all and skipped any asset that already had
+echo bars, so there was a first fetch and a full re-download and nothing between.
+echo.
+echo This asks only for the gap. Yahoo gets a one-month window, MOEX starts from
+echo the last stored date, so a run costs minutes instead of re-pulling two years
+echo for each of 847 assets.
+echo.
+echo Safe to repeat. Bars are keyed on asset plus timestamp and replaced, so one
+echo stored before it was final is healed rather than duplicated, and an asset
+echo with nothing new reports "current" rather than an error.
+echo.
+python intraday_fetch.py --top-up
 pause
 goto menu
 

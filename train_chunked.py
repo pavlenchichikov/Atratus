@@ -92,7 +92,15 @@ def _done():
 
 def _merge_quality():
     """Fold this chunk's quality_report into the cumulative one so the final
-    report covers all assets instead of only the last chunk."""
+    report covers all assets instead of only the last chunk.
+
+    Rows for assets that have left FULL_ASSET_MAP are dropped. The merge only
+    ever added and overwrote, so an asset removed from the universe kept its
+    last row for ever: after the 2026-09-14 retrain AVB, EQR and WBS were still
+    in the report carrying champions from July and August, columns from a format
+    that no longer exists, and prices that stop three weeks back. Nothing was
+    going to overwrite them, because nothing trains them any more.
+    """
     cum = {}
     if os.path.exists(QCUM):
         try:
@@ -107,6 +115,10 @@ def _merge_quality():
                     cum[r["Asset"]] = r
         except Exception:
             pass
+    # Guarded: an empty map would mean the universe failed to import, and
+    # filtering on it would erase the whole report rather than tidy it.
+    if FULL_ASSET_MAP:
+        cum = {a: r for a, r in cum.items() if a in FULL_ASSET_MAP}
     recs = list(cum.values())
     for path in (QCUM, QPATH):
         with open(path, "w", encoding="utf-8") as f:

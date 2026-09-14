@@ -13,6 +13,76 @@ import auto_research as ar
 import train_chunked
 
 
+def _write_reports(tmp_path, monkeypatch, cumulative, this_chunk):
+    """Point the merge at temp files and seed both sides of it."""
+    import json
+    qcum = tmp_path / "_chunk_quality.json"
+    qpath = tmp_path / "quality_report.json"
+    qcum.write_text(json.dumps(cumulative), encoding="utf-8")
+    qpath.write_text(json.dumps(this_chunk), encoding="utf-8")
+    monkeypatch.setattr(train_chunked, "QCUM", str(qcum))
+    monkeypatch.setattr(train_chunked, "QPATH", str(qpath))
+    return qcum, qpath
+
+
+def _assets_in(path):
+    import json
+    return sorted(r["Asset"] for r in json.loads(path.read_text(encoding="utf-8")))
+
+
+def test_an_asset_that_left_the_universe_is_dropped_from_the_report(tmp_path, monkeypatch):
+    """The merge only ever added and overwrote, so a removed asset kept its last
+    row for ever. After the 2026-09-14 retrain AVB, EQR and WBS were still in the
+    report with champions from July and August and columns from a format that no
+    longer exists, because nothing trains them any more and nothing overwrote
+    them."""
+    monkeypatch.setattr(train_chunked, "FULL_ASSET_MAP", {"AAPL": "AAPL", "MSFT": "MSFT"})
+    qcum, qpath = _write_reports(
+        tmp_path, monkeypatch,
+        cumulative=[{"Asset": "AVB", "Score": 5.0}, {"Asset": "AAPL", "Score": 1.0}],
+        this_chunk=[{"Asset": "MSFT", "Score": 2.0}])
+    train_chunked._merge_quality()
+    assert _assets_in(qpath) == ["AAPL", "MSFT"]
+    assert _assets_in(qcum) == ["AAPL", "MSFT"]
+
+
+def test_the_merge_still_carries_assets_across_chunks(tmp_path, monkeypatch):
+    """The reason the merge exists: a chunk's own report covers only its own
+    assets, so dropping the rest would leave a report of the last 15."""
+    monkeypatch.setattr(train_chunked, "FULL_ASSET_MAP", {"AAPL": "AAPL", "MSFT": "MSFT"})
+    _qcum, qpath = _write_reports(
+        tmp_path, monkeypatch,
+        cumulative=[{"Asset": "AAPL", "Score": 1.0}],
+        this_chunk=[{"Asset": "MSFT", "Score": 2.0}])
+    train_chunked._merge_quality()
+    assert _assets_in(qpath) == ["AAPL", "MSFT"], "an earlier chunk's asset was lost"
+
+
+def test_a_fresh_row_overwrites_the_carried_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(train_chunked, "FULL_ASSET_MAP", {"AAPL": "AAPL"})
+    import json
+    _qcum, qpath = _write_reports(
+        tmp_path, monkeypatch,
+        cumulative=[{"Asset": "AAPL", "Score": 1.0}],
+        this_chunk=[{"Asset": "AAPL", "Score": 9.0}])
+    train_chunked._merge_quality()
+    rows = json.loads(qpath.read_text(encoding="utf-8"))
+    assert [r["Score"] for r in rows] == [9.0]
+
+
+def test_an_empty_universe_does_not_erase_the_report(tmp_path, monkeypatch):
+    """The positive control for the guard. FULL_ASSET_MAP is imported at module
+    load; if that import ever yields nothing, filtering on it would wipe every
+    row instead of tidying three."""
+    monkeypatch.setattr(train_chunked, "FULL_ASSET_MAP", {})
+    _qcum, qpath = _write_reports(
+        tmp_path, monkeypatch,
+        cumulative=[{"Asset": "AVB", "Score": 5.0}],
+        this_chunk=[{"Asset": "AAPL", "Score": 1.0}])
+    train_chunked._merge_quality()
+    assert _assets_in(qpath) == ["AAPL", "AVB"]
+
+
 def test_workers_are_divided_between_parallel_chunk_processes():
     """Two processes at the full worker count would double the concurrent
     trainings on a card with no room for them."""
