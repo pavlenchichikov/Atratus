@@ -835,6 +835,60 @@ def test_levels_page_renders_with_a_reason_when_there_are_no_bars(client):
     assert "no_bars" in r.text
 
 
+class _FakeProc:
+    """A process that is alive until told otherwise, so no scan is ever spawned."""
+
+    def __init__(self, alive=True):
+        self.pid = 4321
+        self._alive = alive
+
+    def poll(self):
+        return None if self._alive else 0
+
+
+def test_the_levels_sheet_can_be_searched_by_ticker(client):
+    """847 assets make an unfiltered sheet unreadable, and the row needs the
+    ticker as data for the filter to have anything to match on."""
+    r = client.get("/levels")
+    assert 'id="q"' in r.text
+    assert 'data-asset="BTC"' in r.text
+
+
+def test_the_scan_button_starts_a_radar_pass_not_a_page_refresh(client, monkeypatch):
+    """The sheet is rebuilt on every request, so refreshing can never add a
+    setup. Only a scan writing a new signal can."""
+    import webapp
+    seen = {}
+
+    def _popen(cmd, **kw):
+        seen["cmd"] = cmd
+        return _FakeProc()
+
+    monkeypatch.setattr(webapp, "_SCAN_PROC", None)
+    monkeypatch.setattr(webapp.subprocess, "Popen", _popen)
+    body = client.post("/api/levels/scan").json()
+    assert body["started"] is True
+    assert seen["cmd"][1].endswith("predict.py")
+    assert client.get("/api/levels/scan/status").json()["running"] is True
+
+
+def test_a_second_scan_is_refused_while_one_is_running(client, monkeypatch):
+    """Two radar passes writing the same journal at once is not a faster scan."""
+    import webapp
+    monkeypatch.setattr(webapp, "_SCAN_PROC", _FakeProc())
+    body = client.post("/api/levels/scan").json()
+    assert body["started"] is False
+    assert "already running" in body["reason"]
+
+
+def test_a_finished_scan_stops_being_reported_as_running(client, monkeypatch):
+    """The page polls this to know when to reload; a guard that never clears
+    would leave the button dead until uvicorn restarts."""
+    import webapp
+    monkeypatch.setattr(webapp, "_SCAN_PROC", _FakeProc(alive=False))
+    assert client.get("/api/levels/scan/status").json()["running"] is False
+
+
 def test_asset_page_shows_the_trade_levels(client, monkeypatch):
     """The card answers "where do I enter and where do I bail", beside the
     signal. Sizing is not here on purpose: it needs an equity figure and lives

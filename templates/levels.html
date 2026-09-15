@@ -24,10 +24,16 @@
 </p>
 
 
+<div class="toolbar fade">
+  <input id="q" class="search mono" type="text" placeholder="search ticker...">
+  <button id="scan" class="fbtn">Scan for new setups</button>
+  <span class="sync mono" id="scan-msg"></span>
+</div>
+
 <section class="panel fade">
   <div class="panel-head">
     <h2>Today</h2>
-    <span class="count mono">{{ rows | length }} setups</span>
+    <span class="count mono" id="setup-count">{{ rows | length }} setups</span>
   </div>
   <table class="grid">
     <thead>
@@ -44,7 +50,7 @@
     </thead>
     <tbody>
       {% for r in rows %}
-      <tr>
+      <tr data-asset="{{ r.asset }}">
         <td><a class="asset-link" href="/asset/{{ r.asset }}">{{ r.asset }}</a></td>
         <td><span class="chip chip-{{ 'BUY' if r.side == 1 else 'SELL' }}">{{ 'LONG' if r.side == 1 else 'SHORT' }}</span>{% if r.timing_badge %} <span class="chip timing-badge" title="{{ r.timing_badge }}">{{ r.timing_badge }}</span>{% endif %}</td>
         <td class="num mono">
@@ -77,4 +83,57 @@
     </tbody>
   </table>
 </section>
+
+<script>
+const q = document.getElementById('q');
+const count = document.getElementById('setup-count');
+const rows = document.querySelectorAll('tr[data-asset]');
+
+function apply() {
+  const text = q.value.trim().toUpperCase();
+  let shown = 0;
+  rows.forEach(function (tr) {
+    const ok = !text || tr.dataset.asset.includes(text);
+    tr.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  count.textContent = shown === rows.length
+    ? shown + ' setups'
+    : shown + ' of ' + rows.length + ' setups';
+}
+q.addEventListener('input', apply);
+
+// The sheet is assembled fresh on every request, so reloading the page finds
+// nothing new by itself. A setup appears only once a scan has written a new
+// signal, which is what this starts; the poll reloads when that finishes.
+const scan = document.getElementById('scan');
+const msg = document.getElementById('scan-msg');
+
+function watch() {
+  const poll = setInterval(function () {
+    fetch('/api/levels/scan/status').then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s.running) return;
+        clearInterval(poll);
+        location.reload();
+      });
+  }, 5000);
+}
+
+scan.addEventListener('click', function () {
+  scan.disabled = true;
+  msg.textContent = 'starting';
+  fetch('/api/levels/scan', {method: 'POST'})
+    .then(function (r) { return r.json(); })
+    .then(function (s) {
+      if (!s.started) { msg.textContent = s.reason; scan.disabled = false; return; }
+      msg.textContent = 'scanning every asset, this takes a few minutes';
+      watch();
+    })
+    .catch(function () {
+      msg.textContent = 'could not start the scan';
+      scan.disabled = false;
+    });
+});
+</script>
 {% endblock %}

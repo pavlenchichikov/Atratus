@@ -727,6 +727,39 @@ def levels_page(request: Request):
     })
 
 
+# One scan at a time, the same shape and the same reason as _ANALYST_PROC below.
+# ponytail: per-process guard, swap for core.runlock if webapp ever runs multi-worker
+_SCAN_PROC = None
+
+
+def _scan_running():
+    return _SCAN_PROC is not None and _SCAN_PROC.poll() is None
+
+
+@app.post("/api/levels/scan")
+def api_levels_scan():
+    """Start one radar pass, which is what puts NEW setups on the sheet.
+
+    levels_sheet() is assembled from scratch on every request, so a button that
+    only refreshed the page would be the F5 key with extra steps. A setup
+    appears when a scan writes a new signal to prediction_log, so that scan is
+    what this starts. Refuses a second one while the first runs.
+    """
+    global _SCAN_PROC
+    if _scan_running():
+        return {"started": False, "reason": "a scan is already running",
+                "pid": _SCAN_PROC.pid}
+    _SCAN_PROC = subprocess.Popen(
+        [sys.executable, "predict.py"], cwd=BASE_DIR,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"started": True, "pid": _SCAN_PROC.pid}
+
+
+@app.get("/api/levels/scan/status")
+def api_levels_scan_status():
+    return {"running": _scan_running()}
+
+
 @app.get("/portfolio", response_class=HTMLResponse)
 def portfolio_page(request: Request):
     return templates.TemplateResponse(request, "portfolio.html", {
