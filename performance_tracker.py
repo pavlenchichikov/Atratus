@@ -698,6 +698,187 @@ def _resolve_level_row(row, df, shown, leg_cost):
     return out
 
 
+# --- intraday reach: what the card quoted, and whether the session touched it -
+#
+# The third journal, and the same two-step shape as the other two: store what
+# was QUOTED on the session's first bar, reconcile it against the finished
+# session later. Until 2026-09-15 the card computed the touch and threw it
+# away, so the one number the asset page states as odds could not be checked
+# against a single day of history.
+#
+# There is no `correct` column here on purpose. A signal has a side and can be
+# right or wrong; a reach quote has neither. What it can be is CALIBRATED - it
+# says 65% and the level is touched on 65% of such sessions - so the outcome is
+# a touch and the score is a Brier and a reliability table, computed with the
+# same core.intraday_reach functions the pre-registered gate used.
+
+def _ensure_reach_table(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intraday_reach_log (
+            session TEXT NOT NULL,
+            asset   TEXT NOT NULL,
+            side    TEXT NOT NULL,
+            level   REAL,
+            k       REAL,
+            dist    REAL,
+            probability REAL,
+            cutoff  TEXT,
+            reached INTEGER,
+            PRIMARY KEY (session, asset, side)
+        )
+    """)
+
+
+def log_intraday_reach(asset, rows=None):
+    """Store today's reach quotes for one asset. Returns rows written.
+
+    INSERT OR IGNORE on (session, asset, side): a second call on the same
+    session must not overwrite the quote, because the quote is only true at the
+    first bar and a later call would silently re-state it from mid-session.
+    """
+    if rows is None:
+        from core import dashboard
+        got = dashboard.intraday_quotes(asset)
+        rows = got or []
+    if not rows:
+        return 0
+    written = 0
+    with _conn() as con:
+        cur = con.cursor()
+        _ensure_reach_table(cur)
+        for r in rows:
+            cur.execute(
+                "INSERT OR IGNORE INTO intraday_reach_log "
+                "(session, asset, side, level, k, dist, probability, cutoff, reached) "
+                "VALUES (?,?,?,?,?,?,?,?,NULL)",
+                (r["session"], asset, r["side"], r["level"], r["k"], r["dist"],
+                 r["probability"], r.get("cutoff")))
+            written += cur.rowcount
+        con.commit()
+    return written
+
+
+def update_intraday_reach():
+    """Score quotes whose session has since closed. Idempotent.
+
+    A session counts as closed only when the hourly store holds a LATER one.
+    Judging the running session would record every not-yet-touched level as a
+    miss and drag the measured calibration below the truth.
+    """
+    from core.intraday import session_table, session_zone, sessionize
+    from intraday_fetch import load, load_tz
+
+    scored, pending = 0, 0
+    with _conn() as con:
+        cur = con.cursor()
+        _ensure_reach_table(cur)
+        rows = cur.execute(
+            "SELECT session, asset, side, level FROM intraday_reach_log "
+            "WHERE reached IS NULL ORDER BY asset").fetchall()
+        cache = {}
+        for session, asset, side, level in rows:
+            if asset not in cache:
+                bars = load(asset)
+                tz = load_tz(asset)
+                if not bars or not tz:
+                    cache[asset] = None
+                else:
+                    df = sessionize(bars, session_zone(asset, tz))
+                    cache[asset] = session_table(df) if len(df) else None
+            st = cache[asset]
+            if st is None or session not in st.index:
+                pending += 1
+                continue
+            later = [s for s in st.index if s > session]
+            if not later:
+                pending += 1          # the session is still running
+                continue
+            row = st.loc[session]
+            hit = (float(row["high"]) >= level if side == "upper"
+                   else float(row["low"]) <= level)
+            cur.execute(
+                "UPDATE intraday_reach_log SET reached=? "
+                "WHERE session=? AND asset=? AND side=?",
+                (1 if hit else 0, session, asset, side))
+            scored += 1
+        con.commit()
+    return {"scored": scored, "pending": pending}
+
+
+def intraday_reach_summary(days=None):
+    """Calibration of the quoted odds: Brier, reliability bands, hit rate.
+
+    None everywhere when nothing has been scored, which is the honest answer on
+    a young journal rather than a zero that reads as a measured result.
+    """
+    from core.intraday_reach import brier, reliability
+
+    with _conn() as con:
+        cur = con.cursor()
+        _ensure_reach_table(cur)
+        where, args = "WHERE reached IS NOT NULL", []
+        if days:
+            cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+            where += " AND session >= ?"
+            args = [cutoff]
+        rows = cur.execute(
+            "SELECT probability, reached, side FROM intraday_reach_log " + where,
+            args).fetchall()
+        quoted = cur.execute(
+            "SELECT COUNT(*), SUM(reached IS NULL), MIN(session), MAX(session) "
+            "FROM intraday_reach_log").fetchone()
+    issued, unresolved, first, last = quoted
+    out = {"quoted": issued or 0, "pending": unresolved or 0,
+           "scored": len(rows), "first": first, "last": last,
+           "brier": None, "hit_rate": None, "mean_quoted": None,
+           "bands": [], "by_side": {}}
+    if not rows:
+        return out
+    p = [float(r[0]) for r in rows]
+    y = [int(r[1]) for r in rows]
+    out["brier"] = brier(y, p)
+    out["hit_rate"] = sum(y) / len(y)
+    out["mean_quoted"] = sum(p) / len(p)
+    out["bands"] = [{"lo": lo, "hi": hi, "n": n, "quoted": q, "realised": r}
+                    for lo, hi, n, q, r in reliability(y, p)]
+    for name in ("upper", "lower"):
+        sub = [(float(a), int(b)) for a, b, s in rows if s == name]
+        if sub:
+            out["by_side"][name] = {
+                "n": len(sub),
+                "quoted": sum(a for a, _ in sub) / len(sub),
+                "realised": sum(b for _, b in sub) / len(sub),
+            }
+    return out
+
+
+def intraday_reach_lines(s=None):
+    """intraday_reach_summary as console text, for the __main__ block."""
+    s = intraday_reach_summary() if s is None else s
+    if not s["quoted"]:
+        return ["=== INTRADAY REACH ===",
+                ("No reach quotes stored yet. predict.py writes one row per "
+                 "asset per side per session.")]
+    out = ["=== INTRADAY REACH (%s to %s) ===" % (s["first"], s["last"]),
+           "Quoted   : %d  (%d scored, %d awaiting the session to close)"
+           % (s["quoted"], s["scored"], s["pending"])]
+    if not s["scored"]:
+        out.append("Nothing has been scored yet. A quote resolves once the "
+                   "hourly store holds a later session.")
+        return out
+    out += ["Brier    : %.4f  (0.25 is a coin, lower is better)" % s["brier"],
+            "Quoted   : %.1f%% on average, touched %.1f%% of the time"
+            % (100.0 * s["mean_quoted"], 100.0 * s["hit_rate"])]
+    for band in s["bands"]:
+        out.append("   %.0f-%.0f%%  n=%-5d  said %.1f%%, happened %.1f%%"
+                   % (100 * band["lo"], 100 * band["hi"], band["n"],
+                      100 * band["quoted"], 100 * band["realised"]))
+    for name, v in s["by_side"].items():
+        out.append("   %-6s n=%-5d said %.1f%%, happened %.1f%%"
+                   % (name, v["n"], 100 * v["quoted"], 100 * v["realised"]))
+    return out
+
+
 def level_summary(days=None):
     """What the issued levels actually did, or as much of it as has resolved.
 
@@ -912,6 +1093,12 @@ if __name__ == "__main__":
     if res.get("excluded"):
         print("Excluded %d prediction(s) on non-trading days (market closed)." % res["excluded"])
 
+    # A reach quote resolves when its session closes, which is the same
+    # "reconcile in this pass" rule the other two journals follow.
+    rq = update_intraday_reach()
+    print("Reach quotes: scored %d, %d awaiting their session to close."
+          % (rq["scored"], rq["pending"]))
+
     # Levels resolve on later bars exactly like predictions do, so they are
     # reconciled in the same pass. Only predict.py did this, which meant running
     # the tracker by hand reported stale level outcomes and never said so.
@@ -927,6 +1114,13 @@ if __name__ == "__main__":
         lb_display["Accuracy"] = lb_display["Accuracy"].map("{:.1%}".format)
         print("\n=== LEADERBOARD (last 30 days) ===")
         print(lb_display.to_string(index=False))
+
+    # The odds the asset card states, against what the sessions did. Printed
+    # beside the other two journals rather than left to a reader who knows the
+    # function exists: an unprinted measurement is an unread one.
+    print()
+    for line in intraday_reach_lines():
+        print(line)
 
     ver = current_model_version()
     for label, mv in (("ALL GENERATIONS", None), (f"CURRENT MODEL [{ver}]", ver)):

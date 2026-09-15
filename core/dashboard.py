@@ -418,6 +418,20 @@ def taleb_for_asset(asset):
         return None
 
 
+def intraday_quotes(asset):
+    """The card's reach quotes for one asset, in journal shape, or [].
+
+    Deliberately NOT ttl_cached: the journal writes once per session and a
+    cached row from a different call would be stored under today's date.
+    """
+    try:
+        from core import intraday_card
+        from intraday_fetch import load, load_tz
+        return intraday_card.reach_quotes(asset, load(asset), load_tz(asset))
+    except Exception:
+        return []
+
+
 @ttl_cache(300)
 def intraday_for_asset(asset):
     """Today's intraday levels and the odds of reaching them, or a status.

@@ -137,11 +137,21 @@ def run_radar():
     # -- Update actuals for previous predictions ------------------
     try:
         from core.levels import acting_side, issues_levels
-        from performance_tracker import log_levels, log_prediction, update_actuals, update_level_outcomes
+        from performance_tracker import (
+            log_intraday_reach,
+            log_levels,
+            log_prediction,
+            update_actuals,
+            update_intraday_reach,
+            update_level_outcomes,
+        )
         update_actuals()
         # Levels resolve over several bars, so yesterday's are scored before
         # today's are issued: one pass, same as the prediction reconcile.
         update_level_outcomes()
+        # Reach quotes resolve when their session closes, so the same order
+        # applies: score what has finished, then quote today.
+        update_intraday_reach()
         _do_log = True
     except Exception as e:
         logger.warning("Actuals update failed: %s", e)
@@ -201,6 +211,12 @@ def run_radar():
                     if issues_levels(act):
                         log_levels(name, acting_side(res["sig"], name, act),
                                    date=res["bar_date"])
+                    # The reach quote is not a trade and has no side, so it is
+                    # stored for every asset with hourly bars, independently of
+                    # the signal and of whether a position opens. It is what the
+                    # asset card states as odds, and until it was journalled
+                    # those odds could not be checked against a single day.
+                    log_intraday_reach(name)
                 except Exception as e:
                     logger.debug("Log prediction failed for %s: %s", name, e)
 

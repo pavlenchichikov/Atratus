@@ -92,6 +92,40 @@ def _levels_for(frame, asset, side):
             else bool(row["low"] <= level)}
 
 
+def reach_quotes(asset, bars, tz_name, fit=None):
+    """[{session, side, level, k, dist, probability, cutoff, reached}] or [].
+
+    The same numbers the card shows, in a shape a journal can store. Split out
+    rather than re-derived: a second implementation would drift from the card,
+    and then the measurement would describe a sheet nobody was shown.
+
+    `reached` is the touch as of the bars currently in the store, so it is only
+    final once the session has closed. The reconcile pass decides that, not this
+    function: here it is reported as-is and may be None when the frame has no
+    session rows to judge.
+    """
+    out = []
+    fit = load_fit() if fit is None else fit
+    if fit is None or not bars or not tz_name:
+        return out
+    df = sessionize(bars, session_zone(asset, tz_name))
+    if not len(df):
+        return out
+    frame = build_frame(df)
+    session = max(frame["session"].unique())
+    for side, name in ((1, "upper"), (-1, "lower")):
+        got = _levels_for(frame, asset, side)
+        if got is None:
+            continue
+        out.append({"session": str(session), "side": name,
+                    "level": float(got["level"]), "k": float(got["k"]),
+                    "dist": float(got["dist"]),
+                    "probability": float(reach_probability(fit, asset, got["dist"])),
+                    "cutoff": fit.get("cutoff"),
+                    "reached": got.get("reached")})
+    return out
+
+
 def intraday_for_asset(asset, bars, tz_name, fit=None):
     """{status, session, upper, lower} for the card, never an exception.
 

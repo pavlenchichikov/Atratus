@@ -187,13 +187,16 @@ def tune_asset(asset, n_trials=20, fast_mode=True):
         return None
 
     # Quick feature selection (CatBoost with 150 iterations)
-    candidate = [
-        'close', 'volume', 'vol_z', 'taleb_risk', 'ret_skew', 'var_5',
-        'ret_1', 'ret_5', 'ret_10', 'ret_20', 'trend_strength', 'rsi',
-        'sma_20', 'sma_50', 'macd_hist', 'bb_pos', 'atr', 'vol_ratio',
-        'w_ret', 'w_rsi', 'w_trend',
-        'corr_btc', 'corr_sp500', 'corr_dxy',
-    ]
+    # The ACTIVE list, not a copy of it. This was a frozen 24-name literal and
+    # had drifted three feature additions behind: no macro regime columns, no
+    # volatility-normalised returns, no cross-asset leads, no calendar, and
+    # after 2026-09-14 no breadth or COT either. Optuna was therefore tuning
+    # hyperparameters on a feature space the trainer no longer uses, and the
+    # `close`/`volume` levels it carried were dropped from the extended set on
+    # purpose. active_candidate_features() is the one definition, and it already
+    # honours GTRADE_EXTRA_FEATURES and GTRADE_DROP_FEATURES.
+    from core.features import active_candidate_features
+    candidate = list(active_candidate_features())
     available = [f for f in candidate if f in df.columns]
     if len(available) < 4:
         return None
