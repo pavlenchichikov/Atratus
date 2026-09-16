@@ -99,6 +99,49 @@ def test_transformer_parameters_are_read_from_the_weights_not_guessed(tmp_path):
                                                      "ff_dim": ff_dim}
 
 
+def test_a_square_feed_forward_block_is_still_readable(tmp_path):
+    """ff_dim == n_features makes every feed-forward kernel square, and demanding
+    a width that differs threw the champion away: load_transformer_model refuses
+    outright when this returns None, so HHRU and MDMG (both ff_dim 40 on 40
+    features) served with no transformer member at all until 2026-09-16."""
+    import h5py
+
+    from core.model_io import transformer_kwargs_from_h5
+
+    n_feat, heads, key_dim = 40, 2, 20
+    path = tmp_path / "square_transformer.keras"
+    with h5py.File(path, "w") as f:
+        g = f.create_group("model_weights")
+        g.create_dataset("multi_head_attention_38/multi_head_attention_38/query/kernel:0",
+                         shape=(n_feat, heads, key_dim))
+        # the real files carry four of these, one pair per encoder block
+        for i in (252, 253, 254, 255):
+            g.create_dataset(f"dense_{i}/dense_{i}/kernel:0",
+                             shape=(n_feat, n_feat))
+    assert transformer_kwargs_from_h5(str(path)) == {"num_heads": heads,
+                                                     "ff_dim": n_feat}
+
+
+def test_a_differing_width_still_wins_over_a_square_one(tmp_path):
+    """The square case is the fallback, not the answer. A file carrying both
+    must report the real feed-forward width: a square kernel elsewhere in the
+    graph would otherwise rebuild the block at the wrong size."""
+    import h5py
+
+    from core.model_io import transformer_kwargs_from_h5
+
+    n_feat, heads, key_dim, ff_dim = 40, 2, 20, 91
+    path = tmp_path / "mixed_transformer.keras"
+    with h5py.File(path, "w") as f:
+        g = f.create_group("model_weights")
+        g.create_dataset("multi_head_attention_42/multi_head_attention_42/query/kernel:0",
+                         shape=(n_feat, heads, key_dim))
+        g.create_dataset("dense_1/dense_1/kernel:0", shape=(n_feat, n_feat))
+        g.create_dataset("dense_278/dense_278/kernel:0", shape=(n_feat, ff_dim))
+        g.create_dataset("dense_279/dense_279/kernel:0", shape=(ff_dim, n_feat))
+    assert transformer_kwargs_from_h5(str(path))["ff_dim"] == ff_dim
+
+
 def test_a_file_without_those_shapes_returns_nothing(tmp_path):
     """Positive control: no attention kernel means no answer, because a default
     would rebuild the wrong architecture and fill it with untrained weights."""

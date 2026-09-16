@@ -364,9 +364,22 @@ def transformer_kwargs_from_h5(h5_path):
     # Matching the PAIR rather than a layer called "dense" is what makes this
     # work on a real champion: Keras names layers with a global counter, so the
     # file calls them dense_24 and dense_25, and a name test finds nothing.
+    #
+    # A width that DIFFERS from n_feat is preferred because the pair can then
+    # only be the feed-forward block. But a net built with ff_dim == n_feat
+    # makes every one of those kernels square, and demanding a difference threw
+    # such a champion away: HHRU and MDMG, both ff_dim 40 on 40 features, lost
+    # their transformer member entirely on 2026-09-16 - load_transformer_model
+    # refuses outright when this returns None, so not one rebuild was even
+    # attempted. The ambiguity the guard avoided is harmless in that case,
+    # since every square candidate answers n_feat and the answer IS n_feat.
     two_d = [sh for sh in shapes.values() if len(sh) == 2]
-    for a, b in ((a, b) for a in two_d for b in two_d):
-        if a[0] == n_feat and a[1] == b[0] and b[1] == n_feat and a[1] != n_feat:
+    for allow_square in (False, True):
+        for a, b in ((a, b) for a in two_d for b in two_d):
+            if a[0] != n_feat or a[1] != b[0] or b[1] != n_feat:
+                continue
+            if a[1] == n_feat and not allow_square:
+                continue
             return {"num_heads": int(heads), "ff_dim": int(a[1])}
     return None
 
