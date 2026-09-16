@@ -76,7 +76,7 @@ echo  SERVICES
 echo    [7] Telegram Bot    [8] Scheduler           [9] DB Audit
 echo    [F] DB Fix          [B] DB Backup           [I] Install/Repair
 echo.
-echo    [0] EXIT
+echo    [?] What every item here is for             [0] EXIT
 echo.
 echo =======================================================
 set /p choice="Select: "
@@ -139,7 +139,121 @@ if /i "%choice%"=="B" goto backup
 if /i "%choice%"=="I" goto install_fix
 if /i "%choice%"=="Q" goto equity
 if /i "%choice%"=="T" goto optuna
+if "%choice%"=="?" goto help
 if "%choice%"=="0" exit
+goto menu
+
+REM  The grid above has to stay one screen, so the purpose of each item lives
+REM  here instead of beside it. Two pages, because a cmd window shows ~50 lines
+REM  and a list that scrolls off the top explains nothing.
+:help
+cls
+echo =======================================================
+echo   WHAT EVERY MENU ITEM IS FOR            page 1 of 2
+echo =======================================================
+echo.
+echo  DAILY
+echo   [1]  Full Cycle   data update, then training, then the dashboard.
+echo   [3]  Predict      scores every asset from the champions on disk, prints
+echo                     the radar and writes today's calls to the journal. It
+echo                     ALSO scores yesterday's calls, so accuracy only ever
+echo                     accrues by running this.
+echo   [4]  Data Update  fetches new bars and repairs two known defects first.
+echo                     Run it before [3] or [3] re-scores the same day.
+echo   [2]  Dashboard    the older Streamlit view.
+echo   [WU] Web UI       the FastAPI site on port 8000: radar, asset cards,
+echo                     levels, accuracy, research. The main interface.
+echo   [4H] Hourly bars  tops up intraday.db, which feeds the "reaches up
+echo                     today" odds on the asset card. Nothing else does.
+echo.
+echo  TRAINING          all of it runs in the GPU environment
+echo   [5]  Train Models  one pass over every asset in one process.
+echo   [5C] Chunked       the same, one fresh process per 15 assets, so RAM
+echo                      stays flat and an interrupted run resumes. Use this
+echo                      for a full retrain; [5] is for short runs.
+echo   [5R] Chosen assets retrain a named list. For repairing a few assets.
+echo   [5F] Fill/repair   works out WHICH assets are broken (no champion, or a
+echo                      champion serving cannot load) and trains only those.
+echo   [T]  Optuna Tune   searches CatBoost hyperparameters per asset and
+echo                      writes models/optuna_params.json. Months apart.
+echo.
+echo  SIGNALS
+echo   [6]  Backtest      replays the champions over history.
+echo   [M]  Model Health  which champions are missing, stale or unreadable,
+echo                      plus live accuracy by generation.
+echo   [E]  Export CSV    the signals as a file.
+echo   [L]  Signal Log    the journal as text.
+echo   [H]  HTML Report   a performance report.
+echo   [Q]  Equity Curve  what following the signals would have compounded to.
+echo   [SG] Publish       pushes the signal snapshot to the public site.
+echo.
+echo  ANALYTICS
+echo   [N]  News Analyzer   headlines per asset.
+echo   [D]  News Digest     the same, summarised.
+echo   [R]  Regime Detector bull/bear/volatile state of the market.
+echo   [C]  Correlation     which positions would fall together.
+echo   [WL] Watchlist       your own list.
+echo   [P]  Paper Trading   a simulated account.
+echo   [W1..W5] What-If     what a basket of the top signals would have done.
+echo                        W5 asks for your own assets, days and capital.
+echo   [PF] Performance     what ONE asset returned over a period, vs its index.
+echo   [MC] Macro calendar  refreshes CBR and FOMC dates.
+echo.
+pause
+cls
+echo =======================================================
+echo   WHAT EVERY MENU ITEM IS FOR            page 2 of 2
+echo =======================================================
+echo.
+echo  RESEARCH          looks for improvements; adopts nothing on its own
+echo   [RS]  Auto-research  the search agent's own menu: mode, budget,
+echo                        objective, score basis. Trains candidates into temp
+echo                        dirs, never into production.
+echo   [AN]  Analyst agent  an LLM opinion formed without seeing the ensemble's,
+echo                        scored against baselines. Costs money per run.
+echo   [AL]  Autonomous     search, then A/B, then adopt, cycling unattended.
+echo                        STOPS before the retrain and hands you the report.
+echo   [ALS] Its stage      where that cycle stands, and how to stop it.
+echo   [LC]  Daily loop     data, predict, reconcile, plus a drift scan.
+echo                        Proposals land on the /loop page for approval.
+echo.
+echo  POLICIES          layers on TOP of the model's direction
+echo   [TP] Timing rules    when to act on a signal rather than every bar.
+echo   [TB] Timing Q        a fitted-Q challenger to those rules, gated
+echo                        against them rather than against the baseline.
+echo   [TO] One online tick refits that Q on the newest data and keeps it only
+echo                        if it stays near the rules and wins in shadow.
+echo   [TL] Trade levels    fits the entry zone and stop, in ATR.
+echo   [SZ] Position sizing how big, given a side something else chose.
+echo   [DR] Direction rule  should the direction be followed at all. Fitted on
+echo                        LIVE outcomes. Nothing serves it.
+echo   [RC] Recalibrate     refits the live probability layer from verified
+echo                        outcomes. Weekly is enough.
+echo   [OS] Refit unscored  refits a policy on assets its gate NEVER scored,
+echo                        which is a replication rather than a re-reading.
+echo   [PS] Policy status   what each layer concluded AND what it was worth on
+echo                        the signals production actually sent.
+echo   [TR] Timing replay   was each timing decision right, hit or miss.
+echo.
+echo  GENOME            the feature/label recipe training uses
+echo   [AG]  Adopt          puts a searched genome into production.
+echo   [AS]  What is adopted prints it, exceptions included.
+echo   [AR]  Revert         undoes the last adoption.
+echo   [PA]  Per-asset      adopt a genome for ONE asset that failed on the
+echo                        average but was measured to help that asset.
+echo   [ABC] Configure A/B  picks the holdout and the floor for a comparison.
+echo   [ABR] Run it         trains both arms. Hours. Not during a retrain.
+echo.
+echo  SERVICES
+echo   [7] Telegram Bot  pushes signals to a chat.
+echo   [8] Scheduler     runs the daily cycle on a timer.
+echo   [9] DB Audit      read-only check of market.db.
+echo   [F] DB Fix        four known defects of market.db, each scans first and
+echo                     changes nothing until you confirm.
+echo   [B] DB Backup     copies market.db aside.
+echo   [I] Install       reinstalls the dependencies from requirements.txt.
+echo.
+pause
 goto menu
 
 :full_run
@@ -667,7 +781,16 @@ echo     noise; this one decides what counts as an improvement to production.
 echo     Measured 2026-08-18: over one holdout, mean Net_AUC +0.036 while mean
 echo     Score was -1.85, rank correlation -0.24. The A/B passed and the retrain
 echo     it authorised kept the champion on 23 of the first 29 assets.
-echo     1 = raw Score, what train_hybrid promotes champions on (recommended)
+echo     1 = raw Score, the TRADING result after costs (recommended). It is
+echo         the only basis that prices the thing production does with a
+echo         call, so an adoption that raises accuracy while losing money is
+echo         refused here. Two warnings that come with it: on 339 of 839
+echo         assets the Score is the -999 "too few trades" marker rather than
+echo         a number, and it does not reproduce on this GPU (same seed, 0.45
+echo         to 1.52 apart). Search on ens_acc, decide on this.
+echo         NOTE: champions themselves have been promoted on ACCURACY since
+echo         2026-09-12, so this is no longer the number train_hybrid selects
+echo         on - it is the number an ADOPTION is still judged on.
 echo     2 = same as the search basis (the behaviour before this existed)
 set "DEC=1"
 set /p "DEC=    choice [1]: "

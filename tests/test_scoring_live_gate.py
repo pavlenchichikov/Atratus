@@ -64,6 +64,35 @@ def test_a_negative_score_is_shown_and_tagged_not_suppressed(fake_asset, monkeyp
     assert res["gate_reason"].startswith("low-q")
 
 
+def test_the_sentinel_is_not_reported_as_a_catastrophic_backtest(fake_asset, monkeypatch):
+    """-999 is the "too few trades to judge" marker, not a Score. It sits on 339
+    of 839 champions, so printing it as a measured value told the operator that
+    40% of the book had a disastrous backtest - SBER among them, whose champion
+    accuracy is 0.49."""
+    df, reg, model_dir = fake_asset
+    monkeypatch.setattr(scoring.live_gate, "gate", lambda name, prob, sig: (sig, None))
+    res = scoring.score_asset(df, "AAPL", "aapl",
+                              dict(reg, score=-999.0, ens_acc=0.49),
+                              {"AAPL": {"buy": 0.55, "sell": 0.45}}, model_dir)
+    assert res["sig"] == res["sig_raw"] == "BUY"     # still shown, still not a gate
+    # templates/radar.html reads this prefix to tag rather than call it gated
+    assert res["gate_reason"].startswith("low-q")
+    assert "-999" not in res["gate_reason"]
+    assert "too few trades" in res["gate_reason"]
+    assert "0.490" in res["gate_reason"]
+
+
+def test_a_champion_that_really_traded_and_lost_still_says_so(fake_asset, monkeypatch):
+    """Regression guard: the sentinel wording must not swallow the case it was
+    never about, a champion that took real trades and came out negative."""
+    df, reg, model_dir = fake_asset
+    monkeypatch.setattr(scoring.live_gate, "gate", lambda name, prob, sig: (sig, None))
+    res = scoring.score_asset(df, "AAPL", "aapl", dict(reg, score=-2.4),
+                              {"AAPL": {"buy": 0.55, "sell": 0.45}}, model_dir)
+    assert "Score -2.40" in res["gate_reason"]
+    assert "too few trades" not in res["gate_reason"]
+
+
 def test_a_live_gate_reason_wins_and_keeps_the_low_q_note(fake_asset, monkeypatch):
     df, reg, model_dir = fake_asset
     monkeypatch.setattr(scoring.live_gate, "gate",

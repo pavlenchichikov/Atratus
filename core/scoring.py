@@ -20,6 +20,7 @@ import numpy as np
 from catboost import CatBoostClassifier
 
 from core import live_gate, meta_sizer, timing_policy
+from core.backtesting import UNRELIABLE_SCORE
 from core.calibration import apply_calibrator, apply_live_global, load_calibrator
 from core.ensemble import build_stacking_features
 from core.features import active_candidate_features
@@ -41,6 +42,20 @@ logger = get_logger("scoring")
 # Suppressing it turned 76% of the honest post-leak champions into WAIT on
 # 2026-09-11, before sig_raw was taken, so their accuracy was never measured.
 MIN_TRUST_SCORE = 0.0
+
+
+def _accuracy_note(reg_entry):
+    """The champion's own accuracy, appended to the quality tag when recorded.
+
+    The Score answers whether a TRADING result can be trusted. Since 2026-09-12
+    the champion is selected on accuracy instead, so a tag quoting only the
+    Score describes a number nothing selects on - and on the 339 assets whose
+    Score is the sentinel it describes nothing at all.
+    """
+    acc = (reg_entry or {}).get("ens_acc")
+    if not isinstance(acc, (int, float)):
+        return ""
+    return ", champion accuracy %.3f" % float(acc)
 
 
 def missing_champion_features(df, reg_entry):
@@ -231,13 +246,25 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
         else:
             sig = "WAIT"
 
-        # Quality tag, not a gate: see MIN_TRUST_SCORE.
+        # Quality tag, not a gate: see MIN_TRUST_SCORE. The "low-q" prefix is
+        # load-bearing - templates/radar.html reads it to tell a TAG from a
+        # SUPPRESSION, and any other opening word shows this call as "gated".
         score = (reg_entry or {}).get("score")
         low_q = None
-        if score is not None and score < MIN_TRUST_SCORE:
+        if score is not None and score <= UNRELIABLE_SCORE:
+            # -999 is not a Score, it is the marker for "too few trades to
+            # judge" (core.backtesting.UNRELIABLE_SCORE). Printing it as a
+            # measured value reads as a catastrophic backtest: SBER carries it
+            # while its champion's own accuracy is 0.49, and 339 of 839
+            # champions carry it, so the old wording libelled 40% of the book.
             mode = f"{mode} low-q"
-            low_q = "low-q: walk-forward Score %.2f < %.1f, shown, not suppressed" % (
-                score, MIN_TRUST_SCORE)
+            low_q = ("low-q: too few trades to score, so the walk-forward Score "
+                     "is MISSING rather than bad%s; shown, not suppressed"
+                     % _accuracy_note(reg_entry))
+        elif score is not None and score < MIN_TRUST_SCORE:
+            mode = f"{mode} low-q"
+            low_q = ("low-q: walk-forward Score %.2f < %.1f%s, shown, not suppressed"
+                     % (score, MIN_TRUST_SCORE, _accuracy_note(reg_entry)))
 
         # Optional meta-sizing gate (GTRADE_META_SIZING; default off = no-op).
         meta_p = None
