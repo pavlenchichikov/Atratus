@@ -83,7 +83,7 @@ uvicorn webapp:app --host 0.0.0.0 --port 8000
 Lightweight web interface - no TensorFlow needed, reads predictions from the database, starts instantly. Pages:
 
 - `/` - signal radar: BUY / SELL / WAIT per asset with confidence, live accuracy, a Taleb tail-risk column, a live market-breadth panel and regime / fear-greed gauges, and a line saying how much of the asset map the snapshot covers and why the rest is absent (no champion, or no bar dated today)
-- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **expected payoff** for a long and a short in that asset, and the **analyst's own call** with its reasoning
+- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **intraday reach odds** ("Reaches up/down today") with an **Update hourly bars** button that tops up that one asset, the **expected payoff** for a long and a short in that asset, and the **analyst's own call** with its reasoning
 - `/analyst` - the analyst agent: how many judgments it has made and how many are scored, interval coverage, the latest judgments with forecast against outcome, and a button that runs a pass
 - `/levels` - the trade-level sheet: entry zone, stop and position size per active signal, with a reason on every row that has none
 - `/portfolio` - portfolio analytics over open positions: diversification score, sector-exposure heat, held-asset correlation, per-position warnings
@@ -943,6 +943,7 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 | `3` | `predict.py` | Scores every asset and writes `prediction_log`. |
 | `4` | `data_engine.py` | Today's bars only. |
 | `WU` | `uvicorn webapp:app --port 8000` | The FastAPI web UI, opened on the dashboard. |
+| `4H` | `intraday_fetch.py --top-up` | Hourly bars into `intraday.db` for the intraday card. See [Hourly bars](#hourly-bars-and-the-intraday-card). |
 
 ### TRAINING
 
@@ -1169,6 +1170,76 @@ fitted or measured. Three things changed that:
   if a held-out slice agrees. Every run writes `_levels_report.txt` either way,
   including the per-asset breakdown of who carried the result and who argued
   against it.
+
+### Hourly bars and the intraday card
+
+The asset card's "Reaches up/down today" block reads hourly bars from their own
+store, `intraday.db`, never from `market.db`. Nothing else refreshes that store,
+so it needs its own top-up:
+
+```bash
+python intraday_fetch.py --top-up                 # every asset, only bars since the last stored one
+python intraday_fetch.py --top-up --assets SBER,AAPL
+python intraday_fetch.py --refetch                # everything again, slow; rarely needed
+```
+
+Or `4H` in the launcher, or **Update hourly bars** on one asset's page
+(`POST /api/intraday/{asset}/refresh`), which runs the same top-up for that asset
+and reloads the card.
+
+How it behaves:
+
+- a top-up asks Yahoo for the last month and MOEX ISS from the last stored date.
+  Bars are keyed on (asset, hour) and replaced, so a repeat run is harmless and
+  also heals an hour stored before it was final;
+- an hour that has not ended is never stored, so a run at 14:10 gets bars up to
+  the 13:00-14:00 one;
+- an asset with nothing stored gets a full first fetch (about two years from
+  Yahoo). For listings younger than that (IBIT, GEV, DXYZ) Yahoo refuses
+  `range=730d` with a 422, and the fetcher retries with an explicit 729-day
+  window;
+- the summary line counts `fetched` as assets that gained rows; an asset that
+  was already current is neither fetched nor an error;
+- timestamps are stored in UTC. MOEX candles arrive in naive Moscow time and are
+  converted on the way in.
+
+**When to run it.** The card only shows today's session once that session has
+**three completed hours** (shorter sessions are dropped as having no path), and
+the odds are computed from the session's first hour. Before that the card still
+shows the previous session, with its date. Yahoo and the free ISS feed are about
+15 minutes delayed, so add a margin after the hour. Times below are Moscow
+(UTC+3, no daylight saving); Europe and the US move one hour later in winter.
+
+| Market | Session day (zone) | Trading hours, MSK | Today on the card from | Session complete |
+|---|---|---|---|---|
+| Crypto | UTC day, 24/7 | round the clock | ~06:20 | 03:00 next day |
+| Forex | UTC day, 24/5 | Mon 00:00 to Fri 21:00 UTC | ~06:20 | 03:00 next day |
+| Japan, Australia | Tokyo / Sydney | 03:00-09:30 (Sydney shifts with its own DST) | ~06:20 | ~10:00 |
+| Hong Kong, China | Hong Kong / Shanghai | 04:30-11:00 | ~07:50 | ~11:30 |
+| India | Kolkata | 06:45-13:00 | ~10:00 | ~13:30 |
+| MOEX | Moscow | 06:50-23:50 (morning, main, evening) | ~09:20 | ~00:10 |
+| Europe | London / Paris / Berlin ... | 10:00-18:30 (winter 11:00-19:30) | ~13:20 (winter 14:20) | ~19:00 (winter 20:00) |
+| US | New York | 16:30-23:00 (winter 17:30-00:00) | ~19:50 (winter 20:50) | ~23:30 (winter 00:30) |
+
+A practical rhythm, if you trade from the card:
+
+1. **~09:30 MSK**: crypto, forex, Asia and MOEX all have today's session.
+2. **~13:30 MSK** (14:30 in winter): Europe.
+3. **~20:00 MSK** (21:00 in winter): the US.
+4. **Once a day, after the US close or the next morning**: a full `--top-up` so
+   every session is complete in the store. This is the run that matters for the
+   history the levels are fitted on; the intraday ones only move today's card.
+
+For a single asset, use the button on its page at the matching time. Weekends
+bring new bars only for crypto.
+
+**What the hourly layer does NOT do.** It quotes where today's range can reach,
+not which way to trade. Intraday direction measured 0.520 accuracy against a
+0.515 baseline, and the timing overlay run on hourly bars (Stage A rules over
+832 assets) came out HOLD: +0.000067 net per bar against a +0.000200 adoption
+floor. The fitted-Q and online stages were fitted on DAILY bars only
+(`timing_fqi_report.json`, `timing_online.json`) and were not started on hourly
+bars, since the cheaper stage they would build on did not clear its floor.
 
 ### One number for the fit and the gate
 
@@ -1460,6 +1531,7 @@ The switches that change what is served, all default to off:
 
 ```text
 data_engine.py        fetch daily/weekly quotes (Yahoo + MOEX) into market.db
+intraday_fetch.py     hourly bars (Yahoo + MOEX ISS) into intraday.db, for the intraday card
 train_hybrid.py       train the per-asset ensemble + walk-forward selection
 train_chunked.py      RAM-safe full retrain (fresh process per chunk)
 train_timing.py       fit + gate the entry-timing policy (when to act on a side)

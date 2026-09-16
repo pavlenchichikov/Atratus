@@ -158,6 +158,8 @@
   </div>
 </div>
 {% endif %}
+<p class="dim"><button class="fbtn" id="intraday-refresh-btn">Update hourly bars</button>
+  <span id="intraday-refresh-msg" class="mono"></span></p>
 
 {% if analyst %}
 <section class="panel fade">
@@ -615,6 +617,30 @@ function renderGuruBody(g) {
     '<span class="dim mono">' + g.source + ' | ' + g.date + '</span>' +
     '</div><div class="guru-grid">' + cards + '</div>';
   gtFlash(guruBody);
+}
+
+const intradayBtn = document.getElementById('intraday-refresh-btn');
+if (intradayBtn) {
+  intradayBtn.addEventListener('click', async function () {
+    const msg = document.getElementById('intraday-refresh-msg');
+    intradayBtn.disabled = true;
+    msg.textContent = 'Fetching...';
+    try {
+      const r = await fetch('/api/intraday/' + ASSET + '/refresh', { method: 'POST' });
+      if (!r.ok) throw new Error('refresh failed');
+      const d = await r.json();
+      if (d.result.startsWith('error')) {
+        msg.textContent = d.result;
+      } else {
+        msg.textContent = d.result + ', last bar ' + (d.last_bar || '-') + ' UTC';
+        setTimeout(function () { location.reload(); }, 1200);
+      }
+    } catch (e) {
+      msg.textContent = 'Update failed - try again.';
+    } finally {
+      intradayBtn.disabled = false;
+    }
+  });
 }
 
 if (recalcBtn) {

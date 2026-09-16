@@ -1790,3 +1790,22 @@ def test_the_bands_account_for_every_row_they_were_given(tmp_path):
     assert sum(b["n"] for b in d["bands"]) == d["n"], d["bands"]
     top = [b for b in d["bands"] if b["hi"] == 0.50]
     assert top and top[0]["n"] == 80, "the certain rows fell off the top band"
+
+
+def test_api_intraday_refresh_tops_up_one_asset(client, monkeypatch):
+    """The asset page button: one asset, top_up mode, and the cached card dropped."""
+    import intraday_fetch
+    from core import dashboard as dash
+    seen = {}
+    monkeypatch.setattr(intraday_fetch, "fetch_all",
+                        lambda assets, mode=None, log=None: seen.update(a=assets, m=mode)
+                        or {assets[0]: "12 rows"})
+    monkeypatch.setattr(intraday_fetch, "last_ts", lambda a: "2026-09-16T15:00:00+00:00")
+    monkeypatch.setattr(dash, "cache_clear", lambda: seen.update(cleared=True))
+
+    r = client.post("/api/intraday/btc/refresh")
+    assert r.status_code == 200
+    assert r.json() == {"asset": "BTC", "result": "12 rows",
+                        "last_bar": "2026-09-16T15:00:00+00:00"}
+    assert seen == {"a": ["BTC"], "m": "top_up", "cleared": True}
+    assert client.post("/api/intraday/NOPE/refresh").status_code == 404

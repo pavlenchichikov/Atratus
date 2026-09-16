@@ -657,6 +657,26 @@ def asset_page(request: Request, name: str):
     })
 
 
+@app.post("/api/intraday/{asset}/refresh")
+def api_intraday_refresh(asset: str):
+    """Top up one asset's hourly bars now, instead of waiting for the next
+    `intraday_fetch.py --top-up` over the whole universe.
+
+    A top-up on an asset with no bars becomes its first full fetch, the same
+    rule the batch run uses. The card is ttl-cached, so the cache is dropped
+    or the page would show the old session for another five minutes.
+    """
+    asset = asset.upper()
+    if asset not in FULL_ASSET_MAP:
+        raise HTTPException(404, f"Unknown asset: {asset}")
+    import intraday_fetch
+
+    result = intraday_fetch.fetch_all([asset], mode="top_up", log=lambda *a: None)[asset]
+    dashboard.cache_clear()
+    return {"asset": asset, "result": result,
+            "last_bar": intraday_fetch.last_ts(asset)}
+
+
 @app.get("/models", response_class=HTMLResponse)
 def models_page(request: Request):
     quality = _load_json(QUALITY_PATH, [])

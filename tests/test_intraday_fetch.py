@@ -353,6 +353,33 @@ def test_an_asset_that_never_returns_a_bar_is_still_an_error(tmp_path, monkeypat
     assert out["DXYZ"] == "error: no bars", out
 
 
+def test_a_young_listing_refused_on_range_retries_an_explicit_window(tmp_path, monkeypatch):
+    """Yahoo answers range=730d with a 422 for DXYZ, GEV and IBIT (listed 2024)
+    while an explicit period1/period2 inside 730 days returns their bars."""
+    import intraday_fetch as f
+    db = str(tmp_path / "intraday.db")
+    monkeypatch.setattr(f, "DB_PATH", db)
+    good = {"chart": {"result": [{"meta": {"exchangeTimezoneName": "America/New_York"},
+                                  "timestamp": [1700000000],
+                                  "indicators": {"quote": [{"open": [1.0], "high": [1.0],
+                                                            "low": [1.0], "close": [1.0],
+                                                            "volume": [1.0]}]}}]}}
+    refused = {"chart": {"result": None, "error": {"code": "Unprocessable Entity"}}}
+    calls = []
+
+    def http(url, **kw):
+        calls.append(url)
+
+        class R:
+            def json(_self):
+                return refused if "range=" in url else good
+        return R()
+
+    out = f.fetch_all(["IBIT"], http=http, db_path=db, mode="top_up", log=lambda *a: None)
+    assert out["IBIT"] == "1 rows", out
+    assert "period1=" in calls[1]
+
+
 def test_an_unknown_mode_is_refused_rather_than_guessed(tmp_path, monkeypatch):
     import pytest
 

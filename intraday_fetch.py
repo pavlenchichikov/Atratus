@@ -21,6 +21,13 @@ YAHOO_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
 # years each to collect nine days is the reason nothing ever topped this up.
 YAHOO_FULL_RANGE = "730d"
 YAHOO_TOPUP_RANGE = "1mo"
+# range=730d is refused (422) for a listing younger than about 2.5 years: Yahoo
+# starts the window at the first trade date, which it then finds outside its own
+# 730-day limit. DXYZ, GEV and IBIT never got a bar for that reason (2026-09-16).
+# An explicit window inside the limit works for every ticker.
+YAHOO_WINDOW_URL = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+                    "{sym}?interval=1h&period1={p1}&period2={p2}")
+YAHOO_WINDOW_DAYS = 729
 
 MOEX_TZ = "Europe/Moscow"
 MOEX_URL = ("https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/"
@@ -231,6 +238,10 @@ def fetch_asset(asset, http=None, since=None, db_path=None):
 
     rng = YAHOO_TOPUP_RANGE if since else YAHOO_FULL_RANGE
     payload = http(YAHOO_URL.format(sym=sym, range=rng)).json()
+    if not since and (payload.get("chart") or {}).get("error"):
+        p2 = int(datetime.now(UTC).timestamp())
+        payload = http(YAHOO_WINDOW_URL.format(
+            sym=sym, p1=p2 - YAHOO_WINDOW_DAYS * 86400, p2=p2)).json()
     bars, tz = parse_yahoo(payload)
     store_tz(asset, tz)
     return store(asset, bars, db_path=db_path), tz
