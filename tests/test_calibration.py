@@ -1,6 +1,7 @@
 """Tests for core.calibration - isotonic probability calibration."""
 
 import numpy as np
+import pytest
 
 from core.calibration import (
     apply_calibrator,
@@ -8,6 +9,23 @@ from core.calibration import (
     load_calibrator,
     save_calibrator,
 )
+
+
+def _narrow_band_fit(seed=3, n=200, lo=0.47, hi=0.49):
+    """A calibrator shaped like the ones production actually carries.
+
+    Measured 2026-09-16 over all 842 champions: the fitted band has a median
+    width of 0.056, and SBER's spans 0.4733 to 0.4861. The stacker is a
+    logistic regression over four member probabilities, so its validation
+    output lives in a thin belt around 0.5 and the calibrator never sees
+    anything else.
+    """
+    rng = np.random.default_rng(seed)
+    probs = rng.uniform(lo, hi, n)
+    targets = (rng.uniform(0, 1, n) < (probs - lo) / (hi - lo)).astype(int)
+    calib = fit_calibrator(probs, targets)
+    assert calib is not None
+    return calib, float(calib.X_thresholds_.min()), float(calib.X_thresholds_.max())
 
 
 def test_identity_when_none():
@@ -37,6 +55,60 @@ def test_calibration_is_monotonic_and_bounded():
     assert out.min() >= 0.0 and out.max() <= 1.0
     # Isotonic output must be non-decreasing.
     assert np.all(np.diff(out) >= -1e-9)
+
+
+def test_a_probability_outside_the_fitted_band_is_left_alone():
+    """Outside its band the map has no evidence, and it used to answer anyway.
+
+    IsotonicRegression is built with out_of_bounds="clip", which returns the
+    nearest END BLOCK - and a small sample's end block is pure, so the answer
+    is a literal 0.0 or 1.0. With bands this narrow serving leaves them
+    constantly: 100 of 687 rows on 2026-09-15 came back as an exact 0 or 1, and
+    the live gate then suppressed them as anti-calibrated tails. SBER served a
+    BUY at probability 1.0 while all four members sat below 0.5.
+    """
+    calib, lo, hi = _narrow_band_fit()
+    below, above = lo - 0.02, hi + 0.02
+    out = apply_calibrator(calib, np.array([below, above]))
+    assert out[0] == pytest.approx(below)
+    assert out[1] == pytest.approx(above)
+    assert out[1] < 0.999, "an unseen input must not come back as a certainty"
+
+
+def test_inside_the_band_the_calibration_still_applies():
+    """The guard must not quietly turn calibration off: inside the fitted range
+    the isotonic answer is the whole point and has to survive untouched."""
+    calib, lo, hi = _narrow_band_fit()
+    inside = np.linspace(lo, hi, 9)
+    np.testing.assert_allclose(apply_calibrator(calib, inside),
+                               np.clip(calib.predict(inside), 0.0, 1.0))
+
+
+def test_a_rail_the_fit_actually_measured_is_kept():
+    """A 0 or a 1 INSIDE the band is a measurement, not a clip.
+
+    ALRS serves an exact 0.0 that lies inside its own fitted range, and the
+    change left it alone, which is correct: the guard is about inputs the fit
+    never saw, not about extreme answers it did give.
+    """
+    rng = np.random.default_rng(5)
+    probs = rng.uniform(0.40, 0.60, 300)
+    targets = (probs > 0.50).astype(int)          # perfectly separable in-sample
+    calib = fit_calibrator(probs, targets)
+    assert calib is not None
+    inside_low = float(calib.X_thresholds_.min()) + 0.01
+    assert inside_low < 0.5
+    assert apply_calibrator(calib, np.array([inside_low]))[0] == pytest.approx(0.0)
+
+
+def test_platt_has_no_band_and_is_untouched():
+    """Platt is a smooth function of the logit, defined everywhere, so it has
+    no out-of-range case to guard and must keep answering as it always did."""
+    from core.calibration import PlattCalibrator
+    cal = PlattCalibrator(a=1.5, b=-0.2)
+    probs = np.array([0.01, 0.2, 0.5, 0.8, 0.99])
+    np.testing.assert_allclose(apply_calibrator(cal, probs),
+                               np.clip(cal.predict(probs), 0.0, 1.0))
 
 
 def test_save_load_roundtrip(tmp_path):

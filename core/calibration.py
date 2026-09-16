@@ -99,13 +99,34 @@ def log_loss(probs, targets):
 
 
 def apply_calibrator(calibrator, probs):
-    """Map raw probabilities through the calibrator. Identity if calibrator is None."""
+    """Map raw probabilities through the calibrator. Identity if calibrator is None.
+
+    Outside the fitted band the map is left alone, because there is nothing
+    there to map with. IsotonicRegression is built with out_of_bounds="clip",
+    which answers an unseen input with the value of the nearest END BLOCK - and
+    an end block of a small sample is pure, so that value is a literal 0.0 or
+    1.0. The fitted bands are narrow (measured 2026-09-16 over 842 champions:
+    median width 0.056, and SBER's spans 0.4733 to 0.4861), so serving leaves
+    them often: 100 of 687 rows on 2026-09-15 came back as an exact 0 or 1.
+
+    That manufactured certainty is not harmless. It is what the live gate's
+    tail rule fires on, so those rows were suppressed as "anti-calibrated" when
+    nothing about them had been calibrated at all. Returning the input unchanged
+    says the honest thing instead: this asset's calibrator has no evidence here.
+
+    Platt has no band - it is a smooth function of the logit, defined
+    everywhere - so it is unaffected by any of this.
+    """
     probs = np.asarray(probs, dtype=float)
     if calibrator is None:
         return probs
     try:
-        out = calibrator.predict(probs)
-        return np.clip(out, 0.0, 1.0)
+        out = np.clip(calibrator.predict(probs), 0.0, 1.0)
+        knots = getattr(calibrator, "X_thresholds_", None)
+        if knots is not None and len(knots) >= 2:
+            lo, hi = float(np.min(knots)), float(np.max(knots))
+            out = np.where((probs < lo) | (probs > hi), probs, out)
+        return out
     except Exception:
         return probs
 

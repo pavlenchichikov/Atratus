@@ -72,6 +72,36 @@ def _endpoint(proxy_url: str):
     return None
 
 
+# Schemes that must prove themselves with a SOCKS greeting. A plain http://
+# proxy is a valid value for SOCKS5_PROXY - requests accepts one in the same
+# dict - and it would fail a SOCKS handshake while working perfectly, so it is
+# deliberately not asked.
+_SOCKS_SCHEMES = ("socks5", "socks5h", "socks4", "socks4a")
+
+
+def _socks5_handshake_ok(sock) -> bool:
+    """Does this endpoint actually speak SOCKS5, per RFC 1928?
+
+    A TCP probe accepts anything that listens, and that is not enough: xray
+    puts its HTTP proxy on the port beside its SOCKS5 one (10809 next to 10808
+    here), so a config pointing at the wrong one connects, probes "alive", and
+    then every request burns the full connect budget on a handshake the other
+    side never answers. Measured 2026-09-16: 5.0s per attempt, three attempts,
+    for every asset, with no error that names the cause.
+
+    The greeting is VER=5, one method, "no authentication". A SOCKS5 server
+    answers VER=5 plus the method it chose. 0xFF means it accepted none of
+    them, which is still a SOCKS5 server but still unusable to us, so it counts
+    as not alive rather than as a working route.
+    """
+    try:
+        sock.sendall(b"\x05\x01\x00")
+        reply = sock.recv(2)
+    except Exception:
+        return False
+    return len(reply) == 2 and reply[0] == 0x05 and reply[1] != 0xFF
+
+
 def is_proxy_alive(force: bool = False) -> bool:
     """True if the local SOCKS5 endpoint accepts a TCP connection.
 
@@ -91,11 +121,15 @@ def is_proxy_alive(force: bool = False) -> bool:
         return _alive_cache
 
     ep = _endpoint(SOCKS5_PROXY)
+    scheme = (urlparse(SOCKS5_PROXY).scheme or "").lower()
     alive = False
     if ep:
         try:
-            with socket.create_connection(ep, timeout=_PROBE_TIMEOUT):
-                alive = True
+            with socket.create_connection(ep, timeout=_PROBE_TIMEOUT) as s:
+                # A plain http:// proxy is a legitimate value here and speaks no
+                # SOCKS greeting, so only SOCKS schemes are asked to prove it.
+                alive = (_socks5_handshake_ok(s)
+                         if scheme in _SOCKS_SCHEMES else True)
         except Exception:
             alive = False
     _alive_cache, _cache_ts = alive, now
