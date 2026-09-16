@@ -101,13 +101,30 @@ def _prepare():
         con.commit()
 
 
+def _price_table(asset):
+    """The market.db table holding this asset's daily bars.
+
+    Delegated, not copied. data_engine stores BRK-B as "brkb" - the key is
+    lowercased AND stripped of ^ . and - - while this module used a bare
+    .lower() and asked for "brk-b", which does not exist. _has_bar then caught
+    the OperationalError, returned False, and log_prediction returned at its
+    guard WITHOUT raising: BRK-B was scored on every run since the map gained
+    it and never once reached the journal, the level log, or any accuracy
+    figure. Nothing reported it, because a silent return is not an error.
+
+    policy_status._table_name already delegates here for the same reason.
+    """
+    from core.track_record import _table_name
+    return _table_name(asset)
+
+
 def _has_bar(cur, asset, day):
     """True if the asset has a real price bar dated `day` (YYYY-MM-DD). False on a
     non-trading day (weekend/holiday), a missing price table, or a bar not yet
     fetched - i.e. when there is nothing to reconcile the prediction against."""
     try:
         row = cur.execute(
-            f'SELECT 1 FROM "{asset.lower()}" WHERE Date = ? LIMIT 1', (day,)
+            f'SELECT 1 FROM "{_price_table(asset)}" WHERE Date = ? LIMIT 1', (day,)
         ).fetchone()
         return row is not None
     except sqlite3.OperationalError:
@@ -272,7 +289,7 @@ def _load_bars(asset, cache):
     for the duration of one reconcile pass. None if the price table is missing."""
     if asset in cache:
         return cache[asset]
-    table = asset.lower()
+    table = _price_table(asset)
     try:
         df = pd.read_sql(
             f'SELECT Date, Close FROM "{table}" ORDER BY Date',
@@ -643,7 +660,7 @@ def _load_ohlc(asset, cache):
     if asset in cache:
         return cache[asset]
     try:
-        df = pd.read_sql(f'SELECT Date, Open, High, Low, Close FROM "{asset.lower()}" '
+        df = pd.read_sql(f'SELECT Date, Open, High, Low, Close FROM "{_price_table(asset)}" '
                          f'ORDER BY Date', _engine(), index_col="Date")
         df.columns = [c.lower() for c in df.columns]
         df.index = pd.to_datetime(df.index).normalize()

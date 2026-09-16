@@ -212,8 +212,12 @@ def fetch_history_rows(db_path=None, bar_limit=BAR_LIMIT, sig_limit=SIG_LIMIT):
         cur = con.cursor()
         for asset in FULL_ASSET_MAP:
             try:
+                # The same normalisation data_engine stores under: a bare
+                # .lower() asks for "brk-b" while the table is "brkb", and the
+                # OperationalError below then skips the asset silently.
                 rows = cur.execute(
-                    f'SELECT Date, open, high, low, close FROM "{asset.lower()}" '
+                    f'SELECT Date, open, high, low, close FROM '
+                    f'"{track_record._table_name(asset)}" '
                     "ORDER BY Date DESC LIMIT ?", (bar_limit,)).fetchall()
             except sqlite3.OperationalError:
                 continue

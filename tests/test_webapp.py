@@ -1414,6 +1414,37 @@ def test_research_stays_off_the_nav_too(client):
     assert ["Research", "/research"] in client.get("/api/palette").json()["pages"]
 
 
+def test_an_asset_with_a_champion_and_a_bar_but_no_row_is_named_not_filed(client, monkeypatch, tmp_path):
+    """The category that did not exist, and the reason BRK-B was invisible.
+
+    "no bar today" used to be computed as `absent - no_champion`, so anything
+    absent with a champion was reported that way without the bar being looked
+    at once. BRK-B had current bars and a working champion the whole time, and
+    the panel filed it under a reason that was false. A count obtained by
+    subtraction can only ever describe the cases someone already thought of.
+    """
+    import performance_tracker as pt
+    con = sqlite3.connect(pt.DB_PATH)
+    con.execute("CREATE TABLE btc (Date TEXT, close REAL)")
+    con.execute("INSERT INTO btc VALUES ('2026-06-10', 100.0)")
+    con.commit()
+    con.close()
+    # a champion for BTC, so it cannot fall into "untrained", and BTC's newest
+    # journal row is 2026-06-10 - the snapshot date - so it IS covered; the
+    # asset the panel must explain is any OTHER map entry, which has neither.
+    reg = tmp_path / "reg.json"
+    reg.write_text(json.dumps({a: {"score": 1.0} for a in webapp.FULL_ASSET_MAP}),
+                   encoding="utf-8")
+    monkeypatch.setattr(webapp, "REGISTRY_PATH", str(reg))
+
+    body = client.get("/").text
+    # every absent asset now has a champion, and none of them has a bar in this
+    # fixture database, so they must be reported as missing a bar rather than
+    # as untrained - and nothing may be attributed by subtraction
+    assert "untrained" not in body
+    assert "with no bar today" in body
+
+
 def test_the_radar_says_how_much_of_the_universe_it_covers(client):
     # The radar showed 824 of 849 assets and said nothing about the other 25,
     # so the only way to learn why was to query the database by hand. Both
@@ -1426,6 +1457,11 @@ def test_the_radar_says_how_much_of_the_universe_it_covers(client):
     body = client.get("/").text
     assert "of %d absent" % len(FULL_ASSET_MAP) in body
     assert "untrained" in body or "no bar today" in body
+    # the three reasons must add up to the total: a leftover that belongs to
+    # none of them is the bug this panel exists to surface, not a rounding
+    s = webapp._summary(track_record.latest_signals(), [])
+    assert (s["absent_no_champion"] + s["absent_no_bar_today"]
+            + s["absent_unexplained"]) == s["absent"]
 
 
 def test_the_summary_splits_absences_by_cause(monkeypatch):

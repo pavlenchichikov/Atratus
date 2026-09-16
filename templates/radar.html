@@ -72,7 +72,11 @@
     <span class="stat-value">{{ summary.total }}</span>
     <span class="stat-sub">{% if summary.last_date %}snapshot {{ summary.last_date }}{% else %}journal empty{% endif %}{% if summary.absent %}
       &middot; {{ summary.absent }} of {{ summary.universe }} absent:
-      {% if summary.absent_no_champion %}{{ summary.absent_no_champion }} untrained{% endif %}{% if summary.absent_no_champion and summary.absent_no_bar_today %}, {% endif %}{% if summary.absent_no_bar_today %}{{ summary.absent_no_bar_today }} with no bar today{% endif %}{% endif %}</span>
+      {% if summary.absent_no_champion %}{{ summary.absent_no_champion }} untrained{% endif %}{% if summary.absent_no_champion and summary.absent_no_bar_today %}, {% endif %}{% if summary.absent_no_bar_today %}{{ summary.absent_no_bar_today }} with no bar today{% endif %}{#
+        The third case, which used to be folded into "no bar today" by a
+        subtraction: a champion, a current bar, and still no row. That is a
+        defect rather than a state, so it is named and the assets are listed -
+        BRK-B hid in the second category for the life of the map. #}{% if summary.absent_unexplained %}{% if summary.absent_no_champion or summary.absent_no_bar_today %}, {% endif %}<b class="t-sell">{{ summary.absent_unexplained }} unexplained</b>{% if summary.absent_unexplained_names %} ({{ summary.absent_unexplained_names | join(", ") }}){% endif %}{% endif %}{% endif %}</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Signals</span>

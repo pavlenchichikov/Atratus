@@ -119,6 +119,29 @@ def test_fetch_history_rows_limits_and_order(tmp_path, monkeypatch):
                             "correct", "timing_action", "timing_label"}
 
 
+def test_a_dashed_ticker_still_finds_its_bars(tmp_path, monkeypatch):
+    """data_engine stores BRK-B as "brkb", stripping ^ . and -, while this
+    module asked for asset.lower() = "brk-b". The OperationalError below is
+    caught and the asset skipped silently, so the phone received no bars for it
+    at all - the same naming split that kept BRK-B out of the prediction
+    journal for the life of the map."""
+    db = str(tmp_path / "dash.db")
+    con = sqlite3.connect(db)
+    con.execute('CREATE TABLE brkb (Date TEXT, open REAL, close REAL, high REAL,'
+                ' low REAL, volume REAL)')
+    con.execute("INSERT INTO brkb VALUES ('2026-09-15', 1, 2, 3, 0.5, 9)")
+    con.execute('CREATE TABLE prediction_log (date TEXT, asset TEXT, signal TEXT,'
+                ' probability REAL, actual_next_ret REAL, correct INTEGER,'
+                ' timing_action TEXT, timing_reason TEXT)')
+    con.commit()
+    con.close()
+    monkeypatch.setattr(push_signals, "FULL_ASSET_MAP", {"BRK-B": "BRK-B"},
+                        raising=False)
+    bars, _hist = push_signals.fetch_history_rows(db_path=db)
+    assert [b["asset"] for b in bars] == ["BRK-B"]
+    assert bars[0]["date"] == "2026-09-15"
+
+
 def test_fetch_history_rows_skips_missing_table(tmp_path, monkeypatch):
     monkeypatch.setattr(push_signals, "FULL_ASSET_MAP",
                         {"BTC": "BTC-USD", "NEWCO": "NEW"}, raising=False)

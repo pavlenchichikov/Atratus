@@ -411,12 +411,42 @@ def _summary(signals, stale):
     except Exception:
         registry = {}
     no_champion = [a for a in absent if a not in registry]
+    # The third category, and the reason this is no longer a subtraction. It
+    # used to read `absent - no_champion`, so ANYTHING absent with a champion
+    # was reported as "no bar today" without the bar ever being looked at.
+    # BRK-B sat there for the life of the map: bars current, champion fine,
+    # scored on every run, and silently absent because performance_tracker
+    # resolved its table as "brk-b" instead of "brkb". A category defined by
+    # subtraction cannot report a case nobody thought of, which is exactly the
+    # case worth reporting.
+    #
+    # _has_bar is the writer's own test, not a fourth opinion about bars: the
+    # panel and log_prediction now agree by construction.
+    no_bar, unexplained = [], []
+    if absent:
+        try:
+            import sqlite3
+
+            import performance_tracker as pt
+            with sqlite3.connect(pt.DB_PATH) as _con:
+                _cur = _con.cursor()
+                for a in absent:
+                    if a in no_champion:
+                        continue
+                    (no_bar if not pt._has_bar(_cur, a, last_date)
+                     else unexplained).append(a)
+        except Exception:
+            # Never let the panel take the page down; an unreadable database
+            # means the split is unknown, not that the assets are fine.
+            no_bar, unexplained = [], []
     return {
         "total": len(signals),
         "universe": len(FULL_ASSET_MAP),
         "absent": len(absent),
         "absent_no_champion": len(no_champion),
-        "absent_no_bar_today": len(absent) - len(no_champion),
+        "absent_no_bar_today": len(no_bar),
+        "absent_unexplained": len(unexplained),
+        "absent_unexplained_names": unexplained[:8],
         "counts": counts,
         "accuracy": (correct / verified) if verified else None,
         "verified": verified,

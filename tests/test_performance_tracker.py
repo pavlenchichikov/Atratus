@@ -93,6 +93,74 @@ def test_log_prediction_skips_when_no_bar_for_that_day(tmp_path, monkeypatch):
     con.close()
 
 
+def test_an_asset_whose_ticker_carries_a_dash_still_reaches_the_journal(tmp_path, monkeypatch):
+    """data_engine stores BRK-B as "brkb": the key is lowercased AND stripped of
+    ^ . and -. This module used a bare .lower(), asked for "brk-b", caught the
+    OperationalError and returned False, so log_prediction stopped at its guard
+    WITHOUT raising. BRK-B was scored on every run and never once appeared in
+    the journal, the level log, or any accuracy figure - the radar filed it
+    under "no bar today" while its bars were current."""
+    import performance_tracker as pt
+    db = str(tmp_path / "dash.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE brkb (Date TEXT, close REAL)")
+    con.execute("INSERT INTO brkb VALUES ('2026-09-15', 100.0)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+
+    pt.log_prediction("BRK-B", "BUY", 0.71, date="2026-09-15")
+    con = sqlite3.connect(db)
+    rows = con.execute("SELECT asset, date FROM prediction_log").fetchall()
+    con.close()
+    assert rows == [("BRK-B", "2026-09-15")]
+
+
+def test_a_missing_table_is_still_a_skip_not_a_crash(tmp_path, monkeypatch):
+    """The guard must keep doing its job: an asset with no price table at all
+    has nothing to reconcile against, and the fix must not turn that quiet skip
+    into an exception or into a row that can never be scored."""
+    import performance_tracker as pt
+    db = str(tmp_path / "none.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE aapl (Date TEXT, close REAL)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+
+    pt.log_prediction("NOSUCH", "BUY", 0.7, date="2026-09-15")
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT COUNT(*) FROM prediction_log").fetchone()[0] == 0
+    con.close()
+
+
+def test_the_reconcile_finds_the_bars_of_a_dashed_ticker(tmp_path, monkeypatch):
+    """_load_bars carried the same bare .lower(), so even a row that somehow
+    existed could never be scored: the reconcile read no bars and left it
+    pending forever."""
+    import performance_tracker as pt
+    db = str(tmp_path / "dash2.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE brkb (Date TEXT, close REAL)")
+    con.execute("INSERT INTO brkb VALUES ('2026-09-14', 100.0)")
+    con.execute("INSERT INTO brkb VALUES ('2026-09-15', 110.0)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+
+    pt.log_prediction("BRK-B", "BUY", 0.71, date="2026-09-14")
+    pt.update_actuals()
+    con = sqlite3.connect(db)
+    ret, correct = con.execute(
+        "SELECT actual_next_ret, correct FROM prediction_log").fetchone()
+    con.close()
+    assert ret is not None and abs(ret - 0.10) < 1e-9
+    assert correct == 1
+
+
 def test_a_prediction_from_yesterdays_close_logs_under_that_bar(tmp_path, monkeypatch):
     """The morning case: the last bar is yesterday's, today's has not printed.
     Passing the scored bar's date logs it, once, and it reconciles against the
