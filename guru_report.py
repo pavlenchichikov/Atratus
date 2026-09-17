@@ -31,6 +31,7 @@ from config import FULL_ASSET_MAP
 from config import MOEX_ASSETS as _CONFIG_MOEX
 from core.features import compute_rsi
 from core.guru import calc_graham_number, get_guru_analysis, technical_context
+from core.logger import get_logger
 from net import ssl_verify, yf_session
 
 DB_PATH = os.path.join(BASE_DIR, "market.db")
@@ -90,15 +91,24 @@ def _yf_fetch_info(symbol, attempts=3):
     flaky (a single transient miss otherwise drops the asset to N/A). Routes
     through the SOCKS5 proxy when one is alive. Returns (None, None) when no real
     quote could be fetched."""
+    last = None
     for _ in range(attempts):
         try:
             t = yf.Ticker(symbol, session=yf_session())
             info = t.info or {}
             if info.get('currentPrice', 0) or info.get('regularMarketPrice', 0):
                 return t, info
-        except Exception:
-            pass
+        except Exception as exc:
+            last = exc
         time.sleep(1.5)
+    # Say WHY, once, before the caller turns this into "no fundamentals for this
+    # asset". A yfinance upgrade started rejecting the session this passes
+    # (2026-09-18) and the swallowed exception made a wrong call read as a
+    # vendor with no data, for every non-MOEX asset, for as long as nobody
+    # tried the same fetch by hand.
+    get_logger("guru_report").warning(
+        "no quote for %s after %d attempts: %s", symbol, attempts,
+        "empty .info" if last is None else "%s: %s" % (type(last).__name__, last))
     return None, None
 
 

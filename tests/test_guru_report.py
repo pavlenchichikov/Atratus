@@ -181,3 +181,19 @@ def test_each_smartlab_table_contributes_the_ratios_it_actually_has():
                       "\u0414\u0414 \u0430\u043f, %": "13.6%"}, ebitda=False)
     assert (bank["roa"], bank["nim"], bank["div_pref"]) == (2.7, 6.2, 13.6)
     assert "ps" not in bank and "ev_ebitda" not in bank
+
+
+def test_a_failed_quote_says_why_instead_of_going_quiet(caplog, monkeypatch):
+    """The 2026-09-18 breakage: yfinance began rejecting the session this
+    passes, the retry loop swallowed it, and every non-MOEX asset read as a
+    vendor with no fundamentals."""
+    import guru_report
+
+    def boom(*a, **k):
+        raise RuntimeError("Yahoo API requires curl_cffi session")
+
+    monkeypatch.setattr(guru_report.yf, "Ticker", boom)
+    monkeypatch.setattr(guru_report.time, "sleep", lambda *_: None)
+    with caplog.at_level("WARNING"):
+        assert guru_report._yf_fetch_info("NVDA", attempts=2) == (None, None)
+    assert "NVDA" in caplog.text and "curl_cffi" in caplog.text

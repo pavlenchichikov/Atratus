@@ -152,18 +152,28 @@ def proxies_for(route: str = "auto") -> dict | None:
 
 
 def yf_session():
-    """A requests session through the SOCKS5 proxy, ONLY when the proxy is
-    alive. Otherwise None, so yfinance keeps its own session and completes its
-    cookie/crumb handshake - injecting a custom session on the direct path
-    breaks that handshake and yields an empty .info.
+    """Point yfinance's own transport at the SOCKS5 proxy. Returns None, which
+    is what every `session=` call site now passes.
+
+    Every caller passes the result as `session=`, and that is now the one thing
+    yfinance refuses: since 1.1.0 it answers a requests.Session with
+    YFDataException("Yahoo API requires curl_cffi session"). guru_report's
+    retry loop swallowed that exception three times and returned no info, so
+    the asset card said "no fundamentals for this asset" for every non-MOEX
+    name, NVDA included - a live feed reported as a missing one. The Russian
+    names were unaffected because they resolve from Smart-Lab first.
+
+    The proxy is not lost: it moves to yfinance's own curl_cffi session, which
+    is also the only place that can complete the cookie/crumb handshake. None
+    on the direct path for the same reason it always was.
     """
     proxies = proxies_for("auto")
-    if not proxies:
-        return None
-    s = requests.Session()
-    s.proxies.update(proxies)
-    s.verify = ssl_verify()
-    return s
+    try:
+        import yfinance as yf
+
+        yf.config.network.proxy = proxies or None
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------

@@ -28,7 +28,7 @@ except Exception:
     pass
 
 from core.logger import get_logger
-from net import ssl_verify
+from net import ssl_verify, yf_session
 
 logger = get_logger("alert_bot")
 
@@ -156,18 +156,12 @@ def fetch_moex(symbol, name):
 
 
 def fetch_world(symbol, use_proxy):
-    proxies = {"https": SOCKS5_PROXY} if use_proxy else {}
     try:
         if use_proxy:
-            import urllib3
-            urllib3.disable_warnings()
-            sess = requests.Session()
-            sess.proxies = proxies
-            sess.verify = False
-            df = yf.download(symbol, period="100d", interval="1d",
-                             progress=False, session=sess)
-        else:
-            df = yf.download(symbol, period="100d", interval="1d", progress=False)
+            # Not a session argument: yfinance 1.1.0 rejects a requests one.
+            # yf_session points its own transport at the proxy instead.
+            yf_session()
+        df = yf.download(symbol, period="100d", interval="1d", progress=False)
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
