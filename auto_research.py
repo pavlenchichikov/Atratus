@@ -41,6 +41,7 @@ except Exception:
     pass
 
 from core import ar_memory, ar_rl, ar_wiki, llm_proposer, qd_surrogate
+from core.backtesting import UNRELIABLE_SCORE
 from core.feature_dsl import validate_spec
 from core.logger import get_logger
 
@@ -278,9 +279,18 @@ def _reduce_deltas(deltas, objective):
 
 def _objective_delta(var_rows, base_score, objective="mean"):
     """Paired (variant minus base) Score deltas over shared assets, reduced by the
-    objective (see _reduce_deltas). Returns (value, deltas)."""
+    objective (see _reduce_deltas). Returns (value, deltas).
+
+    An asset whose Score is the "too few trades" marker on either side is
+    DROPPED, which is the contract core/backtesting.py states for it: it is
+    missing data wearing a number. Averaged instead, one such asset moved a
+    40-asset mean by 999/40 = 24.97, and that is all the three-digit
+    neural_lift values of 2026-09-17 ever were (+124.21 = 4.97 flips,
+    +99.90 = exactly 4).
+    """
     e = {r["Asset"]: r.get("Score", 0.0) for r in var_rows}
-    common = sorted(set(e) & set(base_score))
+    common = sorted(a for a in set(e) & set(base_score)
+                    if e[a] > UNRELIABLE_SCORE and base_score[a] > UNRELIABLE_SCORE)
     if not common:
         return 0.0, []
     deltas = [e[a] - base_score[a] for a in common]
@@ -500,7 +510,15 @@ def holdout_stats(base_rows, ext_rows, objective="mean"):
         return 1.0, 0.0, [], "no common held-out assets"
     p = _wilcoxon_p(deltas)
     up = sum(1 for d in deltas if d > 0)
-    tag = "%s dScore %.2f, wilcoxon p=%.3f (%d/%d up)" % (objective, value, p, up, len(deltas))
+    # Name the basis and print it to 4 places. "dScore %.2f" was hardcoded, so a
+    # campaign frozen on ens_acc printed its accuracy delta of -0.0037 as
+    # "mean dScore -0.00" - the right number, on the right basis, wearing the
+    # name of the one basis it was NOT measured on, rounded until every
+    # candidate looked identical. The value is compared against a floor of
+    # 0.005 here, which two decimals cannot even show.
+    unit = "Score" if _score_basis() in ("raw", "neural") else _score_basis()
+    tag = "%s d%s %+.4f, wilcoxon p=%.3f (%d/%d up)" % (
+        objective, unit, value, p, up, len(deltas))
     return p, value, deltas, tag
 
 
@@ -966,8 +984,13 @@ def neural_contribution(full_rows, cbonly_rows):
     out = {}
     for r in full_rows:
         a = r["Asset"]
-        if a in cb:
-            out[a] = r.get("Score", 0.0) - cb[a]
+        score = r.get("Score", 0.0)
+        # The sentinel has to be dropped HERE and not only downstream: a
+        # contribution of Score(full) - Score(CB) turns one -999 into an
+        # ordinary-looking +1002, which no guard on the sentinel can recognise
+        # afterwards. 19 of the 40 gate assets carried it on 2026-09-17.
+        if a in cb and score > UNRELIABLE_SCORE and cb[a] > UNRELIABLE_SCORE:
+            out[a] = score - cb[a]
     return out
 
 

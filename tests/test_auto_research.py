@@ -3018,3 +3018,39 @@ def test_run_qd_actually_filters_the_incumbent_out_of_the_gate(monkeypatch, tmp_
     out = capsys.readouterr().out
     assert "hold the ADOPTED genome" in out, \
         "run_qd must filter the incumbent before taking its top-n_final slice"
+
+
+def test_the_unscorable_marker_never_averages_into_a_delta():
+    """-999 is "too few trades to judge", not a score. Averaged, one such asset
+    moved a 40-asset mean by 999/40 = 24.97, which is where neural_lift +124.21
+    came from on 2026-09-17: flips, not neural gains."""
+    import auto_research as ar
+    var = [{"Asset": "A", "Score": 2.0}, {"Asset": "B", "Score": 1.0}]
+    base = {"A": 1.0, "B": -999.0}
+    value, deltas = ar._objective_delta(var, base, "mean")
+    assert deltas == [1.0] and value == 1.0
+
+
+def test_a_contribution_drops_the_asset_the_marker_lands_on():
+    """The sentinel must go before the subtraction: Score(full) - Score(CB) turns
+    a -999 into an ordinary-looking +1002 that nothing downstream can spot."""
+    import auto_research as ar
+    full = [{"Asset": "A", "Score": 3.0}, {"Asset": "B", "Score": 3.0}]
+    cb = [{"Asset": "A", "Score": 1.0}, {"Asset": "B", "Score": -999.0}]
+    assert ar.neural_contribution(full, cb) == {"A": 2.0}
+
+
+def test_the_gate_tag_names_the_basis_it_measured(monkeypatch):
+    """A campaign frozen on ens_acc printed "mean dScore -0.00": the right
+    number under the wrong name, rounded to two places on a scale whose
+    adoption floor is 0.005."""
+    import auto_research as ar
+    base = [{"Asset": "A", "Score": 0.500}, {"Asset": "B", "Score": 0.500}]
+    var = [{"Asset": "A", "Score": 0.512}, {"Asset": "B", "Score": 0.508}]
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_acc")
+    _p, _v, _d, tag = ar.holdout_stats(base, var, "mean")
+    assert "dens_acc +0.0100" in tag, tag
+
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert "dScore +0.0100" in ar.holdout_stats(base, var, "mean")[3]
