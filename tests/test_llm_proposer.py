@@ -652,8 +652,8 @@ def test_the_analyst_asks_at_temperature_zero_and_the_proposer_does_not():
     seen = []
     original = lp._call_ollama
 
-    def spy(prompt, temperature=None):
-        seen.append(temperature)
+    def spy(prompt, temperature=None, max_tokens=lp._UNSET):
+        seen.append((temperature, max_tokens))
         return "{}"
 
     lp._call_ollama = spy
@@ -664,4 +664,16 @@ def test_the_analyst_asks_at_temperature_zero_and_the_proposer_does_not():
         lp._backend("genome")("hello")
     finally:
         lp._call_ollama = original
-    assert seen == [0.0, None], seen
+    assert seen == [(0.0, None), (None, lp._UNSET)], seen
+
+
+def test_the_analyst_cap_can_be_set_and_defaults_to_none(monkeypatch):
+    """A reasoning trace that eats the cap returns EMPTY content: the 7871-char
+    analyst prompt came back 0 chars after 2031 seconds at the shared 8000."""
+    from core import llm_proposer as lp
+    monkeypatch.delenv("GTRADE_ANALYST_MAX_TOKENS", raising=False)
+    assert lp.analyst_max_tokens() is None
+    monkeypatch.setenv("GTRADE_ANALYST_MAX_TOKENS", "24000")
+    assert lp.analyst_max_tokens() == 24000
+    monkeypatch.setenv("GTRADE_ANALYST_MAX_TOKENS", "unlimited")
+    assert lp.analyst_max_tokens() is None

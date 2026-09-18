@@ -11,6 +11,10 @@ import json
 import os
 import re
 
+# "no argument given", so a caller that says nothing keeps the old behaviour and
+# None can still mean "no cap at all".
+_UNSET = object()
+
 DSL_MENU = (
     "ops: zscore(window 2-200), ratio(a,b), lag(k 1-20), diff(k 1-20), "
     "rolling(window,agg in mean|std|sum), interaction(a,b), lead_lag(leader in "
@@ -277,7 +281,7 @@ def _raise_if_terminal(exc, provider):
         % (provider, status, _api_detail(exc) or exc)) from exc
 
 
-def _call_anthropic(prompt, temperature=None):
+def _call_anthropic(prompt, temperature=None, max_tokens=_UNSET):
     """Anthropic SDK. Model via GTRADE_AR_LLM_MODEL (default claude-opus-4-8)."""
     _require_key("ANTHROPIC_API_KEY", "anthropic")
     anthropic = _require("anthropic", "anthropic")
@@ -287,7 +291,8 @@ def _call_anthropic(prompt, temperature=None):
     for _attempt in range(3):
         try:
             msg = client.messages.create(
-                model=model, max_tokens=600, **_temp_kw(temperature),
+                model=model, max_tokens=(600 if max_tokens is _UNSET else max_tokens),
+                **_temp_kw(temperature),
                 messages=[{"role": "user", "content": prompt}])
             return msg.content[0].text.strip()
         except Exception as exc:
@@ -297,7 +302,7 @@ def _call_anthropic(prompt, temperature=None):
                        % (_api_detail(last_err) or last_err))
 
 
-def _call_openai(prompt, temperature=None):
+def _call_openai(prompt, temperature=None, max_tokens=_UNSET):
     """OpenAI-compatible chat API. Works with OpenAI and any compatible endpoint
     (Mistral, LM Studio, etc.) via GTRADE_AR_LLM_BASE_URL. Model via
     GTRADE_AR_LLM_MODEL (default gpt-4o)."""
@@ -314,7 +319,8 @@ def _call_openai(prompt, temperature=None):
     for _attempt in range(3):
         try:
             resp = client.chat.completions.create(
-                model=model, max_tokens=600, **_temp_kw(temperature),
+                model=model, max_tokens=(600 if max_tokens is _UNSET else max_tokens),
+                **_temp_kw(temperature),
                 messages=[{"role": "user", "content": prompt}])
             return resp.choices[0].message.content.strip()
         except Exception as exc:
@@ -427,7 +433,7 @@ def _ollama_unload(base, model, post=None):
         pass
 
 
-def _call_ollama(prompt, temperature=None):
+def _call_ollama(prompt, temperature=None, max_tokens=_UNSET):
     """Local Ollama via its OpenAI-compatible API. Base URL via
     GTRADE_AR_LLM_BASE_URL (default localhost:11434/v1); model via
     GTRADE_AR_LLM_MODEL or auto-detected (gemma preferred)."""
@@ -440,14 +446,17 @@ def _call_ollama(prompt, temperature=None):
     # generously. GTRADE_AR_LLM_MAX_TOKENS overrides; set it to 0 for NO cap (local model
     # is free, but the only cost is wall-clock time - an uncapped reasoning trace can run
     # long, fine for the one-shot wiki, risky for the many-call proposer path).
-    raw = (os.getenv("GTRADE_AR_LLM_MAX_TOKENS") or "8000").strip().lower()
-    if raw in ("0", "none", "unlimited"):
-        max_toks = None
+    if max_tokens is not _UNSET:
+        max_toks = max_tokens
     else:
-        try:
-            max_toks = int(raw)
-        except ValueError:
-            max_toks = 8000
+        raw = (os.getenv("GTRADE_AR_LLM_MAX_TOKENS") or "8000").strip().lower()
+        if raw in ("0", "none", "unlimited"):
+            max_toks = None
+        else:
+            try:
+                max_toks = int(raw)
+            except ValueError:
+                max_toks = 8000
     # max_retries=0: this function already loops 3x below, and the SDK's own
     # retries each wait a full timeout -> without this a slow local model turns
     # one stuck call into a multi-hour retry storm (the 10-min-apart retries).
@@ -493,6 +502,24 @@ def _call_ollama(prompt, temperature=None):
 # one (the 2026-09-18 campaign already lost steps to "no unseen child").
 ANALYST_TEMPERATURE = 0.0
 
+# A reasoning model spends tokens on its trace BEFORE it answers, so a cap that
+# the trace uses up returns empty content - not an error, not a refusal, just
+# nothing. Measured 2026-09-18: the 7871-char analyst prompt came back 0 chars
+# after 2031 seconds at the shared 8000-token cap, and each retry costs another
+# half hour. The analyst therefore asks with no cap by default: it is ONE call
+# per asset, unlike the proposer, where an uncapped trace would be paid for on
+# every step of a hundred-step search.
+def analyst_max_tokens():
+    """GTRADE_ANALYST_MAX_TOKENS: a number, or 0/none/unlimited (the default)
+    for no cap at all, which lets the model stop when it has finished."""
+    raw = (os.getenv("GTRADE_ANALYST_MAX_TOKENS") or "0").strip().lower()
+    if raw in ("0", "none", "unlimited"):
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
 
 def _temp_kw(temperature):
     """{"temperature": t} or {}, so a caller that says nothing keeps the
@@ -536,7 +563,8 @@ def _backend(what="llm"):
         base_fn = fn
 
         def fn(prompt):
-            return base_fn(prompt, temperature=ANALYST_TEMPERATURE)
+            return base_fn(prompt, temperature=ANALYST_TEMPERATURE,
+                           max_tokens=analyst_max_tokens())
     return _traced(fn, what, provider)
 
 
