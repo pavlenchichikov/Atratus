@@ -96,56 +96,60 @@ def test_detect_ollama_unreachable_raises(monkeypatch):
         lp._detect_ollama_model()
 
 
+def _fake_httpx(monkeypatch, captured, reply=None, raises=None):
+    """Stub httpx.Client for the native Ollama transport."""
+    import httpx
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return reply if reply is not None else {"message": {"content": " [] "}}
+
+    class _Client:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+        def post(self, url, json=None):
+            captured["url"] = url
+            captured["body"] = json
+            if raises is not None:
+                raise raises
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    return httpx
+
+
 def test_call_ollama_defaults(monkeypatch):
+    """Ollama is called on its OWN endpoint now - the OpenAI-compatible layer
+    accepts `think` and ignores it, and reports reasoning and answer in one
+    field, which is how a long trace came back as an empty judgment."""
     captured = {}
-
-    class FakeCompletions:
-        def create(self, model, max_tokens, messages):
-            captured["model"] = model
-            msg = types.SimpleNamespace(content=" [] ")
-            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
-
-    class FakeClient:
-        def __init__(self, base_url=None, api_key=None, **kwargs):
-            captured["base_url"] = base_url
-            captured["api_key"] = api_key
-            captured.update(kwargs)
-            self.chat = types.SimpleNamespace(completions=FakeCompletions())
-
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeClient))
+    _fake_httpx(monkeypatch, captured)
     monkeypatch.delenv("GTRADE_AR_LLM_MODEL", raising=False)
     monkeypatch.delenv("GTRADE_AR_LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
+    monkeypatch.setattr(lp, "_ollama_unload", lambda *a, **k: None)
     assert lp._call_ollama("hi") == "[]"
-    # 127.0.0.1, never "localhost": a Windows system proxy swallows localhost
-    # inside the openai SDK's httpx client (see _ollama_base_url).
-    assert captured["base_url"] == "http://127.0.0.1:11434/v1"
-    assert captured["api_key"] == "ollama"
-    assert captured["model"] == "gemma4:26b"
-    # ...and the SDK must not inherit the system proxy: httpx honours the Windows
-    # registry proxy but not its loopback bypass list, which kills every call the
-    # moment the VPN proxy is down.
-    assert captured["http_client"].trust_env is False
+    # 127.0.0.1, never "localhost": a Windows system proxy swallows localhost.
+    assert captured["url"] == "http://127.0.0.1:11434/api/chat"
+    assert captured["body"]["model"] == "gemma4:26b"
+    # nobody asked about the trace, so nothing is said about it
+    assert "think" not in captured["body"]
+    # ...and the client must not inherit the system proxy: httpx honours the
+    # Windows registry proxy but not its loopback bypass list.
+    assert captured["trust_env"] is False
 
 
 def test_call_ollama_model_env_override(monkeypatch):
     captured = {}
-
-    class FakeCompletions:
-        def create(self, model, max_tokens, messages):
-            captured["model"] = model
-            msg = types.SimpleNamespace(content="[]")
-            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
-
-    class FakeClient:
-        def __init__(self, base_url=None, api_key=None, **kwargs):
-            self.chat = types.SimpleNamespace(completions=FakeCompletions())
-
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeClient))
+    _fake_httpx(monkeypatch, captured)
     monkeypatch.setenv("GTRADE_AR_LLM_MODEL", "gemma3:latest")
+    monkeypatch.setattr(lp, "_ollama_unload", lambda *a, **k: None)
     lp._call_ollama("hi")
-    assert captured["model"] == "gemma3:latest"
+    assert captured["body"]["model"] == "gemma3:latest"
 
 
 def test_backend_traces_every_call(monkeypatch, capsys):
@@ -396,30 +400,13 @@ def test_avoid_clause_is_budgeted_and_compacted():
 def test_a_timed_out_ollama_call_is_not_retried(monkeypatch):
     """A timeout is deterministic here, so three attempts cost three timeouts
     and learn nothing new."""
-    calls = []
-
-    class FakeTimeout(Exception):
-        pass
-
-    class FakeCompletions:
-        def create(self, **kw):
-            calls.append(1)
-            raise FakeTimeout("timed out")
-
-    class FakeClient:
-        def __init__(self, **kw):
-            self.chat = types.SimpleNamespace(completions=FakeCompletions())
-
-    # The openai SDK is imported inside the call function precisely so this
-    # module loads without it (see the llm_proposer docstring), and it is not a
-    # requirements.txt entry - so the test must not import it either.
-    monkeypatch.setitem(sys.modules, "openai",
-                        types.SimpleNamespace(OpenAI=FakeClient,
-                                              APITimeoutError=FakeTimeout))
+    import httpx
+    captured = {}
+    _fake_httpx(monkeypatch, captured, raises=httpx.ReadTimeout("timed out"))
     monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
-    with pytest.raises(RuntimeError, match="timed out"):
+    monkeypatch.setattr(lp, "_ollama_unload", lambda *a, **k: None)
+    with pytest.raises(lp.CallTimedOut, match="timed out"):
         lp._call_ollama("hi")
-    assert len(calls) == 1
 
 
 def test_auto_research_reads_the_env_file_for_the_timeout(monkeypatch):
@@ -664,7 +651,7 @@ def test_the_analyst_asks_at_temperature_zero_and_the_proposer_does_not():
         lp._backend("genome")("hello")
     finally:
         lp._call_ollama = original
-    assert seen == [(0.0, 8000, False), (None, lp._UNSET, None)], seen
+    assert seen == [(0.0, 8000, True), (None, lp._UNSET, None)], seen
 
 
 def test_the_analyst_cap_is_a_number_by_default(monkeypatch):
@@ -690,15 +677,15 @@ def test_no_trace_goes_through_ollamas_own_endpoint(monkeypatch):
     def fake_native(base, model, prompt, temperature, max_tokens, think):
         seen.update(base=base, model=model, temperature=temperature,
                     max_tokens=max_tokens, think=think)
-        return "  {\"direction\": \"up\"}  "
+        return "{\"direction\": \"up\"}", ""
 
     monkeypatch.setattr(lp, "_require", lambda *a, **k: object())
     monkeypatch.setattr(lp, "_ollama_native_chat", fake_native)
     monkeypatch.setattr(lp, "_ollama_unload", lambda *a, **k: None)
     monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
-    out = lp._call_ollama("hello", temperature=0.0, max_tokens=8000, think=False)
+    out = lp._call_ollama("hello", temperature=0.0, max_tokens=8000, think=True)
     assert out == '{"direction": "up"}'
-    assert seen["think"] is False and seen["max_tokens"] == 8000
+    assert seen["think"] is True and seen["max_tokens"] == 8000
     assert seen["temperature"] == 0.0
 
 
@@ -725,8 +712,9 @@ def test_the_native_call_builds_ollamas_own_payload(monkeypatch):
 
     import httpx
     monkeypatch.setattr(httpx, "Client", _Client)
-    got = lp._ollama_native_chat("http://127.0.0.1:11434/v1", "m", "hi", 0.0, 8000, False)
-    assert got == "ok"
+    got, trace = lp._ollama_native_chat("http://127.0.0.1:11434/v1", "m", "hi",
+                                       0.0, 8000, False)
+    assert got == "ok" and trace == ""
     assert sent["url"] == "http://127.0.0.1:11434/api/chat"
     assert sent["body"]["think"] is False
     assert sent["body"]["options"] == {"temperature": 0.0, "num_predict": 8000}
@@ -741,7 +729,7 @@ def test_the_analyst_never_reaches_the_sdk_when_the_trace_is_off(monkeypatch):
 
     def fake_native(*a, **k):
         used["native"] += 1
-        return "{}"
+        return "{}", ""
 
     def boom(*a, **k):
         raise AssertionError("the analyst must not go through the openai SDK")
@@ -787,3 +775,34 @@ def test_the_analyst_temperature_can_be_handed_back_to_the_provider(monkeypatch)
     assert lp.analyst_temperature() is None
     monkeypatch.setenv("GTRADE_ANALYST_TEMPERATURE", "0.7")
     assert lp.analyst_temperature() == 0.7
+
+
+def test_an_answer_the_trace_ate_is_named_and_not_retried(monkeypatch):
+    """The failure that cost 3577 seconds: a full budget of reasoning and an
+    empty message. On the native endpoint the two come back separately, so it
+    can be told apart from a model that simply said nothing."""
+    from core import llm_proposer as lp
+    calls = []
+
+    def fake_native(*a, **k):
+        calls.append(1)
+        return "", "thinking at length about SBER"
+
+    monkeypatch.setattr(lp, "_ollama_native_chat", fake_native)
+    monkeypatch.setattr(lp, "_ollama_unload", lambda *a, **k: None)
+    monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
+    try:
+        lp._call_ollama("hello", max_tokens=8000, think=True)
+    except lp.AnswerLostToTrace as exc:
+        assert "8000" in str(exc)
+    else:
+        raise AssertionError("an empty answer beside a long trace must be named")
+    assert len(calls) == 1, "and asking again would spend the same budget"
+
+
+def test_the_analyst_reasons_again_and_the_knob_turns_it_off(monkeypatch):
+    from core import llm_proposer as lp
+    monkeypatch.delenv("GTRADE_ANALYST_THINK", raising=False)
+    assert lp.analyst_think() is True
+    monkeypatch.setenv("GTRADE_ANALYST_THINK", "0")
+    assert lp.analyst_think() is False

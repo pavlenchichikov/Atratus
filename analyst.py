@@ -21,7 +21,7 @@ import sys
 import train_payoff
 from config import radar_category
 from core.analyst import agent, calibrate, dossier, payoff, store
-from core.llm_proposer import CallTimedOut, ProviderUnavailable
+from core.llm_proposer import ProviderUnavailable, TerminalCallError
 
 
 def _load_table():
@@ -266,7 +266,7 @@ def cmd_run(args):
                 written, refused = _judge_one(d, asset, h, horizon, call, depth,
                                               cells, table, written, refused,
                                               rejects, cited, as_of, asked)
-            except CallTimedOut as exc:
+            except TerminalCallError as exc:
                 # Stop the sweep: every remaining asset would spend the same
                 # hour to fail the same way.
                 print("[analyst] %s" % exc)

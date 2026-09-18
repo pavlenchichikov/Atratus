@@ -187,7 +187,20 @@ def _parse_specs(text):
     return [_normalise_spec(sp) for sp in specs]
 
 
-class CallTimedOut(RuntimeError):
+class TerminalCallError(RuntimeError):
+    """A call that will fail the same way if it is simply repeated."""
+
+
+class AnswerLostToTrace(TerminalCallError):
+    """The model spent its whole token budget on reasoning and never answered.
+
+    Structural, like a timeout: the same prompt, model and cap spend the same
+    budget the same way. Named separately because the cure is different - raise
+    the cap, or ask without the trace.
+    """
+
+
+class CallTimedOut(TerminalCallError):
     """The call ran past GTRADE_AR_LLM_TIMEOUT.
 
     Its own layer already refuses to retry a timeout - the same prompt, model
@@ -465,8 +478,10 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
         options["temperature"] = float(temperature)
     if max_tokens is not None:
         options["num_predict"] = int(max_tokens)
-    payload = {"model": model, "stream": False, "think": bool(think),
+    payload = {"model": model, "stream": False,
                "messages": [{"role": "user", "content": prompt}]}
+    if think is not None:
+        payload["think"] = bool(think)
     if options:
         payload["options"] = options
     url = base.removesuffix("/v1").rstrip("/") + "/api/chat"
@@ -478,24 +493,32 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
             f"ollama call timed out after {_llm_timeout()}s (model too slow for "
             "this prompt; try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)") from exc
     resp.raise_for_status()
-    return ((resp.json().get("message") or {}).get("content") or "").strip()
+    msg = (resp.json().get("message") or {})
+    # Separate fields, which is the point of this endpoint: an empty answer
+    # beside a long trace is a budget problem, an empty answer beside no trace
+    # is a model that said nothing.
+    return (msg.get("content") or "").strip(), (msg.get("thinking") or "").strip()
 
 
 def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
-    """Local Ollama via its OpenAI-compatible API. Base URL via
-    GTRADE_AR_LLM_BASE_URL (default localhost:11434/v1); model via
+    """Local Ollama over its OWN /api/chat. Base URL via GTRADE_AR_LLM_BASE_URL
+    (default localhost:11434, /v1 suffix tolerated); model via
     GTRADE_AR_LLM_MODEL or auto-detected (gemma preferred).
 
-    `think=False` switches to Ollama's own endpoint, the only one that honours
-    it (see _ollama_native_chat)."""
+    Every path goes here now, not only the analyst. The OpenAI-compatible layer
+    was never wrong, it was just narrower: it accepts `think` and ignores it
+    (measured 2026-09-18 on gemma4:26b - 7992 tokens of reasoning, an empty
+    message, 3577 seconds), and it reports the reasoning and the answer in one
+    field, so a trace that runs long is indistinguishable from a model with
+    nothing to say. The native endpoint returns them separately, which is what
+    lets this function say WHICH of the two happened.
+    """
     base = _ollama_base_url()
     model = model_override() or _detect_ollama_model()
-    # Reasoning models (e.g. gemma) spend tokens on an internal reasoning trace before
-    # the answer; a small cap gets fully consumed by reasoning and returns EMPTY content
-    # (the silent cause of a wiki/proposer that "runs" but produces nothing). Budget
-    # generously. GTRADE_AR_LLM_MAX_TOKENS overrides; set it to 0 for NO cap (local model
-    # is free, but the only cost is wall-clock time - an uncapped reasoning trace can run
-    # long, fine for the one-shot wiki, risky for the many-call proposer path).
+    # Reasoning models spend tokens on the trace BEFORE the answer, so a cap the
+    # trace uses up leaves nothing for the answer. GTRADE_AR_LLM_MAX_TOKENS
+    # overrides; 0 means no cap, which is fine for a one-shot call and risky for
+    # the many-call search path.
     if max_tokens is not _UNSET:
         max_toks = max_tokens
     else:
@@ -507,45 +530,28 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
                 max_toks = int(raw)
             except ValueError:
                 max_toks = 8000
-    if think is not None and not think:
-        # First, and before the SDK is even required: this path never touches it.
-        out = _ollama_native_chat(base, model, prompt, temperature, max_toks, think)
-        _ollama_unload(base, model)
-        return out.strip()
-    openai = _require("openai", "ollama")
-    # max_retries=0: this function already loops 3x below, and the SDK's own
-    # retries each wait a full timeout -> without this a slow local model turns
-    # one stuck call into a multi-hour retry storm (the 10-min-apart retries).
-    # trust_env=False: httpx picks up the Windows registry proxy (a VPN client sets
-    # one) and ignores its bypass list, so every local call is routed through the
-    # proxy - it works while the VPN is up and dies with a bare "Connection error."
-    # the moment it is not, silently demoting the run to the evolutionary proposer.
-    # Ollama is on loopback; it never needs a proxy.
-    import httpx
-    client = openai.OpenAI(base_url=base, api_key="ollama",
-                           timeout=_llm_timeout(), max_retries=0,
-                           http_client=httpx.Client(trust_env=False,
-                                                    timeout=_llm_timeout()))
     last_err = None
     for _attempt in range(3):
         try:
-            resp = client.chat.completions.create(
-                model=model, max_tokens=max_toks, **_temp_kw(temperature),
-                **({} if think is None else {"extra_body": {"think": bool(think)}}),
-                messages=[{"role": "user", "content": prompt}])
-            out = (resp.choices[0].message.content or "").strip()
-            _ollama_unload(base, model)
-            return out
-        except openai.APITimeoutError as exc:
-            # A timeout is not transient: the same prompt, model and machine will
-            # be just as slow next time, so a retry only multiplies the wait.
-            # Three attempts at the 600s default cost half an hour to learn what
-            # the first one already said.
-            raise CallTimedOut(
-                f"ollama call timed out after {_llm_timeout()}s (model too slow for this prompt; "
-                "try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)") from exc
+            out, trace = _ollama_native_chat(base, model, prompt, temperature,
+                                             max_toks, think)
+        except TerminalCallError:
+            # A timeout, or an answer the trace ate: the same prompt, model and
+            # cap produce the same outcome next time, so asking again only
+            # multiplies the wait. 2026-09-18 spent three and a half hours
+            # learning that four times over.
+            raise
         except Exception as exc:
             last_err = exc
+            continue
+        _ollama_unload(base, model)
+        if not out and trace:
+            raise AnswerLostToTrace(
+                "the model spent its whole budget (%s tokens) on reasoning and "
+                "returned no answer. Raise the cap, or ask without the trace "
+                "(GTRADE_ANALYST_THINK=0 on the analyst path)."
+                % ("no" if max_toks is None else max_toks))
+        return out
     raise RuntimeError(
         f"ollama proposer failed after 3 attempts (is Ollama running at {base}?): {last_err}")
 
@@ -589,7 +595,17 @@ def analyst_temperature():
 # The judgment itself is a small JSON object, so the wait buys the trace, not
 # the answer. The genome proposer is left alone: it writes a new hypothesis
 # rather than filling in a form, and that is where a trace may earn its minutes.
-ANALYST_THINK = False
+def analyst_think():
+    """GTRADE_ANALYST_THINK: 1 by default - the analyst reasons before it judges.
+
+    It was briefly off, because through the OpenAI-compatible layer the trace
+    and the answer shared one field and one budget, so a long trace returned an
+    empty judgment after the full wait. On the native endpoint they are separate
+    and a trace that ran long is reported as such, so the reason for turning it
+    off is gone. Set 0 if a model turns out to spend its whole budget thinking.
+    """
+    raw = (os.getenv("GTRADE_ANALYST_THINK") or "1").strip().lower()
+    return raw not in ("0", "false", "off", "no")
 
 # A reasoning model spends tokens on its trace BEFORE it answers, so a cap that
 # the trace uses up returns empty content - not an error, not a refusal, just
@@ -661,7 +677,7 @@ def _backend(what="llm"):
         kw = {"temperature": analyst_temperature(),
               "max_tokens": analyst_max_tokens()}
         if provider == "ollama":
-            kw["think"] = ANALYST_THINK
+            kw["think"] = analyst_think()
 
         def fn(prompt):
             return base_fn(prompt, **kw)

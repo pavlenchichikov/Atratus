@@ -308,12 +308,12 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
     # A field the dossier carries as None or [] was shown to the model as empty,
     # so citing it is not evidence of anything.
     empty = {k for k, v in dossier.items() if v is None or v == []}
-    from core.llm_proposer import CallTimedOut, ProviderUnavailable
+    from core.llm_proposer import ProviderUnavailable, TerminalCallError
 
     for _ in range(MAX_ATTEMPTS + budget):
         try:
             answer = call(prompt + extra)
-        except CallTimedOut:
+        except TerminalCallError:
             # Structural, like a missing SDK: the next attempt takes the same
             # hour and fails the same way. Asking again turned one timeout into
             # four on 2026-09-18.
