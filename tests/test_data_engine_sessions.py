@@ -119,3 +119,24 @@ def test_a_stored_week_is_not_fetched_again_for_its_time_of_day(monkeypatch):
     stamps = [monday + pd.Timedelta(hours=3)]
     monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(_weekly_payload(stamps, [1.0])))
     assert de.fetch_yahoo_weekly("TON", monday) is None
+
+
+def test_the_window_never_starts_exactly_on_the_next_bars_open(monkeypatch):
+    """Yahoo returns NO completed bar when period1 falls exactly on a bar's
+    open: just one in-progress row stamped with the request time, which the
+    unfinished-session rule drops. Every crypto table froze at 2026-09-16 that
+    way while equities, whose bars open mid-session, kept updating."""
+    urls = []
+
+    def spy(url, **kw):
+        urls.append(url)
+        return _Resp({"chart": {"result": [{}]}})
+
+    monkeypatch.setattr(net, "http_get", spy)
+    last = dt.datetime.now() - dt.timedelta(days=2)
+    de.fetch_yahoo_smart("BTC", last)
+
+    period1 = int(urls[0].split("period1=")[1].split("&")[0])
+    assert period1 < int(last.timestamp()) + 86400
+    # ...but still after the stored bar itself, so the window stays a top-up
+    assert period1 > int(last.timestamp())

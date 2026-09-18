@@ -176,10 +176,26 @@ def fetch_yahoo_smart(symbol, last_date):
     _orig_last_date = last_date
 
     if last_date is not None:
-        start_ts = int(last_date.timestamp()) + 86400
-        if start_ts >= now_ts:
+        next_open = int(last_date.timestamp()) + 86400
+        if next_open >= now_ts:
             print(f"   - [YAHOO] {y_sym:<12} [OK] (UP_TO_DATE)")
             return None
+        # Back off an hour from that boundary. Measured 2026-09-18 against the
+        # live vendor: period1 landing EXACTLY on a daily bar's open returns no
+        # completed bar at all, only a single in-progress row stamped with the
+        # request time, which the unfinished-session rule then drops - so the
+        # run reports "up to date" and the table never advances. One second
+        # earlier returns every bar.
+        #
+        #   period1 = 09-17 00:00 UTC (the bar's own open) -> ['09-18 08:40']
+        #   period1 = one second before                    -> ['09-16', '09-17', '09-18']
+        #
+        # It bites assets whose bars open at 00:00 UTC, which is every crypto:
+        # BTC, ETH, SOL, XRP and DOGE all froze at 2026-09-16 while equities,
+        # whose bars open mid-session, kept updating. The extra hour can only
+        # re-request a bar already stored, and the incremental filter below
+        # drops it.
+        start_ts = next_open - 3600
     else:
         # Start from HISTORY_DAYS ago using an explicit period1/period2 window.
         # range=max with interval=1d returns quarterly data for long histories;
