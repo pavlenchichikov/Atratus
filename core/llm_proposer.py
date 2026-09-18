@@ -187,6 +187,18 @@ def _parse_specs(text):
     return [_normalise_spec(sp) for sp in specs]
 
 
+class CallTimedOut(RuntimeError):
+    """The call ran past GTRADE_AR_LLM_TIMEOUT.
+
+    Its own layer already refuses to retry a timeout - the same prompt, model
+    and machine will be just as slow next time - but that only covered the
+    retries inside one call. The analyst's judge() loop caught it as an
+    ordinary failure and asked again, so 2026-09-18 spent three and a half
+    hours on four identical hour-long timeouts of gemma4:26b. A caller must be
+    able to tell this apart from a model that answered badly.
+    """
+
+
 class ProviderUnavailable(RuntimeError):
     """The provider cannot be reached at all: its SDK is not installed.
 
@@ -433,7 +445,7 @@ def _ollama_unload(base, model, post=None):
         pass
 
 
-def _call_ollama(prompt, temperature=None, max_tokens=_UNSET):
+def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
     """Local Ollama via its OpenAI-compatible API. Base URL via
     GTRADE_AR_LLM_BASE_URL (default localhost:11434/v1); model via
     GTRADE_AR_LLM_MODEL or auto-detected (gemma preferred)."""
@@ -475,6 +487,7 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET):
         try:
             resp = client.chat.completions.create(
                 model=model, max_tokens=max_toks, **_temp_kw(temperature),
+                **({} if think is None else {"extra_body": {"think": bool(think)}}),
                 messages=[{"role": "user", "content": prompt}])
             out = (resp.choices[0].message.content or "").strip()
             _ollama_unload(base, model)
@@ -484,7 +497,7 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET):
             # be just as slow next time, so a retry only multiplies the wait.
             # Three attempts at the 600s default cost half an hour to learn what
             # the first one already said.
-            raise RuntimeError(
+            raise CallTimedOut(
                 f"ollama call timed out after {_llm_timeout()}s (model too slow for this prompt; "
                 "try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)") from exc
         except Exception as exc:
@@ -502,6 +515,19 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET):
 # one (the 2026-09-18 campaign already lost steps to "no unseen child").
 ANALYST_TEMPERATURE = 0.0
 
+# Ollama only: ask the model to skip its reasoning trace. Raising the token cap
+# was not enough on its own - measured 2026-09-18 on the same 7.9k-char analyst
+# prompt and the same machine:
+#
+#   cap 8000, trace on    0 chars after 2031s   (the trace spent the whole cap)
+#   no cap,   trace on    timed out at 3600s
+#   no cap,   trace off   1944 chars after 983s, a valid judgment
+#
+# The judgment itself is a small JSON object, so the wait buys the trace, not
+# the answer. The genome proposer is left alone: it writes a new hypothesis
+# rather than filling in a form, and that is where a trace may earn its minutes.
+ANALYST_THINK = False
+
 # A reasoning model spends tokens on its trace BEFORE it answers, so a cap that
 # the trace uses up returns empty content - not an error, not a refusal, just
 # nothing. Measured 2026-09-18: the 7871-char analyst prompt came back 0 chars
@@ -510,15 +536,23 @@ ANALYST_TEMPERATURE = 0.0
 # per asset, unlike the proposer, where an uncapped trace would be paid for on
 # every step of a hundred-step search.
 def analyst_max_tokens():
-    """GTRADE_ANALYST_MAX_TOKENS: a number, or 0/none/unlimited (the default)
-    for no cap at all, which lets the model stop when it has finished."""
-    raw = (os.getenv("GTRADE_ANALYST_MAX_TOKENS") or "0").strip().lower()
+    """GTRADE_ANALYST_MAX_TOKENS: the cap on ONE judgment, or 0/none/unlimited
+    for no cap.
+
+    Default 8000. It was briefly no-cap, which was the wrong lesson from the
+    empty replies: the trace was what spent the budget, and with the trace off
+    a judgment is a small JSON object that fits several times over. Uncapped,
+    a model that ignores the no-trace flag - gemma4:26b does - generates until
+    the hour-long timeout instead of until the cap, which is how a run that
+    used to answer stopped answering.
+    """
+    raw = (os.getenv("GTRADE_ANALYST_MAX_TOKENS") or "8000").strip().lower()
     if raw in ("0", "none", "unlimited"):
         return None
     try:
         return int(raw)
     except ValueError:
-        return None
+        return 8000
 
 
 def _temp_kw(temperature):
@@ -561,10 +595,13 @@ def _backend(what="llm"):
             f"unknown GTRADE_AR_LLM {provider!r} (use anthropic, openai or ollama)")
     if what == "analyst":
         base_fn = fn
+        kw = {"temperature": ANALYST_TEMPERATURE,
+              "max_tokens": analyst_max_tokens()}
+        if provider == "ollama":
+            kw["think"] = ANALYST_THINK
 
         def fn(prompt):
-            return base_fn(prompt, temperature=ANALYST_TEMPERATURE,
-                           max_tokens=analyst_max_tokens())
+            return base_fn(prompt, **kw)
     return _traced(fn, what, provider)
 
 

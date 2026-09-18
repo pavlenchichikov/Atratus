@@ -21,7 +21,7 @@ import sys
 import train_payoff
 from config import radar_category
 from core.analyst import agent, calibrate, dossier, payoff, store
-from core.llm_proposer import ProviderUnavailable
+from core.llm_proposer import CallTimedOut, ProviderUnavailable
 
 
 def _load_table():
@@ -266,6 +266,14 @@ def cmd_run(args):
                 written, refused = _judge_one(d, asset, h, horizon, call, depth,
                                               cells, table, written, refused,
                                               rejects, cited, as_of, asked)
+            except CallTimedOut as exc:
+                # Stop the sweep: every remaining asset would spend the same
+                # hour to fail the same way.
+                print("[analyst] %s" % exc)
+                print("[analyst] stopped after the first timeout. Try a smaller "
+                      "model for this path, or raise GTRADE_AR_LLM_TIMEOUT if "
+                      "the machine really is that slow.")
+                return 1
             except ProviderUnavailable as exc:
                 # One line, then stop. A sweep of 28 assets would otherwise
                 # print the same missing-package error 28 times and finish

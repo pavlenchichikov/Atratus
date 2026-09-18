@@ -652,8 +652,8 @@ def test_the_analyst_asks_at_temperature_zero_and_the_proposer_does_not():
     seen = []
     original = lp._call_ollama
 
-    def spy(prompt, temperature=None, max_tokens=lp._UNSET):
-        seen.append((temperature, max_tokens))
+    def spy(prompt, temperature=None, max_tokens=lp._UNSET, think=None):
+        seen.append((temperature, max_tokens, think))
         return "{}"
 
     lp._call_ollama = spy
@@ -664,16 +664,69 @@ def test_the_analyst_asks_at_temperature_zero_and_the_proposer_does_not():
         lp._backend("genome")("hello")
     finally:
         lp._call_ollama = original
-    assert seen == [(0.0, None), (None, lp._UNSET)], seen
+    assert seen == [(0.0, 8000, False), (None, lp._UNSET, None)], seen
 
 
-def test_the_analyst_cap_can_be_set_and_defaults_to_none(monkeypatch):
-    """A reasoning trace that eats the cap returns EMPTY content: the 7871-char
-    analyst prompt came back 0 chars after 2031 seconds at the shared 8000."""
+def test_the_analyst_cap_is_a_number_by_default(monkeypatch):
+    """Uncapped was the wrong lesson from the empty replies: the trace spent the
+    budget, and a model that ignores the no-trace flag (gemma4:26b does) then
+    generates until the hour-long timeout instead of until the cap."""
     from core import llm_proposer as lp
     monkeypatch.delenv("GTRADE_ANALYST_MAX_TOKENS", raising=False)
-    assert lp.analyst_max_tokens() is None
+    assert lp.analyst_max_tokens() == 8000
     monkeypatch.setenv("GTRADE_ANALYST_MAX_TOKENS", "24000")
     assert lp.analyst_max_tokens() == 24000
     monkeypatch.setenv("GTRADE_ANALYST_MAX_TOKENS", "unlimited")
     assert lp.analyst_max_tokens() is None
+
+
+def test_the_analyst_skips_the_reasoning_trace_on_ollama(monkeypatch):
+    """Raising the cap was not enough: the same prompt returned 0 chars after
+    2031s with the trace on and a valid judgment after 983s with it off."""
+    from core import llm_proposer as lp
+    sent = {}
+
+    class _Resp:
+        def __init__(self):
+            self.choices = [type("C", (), {
+                "message": type("M", (), {"content": "{}"})()})()]
+
+    class _Client:
+        def __init__(self, **kw):
+            self.chat = type("Chat", (), {"completions": self})()
+
+        def create(self, **kw):
+            sent.update(kw)
+            return _Resp()
+
+    fake_openai = type("OpenAIModule", (), {
+        "OpenAI": lambda **kw: _Client(**kw),
+        "APITimeoutError": type("T", (Exception,), {}),
+    })
+    monkeypatch.setattr(lp, "_require", lambda *a, **k: fake_openai)
+    monkeypatch.setenv("GTRADE_AR_LLM", "ollama")
+    monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:12b")
+    lp._backend("analyst")("hello")
+    assert sent["extra_body"] == {"think": False}, sent.get("extra_body")
+    assert sent["temperature"] == 0.0 and sent["max_tokens"] == 8000
+
+
+def test_a_timeout_is_not_asked_again(monkeypatch):
+    """One timeout became four on 2026-09-18: the call layer refuses to retry a
+    timeout, and judge() asked again anyway - three and a half hours to learn
+    what the first hour had already said."""
+    from core.analyst import agent
+    from core.llm_proposer import CallTimedOut
+    calls = []
+
+    def boom(prompt):
+        calls.append(prompt)
+        raise CallTimedOut("too slow")
+
+    try:
+        agent.judge({"asset": "SBER", "close": 1.0}, call=boom, depth="full", horizon=1)
+    except CallTimedOut:
+        pass
+    else:
+        raise AssertionError("the timeout must reach the caller")
+    assert len(calls) == 1, calls
