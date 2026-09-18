@@ -642,3 +642,26 @@ def test_normalising_never_invents_an_op_or_touches_a_correct_spec():
     assert _normalise_spec(plain) == plain
     made_up = {"name": "m", "op": "kalman(bb_pos)"}
     assert _normalise_spec(made_up) == made_up
+
+
+def test_the_analyst_asks_at_temperature_zero_and_the_proposer_does_not():
+    """A judgment that cannot be reproduced cannot be audited: at the local
+    model's default the same question answered 412, 402, 402, 412. The genome
+    proposer keeps the default, where the spread is the point."""
+    from core import llm_proposer as lp
+    seen = []
+    original = lp._call_ollama
+
+    def spy(prompt, temperature=None):
+        seen.append(temperature)
+        return "{}"
+
+    lp._call_ollama = spy
+    try:
+        import os
+        os.environ["GTRADE_AR_LLM"] = "ollama"
+        lp._backend("analyst")("hello")
+        lp._backend("genome")("hello")
+    finally:
+        lp._call_ollama = original
+    assert seen == [0.0, None], seen

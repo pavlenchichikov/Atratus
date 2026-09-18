@@ -277,7 +277,7 @@ def _raise_if_terminal(exc, provider):
         % (provider, status, _api_detail(exc) or exc)) from exc
 
 
-def _call_anthropic(prompt):
+def _call_anthropic(prompt, temperature=None):
     """Anthropic SDK. Model via GTRADE_AR_LLM_MODEL (default claude-opus-4-8)."""
     _require_key("ANTHROPIC_API_KEY", "anthropic")
     anthropic = _require("anthropic", "anthropic")
@@ -287,7 +287,7 @@ def _call_anthropic(prompt):
     for _attempt in range(3):
         try:
             msg = client.messages.create(
-                model=model, max_tokens=600,
+                model=model, max_tokens=600, **_temp_kw(temperature),
                 messages=[{"role": "user", "content": prompt}])
             return msg.content[0].text.strip()
         except Exception as exc:
@@ -297,7 +297,7 @@ def _call_anthropic(prompt):
                        % (_api_detail(last_err) or last_err))
 
 
-def _call_openai(prompt):
+def _call_openai(prompt, temperature=None):
     """OpenAI-compatible chat API. Works with OpenAI and any compatible endpoint
     (Mistral, LM Studio, etc.) via GTRADE_AR_LLM_BASE_URL. Model via
     GTRADE_AR_LLM_MODEL (default gpt-4o)."""
@@ -314,7 +314,7 @@ def _call_openai(prompt):
     for _attempt in range(3):
         try:
             resp = client.chat.completions.create(
-                model=model, max_tokens=600,
+                model=model, max_tokens=600, **_temp_kw(temperature),
                 messages=[{"role": "user", "content": prompt}])
             return resp.choices[0].message.content.strip()
         except Exception as exc:
@@ -427,7 +427,7 @@ def _ollama_unload(base, model, post=None):
         pass
 
 
-def _call_ollama(prompt):
+def _call_ollama(prompt, temperature=None):
     """Local Ollama via its OpenAI-compatible API. Base URL via
     GTRADE_AR_LLM_BASE_URL (default localhost:11434/v1); model via
     GTRADE_AR_LLM_MODEL or auto-detected (gemma preferred)."""
@@ -465,7 +465,7 @@ def _call_ollama(prompt):
     for _attempt in range(3):
         try:
             resp = client.chat.completions.create(
-                model=model, max_tokens=max_toks,
+                model=model, max_tokens=max_toks, **_temp_kw(temperature),
                 messages=[{"role": "user", "content": prompt}])
             out = (resp.choices[0].message.content or "").strip()
             _ollama_unload(base, model)
@@ -482,6 +482,22 @@ def _call_ollama(prompt):
             last_err = exc
     raise RuntimeError(
         f"ollama proposer failed after 3 attempts (is Ollama running at {base}?): {last_err}")
+
+
+# A judgment that cannot be reproduced cannot be audited. Measured 2026-09-18
+# against the local model: at the provider's own default the same question came
+# back 412, 402, 402, 412, and at temperature 0 it came back 412 three times.
+# The analyst therefore asks at 0, so a changed verdict means changed EVIDENCE.
+# The genome proposer keeps the provider default on purpose: there the spread is
+# the point, and a search that proposes one genome forever is worse than a noisy
+# one (the 2026-09-18 campaign already lost steps to "no unseen child").
+ANALYST_TEMPERATURE = 0.0
+
+
+def _temp_kw(temperature):
+    """{"temperature": t} or {}, so a caller that says nothing keeps the
+    provider's default and the request stays byte-identical to before."""
+    return {} if temperature is None else {"temperature": float(temperature)}
 
 
 def _traced(fn, what, provider):
@@ -516,6 +532,11 @@ def _backend(what="llm"):
     if fn is None:
         raise RuntimeError(
             f"unknown GTRADE_AR_LLM {provider!r} (use anthropic, openai or ollama)")
+    if what == "analyst":
+        base_fn = fn
+
+        def fn(prompt):
+            return base_fn(prompt, temperature=ANALYST_TEMPERATURE)
     return _traced(fn, what, provider)
 
 
