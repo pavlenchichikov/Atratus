@@ -589,3 +589,56 @@ class TestTerminalErrors:
             lp._call_anthropic("hi")
         assert not isinstance(e.value, lp.ProviderUnavailable)
         assert len(calls) == 3
+
+
+def test_ollama_releases_the_card_after_a_reply():
+    """The model sits in VRAM for five minutes after a reply, and training
+    starts seconds later: the card then fits one training process instead of
+    two. The unload is what keeps the search running at full width."""
+    from core import llm_proposer as lp
+    seen = {}
+
+    def post(url, json=None):
+        seen.update(url=url, json=json)
+
+    lp._ollama_unload("http://127.0.0.1:11434/v1", "gemma4:12b", post=post)
+    assert seen["url"] == "http://127.0.0.1:11434/api/generate"
+    assert seen["json"] == {"model": "gemma4:12b", "keep_alive": 0}
+
+
+def test_an_unreachable_ollama_never_breaks_the_call():
+    from core import llm_proposer as lp
+
+    def boom(*a, **k):
+        raise RuntimeError("connection refused")
+
+    lp._ollama_unload("http://127.0.0.1:11434/v1", "m", post=boom)
+
+
+def test_a_spec_written_as_a_call_is_understood():
+    """Local models write the transform as a call. The DSL takes an op name plus
+    inputs, so every such spec was illegal, which made the whole genome illegal
+    and cost the 10-to-30-minute generation that produced it."""
+    from core.feature_dsl import validate_spec
+    from core.llm_proposer import _normalise_spec
+    cols = {"bb_pos", "rsi", "vol_z", "trend_strength", "ret_1"}
+
+    got = _normalise_spec({"name": "m1", "op": "ratio(bb_pos, rsi)"})
+    assert got == {"name": "m1", "op": "ratio", "inputs": ["bb_pos", "rsi"]}
+    assert validate_spec(got, cols)
+
+    lagged = _normalise_spec({"name": "m2", "op": "lag(vol_z, 3)"})
+    assert lagged["op"] == "lag" and lagged["inputs"] == ["vol_z"]
+    assert lagged["params"] == {"k": 3} and validate_spec(lagged, cols)
+
+    # the number can arrive alone, with the input already in its own field
+    assert _normalise_spec({"name": "m3", "op": "lag(3)", "inputs": ["vol_z"]}) == {
+        "name": "m3", "op": "lag", "inputs": ["vol_z"], "params": {"k": 3}}
+
+
+def test_normalising_never_invents_an_op_or_touches_a_correct_spec():
+    from core.llm_proposer import _normalise_spec
+    plain = {"name": "m", "op": "ratio", "inputs": ["bb_pos", "rsi"]}
+    assert _normalise_spec(plain) == plain
+    made_up = {"name": "m", "op": "kalman(bb_pos)"}
+    assert _normalise_spec(made_up) == made_up

@@ -9,6 +9,7 @@ imports cleanly without them."""
 
 import json
 import os
+import re
 
 DSL_MENU = (
     "ops: zscore(window 2-200), ratio(a,b), lag(k 1-20), diff(k 1-20), "
@@ -124,6 +125,48 @@ def _avoid_clause(avoid):
             "different):\n" + "\n".join(kept))
 
 
+# Which parameter a bare number in "lag(vol_z, 3)" belongs to, per op. The DSL
+# itself is the authority on the names; this is only the reverse mapping for a
+# call the model wrote in function form.
+_OP_NUMERIC_PARAM = {"lag": "k", "diff": "k", "zscore": "window",
+                     "rolling": "window", "lead_lag": "horizon"}
+
+
+def _normalise_spec(spec):
+    """Rewrite `{"op": "ratio(bb_pos, rsi)"}` as `{"op": "ratio", "inputs": [...]}`.
+
+    Local models write the transform the way a person would, as a call. The DSL
+    validator takes an op NAME plus `inputs`, so every such spec was illegal,
+    and an illegal spec makes the whole genome illegal - which the QD loop then
+    replaces with an evolutionary child. On the 2026-09-18 campaign that threw
+    away most of the LLM proposals after 10 to 30 minutes of generation each,
+    silently: the run looked like it was using the model and was not.
+
+    Anything not in function form, and any op not in the DSL, is returned
+    untouched: this normalises a shape, it never invents an op.
+    """
+    if not isinstance(spec, dict) or not isinstance(spec.get("op"), str):
+        return spec
+    m = re.match(r"^\s*([A-Za-z_]\w*)\s*\((.*)\)\s*$", spec["op"])
+    if not m:
+        return spec
+    op, args = m.group(1), [a.strip() for a in m.group(2).split(",") if a.strip()]
+    if op not in _OP_NUMERIC_PARAM and op not in ("ratio", "interaction"):
+        return spec
+    out = dict(spec)
+    out["op"] = op
+    names = [a for a in args if not a.lstrip("+-").isdigit()]
+    numbers = [int(a) for a in args if a.lstrip("+-").isdigit()]
+    if names and not out.get("inputs"):
+        out["inputs"] = names
+    key = _OP_NUMERIC_PARAM.get(op)
+    if key and numbers:
+        params = dict(out.get("params") or {})
+        params.setdefault(key, numbers[0])
+        out["params"] = params
+    return out
+
+
 def _parse_specs(text):
     """Extract the JSON list of specs from a model reply, tolerant of stray prose."""
     if not text:
@@ -135,7 +178,9 @@ def _parse_specs(text):
         specs = json.loads(text[start:end + 1])
     except Exception:
         return []
-    return specs if isinstance(specs, list) else []
+    if not isinstance(specs, list):
+        return []
+    return [_normalise_spec(sp) for sp in specs]
 
 
 class ProviderUnavailable(RuntimeError):
@@ -356,6 +401,32 @@ def _print_ollama_models():
         print("  [%d] %s" % (i, name))
 
 
+def _ollama_unload(base, model, post=None):
+    """Ask Ollama to drop the model from VRAM now instead of in five minutes.
+
+    Ollama keeps a model resident for OLLAMA_KEEP_ALIVE (5 minutes by default)
+    after a reply, and auto_research starts training seconds later. On a 4 GB
+    card gemma4:12b leaves about 1.5 GiB free, gpu_fit_jobs correctly refuses
+    the second training process, and the run halves its own throughput while
+    the card looks busy - measured on the 2026-09-18 campaign, where every step
+    that followed an LLM call printed "fits 1 training process(es), not 2" and
+    every step without one ran two.
+
+    Best effort: a failure here costs the old behaviour, never the run. The
+    reload on the next call is seconds against calls that take minutes.
+    """
+    root = base.removesuffix("/v1")
+    try:
+        if post is None:
+            import httpx
+
+            post = httpx.Client(trust_env=False, timeout=10).post
+        post(root.rstrip("/") + "/api/generate",
+             json={"model": model, "keep_alive": 0})
+    except Exception:
+        pass
+
+
 def _call_ollama(prompt):
     """Local Ollama via its OpenAI-compatible API. Base URL via
     GTRADE_AR_LLM_BASE_URL (default localhost:11434/v1); model via
@@ -396,7 +467,9 @@ def _call_ollama(prompt):
             resp = client.chat.completions.create(
                 model=model, max_tokens=max_toks,
                 messages=[{"role": "user", "content": prompt}])
-            return (resp.choices[0].message.content or "").strip()
+            out = (resp.choices[0].message.content or "").strip()
+            _ollama_unload(base, model)
+            return out
         except openai.APITimeoutError as exc:
             # A timeout is not transient: the same prompt, model and machine will
             # be just as slow next time, so a retry only multiplies the wait.
@@ -532,6 +605,8 @@ def propose_genome(parent, elites, active, base_features, avoid=None):
     backend = _backend("genome")
     for _attempt in range(2):
         obj = _parse_obj(backend(prompt))
+        if isinstance(obj, dict) and isinstance(obj.get("extra"), list):
+            obj["extra"] = [_normalise_spec(sp) for sp in obj["extra"]]
         if obj is not None:
             print(f"[llm] genome: {json.dumps(obj, ensure_ascii=True)[:300]}",
                   flush=True)
