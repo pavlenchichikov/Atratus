@@ -680,35 +680,79 @@ def test_the_analyst_cap_is_a_number_by_default(monkeypatch):
     assert lp.analyst_max_tokens() is None
 
 
-def test_the_analyst_skips_the_reasoning_trace_on_ollama(monkeypatch):
-    """Raising the cap was not enough: the same prompt returned 0 chars after
-    2031s with the trace on and a valid judgment after 983s with it off."""
+def test_no_trace_goes_through_ollamas_own_endpoint(monkeypatch):
+    """The OpenAI layer accepts `think` and ignores it: on gemma4:26b it still
+    produced 7992 tokens of reasoning and an empty message, the whole cap spent
+    in 3577 seconds. /api/chat is the only place the flag is honoured."""
+    from core import llm_proposer as lp
+    seen = {}
+
+    def fake_native(base, model, prompt, temperature, max_tokens, think):
+        seen.update(base=base, model=model, temperature=temperature,
+                    max_tokens=max_tokens, think=think)
+        return "  {\"direction\": \"up\"}  "
+
+    monkeypatch.setattr(lp, "_require", lambda *a, **k: object())
+    monkeypatch.setattr(lp, "_ollama_native_chat", fake_native)
+    monkeypatch.setattr(lp, "_ollama_unload", lambda *a, **k: None)
+    monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
+    out = lp._call_ollama("hello", temperature=0.0, max_tokens=8000, think=False)
+    assert out == '{"direction": "up"}'
+    assert seen["think"] is False and seen["max_tokens"] == 8000
+    assert seen["temperature"] == 0.0
+
+
+def test_the_native_call_builds_ollamas_own_payload(monkeypatch):
+    """num_predict and temperature live under `options` there, not beside the
+    messages, and the /v1 suffix has to come off the base URL."""
     from core import llm_proposer as lp
     sent = {}
 
     class _Resp:
-        def __init__(self):
-            self.choices = [type("C", (), {
-                "message": type("M", (), {"content": "{}"})()})()]
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "ok"}}
 
     class _Client:
         def __init__(self, **kw):
-            self.chat = type("Chat", (), {"completions": self})()
+            pass
 
-        def create(self, **kw):
-            sent.update(kw)
+        def post(self, url, json=None):
+            sent.update(url=url, body=json)
             return _Resp()
 
-    fake_openai = type("OpenAIModule", (), {
-        "OpenAI": lambda **kw: _Client(**kw),
-        "APITimeoutError": type("T", (Exception,), {}),
-    })
-    monkeypatch.setattr(lp, "_require", lambda *a, **k: fake_openai)
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    got = lp._ollama_native_chat("http://127.0.0.1:11434/v1", "m", "hi", 0.0, 8000, False)
+    assert got == "ok"
+    assert sent["url"] == "http://127.0.0.1:11434/api/chat"
+    assert sent["body"]["think"] is False
+    assert sent["body"]["options"] == {"temperature": 0.0, "num_predict": 8000}
+
+
+def test_the_analyst_never_reaches_the_sdk_when_the_trace_is_off(monkeypatch):
+    """Replaces the older test that asserted an extra_body on the SDK call: the
+    SDK path was where `think` was accepted and ignored, so the analyst must not
+    take it at all."""
+    from core import llm_proposer as lp
+    used = {"native": 0}
+
+    def fake_native(*a, **k):
+        used["native"] += 1
+        return "{}"
+
+    def boom(*a, **k):
+        raise AssertionError("the analyst must not go through the openai SDK")
+
+    monkeypatch.setattr(lp, "_require", boom)
+    monkeypatch.setattr(lp, "_ollama_native_chat", fake_native)
+    monkeypatch.setattr(lp, "_ollama_unload", lambda *a, **k: None)
+    monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
     monkeypatch.setenv("GTRADE_AR_LLM", "ollama")
-    monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:12b")
-    lp._backend("analyst")("hello")
-    assert sent["extra_body"] == {"think": False}, sent.get("extra_body")
-    assert sent["temperature"] == 0.0 and sent["max_tokens"] == 8000
+    assert lp._backend("analyst")("hello") == "{}"
+    assert used["native"] == 1
 
 
 def test_a_timeout_is_not_asked_again(monkeypatch):
@@ -730,3 +774,16 @@ def test_a_timeout_is_not_asked_again(monkeypatch):
     else:
         raise AssertionError("the timeout must reach the caller")
     assert len(calls) == 1, calls
+
+
+def test_the_analyst_temperature_can_be_handed_back_to_the_provider(monkeypatch):
+    """Greedy decoding can fall into a repetition loop and never stop, which on
+    a local model is indistinguishable from the runaway that filled 20411
+    tokens. The knob is how a model that does that gets its sampling back."""
+    from core import llm_proposer as lp
+    monkeypatch.delenv("GTRADE_ANALYST_TEMPERATURE", raising=False)
+    assert lp.analyst_temperature() == 0.0
+    monkeypatch.setenv("GTRADE_ANALYST_TEMPERATURE", "none")
+    assert lp.analyst_temperature() is None
+    monkeypatch.setenv("GTRADE_ANALYST_TEMPERATURE", "0.7")
+    assert lp.analyst_temperature() == 0.7

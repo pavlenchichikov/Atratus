@@ -445,11 +445,49 @@ def _ollama_unload(base, model, post=None):
         pass
 
 
+def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
+    """One call over Ollama's OWN /api/chat, which is the only place `think`
+    is honoured.
+
+    The OpenAI-compatible layer accepts the field and ignores it: measured
+    2026-09-18 on gemma4:26b, `think: false` through /v1 still produced 7992
+    tokens of reasoning and returned an empty message - the whole 8000 cap
+    spent before a word of the answer, after 3577 seconds. The same model
+    answers over /api/chat with the trace actually off.
+
+    Only the analyst takes this path. The search never passes `think`, so its
+    calls keep going through the SDK exactly as before.
+    """
+    import httpx
+
+    options = {}
+    if temperature is not None:
+        options["temperature"] = float(temperature)
+    if max_tokens is not None:
+        options["num_predict"] = int(max_tokens)
+    payload = {"model": model, "stream": False, "think": bool(think),
+               "messages": [{"role": "user", "content": prompt}]}
+    if options:
+        payload["options"] = options
+    url = base.removesuffix("/v1").rstrip("/") + "/api/chat"
+    client = httpx.Client(trust_env=False, timeout=_llm_timeout())
+    try:
+        resp = client.post(url, json=payload)
+    except httpx.TimeoutException as exc:
+        raise CallTimedOut(
+            f"ollama call timed out after {_llm_timeout()}s (model too slow for "
+            "this prompt; try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)") from exc
+    resp.raise_for_status()
+    return ((resp.json().get("message") or {}).get("content") or "").strip()
+
+
 def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
     """Local Ollama via its OpenAI-compatible API. Base URL via
     GTRADE_AR_LLM_BASE_URL (default localhost:11434/v1); model via
-    GTRADE_AR_LLM_MODEL or auto-detected (gemma preferred)."""
-    openai = _require("openai", "ollama")
+    GTRADE_AR_LLM_MODEL or auto-detected (gemma preferred).
+
+    `think=False` switches to Ollama's own endpoint, the only one that honours
+    it (see _ollama_native_chat)."""
     base = _ollama_base_url()
     model = model_override() or _detect_ollama_model()
     # Reasoning models (e.g. gemma) spend tokens on an internal reasoning trace before
@@ -469,6 +507,12 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
                 max_toks = int(raw)
             except ValueError:
                 max_toks = 8000
+    if think is not None and not think:
+        # First, and before the SDK is even required: this path never touches it.
+        out = _ollama_native_chat(base, model, prompt, temperature, max_toks, think)
+        _ollama_unload(base, model)
+        return out.strip()
+    openai = _require("openai", "ollama")
     # max_retries=0: this function already loops 3x below, and the SDK's own
     # retries each wait a full timeout -> without this a slow local model turns
     # one stuck call into a multi-hour retry storm (the 10-min-apart retries).
@@ -514,6 +558,25 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
 # the point, and a search that proposes one genome forever is worse than a noisy
 # one (the 2026-09-18 campaign already lost steps to "no unseen child").
 ANALYST_TEMPERATURE = 0.0
+
+
+def analyst_temperature():
+    """GTRADE_ANALYST_TEMPERATURE: 0 by default, or empty/none to send nothing
+    and let the provider decide.
+
+    The knob exists because greedy decoding is not free of risk on a local
+    model: it can fall into a repetition loop and never emit a stop token,
+    which on gemma4:26b looks exactly like the runaway this file already
+    describes. Leave it at 0 for an auditable judgment; clear it if a
+    particular model starts writing forever.
+    """
+    raw = (os.getenv("GTRADE_ANALYST_TEMPERATURE") or str(ANALYST_TEMPERATURE)).strip().lower()
+    if raw in ("", "none", "default"):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return ANALYST_TEMPERATURE
 
 # Ollama only: ask the model to skip its reasoning trace. Raising the token cap
 # was not enough on its own - measured 2026-09-18 on the same 7.9k-char analyst
@@ -595,7 +658,7 @@ def _backend(what="llm"):
             f"unknown GTRADE_AR_LLM {provider!r} (use anthropic, openai or ollama)")
     if what == "analyst":
         base_fn = fn
-        kw = {"temperature": ANALYST_TEMPERATURE,
+        kw = {"temperature": analyst_temperature(),
               "max_tokens": analyst_max_tokens()}
         if provider == "ollama":
             kw["think"] = ANALYST_THINK
