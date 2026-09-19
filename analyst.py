@@ -326,6 +326,141 @@ def cmd_run(args):
     return 0
 
 
+def cmd_intraday(args):
+    """One session judgment per asset: the intraday question (see
+    core/analyst/intraday.py). The same provider, model, rewind and stop rules
+    as cmd_run, and its own table."""
+    from core.analyst import intraday
+
+    back = int(getattr(args, "back", 0) or 0)
+    if back:
+        dates = _recent_dates(back)
+        if not dates:
+            print("[intraday] no bar dates to judge; run data_engine.py first.")
+            return 1
+        print("[intraday] backfilling %d dates: %s .. %s"
+              % (len(dates), dates[0], dates[-1]))
+        for day in dates:
+            one = copy.copy(args)
+            one.back, one.as_of = 0, day
+            rc = cmd_intraday(one)
+            if rc:
+                print("[intraday] stopped at %s" % day)
+                return rc
+        return 0
+
+    if (os.getenv("GTRADE_ANALYST") or "1").strip() == "0":
+        print("[intraday] GTRADE_ANALYST=0, nothing to do.")
+        return 0
+    if getattr(args, "llm", None):
+        os.environ["GTRADE_AR_LLM"] = args.llm
+    if getattr(args, "model", None):
+        os.environ["GTRADE_AR_LLM_MODEL"] = args.model
+
+    call = _provider_call()
+    named = _named_assets(getattr(args, "assets", None))
+    targets = named or intraday.panel_assets()
+    depth = getattr(args, "depth", None) or ("full" if named else "brief")
+    as_of = getattr(args, "as_of", None)
+    print("[intraday] %d asset(s) via %s, depth %s%s" % (
+        len(targets), os.getenv("GTRADE_AR_LLM", "anthropic"), depth,
+        " as of %s (news, fundamentals and the calendar are blank)" % as_of
+        if as_of else ""))
+
+    written = skipped = refused = 0
+    rejects = []
+    for asset in targets:
+        d = intraday.build(asset, today=as_of)
+        if d["close"] is None or d["atr"] is None:
+            skipped += 1
+            continue
+        h = dossier.dossier_hash(d)
+        if not named and intraday.judged_with_hash(asset, h):
+            skipped += 1
+            continue
+        try:
+            j = agent.judge(d, call=call, depth=depth, today=as_of, session=True,
+                            on_reject=lambda why, a=asset: rejects.append(
+                                "%s: %s" % (a, why)))
+        except TerminalCallError as exc:
+            print("[intraday] %s" % exc)
+            print("[intraday] stopped: every remaining asset would wait the same "
+                  "way. Try a smaller model or GTRADE_ANALYST_THINK=0.")
+            return 1
+        except ProviderUnavailable as exc:
+            print("[intraday] %s" % exc)
+            return 1
+        if j is None:
+            refused += 1
+            continue
+        intraday.write(intraday.row_for(d, j, h, os.getenv("GTRADE_AR_LLM", "default")))
+        written += 1
+        _print_session(asset, d, j)
+    print("[intraday] written=%d skipped=%d refused=%d retried=%d"
+          % (written, skipped, refused, len(rejects)))
+    for line in rejects:
+        print("[intraday] discarded: %s" % line)
+    return 0
+
+
+def _print_session(asset, d, j):
+    arrow = {"up": "LONG", "down": "SHORT", "flat": "FLAT"}
+    print()
+    print("  %-10s session after %s   conviction %d/5" % (asset, d["date"],
+                                                          j["conviction"]))
+    print("             open->close %-5s   gap %-5s   range %s" % (
+        arrow[j["direction"]], j["gap"],
+        {"calm": "narrow", "normal": "normal", "elevated": "wide"}[j["vol_regime"]]))
+    if j["stand_aside"]:
+        print("             STAND ASIDE: %s" % (j.get("stand_aside_reason") or "-"))
+    if j.get("key_risk"):
+        print("             risk:  %s" % j["key_risk"])
+    for line in _wrap(j.get("thesis") or "", 68):
+        print("             %s" % line)
+
+
+def cmd_intraday_score(args):
+    """Backfill the finished sessions, then each question against its baseline."""
+    from core.analyst import intraday
+
+    filled = intraday.backfill()
+    s = intraday.score()
+    v = intraday.verdicts(s)
+    print("[intraday] filled %d sessions, %d still pending, %d scored"
+          % (filled, intraday.pending_count(), s["n"]))
+
+    def pct(x):
+        return "-" if x is None else "%.1f%%" % (x * 100)
+
+    d, g, r, a = s["direction"], s["gap"], s["range"], s["stand_aside"]
+    print()
+    print("  D direction   open->close hit %s on %d calls (coin 50.0%%, p %s)"
+          % (pct(d["hit_rate"]), d["n"], d["p_vs_coin"]))
+    conv = d["conviction"]["by_conviction"]
+    if conv:
+        print("                by conviction: " + ", ".join(
+            "%d/5 %s of %d" % (k, pct(e["rate"]), e["n"]) for k, e in conv.items()))
+    print("  B gap         hit %s vs US-close rule %s on %d lead sessions "
+          "(won %d, lost %d, p %s)" % (pct(g["hit_rate"]), pct(g["rule_hit_rate"]),
+                                       g["n"], g["wins"], g["losses"], g["p"]))
+    print("  C range       hit %s vs always-normal %s on %d sessions "
+          "(won %d, lost %d, p %s)" % (pct(r["hit_rate"]),
+                                       pct(r["always_normal_hit_rate"]), r["n"],
+                                       r["wins"], r["losses"], r["p"]))
+    c = a["calendar"]
+    print("  A stand aside range vs usual: %s on %d stand-aside, %s on %d traded "
+          "(p %s)" % (a["surprise_on"], a["n_on"], a["surprise_off"], a["n_off"],
+                      a["p"]))
+    print("                calendar rule: %s on %d event days, %s on %d others (p %s)"
+          % (c["surprise_on"], c["n_on"], c["surprise_off"], c["n_off"], c["p"]))
+    print()
+    for name, e in v.items():
+        print("  %-12s %s" % (name, e["verdict"]))
+        for want in e["missing"]:
+            print("               missing: %s" % want)
+    return 0
+
+
 def _named_assets(raw):
     """Assets named on the command line, validated against the map."""
     if not raw:
@@ -553,6 +688,24 @@ def main(argv=None):
                          "dossier field and whether citing it pays")
     sc.set_defaults(fn=cmd_score)
     sub.add_parser("backfill").set_defaults(fn=cmd_backfill)
+    it = sub.add_parser("intraday", help="one judgment of the NEXT session per "
+                                         "asset: direction, gap, range, stand aside")
+    it.add_argument("--assets", help="comma-separated assets, instead of the "
+                                     "intraday panel (GTRADE_ANALYST_INTRADAY_PANEL)")
+    it.add_argument("--llm", choices=("anthropic", "openai", "ollama"),
+                    help="provider for this run only")
+    it.add_argument("--model", help="model name for this run only")
+    it.add_argument("--depth", choices=("brief", "full"),
+                    help="default: full for named assets, brief for the panel")
+    it.add_argument("--back", type=int, default=0, metavar="N",
+                    help="judge the last N trading dates, oldest first. News, "
+                         "fundamentals and the calendar are blank on a rewind, "
+                         "so stand-aside is only tested by live runs")
+    it.add_argument("--as-of", dest="as_of", help="judge a past date (YYYY-MM-DD)")
+    it.set_defaults(fn=cmd_intraday)
+    sub.add_parser("intraday-score", help="fill finished sessions, then score the "
+                                          "four intraday questions"
+                   ).set_defaults(fn=cmd_intraday_score)
     args = p.parse_args(argv)
     return args.fn(args)
 

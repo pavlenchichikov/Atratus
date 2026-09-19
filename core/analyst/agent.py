@@ -55,7 +55,29 @@ def _span(horizon):
             else "the next %d trading days" % int(horizon))
 
 
-def prompt_for(dossier, depth="full", horizon=1, tool_menu=""):
+SESSION_SPAN = "the next trading session, from its open to its close"
+
+# The intraday question (core/analyst/intraday.py). One call answers four
+# things, each scored against its own baseline, because four calls would cost
+# four times the wait on a local model for the same dossier.
+SESSION_TAIL = (
+    "\n\nThis is an INTRADAY question about the next session only.\n"
+    "- direction is the move from the session's OPEN to its CLOSE. The overnight "
+    "gap before it opens is NOT part of it.\n"
+    "- gap is up|down|flat: where the session OPENS against the last close. "
+    "us_last_session_ret is SP500's close-to-close move on the same date as this "
+    "dossier; Asia-Pacific markets open after it and tend to follow it.\n"
+    "- vol_regime here means the size of the session's high-low range against "
+    "this asset's usual session: calm = narrow, normal, elevated = wide.\n"
+    "- stand_aside is true|false: true when the session should not be traded at "
+    "all, for example an event inside it (macro_events, next_earnings) or news "
+    "that makes the range unpredictable. stand_aside_reason is one sentence.\n"
+    'Add these keys to the JSON: "gap": "up|down|flat", "stand_aside": '
+    'true|false, "stand_aside_reason": "one sentence".'
+)
+
+
+def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
     """The judgment prompt. Carries the dossier and nothing else.
 
     `depth` buys substance with time, and on a local model the exchange rate is
@@ -83,7 +105,8 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu=""):
     """
     return (
         "You are an independent market analyst. Below is everything known "
-        "about one asset. Form your own view of " + _span(horizon) + ".\n\n"
+        "about one asset. Form your own view of "
+        + (SESSION_SPAN if session else _span(horizon)) + ".\n\n"
         + json.dumps(dossier, indent=2, ensure_ascii=True)
         + "\n\nReturn STRICT JSON, no prose, with exactly these keys:\n"
           '{"direction": "up|down|flat", "conviction": 1-5, '
@@ -168,6 +191,7 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu=""):
           "leaning on where a reader might assume you did. If the evidence is "
           "thin, say the case is thin and pick conviction 1 or 2 rather than "
           "dressing up a guess.")
+        + (SESSION_TAIL if session else "")
         # Last, so the schema above is what the model reads immediately before
         # answering, and the menu is an aside rather than the instruction.
         + tool_menu
@@ -215,7 +239,7 @@ def _no(why, reason):
         why.append(reason)
 
 
-def parse_judgment(text, allowed=None, empty=(), why=None):
+def parse_judgment(text, allowed=None, empty=(), why=None, session=False):
     """A validated judgment, or None. Never raises.
 
     `why`, when a list is passed, collects one short line naming the check that
@@ -265,7 +289,18 @@ def parse_judgment(text, allowed=None, empty=(), why=None):
         if not evidence:                     # cited only fields that were empty
             return _no(why, "evidence cited only fields that were blank")
 
-    return {"direction": data["direction"],
+    extra = {}
+    if session:
+        if data.get("gap") not in DIRECTIONS:
+            return _no(why, "gap=%r is not up/down/flat" % data.get("gap"))
+        if not isinstance(data.get("stand_aside"), bool):
+            return _no(why, "stand_aside=%r is not true/false"
+                       % data.get("stand_aside"))
+        extra = {"gap": data["gap"], "stand_aside": data["stand_aside"],
+                 "stand_aside_reason":
+                     plain(str(data.get("stand_aside_reason") or ""))[:400]}
+
+    return {**extra, "direction": data["direction"],
             "conviction": int(data["conviction"]),
             "vol_regime": data["vol_regime"],
             "key_risk": plain(str(data.get("key_risk") or ""))[:400],
@@ -274,7 +309,7 @@ def parse_judgment(text, allowed=None, empty=(), why=None):
 
 
 def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
-          today=None, tool_calls=None):
+          today=None, tool_calls=None, session=False):
     """One judgment for one dossier, or None when the model will not produce one.
 
     Returning None rather than a default is the point: a fabricated neutral
@@ -303,7 +338,8 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
     if call is None:
         raise ValueError("judge() needs an injected call; see analyst.py")
     prompt = prompt_for(dossier, depth=depth, horizon=horizon,
-                        tool_menu=tools.spec_lines(today) if budget else "")
+                        tool_menu=tools.spec_lines(today) if budget else "",
+                        session=session)
     allowed = set(dossier)
     # A field the dossier carries as None or [] was shown to the model as empty,
     # so citing it is not evidence of anything.
@@ -344,7 +380,8 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
                 continue
 
         why = []
-        parsed = parse_judgment(answer, allowed=allowed, empty=empty, why=why)
+        parsed = parse_judgment(answer, allowed=allowed, empty=empty, why=why,
+                                session=session)
         if parsed is not None:
             return parsed
         if on_reject is not None:

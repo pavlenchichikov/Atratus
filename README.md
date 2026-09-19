@@ -726,12 +726,20 @@ User-Agent without a contact address.
 python analyst.py run                        # watchlist, plus anything reporting earnings today
 python analyst.py run --assets SBER,AAPL     # exactly these, now
 python analyst.py run --llm ollama --model qwen2.5:32b   # this run only, .env untouched
+python analyst.py run --assets SBER --horizons 5,20      # a week and a month ahead, one call each
+python analyst.py run --panel --back 60      # the fixed panel over the last 60 trading dates
 python analyst.py score                      # standings against the baselines, and the verdict
 python analyst.py backfill                   # fill outcomes whose horizon has elapsed
 ```
 
-`run_gtrade.bat` has the same under `[AN]`, which asks for the asset list and
-the provider and requires a typed YES for anything that spends money. The web
+The horizon is in trading days and defaults to 1. `LONG 20d` means "higher in
+20 trading days": LONG and SHORT name the side of the trade, the `Nd` beside
+them names how long it is held. Each horizon is its own question and its own
+model call.
+
+`run_gtrade.bat` has the same under `[AN]`, which asks for the asset list, the
+provider, the model and the horizon, and requires a typed YES for anything that
+spends money. The web
 page has a **Run now** button that refuses a second pass while one is running,
 because a double click would pay for every eligible asset twice.
 
@@ -753,6 +761,65 @@ with sixteen minutes of local inference thrown away. Now:
 
 The reason is the useful half. `conviction=2.5` is a prompt to fix; `the call
 itself failed` is a dead provider; a count alone cannot tell them apart.
+
+### Reasoning on a local model
+
+On Ollama the analyst reasons before it judges (`GTRADE_ANALYST_THINK=1`, the
+default) and the reasoning gets a 16000-token cap. Two things keep that from
+turning into an hour of nothing, both measured on gemma4:26b:
+
+- At temperature 0 the reasoning went in circles, one checklist repeated until
+  the cap ran out, so a reasoning call is asked at the model's own sampling
+  defaults instead. Without reasoning the analyst still asks at 0, so a changed
+  verdict means changed evidence.
+- The reasoning is read as it streams. Once a stretch of it repeats three times
+  the call is cut, and the same question is asked again without reasoning,
+  which has always answered. The tail of the lost reasoning is saved to
+  `%TEMP%\atratus_lost_trace.txt`.
+
+A finished judgment with reasoning took about 35 minutes on that machine, one
+without about 16. `GTRADE_ANALYST_THINK=0` always asks without it.
+
+### Intraday
+
+`analyst.py intraday` asks about the NEXT session instead of the next day, and
+one call answers four questions, each scored against its own baseline:
+
+| Answer | What it claims | Baseline it has to beat |
+|---|---|---|
+| direction | the move from the session's open to its close | a coin |
+| gap | where the session opens against the last close | "follow the last US session" (`lead_baseline.py`), on the lead assets |
+| range | narrow, normal or wide high-low range for this asset | always saying normal |
+| stand aside | the session should not be traded at all | "stand aside when the calendar has an event that day" |
+
+The gap is asked for separately because the one intraday lead this project has
+measured, the US close into Asia-Pacific (IC +0.44 on ASX200, NIKKEI, TAIEX and
+AUDJPY), lives in the gap, and an open-to-close question would never see it.
+The dossier is the daily one plus `us_last_session_ret`, SP500's move on the
+same date.
+
+```bash
+python analyst.py intraday                   # the intraday panel
+python analyst.py intraday --assets NIKKEI --llm ollama --model gemma4:26b
+python analyst.py intraday --back 40         # the last 40 trading dates, for a sample
+python analyst.py intraday-score             # fill finished sessions, then accuracy per question
+```
+
+Run it before the session opens: Asia-Pacific after the US close (about
+23:00-00:00 MSK), MOEX before 10:00 MSK. Nothing schedules it yet. The panel is
+ASX200, NIKKEI, TAIEX, AUDJPY, IMOEX, SBER, SP500 and GOLD
+(`GTRADE_ANALYST_INTRADAY_PANEL` overrides). Judgments go to their own table,
+`analyst_intraday_log`, so the daily score never sees them.
+
+A session is scored only from a bar dated before today, because market.db can
+hold a partial bar for a session still trading. Each question gets SHIP only at
+100 scored sessions and a win over its baseline at p < 0.05; stand aside also
+needs 20 stand-aside sessions and a bigger effect than the calendar rule's. A
+rewind (`--back`, `--as-of`) cannot restore news or the calendar, so stand
+aside is only really tested by live runs.
+
+In `run_gtrade.bat` it is `[AN]` then `[I]`: run (assets, provider, model, YES)
+or score.
 
 ## Self-maintaining loop
 
@@ -1047,7 +1114,7 @@ exceptions; 6 puts an asset back on the global genome. Steps 1 and 2 ship with
 the project rather than living beside it - a menu entry pointing at a file that
 is not in the repository is not an offer. See [Per-asset adoption](#per-asset-adoption).
 
-**`[AN]` analyst agent.** Score, backfill outcomes, refit the payoff table, run one judgment per eligible asset, or open the web UI on the analyst page. The run option asks for assets, the LLM provider and model, and a typed `YES`, because it spends one model call per asset.
+**`[AN]` analyst agent.** Score, backfill outcomes, refit the payoff table, run one judgment per eligible asset, open the web UI on the analyst page, or `[I]` intraday: judge the next session or score the intraday questions. The run options ask for assets, the LLM provider and model (the daily run also for the horizon in trading days, Enter = 1), and a typed `YES`, because each spends one model call per asset.
 
 **`[5F]` fill in / repair champions.** Asks whether to fill in assets that never had a champion, repair the ones whose neural champion does not load here, or both. Force-promote is on for the repair half, which needs it.
 
@@ -1520,6 +1587,11 @@ The switches that change what is served, all default to off:
 | `GTRADE_TRAIN_EMBARGO_BARS` | bars dropped from the end of each training fold |
 | `GTRADE_ANALYST=0` | switch the analyst agent off entirely, on the command line and in the web alike |
 | `GTRADE_AR_ADOPT_SCORE` | the practical-effect floor on the raw Score basis (default 0.5). Raise it when the A/B refuses on power and the effect you are chasing is far above it; it does NOT loosen the neural floor |
+| `GTRADE_ANALYST_THINK` | `1` (default): on Ollama the analyst reasons before it judges; `0` asks without reasoning |
+| `GTRADE_ANALYST_MAX_TOKENS` | the cap on one judgment; unset = 16000 with reasoning on Ollama, 8000 without. The call timeout grows with it |
+| `GTRADE_ANALYST_TEMPERATURE` | unset = 0 without reasoning, the model's own default with it; a number forces one |
+| `GTRADE_ANALYST_PANEL` | the fixed daily panel for `run --panel` |
+| `GTRADE_ANALYST_INTRADAY_PANEL` | the assets `analyst.py intraday` judges when none are named |
 | `GTRADE_ANALYST_TOOL_CALLS` | how many extra sources one judgment may ask for (default 2, `0` disables asking). Each one is another full model round trip, so on a local 26b it is another 9 to 25 minutes |
 | `GTRADE_SEC_CONTACT` | an email for the User-Agent SEC requires; without it `insider_filings` returns the instruction instead of a 403. Never committed: it is your address, not the project's |
 | `GTRADE_AR_WIKI_CHARS` | how much research wiki a prompt may carry (default 20000) |
@@ -1540,7 +1612,7 @@ fills.py              record what you actually filled at the broker
 predict.py            console signal radar
 backtest.py           held-out evaluation (PnL, Sharpe, Brier, alpha)
 webapp.py             FastAPI dashboard (app.py = Streamlit)
-analyst.py            analyst agent CLI: run / score / backfill
+analyst.py            analyst agent CLI: run / score / backfill / intraday / intraday-score
 core/analyst/         its dossier, judgment parser, tool registry, log,
                       calibration and scorer
 train_payoff.py       fits payoff_stats.json: what a position has been worth, in ATR units

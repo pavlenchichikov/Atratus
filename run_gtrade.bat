@@ -584,9 +584,12 @@ echo    [F] Fit table  refit payoff_stats.json from prediction_log
 echo    [R] Run        one judgment per eligible asset  (COSTS MONEY: one LLM
 echo                   call per asset, plus an earnings scan over the map)
 echo    [W] Watch      start the Web UI on the analyst page
+echo    [I] Intraday   the NEXT session: direction, gap, range, stand aside,
+echo                   and their accuracy (run it before the session opens)
 echo.
 set "an_choice="
 set /p an_choice="Choose, Enter = back: "
+if /i "%an_choice%"=="I" goto analyst_intraday
 if /i "%an_choice%"=="S" goto analyst_score
 if /i "%an_choice%"=="B" goto analyst_backfill
 if /i "%an_choice%"=="R" goto analyst_run
@@ -596,6 +599,45 @@ goto menu
 
 :analyst_score
 python analyst.py score
+pause
+goto analyst
+
+:analyst_intraday
+echo.
+echo    [R] Run        one judgment of the next session per asset (COSTS MONEY)
+echo    [S] Score      fill finished sessions, then accuracy per question
+echo.
+echo    Run it BEFORE the session opens: Asia-Pacific after the US close
+echo    (about 23:00-00:00 MSK), MOEX before 10:00 MSK.
+echo.
+set "in_choice="
+set /p in_choice="Choose, Enter = back: "
+if /i "%in_choice%"=="S" goto analyst_intraday_score
+if /i not "%in_choice%"=="R" goto analyst
+echo.
+set "in_assets="
+set /p in_assets="Assets (comma-separated), Enter = intraday panel: "
+echo.
+echo    [1] anthropic   [2] openai   [3] ollama   Enter = whatever .env says
+set "in_llm="
+set /p in_llm="Model provider: "
+set "in_flag="
+if "%in_llm%"=="1" set "in_flag=--llm anthropic"
+if "%in_llm%"=="2" set "in_flag=--llm openai"
+if "%in_llm%"=="3" set "in_flag=--llm ollama"
+set "in_name="
+if not "%in_flag%"=="" set /p in_name="Model id (e.g. claude-opus-4-8), Enter = provider default: "
+if not "%in_name%"=="" set "in_flag=%in_flag% --model "%in_name%""
+echo.
+set "in_ok="
+set /p in_ok="Type YES to run: "
+if /i not "%in_ok%"=="YES" goto analyst
+if "%in_assets%"=="" (python analyst.py intraday %in_flag%) else (python analyst.py intraday --assets "%in_assets%" %in_flag%)
+pause
+goto analyst
+
+:analyst_intraday_score
+python analyst.py intraday-score
 pause
 goto analyst
 
