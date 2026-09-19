@@ -83,8 +83,8 @@ uvicorn webapp:app --host 0.0.0.0 --port 8000
 Lightweight web interface - no TensorFlow needed, reads predictions from the database, starts instantly. Pages:
 
 - `/` - signal radar: BUY / SELL / WAIT per asset with confidence, live accuracy, a Taleb tail-risk column, a live market-breadth panel and regime / fear-greed gauges, and a line saying how much of the asset map the snapshot covers and why the rest is absent (no champion, or no bar dated today)
-- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **intraday reach odds** ("Reaches up/down today") with an **Update hourly bars** button that tops up that one asset, the **expected payoff** for a long and a short in that asset, and the **analyst's own call** with its reasoning
-- `/analyst` - the analyst agent: how many judgments it has made and how many are scored, interval coverage, the latest judgments with forecast against outcome, and a button that runs a pass
+- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **intraday reach odds** ("Reaches up/down today") with an **Update hourly bars** button that tops up that one asset, the **expected payoff** for a long and a short in that asset, the **analyst's own call** with its reasoning, and its latest call on the **next session** (open to close, gap, range, stand aside) with the outcome once the session has closed
+- `/analyst` - the analyst agent: how many judgments it has made and how many are scored, interval coverage, the latest judgments with forecast against outcome, a button that runs a pass, and an **Intraday** block: each of the four session questions against its baseline with its verdict, and the latest session calls with their outcomes
 - `/levels` - the trade-level sheet: entry zone, stop and position size per active signal, with a reason on every row that has none
 - `/portfolio` - portfolio analytics over open positions: diversification score, sector-exposure heat, held-asset correlation, per-position warnings
 - `/whatif` - what-if simulator: "what if I had invested $X, N days ago, following the signals", with an equity curve and per-asset breakdown
@@ -819,7 +819,8 @@ rewind (`--back`, `--as-of`) cannot restore news or the calendar, so stand
 aside is only really tested by live runs.
 
 In `run_gtrade.bat` it is `[AN]` then `[I]`: run (assets, provider, model, YES)
-or score.
+or score. The web shows the same scores and the latest calls on `/analyst`, and
+each asset card shows that asset's latest session call.
 
 ## Self-maintaining loop
 

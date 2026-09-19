@@ -147,6 +147,106 @@
 </section>
 {% endif %}
 
+{% set intra_names = {'direction': 'Direction, open to close', 'gap': 'Gap at the open',
+                       'range': 'Session range', 'stand_aside': 'Stand aside'} %}
+<section class="panel fade" id="intraday">
+  <div class="panel-head"><h2>Intraday: the next session</h2></div>
+  <p class="dim">One call per asset answers four questions about the session that
+    follows the last bar, and each is scored against its own baseline. Run it from
+    the console menu, <span class="mono">[AN]</span> then <span class="mono">[I]</span>,
+    before the session opens. Finished sessions are filled in when this page loads.</p>
+  {% if intra %}
+  <div style="overflow-x:auto">
+  <table class="table">
+    <thead><tr><th>Question</th><th>Agent</th><th>Baseline</th><th>n</th><th>p</th><th>Verdict</th></tr></thead>
+    <tbody>
+      {% set d = intra.direction %}
+      <tr>
+        <td>{{ intra_names.direction }}</td>
+        <td class="mono">{% if d.hit_rate is not none %}{{ "%.1f"|format(d.hit_rate * 100) }}%{% else %}-{% endif %}</td>
+        <td class="mono dim">coin 50.0%</td>
+        <td class="mono">{{ d.n }}</td>
+        <td class="mono">{{ d.p_vs_coin if d.p_vs_coin is not none else '-' }}</td>
+        <td class="{{ 'good' if intra_board.direction.verdict == 'SHIP' else 'warn' }}">{{ intra_board.direction.verdict }}</td>
+      </tr>
+      {% set g = intra.gap %}
+      <tr>
+        <td>{{ intra_names.gap }} <span class="dim">(lead assets)</span></td>
+        <td class="mono">{% if g.hit_rate is not none %}{{ "%.1f"|format(g.hit_rate * 100) }}%{% else %}-{% endif %}</td>
+        <td class="mono dim">US-close rule {% if g.rule_hit_rate is not none %}{{ "%.1f"|format(g.rule_hit_rate * 100) }}%{% else %}-{% endif %}</td>
+        <td class="mono">{{ g.n }}</td>
+        <td class="mono">{{ g.p if g.p is not none else '-' }}</td>
+        <td class="{{ 'good' if intra_board.gap.verdict == 'SHIP' else 'warn' }}">{{ intra_board.gap.verdict }}</td>
+      </tr>
+      {% set r = intra.range %}
+      <tr>
+        <td>{{ intra_names.range }}</td>
+        <td class="mono">{% if r.hit_rate is not none %}{{ "%.1f"|format(r.hit_rate * 100) }}%{% else %}-{% endif %}</td>
+        <td class="mono dim">always normal {% if r.always_normal_hit_rate is not none %}{{ "%.1f"|format(r.always_normal_hit_rate * 100) }}%{% else %}-{% endif %}</td>
+        <td class="mono">{{ r.n }}</td>
+        <td class="mono">{{ r.p if r.p is not none else '-' }}</td>
+        <td class="{{ 'good' if intra_board.range.verdict == 'SHIP' else 'warn' }}">{{ intra_board.range.verdict }}</td>
+      </tr>
+      {% set a = intra.stand_aside %}
+      <tr>
+        <td>{{ intra_names.stand_aside }}</td>
+        <td class="mono">range {{ a.surprise_on if a.surprise_on is not none else '-' }}x usual on {{ a.n_on }}, {{ a.surprise_off if a.surprise_off is not none else '-' }}x on {{ a.n_off }} traded</td>
+        <td class="mono dim">calendar {{ a.calendar.surprise_on if a.calendar.surprise_on is not none else '-' }}x on {{ a.calendar.n_on }} event days</td>
+        <td class="mono">{{ a.n_on + a.n_off }}</td>
+        <td class="mono">{{ a.p if a.p is not none else '-' }}</td>
+        <td class="{{ 'good' if intra_board.stand_aside.verdict == 'SHIP' else 'warn' }}">{{ intra_board.stand_aside.verdict }}</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  {% for name, e in intra_board.items() if e.missing %}
+  <p class="dim" style="margin:.3em 0"><b>{{ intra_names[name] }}</b> still needs: {{ e.missing|join('; ') }}</p>
+  {% endfor %}
+  {% if intra.direction.conviction.by_conviction %}
+  <p class="dim">Direction by conviction:
+    {% for c, cell in intra.direction.conviction.by_conviction.items() %}<span class="mono">{{ c }}/5 {{ cell.hits }} of {{ cell.n }}</span>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+  {% endif %}
+
+  <div class="panel-head" style="margin-top:1.2em"><h2>Latest session calls</h2></div>
+  {% if intra_recent %}
+  <div style="overflow-x:auto">
+  <table class="table">
+    <thead><tr><th>After</th><th>Asset</th><th>Open to close</th><th>Gap</th><th>Range</th>
+      <th>Conv</th><th>Stand aside</th><th>Session</th><th>Outcome</th></tr></thead>
+    <tbody>
+      {% for r in intra_recent %}
+      <tr>
+        <td class="mono">{{ r.date }}</td>
+        <td class="mono">{{ r.asset }}</td>
+        <td>{{ {'up':'LONG','down':'SHORT','flat':'FLAT'}.get(r.direction, r.direction) }}</td>
+        <td>{{ r.gap }}</td>
+        <td class="dim">{{ {'calm':'narrow','normal':'normal','elevated':'wide'}.get(r.vol_regime, r.vol_regime) }}</td>
+        <td class="mono">{{ r.conviction }}</td>
+        <td>{% if r.stand_aside %}<b class="warn">yes</b>{% else %}no{% endif %}</td>
+        <td class="mono">{{ r.session_date or '-' }}</td>
+        <td class="mono">{% if r.session_open %}{{ "%+.2f"|format((r.session_close - r.session_open) / r.session_open * 100) }}%, gap {{ "%+.2f"|format((r.session_open - r.close_at_signal) / r.close_at_signal * 100) if r.close_at_signal else '-' }}%{% else %}<span class="dim">pending</span>{% endif %}</td>
+      </tr>
+      {% if r.thesis or r.stand_aside_reason %}
+      <tr><td colspan="9" style="padding-top:0">
+        <details><summary class="dim">why</summary>
+          {% if r.stand_aside_reason %}<p style="margin:.5em 0"><b>stand aside:</b> {{ r.stand_aside_reason }}</p>{% endif %}
+          {% if r.thesis %}<p style="margin:.5em 0">{{ r.thesis }}</p>{% endif %}
+          {% if r.key_risk %}<p class="dim"><b>risk:</b> {{ r.key_risk }}</p>{% endif %}
+        </details>
+      </td></tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="dim">No session calls yet.</p>
+  {% endif %}
+  {% else %}
+  <p class="dim">The intraday standings could not be computed.</p>
+  {% endif %}
+</section>
+
 <section class="panel fade">
   <div class="panel-head"><h2>Run a pass</h2></div>
   <p class="dim">One judgment per eligible asset: the watchlist plus anything

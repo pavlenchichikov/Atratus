@@ -128,6 +128,36 @@ def _analyst_for_asset(name):
     return row
 
 
+def _analyst_intraday_for_asset(name):
+    """The analyst's latest call on the next session for this asset, or None."""
+    try:
+        from core.analyst import intraday
+
+        return intraday.latest(name)
+    except Exception:
+        return None
+
+
+def _analyst_intraday_board():
+    """(score, verdicts, recent) for the intraday questions, or Nones.
+
+    Backfills first, exactly as `analyst.py intraday-score` does, so the page
+    and the console answer with the same numbers. Nothing else fills this
+    table, and the fill only ever touches sessions already finished.
+    """
+    try:
+        from core.analyst import intraday
+
+        intraday.backfill()
+        s = intraday.score()
+        return s, intraday.verdicts(s), intraday.recent(15)
+    except Exception as exc:
+        from core.logger import get_logger
+
+        get_logger("webapp").debug("intraday standings unavailable: %s", exc)
+        return None, None, []
+
+
 def _payoff_context(name, atr, close, table=_MISSING, analyst=None):
     """Both sides of the expected payoff for one asset, plus the analyst's read.
 
@@ -654,6 +684,7 @@ def asset_page(request: Request, name: str):
         "payoff": _payoff_context(name, asset_levels.get("atr"),
                                   asset_levels.get("close")),
         "analyst": _analyst_for_asset(name),
+        "analyst_intraday": _analyst_intraday_for_asset(name),
     })
 
 
@@ -952,7 +983,12 @@ def analyst_page(request: Request, asset: str = ""):
                      if (r["direction"] == "up") == (r["realized_ret"] > 0))
             hit = {"n": len(done), "hits": ok, "rate": ok / len(done)}
 
+    intra, intra_board, intra_recent = _analyst_intraday_board()
+
     return templates.TemplateResponse(request, "analyst.html", {
+        "intra": intra,
+        "intra_board": intra_board,
+        "intra_recent": intra_recent,
         "scored": len(rows),
         "picked": picked,
         "asset_rows": asset_rows,

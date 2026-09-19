@@ -200,6 +200,31 @@
 </section>
 {% endif %}
 
+{% if analyst_intraday %}
+{% set ai = analyst_intraday %}
+<section class="panel fade">
+  <div class="panel-head"><h2>Analyst: the next session</h2></div>
+  <div class="statgrid">
+    <div class="stat">
+      <span class="stat-label">Open to close</span>
+      <span class="stat-value">{{ {'up':'LONG','down':'SHORT','flat':'FLAT'}.get(ai.direction, ai.direction) }}</span>
+      <span class="stat-sub">conviction {{ ai.conviction }}/5 &middot; gap {{ ai.gap }} &middot; {{ {'calm':'narrow','normal':'normal','elevated':'wide'}.get(ai.vol_regime, ai.vol_regime) }} range</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Trade it?</span>
+      <span class="stat-value">{% if ai.stand_aside %}<b class="warn">stand aside</b>{% else %}trade{% endif %}</span>
+      <span class="stat-sub">{{ ai.stand_aside_reason or '' }}</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Outcome</span>
+      <span class="stat-value">{% if ai.session_open %}<b class="{{ 't-buy' if ai.session_close >= ai.session_open else 't-sell' }}">{{ "%+.2f"|format((ai.session_close - ai.session_open) / ai.session_open * 100) }}%</b>{% else %}pending{% endif %}</span>
+      <span class="stat-sub">{% if ai.session_open %}session {{ ai.session_date }}, open to close{% else %}scored once the session has closed{% endif %}</span>
+    </div>
+  </div>
+  <p class="dim mono">session after {{ ai.date }} &middot; accuracy per question on <a href="/analyst#intraday">the analyst page</a></p>
+</section>
+{% endif %}
+
 <div class="statgrid">
   <div class="stat fade">
     <span class="stat-label">Accuracy (last {{ acc.n if acc.n else 0 }})</span>

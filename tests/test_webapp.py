@@ -1809,3 +1809,38 @@ def test_api_intraday_refresh_tops_up_one_asset(client, monkeypatch):
                         "last_bar": "2026-09-16T15:00:00+00:00"}
     assert seen == {"a": ["BTC"], "m": "top_up", "cleared": True}
     assert client.post("/api/intraday/NOPE/refresh").status_code == 404
+
+
+def _intraday_row(**over):
+    row = {"date": "2026-09-18", "asset": "NIKKEI", "direction": "up",
+           "gap": "down", "conviction": 3, "vol_regime": "elevated",
+           "stand_aside": 1, "stand_aside_reason": "BoJ decision inside it.",
+           "thesis": "Wide day ahead.", "key_risk": "a quiet BoJ",
+           "close_at_signal": 100.0, "session_date": None, "session_open": None,
+           "session_close": None}
+    row.update(over)
+    return row
+
+
+def test_the_analyst_page_shows_the_intraday_questions(client, monkeypatch, tmp_path):
+    from core.analyst import intraday, store
+    db = str(tmp_path / "m.db")
+    monkeypatch.setattr(store, "DB_PATH", db)
+    monkeypatch.setattr("core.track_record.DB_PATH", db)
+    intraday.write(_intraday_row(), db)
+    body = client.get("/analyst").text
+    assert "Intraday: the next session" in body
+    assert "US-close rule" in body and "always normal" in body
+    assert "NIKKEI" in body and "BoJ decision inside it." in body
+    assert "100 scored sessions" in body, "each HOLD says what it still needs"
+
+
+def test_the_asset_card_shows_the_session_call_only_when_there_is_one(
+        client, monkeypatch):
+    monkeypatch.setattr(webapp, "_analyst_intraday_for_asset",
+                        lambda name: _intraday_row(asset=name))
+    body = client.get("/asset/BTC").text
+    assert "Analyst: the next session" in body
+    assert "stand aside" in body and "BoJ decision inside it." in body
+    monkeypatch.setattr(webapp, "_analyst_intraday_for_asset", lambda name: None)
+    assert "Analyst: the next session" not in client.get("/asset/BTC").text

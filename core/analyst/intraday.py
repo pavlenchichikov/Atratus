@@ -178,6 +178,24 @@ def scored_rows(db_path=None):
             "ORDER BY date, asset")]
 
 
+def recent(n=15, db_path=None):
+    """The last n judgments across every asset, newest first, scored or not."""
+    with _connect(db_path) as con:
+        con.row_factory = sqlite3.Row
+        return [dict(r) for r in con.execute(
+            "SELECT * FROM analyst_intraday_log ORDER BY date DESC, asset "
+            "LIMIT ?", (int(n),))]
+
+
+def latest(asset, db_path=None):
+    """This asset's most recent session judgment, or None."""
+    with _connect(db_path) as con:
+        con.row_factory = sqlite3.Row
+        row = con.execute("SELECT * FROM analyst_intraday_log WHERE asset=? "
+                          "ORDER BY date DESC LIMIT 1", (asset,)).fetchone()
+        return dict(row) if row else None
+
+
 # ---- scoring ---------------------------------------------------------------
 
 def _binom_greater(k, n, p=0.5):
