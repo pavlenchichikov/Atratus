@@ -651,7 +651,7 @@ def test_the_analyst_asks_at_temperature_zero_and_the_proposer_does_not():
         lp._backend("genome")("hello")
     finally:
         lp._call_ollama = original
-    assert seen == [(0.0, 8000, True), (None, lp._UNSET, None)], seen
+    assert seen == [(0.0, lp.ANALYST_THINK_TOKENS, True), (None, lp._UNSET, None)], seen
 
 
 def test_the_analyst_cap_is_a_number_by_default(monkeypatch):
@@ -665,6 +665,32 @@ def test_the_analyst_cap_is_a_number_by_default(monkeypatch):
     assert lp.analyst_max_tokens() == 24000
     monkeypatch.setenv("GTRADE_ANALYST_MAX_TOKENS", "unlimited")
     assert lp.analyst_max_tokens() is None
+
+
+def test_a_reasoning_analyst_gets_room_and_a_timeout_that_outlasts_it(monkeypatch):
+    """8000 tokens was all trace and no answer on gemma4:26b (1705s, 09-19)."""
+    from core import llm_proposer as lp
+    monkeypatch.delenv("GTRADE_ANALYST_MAX_TOKENS", raising=False)
+    assert lp.analyst_max_tokens(thinking=True) == lp.ANALYST_THINK_TOKENS
+    assert lp.analyst_max_tokens(thinking=False) == 8000
+
+    import httpx
+    seen = {}
+
+    class Client:
+        def __init__(self, trust_env, timeout):
+            seen["timeout"] = timeout
+
+        def post(self, url, json):
+            return httpx.Response(200, json={"message": {"content": "{}"}},
+                                  request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "Client", Client)
+    monkeypatch.setenv("GTRADE_AR_LLM_TIMEOUT", "3600")
+    lp._ollama_native_chat("http://x", "m", "p", 0.0, 28000, True)
+    assert seen["timeout"] > 28000 / 4.7, "the cap must end the call, not the timeout"
+    lp._ollama_native_chat("http://x", "m", "p", 0.0, 8000, True)
+    assert seen["timeout"] == 3600, "a small cap keeps the configured timeout"
 
 
 def test_no_trace_goes_through_ollamas_own_endpoint(monkeypatch):
@@ -800,7 +826,7 @@ def test_an_answer_the_trace_ate_is_named_and_not_retried(monkeypatch):
     assert len(calls) == 1, "and asking again would spend the same budget"
 
 
-def test_the_analyst_reasons_again_and_the_knob_turns_it_off(monkeypatch):
+def test_the_analyst_reasons_and_the_knob_turns_it_off(monkeypatch):
     from core import llm_proposer as lp
     monkeypatch.delenv("GTRADE_ANALYST_THINK", raising=False)
     assert lp.analyst_think() is True

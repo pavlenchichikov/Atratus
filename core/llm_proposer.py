@@ -485,12 +485,18 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     if options:
         payload["options"] = options
     url = base.removesuffix("/v1").rstrip("/") + "/api/chat"
-    client = httpx.Client(trust_env=False, timeout=_llm_timeout())
+    # The timeout must outlast the cap, or a large cap is a timeout in disguise.
+    # gemma4:26b generates ~4.7 tok/s here (8000 tokens in 1705s, 2026-09-19);
+    # 3 tok/s leaves room for the prompt and a busy machine.
+    timeout = _llm_timeout()
+    if timeout is not None and max_tokens is not None:
+        timeout = max(timeout, max_tokens / 3.0)
+    client = httpx.Client(trust_env=False, timeout=timeout)
     try:
         resp = client.post(url, json=payload)
     except httpx.TimeoutException as exc:
         raise CallTimedOut(
-            f"ollama call timed out after {_llm_timeout()}s (model too slow for "
+            f"ollama call timed out after {timeout:.0f}s (model too slow for "
             "this prompt; try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)") from exc
     resp.raise_for_status()
     msg = (resp.json().get("message") or {})
@@ -598,11 +604,10 @@ def analyst_temperature():
 def analyst_think():
     """GTRADE_ANALYST_THINK: 1 by default - the analyst reasons before it judges.
 
-    It was briefly off, because through the OpenAI-compatible layer the trace
-    and the answer shared one field and one budget, so a long trace returned an
-    empty judgment after the full wait. On the native endpoint they are separate
-    and a trace that ran long is reported as such, so the reason for turning it
-    off is gone. Set 0 if a model turns out to spend its whole budget thinking.
+    The trace needs room: 2026-09-19, gemma4:26b spent all 8000 tokens of the
+    old cap reasoning and returned nothing after 1705s. With the trace on the
+    cap is ANALYST_THINK_TOKENS instead (see analyst_max_tokens). Set 0 to
+    judge without a trace, which answered the same prompt in 983s.
     """
     raw = (os.getenv("GTRADE_ANALYST_THINK") or "1").strip().lower()
     return raw not in ("0", "false", "off", "no")
@@ -614,9 +619,16 @@ def analyst_think():
 # half hour. The analyst therefore asks with no cap by default: it is ONE call
 # per asset, unlike the proposer, where an uncapped trace would be paid for on
 # every step of a hundred-step search.
-def analyst_max_tokens():
+# The cap when the analyst reasons on Ollama: as much trace as the context
+# holds. Ollama loads gemma4:26b with n_ctx 32768 and the analyst prompt is
+# ~3.2k tokens, so 28000 fits with margin; above that the window, not the cap,
+# ends the call. At ~4.7 tok/s that is up to 1h40m per asset.
+ANALYST_THINK_TOKENS = 28000
+
+
+def analyst_max_tokens(thinking=False):
     """GTRADE_ANALYST_MAX_TOKENS: the cap on ONE judgment, or 0/none/unlimited
-    for no cap.
+    for no cap. Unset: ANALYST_THINK_TOKENS when the trace is on, else 8000.
 
     Default 8000. It was briefly no-cap, which was the wrong lesson from the
     empty replies: the trace was what spent the budget, and with the trace off
@@ -625,13 +637,14 @@ def analyst_max_tokens():
     the hour-long timeout instead of until the cap, which is how a run that
     used to answer stopped answering.
     """
-    raw = (os.getenv("GTRADE_ANALYST_MAX_TOKENS") or "8000").strip().lower()
+    default = ANALYST_THINK_TOKENS if thinking else 8000
+    raw = (os.getenv("GTRADE_ANALYST_MAX_TOKENS") or str(default)).strip().lower()
     if raw in ("0", "none", "unlimited"):
         return None
     try:
         return int(raw)
     except ValueError:
-        return 8000
+        return default
 
 
 def _temp_kw(temperature):
@@ -674,10 +687,11 @@ def _backend(what="llm"):
             f"unknown GTRADE_AR_LLM {provider!r} (use anthropic, openai or ollama)")
     if what == "analyst":
         base_fn = fn
+        think = provider == "ollama" and analyst_think()
         kw = {"temperature": analyst_temperature(),
-              "max_tokens": analyst_max_tokens()}
+              "max_tokens": analyst_max_tokens(thinking=think)}
         if provider == "ollama":
-            kw["think"] = analyst_think()
+            kw["think"] = think
 
         def fn(prompt):
             return base_fn(prompt, **kw)
