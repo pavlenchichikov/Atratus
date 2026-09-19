@@ -6,11 +6,12 @@ somebody had to remember to run. Here the backfill is a loop_cycle step, so a
 judgment that is never scored is a broken pipeline rather than a quiet habit.
 """
 
+import datetime
 import os
 import sqlite3
 
 from core.analyst.payoff import ret_atr
-from core.track_record import ohlc_series
+from core.track_record import ohlc_series, volume_series
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(BASE_DIR, "market.db")
@@ -50,6 +51,48 @@ _FIELDS = ["date", "asset", "horizon", "direction", "conviction", "vol_regime",
 # return being small, the same reasoning calibrate.py gives for why the flat
 # branch reads the BUY prior.
 _SIDE = {"up": 1, "down": -1, "flat": 1}
+
+
+def _weekdays(asset, loader, days, db_path):
+    """`loader`'s last `days` rows, with MOEX weekend sessions dropped.
+
+    MOEX has run weekend sessions since 2025: every Moscow name carries about
+    100 of them, at a quarter of the weekday range and a sixteenth of the
+    volume. Left in, a Friday one-bar call was scored on Saturday's drift, ATR
+    and the volume norm were diluted by quiet bars, and SBER's 60-bar
+    correlation to IMOEX (no weekend bars) paired returns off by up to two days.
+    Dropped, the weekend move lands in Monday's gap like any overnight move.
+    Moscow only, on purpose: crypto trades seven days for real and EGX30's
+    Sunday is a full regular session.
+    """
+    from config import radar_category
+
+    if radar_category(asset) != "ru":
+        return loader(asset, days=days, db_path=db_path)
+    rows = loader(asset, days=days * 7 // 5 + 10, db_path=db_path)
+    return [r for r in rows
+            if datetime.date.fromisoformat(r["date"]).weekday() < 5][-days:]
+
+
+def horizon_bars(asset, horizon):
+    """Bars a horizon of `horizon` trading days spans for this asset.
+
+    The unit is the exchange trading day, 5 a week and 20 a month, the same for
+    SBER as for NVDA once weekend sessions are dropped. Crypto has a bar every
+    calendar day, so the same span is 7/5 as many bars: 5 -> 7, 20 -> 28.
+    """
+    from config import ASSET_TYPES
+
+    h = int(horizon or 1)
+    return round(h * 7 / 5) if asset in ASSET_TYPES["CRYPTO"] else h
+
+
+def bars(asset, days, db_path=None):
+    return _weekdays(asset, ohlc_series, days, db_path)
+
+
+def volumes(asset, days, db_path=None):
+    return _weekdays(asset, volume_series, days, db_path)
 
 
 def _connect(db_path=None):
@@ -170,13 +213,13 @@ def backfill_outcomes(db_path=None, today=None):
         bars_by_asset = {}
         for (date, asset, horizon, direction, fc, lo, hi, atr_sig, close_sig) in pending:
             if asset not in bars_by_asset:
-                bars_by_asset[asset] = ohlc_series(asset, days=6000,
-                                                   db_path=db_path)
+                bars_by_asset[asset] = _weekdays(asset, ohlc_series, 6000,
+                                                    db_path)
             bars = bars_by_asset[asset]
             idx = next((i for i, b in enumerate(bars) if b["date"] == date), None)
             if idx is None:
                 continue
-            target = idx + int(horizon or 1)
+            target = idx + horizon_bars(asset, horizon)
             if target >= len(bars):
                 continue          # the horizon has not elapsed yet
             if today is not None and bars[target]["date"] > today:

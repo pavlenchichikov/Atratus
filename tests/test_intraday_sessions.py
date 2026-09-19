@@ -52,3 +52,11 @@ def test_an_empty_input_gives_an_empty_frame_with_the_columns():
     df = sessionize([], "UTC")
     assert df.empty and {"session", "bar_idx", "is_last"} <= set(df.columns)
     assert isinstance(df, pd.DataFrame)
+
+
+def test_moex_weekend_sessions_are_dropped_and_other_weekends_kept():
+    # Fri 09-04 and Sat 09-05, three bars each, 07:00-09:00 UTC.
+    bars = [_bar("2026-09-%02dT%02d:00:00+00:00" % (d, h)) for d in (4, 5) for h in (7, 8, 9)]
+    assert set(sessionize(bars, "Europe/Moscow")["session"]) == {"2026-09-04"}
+    assert set(sessionize(bars, "UTC")["session"]) == {"2026-09-04", "2026-09-05"}
+    assert set(sessionize(bars, "Africa/Cairo")["session"]) == {"2026-09-04", "2026-09-05"}

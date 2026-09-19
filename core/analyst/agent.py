@@ -50,9 +50,20 @@ BRIEF_TAIL = (
 )
 
 
-def _span(horizon):
-    return ("the next trading day" if int(horizon) == 1
-            else "the next %d trading days" % int(horizon))
+def _span(horizon, asset=None):
+    """The window in words. A horizon counts exchange trading days (5 a week,
+    20 a month) and crypto is asked about the same calendar span, so the model
+    is told both the count and the calendar length it means."""
+    from core.analyst.store import horizon_bars
+
+    h = int(horizon)
+    if h == 1:
+        return "the next trading day"
+    days = round(h * 7 / 5)
+    if horizon_bars(asset, h) != h:
+        return "the next %d days (crypto trades every day)" % days
+    return ("the next %d trading days, about %d calendar days; weekend "
+            "sessions do not count as trading days" % (h, days))
 
 
 SESSION_SPAN = "the next trading session, from its open to its close"
@@ -106,7 +117,7 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
     return (
         "You are an independent market analyst. Below is everything known "
         "about one asset. Form your own view of "
-        + (SESSION_SPAN if session else _span(horizon)) + ".\n\n"
+        + (SESSION_SPAN if session else _span(horizon, dossier.get("asset"))) + ".\n\n"
         + json.dumps(dossier, indent=2, ensure_ascii=True)
         + "\n\nReturn STRICT JSON, no prose, with exactly these keys:\n"
           '{"direction": "up|down|flat", "conviction": 1-5, '
@@ -137,7 +148,7 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
              "Over %s they are part of the case rather than decoration, so "
              "weigh them instead of waving them off. ex_dividend_date, "
              "next_earnings and macro_events matter if they fall inside the "
-             "window.\n" % _span(horizon)
+             "window.\n" % _span(horizon, dossier.get("asset"))
              if int(horizon) > 1 else
              "4. What the fundamentals and the calendar add, if anything. "
              "guru_verdict is a value-investing council and pe, roe, "

@@ -14,8 +14,9 @@ import datetime
 import hashlib
 import json
 
+from core.analyst.store import bars as ohlc_series
+from core.analyst.store import volumes as volume_series
 from core.levels import ATR_PERIOD, atr_abs
-from core.track_record import ohlc_series, volume_series
 
 FORBIDDEN_KEYS = frozenset({
     "probability", "cb_prob", "lstm_prob", "meta_prob", "signal",

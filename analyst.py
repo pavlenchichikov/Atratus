@@ -665,7 +665,9 @@ def main(argv=None):
                           "0 = no ceiling. Checked BEFORE the first call, so a "
                           "run that would overspend costs nothing")
     run.add_argument("--horizons", default="1",
-                     help="comma-separated horizons in trading days (default 1). "
+                     help="comma-separated horizons in exchange trading days (default 1): "
+                          "5 is a week, 20 a month, for every class; crypto "
+                          "is scored over the same calendar span (20 -> 28 bars). "
                           "Each is its own question and its own LLM call; the "
                           "log's primary key has carried a horizon column since "
                           "it was written and nothing ever used it")

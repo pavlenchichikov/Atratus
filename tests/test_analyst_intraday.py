@@ -41,9 +41,10 @@ def test_the_daily_question_is_untouched():
     assert "INTRADAY" in session and "from its open to its close" in session
 
 
-def _db(tmp_path, n=80):
-    """SBER and SP500 with n daily bars from 2026-01-01; SBER's ranges alternate
-    so its history has three distinct range classes."""
+def _db(tmp_path, n=80, start="2026-01-01"):
+    """SBER and SP500 with n weekday bars from `start`; SBER's ranges alternate
+    so its history has three distinct range classes. Weekdays only, because
+    the analyst drops Saturday and Sunday for every non-crypto asset."""
     import datetime as dt
 
     path = str(tmp_path / "market.db")
@@ -51,9 +52,8 @@ def _db(tmp_path, n=80):
     for table in ("sber", "sp500"):
         con.execute('CREATE TABLE %s (Date TEXT, Open REAL, Close REAL, '
                     'High REAL, Low REAL)' % table)
-    start = dt.date(2026, 1, 1)
-    for i in range(n):
-        day = (start + dt.timedelta(days=i)).isoformat()
+    days = (dt.date.fromisoformat(start) + dt.timedelta(days=k) for k in range(2 * n))
+    for i, day in enumerate([d.isoformat() for d in days if d.weekday() < 5][:n]):
         width = (0.5, 1.0, 2.0)[i % 3]
         con.execute("INSERT INTO sber VALUES (?,?,?,?,?)",
                     (day, 100.0, 100.0 + (0.5 if i % 2 else -0.5),
@@ -78,13 +78,14 @@ def _offline(monkeypatch, db):
 def test_the_us_lead_is_read_only_from_the_same_date(monkeypatch, tmp_path):
     db = _db(tmp_path, n=10)
     _offline(monkeypatch, db)
+    # Monday 01-05 reads its return from Friday 01-02, the bar before it.
     got = intraday.us_last_session_ret("2026-01-05", db_path=db)
-    assert abs(got - (5004.0 - 5003.0) / 5003.0) < 1e-12
+    assert abs(got - (5002.0 - 5001.0) / 5001.0) < 1e-12
     assert intraday.us_last_session_ret("2026-02-01", db_path=db) is None
 
 
 def test_a_run_writes_a_row_that_waits_for_a_finished_session(monkeypatch, tmp_path):
-    db = _db(tmp_path, n=40)
+    db = _db(tmp_path, n=28)          # last bar Monday 2026-02-09
     _offline(monkeypatch, db)
     monkeypatch.setattr(analyst, "_provider_call",
                         lambda: (lambda prompt: json.dumps(SESSION_REPLY)))
@@ -117,7 +118,7 @@ def _judged(db, date, session, direction="up", vol="normal", stand=0,
 
 
 def test_score_counts_each_question_and_holds_under_the_floor(monkeypatch, tmp_path):
-    db = _db(tmp_path)
+    db = _db(tmp_path, n=120, start="2025-12-01")   # 60+ sessions before 03-11
     _offline(monkeypatch, db)
     monkeypatch.setattr(intraday, "_lead_rule", lambda rows, db_path: {})
     # Right, wrong, right on direction; a wide stand-aside day; an event day.

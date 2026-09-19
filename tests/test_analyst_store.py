@@ -170,3 +170,53 @@ def test_today_in_the_future_holds_back_an_available_bar(db):
     store.write_judgment(_judgment(date="2026-01-20"), db_path=db)
     assert store.backfill_outcomes(db_path=db, today="2026-01-20") == 0
     assert store.pending_count(db_path=db) == 1
+
+
+def test_a_friday_call_on_a_moscow_name_is_scored_on_monday_not_saturday(tmp_path):
+    """MOEX weekend sessions are dropped; crypto and EGX30 keep their weekends."""
+    path = str(tmp_path / "market.db")
+    con = sqlite3.connect(path)
+    # Fri 2026-09-04 .. Mon 2026-09-07; the weekend barely moves, Monday does.
+    rows = [("2026-09-04", 100.0, 100.0, 101.0, 99.0),
+            ("2026-09-05", 100.0, 100.1, 100.2, 99.9),
+            ("2026-09-06", 100.1, 100.2, 100.3, 100.0),
+            ("2026-09-07", 100.2, 103.0, 103.5, 100.0)]
+    for table in ("sber", "btc", "egx30"):
+        con.execute('CREATE TABLE %s (Date TEXT, Open REAL, Close REAL, '
+                    'High REAL, Low REAL)' % table)
+        con.executemany('INSERT INTO %s VALUES (?,?,?,?,?)' % table, rows)
+    con.commit()
+    con.close()
+
+    assert [b["date"] for b in store.bars("SBER", 10, path)] == ["2026-09-04", "2026-09-07"]
+    assert len(store.bars("BTC", 10, path)) == 4
+    assert len(store.bars("EGX30", 10, path)) == 4      # Sunday is a Cairo session
+
+    store.write_judgment(_judgment(date="2026-09-04"), db_path=path)
+    assert store.backfill_outcomes(db_path=path, today="2026-09-08") == 1
+    assert store.scored_rows(db_path=path)[0]["realized_ret"] == pytest.approx(0.03)
+
+
+def test_a_week_is_five_exchange_bars_and_seven_crypto_bars(tmp_path):
+    """One horizon unit for every class: 5 = a calendar week, 20 = a month."""
+    from core.analyst import agent
+
+    assert [store.horizon_bars(a, h) for a in ("SBER", "NVDA", "BTC")
+            for h in (1, 5, 20)] == [1, 5, 20, 1, 5, 20, 1, 7, 28]
+
+    path = str(tmp_path / "market.db")
+    con = sqlite3.connect(path)
+    con.execute('CREATE TABLE btc (Date TEXT, Open REAL, Close REAL, '
+                'High REAL, Low REAL)')
+    # 2026-09-01 .. 09-09 every day; only the 7th bar after 09-01 moves.
+    closes = [100.0] * 7 + [110.0, 100.0]
+    con.executemany('INSERT INTO btc VALUES (?,?,?,?,?)',
+                    [("2026-09-%02d" % (i + 1), c, c, c, c) for i, c in enumerate(closes)])
+    con.commit()
+    con.close()
+    store.write_judgment(_judgment(date="2026-09-01", asset="BTC", horizon=5), db_path=path)
+    assert store.backfill_outcomes(db_path=path, today="2026-09-10") == 1
+    assert store.scored_rows(db_path=path)[0]["realized_ret"] == pytest.approx(0.10)
+
+    assert "next 28 days" in agent.prompt_for({"asset": "BTC"}, horizon=20)
+    assert "about 28 calendar days" in agent.prompt_for({"asset": "SBER"}, horizon=20)

@@ -13,6 +13,7 @@ import config
 # label below need at least one bar after the one being predicted from.
 MIN_SESSION_BARS = 3
 
+MOEX_TZ = "Europe/Moscow"
 _ROUND_THE_CLOCK = ("CRYPTO", "FOREX MAJORS", "FOREX CROSSES", "FOREX EXOTIC")
 _COLS = ["ts", "open", "high", "low", "close", "volume"]
 
@@ -38,6 +39,11 @@ def sessionize(bars, tz_name):
     df = (df.dropna(subset=["open", "high", "low", "close"])
             .sort_values("ts").drop_duplicates("ts"))
     df["session"] = df["ts"].dt.tz_convert(tz_name).dt.strftime("%Y-%m-%d")
+    if tz_name == MOEX_TZ:
+        # MOEX weekend sessions run at about a third of the weekday range. Mixed
+        # in, fit_k set k so the level is hit half the time ACROSS both, which
+        # made it 0.58 on weekdays and 0.21 on weekends (181 names, 2026-09-19).
+        df = df[pd.to_datetime(df["session"]).dt.dayofweek < 5]
     size = df.groupby("session")["close"].transform("size")
     df = df[size >= MIN_SESSION_BARS].reset_index(drop=True)
     df["bar_idx"] = df.groupby("session").cumcount()

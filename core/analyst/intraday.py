@@ -30,7 +30,8 @@ import sqlite3
 import statistics
 
 from core.analyst import dossier, store
-from core.track_record import ohlc_series
+
+ohlc_series = store.bars
 
 # Asia-Pacific names the US close leads, then the home market and two anchors.
 LEAD_ASSETS = ("ASX200", "NIKKEI", "TAIEX", "AUDJPY")
