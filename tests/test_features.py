@@ -419,3 +419,21 @@ def test_active_candidate_features_drop_unknown_is_harmless(monkeypatch):
     assert active_candidate_features() == full
 
 
+
+
+def test_tail_rank_is_high_only_while_volatility_is():
+    import numpy as np
+
+    from core.features import tail_rank
+    rng = np.random.default_rng(0)
+    calm = rng.normal(0, 0.01, 900)
+    wild = rng.normal(0, 0.04, 60)
+    closes = 100 * np.exp(np.cumsum(np.concatenate([calm, wild])))
+    assert tail_rank(closes) > 0.95, "a violent stretch sits at the top of its history"
+    # One outlier 40 bars back in otherwise calm data: kurtosis would still be
+    # extreme; the volatility rank moves only by what the outlier adds.
+    spike = calm.copy()
+    spike[-40] = 0.15
+    closes = 100 * np.exp(np.cumsum(spike))
+    assert tail_rank(closes) < 0.99
+    assert tail_rank(closes[:300]) is None, "too little history for a year of scale"

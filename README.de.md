@@ -51,7 +51,7 @@
 
 - **Walk-Forward-Auswahl mit Embargo.** Der Champion wird nie auf den Daten gewählt, die ihn trainiert haben, und ein Embargo entfernt die Balken an der Grenze jeder Falte, damit das Label nicht rückwärts durchsickert.
 
-- **Kontrolle des Extremrisikos.** Fraktionale Kelly-Positionsgrößen, Verlust- und Drawdown-Grenzen sowie ein Taleb-Gate, das in Regimen, in denen die Verlustverteilung unbrauchbar wird, gar nicht erst eine Position eröffnet.
+- **Kontrolle des Extremrisikos.** Fraktionale Kelly-Positionsgrößen, Verlust- und Drawdown-Grenzen sowie ein Taleb-Gate, das keine neue Position eröffnet, solange die Volatilität eines Assets am oberen Rand seiner eigenen Historie liegt.
 
 - **Ein autonomer Forschungsagent, der Nein sagen darf.** Er sucht neue Konfigurationen, misst sie an einem Haltebestand, den er nie optimiert hat, und übernimmt nur, was eine vorab festgelegte statistische Schwelle überschreitet. Die meisten Kampagnen führen zu nichts, und das ist das erwartete Verhalten.
 

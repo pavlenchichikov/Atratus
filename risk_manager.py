@@ -5,8 +5,6 @@ import logging
 import os
 from datetime import date, datetime
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -31,8 +29,11 @@ RISK_CONFIG = {
     "risk_per_trade":         0.01,   # 1 % of equity risked to the stop
     "fee_rate":               0.0,    # commission + spread per side, fraction
     # Risk adjustments
-    "taleb_risk_cap":         5.0,    # Block BUY if Taleb risk > 5.0
-    "taleb_soft_cap":         2.5,    # Reduce size above 2.5
+    # Tail risk: core.features.tail_rank, where today's volatility sits in the
+    # asset's own history (0-1). The two cuts keep the share of days the old
+    # kurtosis caps touched (about 30% and 16%), so what changed is WHICH days.
+    "tail_soft_rank":         0.70,   # size shrinks above this rank
+    "tail_hard_rank":         0.85,   # no new entry, either side, above this
     "correlation_penalty":    0.15,   # Size reduction per correlated open position
     # Default trade expectations (used when historical stats are unavailable)
     "default_avg_win":        0.025,  # 2.5 % average winning trade
@@ -48,7 +49,7 @@ _FRACTION_KEYS = {
     "max_portfolio_exposure", "max_single_position", "max_daily_loss",
     "max_drawdown_halt", "kelly_fraction", "min_kelly_threshold",
     "correlation_penalty", "default_avg_win", "default_avg_loss",
-    "risk_per_trade", "fee_rate",
+    "risk_per_trade", "fee_rate", "tail_soft_rank", "tail_hard_rank",
 }
 
 
@@ -58,7 +59,10 @@ def _load_risk_config_override() -> None:
     try:
         with open(RISK_CONFIG_OVERRIDE_PATH, encoding="utf-8") as fh:
             override = json.load(fh)
-        RISK_CONFIG.update(override)
+        # Only keys the code still has: an override written before a key was
+        # renamed would otherwise sit in RISK_CONFIG looking like a live limit.
+        RISK_CONFIG.update({k: v for k, v in override.items()
+                            if k in _DEFAULT_RISK_CONFIG})
     except Exception as exc:
         logger.warning("Could not load risk config override: %s", exc)
 
@@ -103,7 +107,7 @@ class RiskManager:
     Usage::
 
         rm = RiskManager(initial_capital=10_000)
-        result = rm.check_signal("BTC", "BUY", confidence=0.62, taleb_risk=1.2)
+        result = rm.check_signal("BTC", "BUY", confidence=0.62, tail_rank=0.40)
         if result["approved"]:
             print(f"Trade size: ${result['position_size_usd']:.2f}")
     """
@@ -257,7 +261,7 @@ class RiskManager:
         win_rate: float,
         avg_win: float | None = None,
         avg_loss: float | None = None,
-        taleb_risk: float = 0.0,
+        tail_rank: float | None = None,
         n_correlated: int = 0,
     ) -> float:
         """
@@ -266,7 +270,7 @@ class RiskManager:
         Formula: Kelly = (p*b - q) / b   where b = avg_win / avg_loss
         Then applies:
           - Fractional Kelly  (x kelly_fraction)
-          - Taleb risk penalty (exponential decay above soft cap)
+          - Tail penalty (linear shrink above the soft rank, floor 25%)
           - Correlation penalty (linear reduction per correlated position)
           - Hard cap at max_single_position and remaining_capacity
 
@@ -289,11 +293,11 @@ class RiskManager:
         # 1. Fractional Kelly (quarter-Kelly by default)
         size = kelly_full * RISK_CONFIG["kelly_fraction"]
 
-        # 2. Taleb risk penalty - starts reducing size above soft_cap
-        soft_cap = RISK_CONFIG["taleb_soft_cap"]
-        if taleb_risk > soft_cap:
-            penalty = np.exp(-0.4 * (taleb_risk - soft_cap))
-            size *= penalty
+        # 2. Tail penalty - from full size at the soft rank down to a quarter at
+        # the top of the asset's own history
+        soft = RISK_CONFIG["tail_soft_rank"]
+        if tail_rank is not None and tail_rank > soft and soft < 1.0:
+            size *= max(0.25, 1.0 - 0.75 * (tail_rank - soft) / (1.0 - soft))
 
         # 3. Correlation penalty - each correlated open position reduces size
         if n_correlated > 0:
@@ -314,7 +318,7 @@ class RiskManager:
         asset: str,
         signal: str,          # "BUY" | "SELL" | "WAIT"
         confidence: float,    # model probability (0-1)
-        taleb_risk: float = 0.0,
+        tail_rank: float | None = None,
         n_correlated: int = 0,
         win_rate: float | None = None,
         avg_win: float | None = None,
@@ -357,10 +361,12 @@ class RiskManager:
             result["reason"] = f"TRADING HALTED - {halt_reason}"
             return result
 
-        # Block BUY in high-risk regime
-        if signal == "BUY" and taleb_risk > RISK_CONFIG["taleb_risk_cap"]:
-            result["reason"] = (f"HIGH TAIL RISK - Taleb={taleb_risk:.2f} "
-                                f"> cap={RISK_CONFIG['taleb_risk_cap']}")
+        # No new entry in the top of the asset's own volatility history. Both
+        # sides: a short is as exposed to a violent week as a long is.
+        if tail_rank is not None and tail_rank > RISK_CONFIG["tail_hard_rank"]:
+            result["reason"] = (f"HIGH TAIL RISK - volatility at the "
+                                f"{tail_rank:.0%} rank of its own history "
+                                f"> cap {RISK_CONFIG['tail_hard_rank']:.0%}")
             return result
 
         # Map signal to win_rate
@@ -373,7 +379,7 @@ class RiskManager:
             win_rate=effective_wr,
             avg_win=avg_win,
             avg_loss=avg_loss,
-            taleb_risk=taleb_risk,
+            tail_rank=tail_rank,
             n_correlated=n_correlated,
         )
 
@@ -496,8 +502,8 @@ if __name__ == "__main__":
     rm.print_summary()
 
     # Demo checks
-    for asset, conf, taleb in [("BTC", 0.62, 1.5), ("ETH", 0.58, 6.0), ("GOLD", 0.54, 0.8)]:
-        res = rm.check_signal(asset, "BUY", confidence=conf, taleb_risk=taleb)
+    for asset, conf, tail in [("BTC", 0.62, 0.40), ("ETH", 0.58, 0.95), ("GOLD", 0.54, 0.75)]:
+        res = rm.check_signal(asset, "BUY", confidence=conf, tail_rank=tail)
         status = "[OK]" if res["approved"] else "[NO]"
-        print(f"{status} {asset:<6} conf={conf:.0%} taleb={taleb:.1f} - "
+        print(f"{status} {asset:<6} conf={conf:.0%} tail={tail:.0%} - "
               f"size={res['position_size_pct']:.1%} (${res['position_size_usd']:,.0f}) | {res['reason']}")

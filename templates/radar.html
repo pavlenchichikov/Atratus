@@ -145,7 +145,7 @@
   </div>
   <table class="grid">
     <thead>
-      <tr><th>Asset</th><th>Signal</th><th class="num">p</th><th>Confidence</th><th>Accuracy</th><th class="num" title="Taleb tail-risk: rolling kurtosis of log-returns (soft cap {{ "%.1f"|format(config.taleb_soft_cap) }}, hard cap {{ "%.1f"|format(config.taleb_risk_cap) }})">Taleb</th><th>30 days</th><th class="num">Date</th></tr>
+      <tr><th>Asset</th><th>Signal</th><th class="num">p</th><th>Confidence</th><th>Accuracy</th><th class="num" title="Taleb risk: where today's volatility sits in this asset's own history, 0-100 (size cut above {{ "%.0f"|format(config.tail_soft_rank * 100) }}, no new entry above {{ "%.0f"|format(config.tail_hard_rank * 100) }})">Taleb</th><th>30 days</th><th class="num">Date</th></tr>
     </thead>
     <tbody>
       {% for s in g.rows %}
@@ -163,8 +163,8 @@
           {% else %}<span class="dim">-</span>{% endif %}
         </td>
         <td class="num mono c-taleb">
-          {% if s.taleb is not none %}
-          <span class="taleb-{{ s.taleb_regime }}" title="{{ s.taleb_regime }}">{{ "%.1f"|format(s.taleb) }}</span>
+          {% if s.tail is not none %}
+          <span class="taleb-{{ s.tail_regime }}" title="{{ s.tail_regime }}">{{ "%.0f"|format(s.tail * 100) }}</span>
           {% else %}<span class="dim">-</span>{% endif %}
         </td>
         <td class="cell-spark">

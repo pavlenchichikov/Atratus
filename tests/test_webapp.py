@@ -250,12 +250,12 @@ def test_api_risk(client):
     assert "config" in data
 
 
-def test_radar_page_has_taleb_column(client):
+def test_radar_page_has_the_tail_column(client):
     import core.dashboard as dash
     dash.cache_clear()
     r = client.get("/")
     assert r.status_code == 200
-    assert "Taleb" in r.text
+    assert ">Taleb</th>" in r.text
 
 
 def test_risk_page_has_tail_risk_panel(client):
@@ -263,7 +263,8 @@ def test_risk_page_has_tail_risk_panel(client):
     dash.cache_clear()
     r = client.get("/risk")
     assert r.status_code == 200
-    assert "Tail risk (Taleb)" in r.text
+    assert "<h2>Taleb risk</h2>" in r.text
+    assert 'data-key="tail_hard_rank"' in r.text, "the new cut is editable"
 
 
 def test_risk_page_has_risk_alerts_panel(client):
@@ -295,14 +296,14 @@ def test_api_risk_alerts_returns_report_alerts(client, monkeypatch):
     assert client.get("/api/risk/alerts").json()["cached"] is True
 
 
-def test_asset_page_shows_taleb_value(client, monkeypatch):
+def test_asset_page_shows_the_tail_rank(client, monkeypatch):
     import core.dashboard as dash
     dash.cache_clear()
-    monkeypatch.setattr(dash, "taleb_for_asset", lambda asset: 3.4)
+    monkeypatch.setattr(dash, "tail_for_asset", lambda asset: 0.93)
     r = client.get("/asset/BTC")
     assert r.status_code == 200
-    assert "Taleb tail risk" in r.text
-    assert "3.4" in r.text
+    assert "Taleb risk" in r.text
+    assert ">93<" in r.text and "no new entry" in r.text
 
 
 def test_api_risk_open_and_close_position(client, monkeypatch, tmp_path):
@@ -958,19 +959,19 @@ def test_market_page_shows_the_market_wide_tail_risk(client, monkeypatch):
     it is the only reading on the page that actually gates trading."""
     import core.dashboard as dash
     dash.cache_clear()
-    monkeypatch.setattr(dash, "taleb_index", lambda: {
-        "BTC": 9.9, "ETH": 8.1, "NVDA": 4.2, "SP500": 1.1, "GOLD": None})
+    monkeypatch.setattr(dash, "tail_index", lambda: {
+        "BTC": 0.99, "ETH": 0.91, "NVDA": 0.75, "SP500": 0.30, "GOLD": None})
     r = client.get("/market")
     assert r.status_code == 200
-    assert "Tail risk across the market" in r.text
-    assert "cannot be bought" in r.text          # something is over the hard cap
+    assert "Taleb risk across the market" in r.text
+    assert "cannot be entered" in r.text         # something is over the hard cap
     assert "/asset/BTC" in r.text                # the worst names are reachable
 
 
 def test_market_page_counts_every_band_and_says_when_nothing_is_gated(client, monkeypatch):
     import core.dashboard as dash
     dash.cache_clear()
-    monkeypatch.setattr(dash, "taleb_index", lambda: {"SP500": 0.5, "GOLD": 0.4})
+    monkeypatch.setattr(dash, "tail_index", lambda: {"SP500": 0.5, "GOLD": 0.4})
     r = client.get("/market")
     assert "no asset is under a tail-risk gate" in r.text
 

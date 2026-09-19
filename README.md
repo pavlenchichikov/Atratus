@@ -53,7 +53,7 @@
 
   There are also **four model sets on disk whose map entry is gone** (`avb`, `eqr`, `wbs`, `brkb`). Three are assets dropped from the map. The fourth is a rename: Berkshire moved from `BRKB` to `BRK-B`, whose model filename is `brk_b`, so a trained model was orphaned and the asset now counts as untrained. Renaming a map key without moving its model files does that silently, and `[M] Model Health` is where it shows.
 - **Honest, calibrated signals.** BUY / SELL / WAIT with a calibrated probability, per-asset tuned thresholds, and a live accuracy track record that reconciles each prediction against the realized next-bar move.
-- **Risk-managed by design.** Kelly-based position sizing, drawdown stops, sector-exposure and correlation checks, and a Taleb tail-risk index that shrinks size above a soft cap and blocks new buys above a hard cap.
+- **Risk-managed by design.** Kelly-based position sizing, drawdown stops, sector-exposure and correlation checks, and a Taleb risk gate that shrinks size when an asset's volatility climbs into the upper part of its own history and allows no new entry, long or short, at the very top.
 - **Prices, not just calls.** A daily trade-level sheet turns each signal into numbers you can act on: an ATR entry zone around the last close, an emergency stop that trails the position, and a size derived from the distance to that stop and clipped by the risk limits. The same entry zone and stop appear on each asset's own page, every issued set is journalled and later scored against the bars that followed, and the two ATR multipliers behind them can be fitted over the whole history and are adopted only if a held-out slice agrees. Execution stays manual.
 - **Rich feature set.** Returns and volatility-normalized returns, tail risk (kurtosis / skew / VaR), RSI / MACD / SMA / ATR, weekly and cross-asset correlations, cross-asset lead-lag, calendar position, and a macro regime read (10y yield, VIX, dollar).
 - **Autonomous research agent.** A quality-diversity (MAP-Elites) search over features, labels and transforms, with a rigorous held-out adoption gate (Wilcoxon signed-rank + Benjamini-Hochberg + cross-run replication) so nothing is adopted on noise. Never touches production automatically.
@@ -68,7 +68,7 @@
 2. `train_hybrid.py` builds the features (above), trains the ensemble, and saves the champion together with its scaler and probability calibrator, chosen by walk-forward accuracy on the next bar. The quality report carries `Ens_Acc` and `CB_Acc_Mean` beside the older columns: those two are averaged over every fold, while `CB_Acc` belongs to the champion fold alone.
 3. `predict.py` prints BUY / SELL / WAIT with confidence for all assets.
 4. `backtest.py` checks champions on held-out data: PnL, win rate, Sharpe, directional accuracy, Brier, alpha vs buy & hold.
-5. `risk_manager.py` and `portfolio.py` do position sizing, loss limits and correlation checks. Tail risk is gated by the Taleb index: size shrinks above the soft cap, new buys are blocked above the hard cap.
+5. `risk_manager.py` and `portfolio.py` do position sizing, loss limits and correlation checks. Tail risk is gated by Taleb risk (where today's volatility sits in the asset's own history, 0 to 1): size shrinks above 0.70, no new entry either side above 0.85. See [Taleb risk](#taleb-risk).
 
 Supporting layers: a **Guru Council** value overlay (`guru_report.py`, shown only for assets with real fundamentals), news sentiment (`news_analyzer.py`), a market regime / fear-greed read, and `db_check.py`, a read-only audit of `market.db` (freshness, OHLC sanity, gaps, coverage).
 
@@ -82,13 +82,13 @@ uvicorn webapp:app --host 0.0.0.0 --port 8000
 
 Lightweight web interface - no TensorFlow needed, reads predictions from the database, starts instantly. Pages:
 
-- `/` - signal radar: BUY / SELL / WAIT per asset with confidence, live accuracy, a Taleb tail-risk column, a live market-breadth panel and regime / fear-greed gauges, and a line saying how much of the asset map the snapshot covers and why the rest is absent (no champion, or no bar dated today)
-- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb tail risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **intraday reach odds** ("Reaches up/down today") with an **Update hourly bars** button that tops up that one asset, the **expected payoff** for a long and a short in that asset, the **analyst's own call** with its reasoning, and its latest call on the **next session** (open to close, gap, range, stand aside) with the outcome once the session has closed
+- `/` - signal radar: BUY / SELL / WAIT per asset with confidence, live accuracy, a Taleb risk column (0-100), a live market-breadth panel and regime / fear-greed gauges, and a line saying how much of the asset map the snapshot covers and why the rest is absent (no champion, or no bar dated today)
+- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **intraday reach odds** ("Reaches up/down today") with an **Update hourly bars** button that tops up that one asset, the **expected payoff** for a long and a short in that asset, the **analyst's own call** with its reasoning, and its latest call on the **next session** (open to close, gap, range, stand aside) with the outcome once the session has closed
 - `/analyst` - the analyst agent: how many judgments it has made and how many are scored, interval coverage, the latest judgments with forecast against outcome, a button that runs a pass, and an **Intraday** block: each of the four session questions against its baseline with its verdict, and the latest session calls with their outcomes
 - `/levels` - the trade-level sheet: entry zone, stop and position size per active signal, with a reason on every row that has none
 - `/portfolio` - portfolio analytics over open positions: diversification score, sector-exposure heat, held-asset correlation, per-position warnings
 - `/whatif` - what-if simulator: "what if I had invested $X, N days ago, following the signals", with an equity curve and per-asset breakdown
-- `/risk` - interactive risk manager: open / close positions, edit and persist risk limits, halt / resume trading, plus a Taleb tail-risk watchlist
+- `/risk` - interactive risk manager: open / close positions, edit and persist risk limits, halt / resume trading, plus a Taleb risk watchlist
 - `/loop` - self-maintaining loop: daily cycle status and drift proposals, with one-click approve of a champion-challenger retrain
 - `/guru` - value overlay: the council verdict next to the ML signal, with a 60-day accuracy track record and a one-click **Recalculate all** that re-scores every stock in the background
 - `/experience` - what the search has learned: the funnel from every genome ever
@@ -821,6 +821,38 @@ aside is only really tested by live runs.
 In `run_gtrade.bat` it is `[AN]` then `[I]`: run (assets, provider, model, YES)
 or score. The web shows the same scores and the latest calls on `/analyst`, and
 each asset card shows that asset's latest session call.
+
+## Taleb risk
+
+The idea: black swans cannot be foreseen, but a market that is getting fragile
+can be felt, and the index puts a number on that feeling.
+
+The risk manager's Taleb risk gate reads `core.features.tail_rank`: the 60-bar
+volatility of an asset over a robust one-year scale, ranked against that same
+ratio on every earlier bar of the asset, so 0.9 means "more volatile than 90% of
+its own history". Above `tail_soft_rank` (0.70) the position is sized down,
+linearly to a quarter at the top; above `tail_hard_rank` (0.85) there is no new
+entry in either direction. Both are editable on `/risk`. The cuts keep the share
+of days the old caps touched, about 30% and 16%.
+
+Until 2026-09-19 the index was the 60-bar kurtosis of log-returns. Taleb himself
+warns that sample kurtosis is unreliable on fat tails, one observation dominates
+it, and the measurement agreed. Measured over 830 assets since 2010, predicting a move beyond four
+robust sigmas within 20 bars:
+
+| Read | Median IC across assets | Assets with IC > 0 |
+|---|---|---|
+| volatility / one-year robust scale | +0.176 | 97% |
+| bars since the last 3-sigma day | +0.088 | 84% |
+| kurtosis (the old Taleb index) | +0.060 | 77% |
+
+Inside volatility quintiles the kurtosis IC was -0.009: it carried nothing the
+volatility level did not. It also did not persist (IC +0.04 with itself 60 bars
+later), because one outlier holds it up for exactly 60 bars and then drops out.
+
+Still on kurtosis, because moving them needs a refit rather than a relabel: the
+`taleb_hi` flag of the levels and entry-timing policies (`core.levels.TALEB_HI`),
+the regime filter used in champion selection, and the `taleb_risk` model feature.
 
 ## Self-maintaining loop
 
@@ -1622,7 +1654,7 @@ core/performance.py   the arithmetic behind it, and the three things it refuses 
 macro_calendar.py     refresh macro_calendar.json from the CBR and the Fed
 core/macro.py         those parsers, plus the policy rate and its direction
 alert_bot.py          Telegram bot (hourly scan)
-risk_manager.py       Kelly sizing, loss/drawdown limits, Taleb gate
+risk_manager.py       Kelly sizing, loss/drawdown limits, Taleb risk gate
 guru_report.py        Guru Council fundamentals overlay
 auto_research.py      autonomous research agent (run via auto_research.bat)
 auto_loop.py          unattended search / A/B / adopt cycle, stops before retrain

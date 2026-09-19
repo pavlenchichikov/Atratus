@@ -51,7 +51,7 @@
 
 - **Sélection walk-forward avec embargo.** Le champion n'est jamais choisi sur les données qui l'ont entraîné, et un embargo retire les barres situées à la frontière de chaque pli pour empêcher l'étiquette de fuir en arrière.
 
-- **Contrôle du risque de queue.** Dimensionnement de Kelly fractionné, limites de perte et de drawdown, et une porte de type Taleb qui refuse de prendre position dans les régimes où la distribution des pertes cesse d'être exploitable.
+- **Contrôle du risque de queue.** Dimensionnement de Kelly fractionné, limites de perte et de drawdown, et une porte de type Taleb qui refuse toute nouvelle position tant que la volatilité d'un actif se situe au sommet de son propre historique.
 
 - **Un agent de recherche autonome qui a le droit de dire non.** Il cherche de nouvelles configurations, les mesure sur un jeu de validation qu'il n'a jamais optimisé, et n'adopte que ce qui franchit un seuil statistique fixé à l'avance. La plupart des campagnes ne débouchent sur rien, et c'est le comportement attendu.
 

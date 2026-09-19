@@ -202,7 +202,10 @@ def analyze_asset(df, name, registry, thresholds):
         mode = res["mode"]
         current_price = res["price"]
         confidence = prob
-        taleb_val = float(df['taleb_risk'].iloc[-1]) if 'taleb_risk' in df.columns else 0.0
+        # The risk manager's tail gate reads the tail rank, not the model's
+        # kurtosis feature (see core.features.tail_rank for why).
+        from core.dashboard import tail_for_asset
+        tail = tail_for_asset(name)
 
         if action == "BUY":
             signal_type = "SNIPER BUY" if mode != "CB" else "CB BUY"
@@ -216,7 +219,7 @@ def analyze_asset(df, name, registry, thresholds):
             if _pm is not None:
                 n_corr = len(_pm.get_correlated_assets(name))
             risk_result = _rm.check_signal(
-                name, action, confidence, taleb_val, n_correlated=n_corr
+                name, action, confidence, tail, n_correlated=n_corr
             )
             if not risk_result["approved"]:
                 logger.info("Signal %s %s REJECTED by risk: %s",
@@ -243,12 +246,12 @@ def analyze_asset(df, name, registry, thresholds):
         msg = (
             f"*{emoji_char}: {name}* (`{current_price:,.2f}`)\n"
             f"   _{signal_type}_ | Prob:`{prob:.0%}` CB:`{cb_prob:.0%}` "
-            f"Mode:`{mode}` Risk:`{taleb_val:.1f}`"
+            f"Mode:`{mode}` Taleb:`{'-' if tail is None else '%.0f' % (tail * 100)}`"
             f"{portfolio_line}{size_line}"
         )
 
-        logger.info("%s %s | prob=%.0f%% cb=%.0f%% mode=%s taleb=%.1f",
-                    action, name, prob * 100, cb_prob * 100, mode, taleb_val)
+        logger.info("%s %s | prob=%.0f%% cb=%.0f%% mode=%s taleb=%s",
+                    action, name, prob * 100, cb_prob * 100, mode, tail)
         return {"action": action, "confidence": confidence, "message": msg}
 
     except Exception as exc:

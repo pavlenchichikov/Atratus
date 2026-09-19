@@ -163,6 +163,45 @@ def latest_taleb_risk(closes) -> float | None:
     return float(val) if pd.notna(val) else None
 
 
+TAIL_WINDOW = 60
+TAIL_SCALE_WINDOW = 250
+TAIL_MIN_HISTORY = 120
+
+
+def tail_rank(closes) -> float | None:
+    """Where today's volatility sits in this asset's own history, from 0 to 1.
+
+    Volatility is the 60-bar std of log-returns over a robust one-year scale
+    (1.4826 x the median absolute return), so a single outlier cannot inflate
+    the yardstick it is measured against. The rank is taken against the same
+    ratio on every earlier bar of THIS asset, because a volatile week for a bond
+    ETF and one for a coin are different numbers and the same event.
+
+    Replaces the kurtosis index as the tail-risk read. Measured 2026-09-19 over
+    830 assets since 2010, predicting a move beyond 4 robust sigmas within 20
+    bars: this ratio IC +0.176 (97% of assets positive), kurtosis +0.060 (77%),
+    and kurtosis added nothing once the volatility level was known (IC -0.009
+    inside volatility quintiles). Kurtosis also did not persist: IC +0.04 with
+    itself 60 bars later, an echo of one old outlier rather than a regime.
+
+    None when there is not enough history for a year of scale plus a
+    TAIL_MIN_HISTORY-bar record to rank against.
+    """
+    s = pd.Series(list(closes), dtype="float64")
+    if len(s) < TAIL_SCALE_WINDOW + TAIL_MIN_HISTORY:
+        return None
+    ratio = s / s.shift(1)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        log_ret = np.log(ratio.where(ratio > 0))
+    vol = log_ret.rolling(TAIL_WINDOW, min_periods=TAIL_WINDOW // 2).std()
+    scale = 1.4826 * log_ret.abs().rolling(
+        TAIL_SCALE_WINDOW, min_periods=int(TAIL_SCALE_WINDOW * 0.8)).median()
+    rel = (vol / scale).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(rel) < TAIL_MIN_HISTORY:
+        return None
+    return float((rel <= rel.iloc[-1]).mean())
+
+
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute technical indicators from OHLCV data.
 

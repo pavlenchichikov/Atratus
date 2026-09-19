@@ -257,16 +257,16 @@
     </span>
     <span class="stat-sub">old - new</span>
   </div>
-  <div class="stat fade {% if taleb_regime == 'extreme' %}stat-warn{% endif %}">
-    <span class="stat-label">Taleb tail risk</span>
+  <div class="stat fade {% if tail_regime == 'extreme' %}stat-warn{% endif %}">
+    <span class="stat-label">Taleb risk</span>
     <span class="stat-value">
-      {% if taleb is not none %}<span class="taleb-{{ taleb_regime }}">{{ "%.1f"|format(taleb) }}</span>{% else %}-{% endif %}
+      {% if tail is not none %}<span class="taleb-{{ tail_regime }}">{{ "%.0f"|format(tail * 100) }}</span><small> / 100</small>{% else %}-{% endif %}
     </span>
     <span class="stat-sub">
-      {% if taleb is none %}not enough history
-      {% elif taleb_regime == 'extreme' %}above hard cap {{ "%.1f"|format(taleb_hard_cap) }} - BUY blocked
-      {% elif taleb_regime == 'elevated' %}above soft cap {{ "%.1f"|format(taleb_soft_cap) }} - size reduced
-      {% else %}normal (soft cap {{ "%.1f"|format(taleb_soft_cap) }}){% endif %}
+      {% if tail is none %}not enough history
+      {% elif tail_regime == 'extreme' %}volatility in the top {{ "%.0f"|format((1 - tail_hard) * 100) }}% of its own history - no new entry
+      {% elif tail_regime == 'elevated' %}above {{ "%.0f"|format(tail_soft * 100) }} - size reduced
+      {% else %}normal (size cut above {{ "%.0f"|format(tail_soft * 100) }}){% endif %}
     </span>
   </div>
 </div>

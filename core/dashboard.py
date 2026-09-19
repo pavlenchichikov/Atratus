@@ -391,12 +391,12 @@ def news_digest(lang="all", category="all", limit=40):
         return []
 
 
-def taleb_regime(value, soft_cap, hard_cap):
-    """Tail-risk band for a Taleb index value, mirroring risk_manager's gates.
+def tail_regime(value, soft_cap, hard_cap):
+    """Tail-risk band for a tail rank, mirroring risk_manager's gates.
 
     normal:   below the soft cap (full size)
     elevated: above the soft cap (risk_manager shrinks position size)
-    extreme:  above the hard cap (risk_manager blocks new BUYs)
+    extreme:  above the hard cap (risk_manager blocks new entries, both sides)
     """
     if value is None:
         return "na"
@@ -469,12 +469,28 @@ def regime_flags(asset, taleb=None):
     return bool(taleb is not None and taleb > TALEB_HI), risky
 
 
-@ttl_cache(300)
-def taleb_index():
-    """Latest Taleb tail-risk index per asset: {asset: float|None}.
+# Bars behind a tail rank: a year of scale plus about five years to rank against.
+TAIL_HISTORY_BARS = 1500
 
-    One DB read + kurtosis per asset, cached 5 min so the radar and risk pages
-    do not recompute ~150 kurtoses on every request.
+
+@ttl_cache(300)
+def tail_for_asset(asset):
+    """Tail rank (0-1) for one asset, or None if too little history."""
+    try:
+        from core import features, track_record
+        closes = [r["close"] for r in
+                  track_record.price_series(asset, days=TAIL_HISTORY_BARS)]
+        return features.tail_rank(closes)
+    except Exception:
+        return None
+
+
+@ttl_cache(300)
+def tail_index():
+    """Tail rank per asset: {asset: float|None}.
+
+    One DB read per asset, cached 5 min so the radar, market and risk pages do
+    not recompute every asset's rank on every request.
     """
     try:
         from config import FULL_ASSET_MAP
@@ -482,10 +498,11 @@ def taleb_index():
     except Exception:
         return {}
     out = {}
-    series = track_record.price_series_many(list(FULL_ASSET_MAP), days=120)
+    series = track_record.price_series_many(list(FULL_ASSET_MAP),
+                                            days=TAIL_HISTORY_BARS)
     for asset in FULL_ASSET_MAP:
         try:
-            out[asset] = features.latest_taleb_risk(
+            out[asset] = features.tail_rank(
                 [r["close"] for r in series.get(asset, [])])
         except Exception:
             out[asset] = None

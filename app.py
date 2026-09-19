@@ -967,9 +967,9 @@ with tab4:
         k_win_rate  = kc1.slider("Win Rate",   0.40, 0.80, 0.56, 0.01, format="%.2f")
         k_avg_win   = kc2.slider("Avg Win %",  0.005, 0.10, 0.025, 0.005, format="%.3f")
         k_avg_loss  = kc3.slider("Avg Loss %", 0.005, 0.05, 0.012, 0.005, format="%.3f")
-        k_taleb     = kc4.slider("Taleb Risk", 0.0,   8.0,  1.0,   0.1)
+        k_tail      = kc4.slider("Taleb risk", 0.0,   1.0,  0.5,   0.01)
 
-        kelly_pct = _rm.kelly_fraction(k_win_rate, k_avg_win, k_avg_loss, k_taleb)
+        kelly_pct = _rm.kelly_fraction(k_win_rate, k_avg_win, k_avg_loss, k_tail)
         kelly_usd = _rm.current_capital * kelly_pct
 
         ka, kb, kc = st.columns(3)
@@ -991,7 +991,8 @@ with tab4:
             "Max drawdown halt":       f"{RISK_CONFIG['max_drawdown_halt']:.0%}",
             "Fractional Kelly":        f"{RISK_CONFIG['kelly_fraction']:.0%} of full Kelly",
             "Min trade Kelly":         f"{RISK_CONFIG['min_kelly_threshold']:.1%}",
-            "Taleb risk cap (BUY)":    str(RISK_CONFIG['taleb_risk_cap']),
+            "Taleb risk cap (entries)": f"{RISK_CONFIG['tail_hard_rank']:.0%}",
+            "Taleb risk size cut":     f"above {RISK_CONFIG['tail_soft_rank']:.0%}",
             "Correlation penalty":     f"{RISK_CONFIG['correlation_penalty']:.0%} per correlated pos.",
         }
         rules_df = pd.DataFrame(list(rules.items()), columns=["Rule", "Value"])
@@ -1003,9 +1004,9 @@ with tab4:
         pg_asset   = p1.selectbox("Asset",   list(FULL_ASSET_MAP.keys()), index=0)
         pg_signal  = p2.selectbox("Signal",  ["BUY", "SELL"])
         pg_conf    = p3.slider("Confidence", 0.50, 0.90, 0.60, 0.01)
-        pg_taleb   = p4.slider("Taleb",      0.0,  8.0,  1.0,  0.1)
+        pg_tail    = p4.slider("Taleb risk", 0.0,  1.0,  0.5,  0.01)
 
-        result = _rm.check_signal(pg_asset, pg_signal, pg_conf, pg_taleb)
+        result = _rm.check_signal(pg_asset, pg_signal, pg_conf, pg_tail)
         if result["approved"]:
             st.success(f"[OK] {result['reason']}")
             ra, rb, rc = st.columns(3)

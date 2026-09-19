@@ -33,18 +33,18 @@ def test_regime_score_maps_status():
     assert dash.regime_score({"status": "UNKNOWN"}) == 50
 
 
-def test_taleb_regime_bands():
+def test_tail_regime_bands():
     # soft cap 2.5, hard cap 5.0 (the RISK_CONFIG defaults)
-    assert dash.taleb_regime(1.0, 2.5, 5.0) == "normal"
-    assert dash.taleb_regime(3.0, 2.5, 5.0) == "elevated"
-    assert dash.taleb_regime(6.0, 2.5, 5.0) == "extreme"
-    assert dash.taleb_regime(None, 2.5, 5.0) == "na"
+    assert dash.tail_regime(0.50, 0.70, 0.85) == "normal"
+    assert dash.tail_regime(0.80, 0.70, 0.85) == "elevated"
+    assert dash.tail_regime(0.90, 0.70, 0.85) == "extreme"
+    assert dash.tail_regime(None, 0.70, 0.85) == "na"
 
 
-def test_taleb_regime_boundaries_inclusive_of_lower_band():
+def test_tail_regime_boundaries_inclusive_of_lower_band():
     # exactly at a cap stays in the lower band (strictly-greater thresholds)
-    assert dash.taleb_regime(2.5, 2.5, 5.0) == "normal"
-    assert dash.taleb_regime(5.0, 2.5, 5.0) == "elevated"
+    assert dash.tail_regime(0.70, 0.70, 0.85) == "normal"
+    assert dash.tail_regime(0.85, 0.70, 0.85) == "elevated"
 
 
 def test_market_breadth_counts(monkeypatch):

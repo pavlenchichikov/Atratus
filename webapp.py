@@ -520,15 +520,15 @@ def _grouped_signals(signals):
 @app.get("/", response_class=HTMLResponse)
 def radar(request: Request):
     signals = track_record.latest_signals()
-    taleb = dashboard.taleb_index()
-    soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
+    tail = dashboard.tail_index()
+    soft_cap, hard_cap = RISK_CONFIG["tail_soft_rank"], RISK_CONFIG["tail_hard_rank"]
     spark_series = track_record.price_series_many(
         [s["asset"] for s in signals], days=30)
     for s in signals:
         closes = [p["close"] for p in spark_series.get(s["asset"], [])]
         s["spark"] = _spark(closes)
-        s["taleb"] = taleb.get(s["asset"])
-        s["taleb_regime"] = dashboard.taleb_regime(s["taleb"], soft_cap, hard_cap)
+        s["tail"] = tail.get(s["asset"])
+        s["tail_regime"] = dashboard.tail_regime(s["tail"], soft_cap, hard_cap)
     stale = track_record.stale_assets()
     regime = dashboard.global_regime()
     score = dashboard.regime_score(regime)
@@ -600,8 +600,8 @@ def asset_page(request: Request, name: str):
         [{"date": t["date"], "signal": t["signal"], "ret": t["actual_next_ret"]}
          for t in reversed(track)])
     markers = pos["markers"]
-    taleb = dashboard.taleb_for_asset(name)
-    soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
+    tail = dashboard.tail_for_asset(name)
+    soft_cap, hard_cap = RISK_CONFIG["tail_soft_rank"], RISK_CONFIG["tail_hard_rank"]
 
     # asset_track doesn't carry the live-gate columns; pull the gated display
     # value + reason from latest_gated() so the chip matches the radar page.
@@ -641,7 +641,9 @@ def asset_page(request: Request, name: str):
     # answers "where", not "how much".
     segments = pos.get("segments") or []
     open_segment = segments[-1] if segments and segments[-1].get("open") else None
-    taleb_hi, risky = dashboard.regime_flags(name, taleb=taleb)
+    # Still the kurtosis flag: the levels policy was fitted on it, and moving it
+    # to the tail rank needs a refit, not a relabel.
+    taleb_hi, risky = dashboard.regime_flags(name)
     # The side the timing layer is actually on, the same one the journal
     # records and the fit is measured against. Showing the raw call here while
     # the badge below reports a policy that disagrees is two instructions on one
@@ -657,10 +659,10 @@ def asset_page(request: Request, name: str):
         "ticker": FULL_ASSET_MAP[name],
         "levels": asset_levels,
         "levels_policy": levels_mod.policy_evidence(),
-        "taleb": taleb,
-        "taleb_regime": dashboard.taleb_regime(taleb, soft_cap, hard_cap),
-        "taleb_soft_cap": soft_cap,
-        "taleb_hard_cap": hard_cap,
+        "tail": tail,
+        "tail_regime": dashboard.tail_regime(tail, soft_cap, hard_cap),
+        "tail_soft": soft_cap,
+        "tail_hard": hard_cap,
         "group": group,
         "cat": radar_category(name),
         "track": track,
@@ -753,28 +755,28 @@ def models_page(request: Request):
     })
 
 
-def _taleb_top(limit=10):
-    """Assets with the highest current Taleb tail-risk index, regime-tagged."""
-    soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
-    items = [(a, v) for a, v in dashboard.taleb_index().items() if v is not None]
+def _tail_top(limit=10):
+    """Assets with the highest current tail rank, regime-tagged."""
+    soft_cap, hard_cap = RISK_CONFIG["tail_soft_rank"], RISK_CONFIG["tail_hard_rank"]
+    items = [(a, v) for a, v in dashboard.tail_index().items() if v is not None]
     items.sort(key=lambda kv: kv[1], reverse=True)
-    return [{"asset": a, "taleb": v,
-             "regime": dashboard.taleb_regime(v, soft_cap, hard_cap)}
+    return [{"asset": a, "tail": v,
+             "regime": dashboard.tail_regime(v, soft_cap, hard_cap)}
             for a, v in items[:limit]]
 
 
-def _taleb_counts():
+def _tail_counts():
     """How many assets sit in each tail-risk band right now.
 
     The bands are risk_manager's own gates, so this is not a mood reading: the
     elevated count is how many assets are being sized down and the extreme count
-    is how many cannot be bought at all. Per-asset that has always been visible;
+    is how many cannot be entered at all. Per-asset that has always been visible;
     across the market it was not visible anywhere.
     """
-    soft_cap, hard_cap = RISK_CONFIG["taleb_soft_cap"], RISK_CONFIG["taleb_risk_cap"]
+    soft_cap, hard_cap = RISK_CONFIG["tail_soft_rank"], RISK_CONFIG["tail_hard_rank"]
     counts = {"normal": 0, "elevated": 0, "extreme": 0, "na": 0}
-    for value in dashboard.taleb_index().values():
-        counts[dashboard.taleb_regime(value, soft_cap, hard_cap)] += 1
+    for value in dashboard.tail_index().values():
+        counts[dashboard.tail_regime(value, soft_cap, hard_cap)] += 1
     counts["total"] = counts["normal"] + counts["elevated"] + counts["extreme"]
     counts["gated"] = counts["elevated"] + counts["extreme"]
     counts["soft_cap"] = soft_cap
@@ -787,7 +789,7 @@ def risk_page(request: Request):
     return templates.TemplateResponse(request, "risk.html", {
         **_risk_snapshot(), "config": RISK_CONFIG,
         "full_asset_map": sorted(FULL_ASSET_MAP),
-        "taleb_top": _taleb_top(),
+        "tail_top": _tail_top(),
     })
 
 
@@ -1107,8 +1109,8 @@ def market_page(request: Request):
         "sentiment": sentiment,
         "sent_zone": dashboard.gauge_zone(sentiment["score"]),
         "breadth": dashboard.market_breadth(),
-        "taleb": _taleb_counts(),
-        "taleb_top": _taleb_top(5),
+        "tail": _tail_counts(),
+        "tail_top": _tail_top(5),
         "stress": dashboard.correlation_stress(),
     })
 

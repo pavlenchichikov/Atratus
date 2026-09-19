@@ -66,36 +66,38 @@
 
   {# Tail risk is the only market-wide read that actually gates trading: the
      elevated band is where risk_manager shrinks a position, the extreme band is
-     where it refuses a new BUY. Per asset that was always visible; across the
+     where it refuses a new entry. Per asset that was always visible; across the
      market it was not visible anywhere. #}
   <section class="panel fade">
     <div class="panel-head">
-      <h2>Tail risk across the market</h2>
-      <span class="count mono">{{ taleb.gated }} of {{ taleb.total }} gated</span>
+      <h2>Taleb risk across the market</h2>
+      <span class="count mono">{{ tail.gated }} of {{ tail.total }} gated</span>
     </div>
     <div class="ind-desc">
-      <p class="ind-status {{ 't-sell' if taleb.extreme else 't-wait' if taleb.elevated else 't-buy' }}">
-        {% if taleb.extreme %}{{ taleb.extreme }} asset{{ 's' if taleb.extreme != 1 }} cannot be bought
-        {% elif taleb.elevated %}{{ taleb.elevated }} asset{{ 's' if taleb.elevated != 1 }} sized down
+      <p class="ind-status {{ 't-sell' if tail.extreme else 't-wait' if tail.elevated else 't-buy' }}">
+        {% if tail.extreme %}{{ tail.extreme }} asset{{ 's' if tail.extreme != 1 }} cannot be entered
+        {% elif tail.elevated %}{{ tail.elevated }} asset{{ 's' if tail.elevated != 1 }} sized down
         {% else %}no asset is under a tail-risk gate{% endif %}
       </p>
-      <p class="dim">The Taleb index measures fat tails in the recent return
-        distribution. Above the soft cap the risk manager shrinks the position;
-        above the hard cap it blocks new buys outright.</p>
+      <p class="dim">Taleb risk is where each asset's current volatility sits in
+        its own history, 0 to 100. High volatility is what came before the big
+        moves; fat-tail kurtosis, which the index used to be built on, did not
+        predict them once volatility was known. Above the soft cut the risk manager shrinks the
+        position; above the hard cut it allows no new entry, long or short.</p>
     </div>
     <table class="kv">
-      <tr><td>Extreme (above {{ "%.1f"|format(taleb.hard_cap) }}, new buys blocked)</td>
-          <td class="mono t-sell">{{ taleb.extreme }}</td></tr>
-      <tr><td>Elevated (above {{ "%.1f"|format(taleb.soft_cap) }}, size reduced)</td>
-          <td class="mono t-wait">{{ taleb.elevated }}</td></tr>
-      <tr><td>Normal</td><td class="mono t-buy">{{ taleb.normal }}</td></tr>
-      {% if taleb.na %}<tr><td>Not enough history</td><td class="mono dim">{{ taleb.na }}</td></tr>{% endif %}
+      <tr><td>Extreme (above {{ "%.0f"|format(tail.hard_cap * 100) }}, no new entry)</td>
+          <td class="mono t-sell">{{ tail.extreme }}</td></tr>
+      <tr><td>Elevated (above {{ "%.0f"|format(tail.soft_cap * 100) }}, size reduced)</td>
+          <td class="mono t-wait">{{ tail.elevated }}</td></tr>
+      <tr><td>Normal</td><td class="mono t-buy">{{ tail.normal }}</td></tr>
+      {% if tail.na %}<tr><td>Not enough history</td><td class="mono dim">{{ tail.na }}</td></tr>{% endif %}
     </table>
-    {% if taleb_top %}
+    {% if tail_top %}
     <table class="kv">
-      {% for t in taleb_top %}
+      {% for t in tail_top %}
       <tr><td><a href="/asset/{{ t.asset }}">{{ t.asset }}</a></td>
-          <td class="mono taleb-{{ t.regime }}">{{ "%.1f"|format(t.taleb) }}</td></tr>
+          <td class="mono taleb-{{ t.regime }}">{{ "%.0f"|format(t.tail * 100) }}</td></tr>
       {% endfor %}
     </table>
     {% endif %}

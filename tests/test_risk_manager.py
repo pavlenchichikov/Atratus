@@ -36,10 +36,11 @@ class TestKellyFraction:
         size = rm.kelly_fraction(win_rate=0.30, avg_win=0.01, avg_loss=0.01)
         assert size == 0.0
 
-    def test_high_taleb_reduces_size(self, rm):
-        size_low = rm.kelly_fraction(win_rate=0.60, taleb_risk=1.0)
-        size_high = rm.kelly_fraction(win_rate=0.60, taleb_risk=4.0)
+    def test_a_high_tail_rank_reduces_size(self, rm):
+        size_low = rm.kelly_fraction(win_rate=0.60, tail_rank=0.40)
+        size_high = rm.kelly_fraction(win_rate=0.60, tail_rank=0.84)
         assert size_low > size_high
+        assert rm.kelly_fraction(win_rate=0.60, tail_rank=None) == size_low
 
     def test_correlation_reduces_size(self, rm):
         size_0 = rm.kelly_fraction(win_rate=0.60, n_correlated=0)
@@ -99,10 +100,15 @@ class TestCheckSignal:
         assert result["approved"] is True
         assert result["position_size_usd"] > 0
 
-    def test_buy_blocked_by_high_taleb(self, rm):
-        result = rm.check_signal("BTC", "BUY", confidence=0.65, taleb_risk=6.0)
-        assert result["approved"] is False
-        assert "TAIL RISK" in result["reason"]
+    def test_both_sides_blocked_above_the_hard_rank(self, rm):
+        # Kurtosis blocked only BUY; a short is as exposed to a violent week.
+        for side in ("BUY", "SELL"):
+            conf = 0.65 if side == "BUY" else 0.35
+            result = rm.check_signal("BTC", side, confidence=conf, tail_rank=0.95)
+            assert result["approved"] is False, side
+            assert "TAIL RISK" in result["reason"]
+        assert rm.check_signal("BTC", "BUY", confidence=0.65,
+                               tail_rank=0.50)["approved"] is True
 
     def test_buy_blocked_by_drawdown_halt(self, rm):
         rm.peak_capital = 10_000
@@ -191,10 +197,22 @@ class TestRiskConfigOverride:
         with pytest.raises(ValueError):
             rm_mod.save_risk_config_override({"max_portfolio_exposure": 1.5})
 
-    def test_negative_taleb_cap_rejected(self):
+    def test_a_tail_rank_outside_0_1_is_rejected(self):
         import risk_manager as rm_mod
         with pytest.raises(ValueError):
-            rm_mod.save_risk_config_override({"taleb_risk_cap": -1.0})
+            rm_mod.save_risk_config_override({"tail_hard_rank": 5.0})
+
+    def test_a_renamed_key_in_an_old_override_file_is_ignored(self, tmp_path, monkeypatch):
+        import json
+
+        import risk_manager as rm_mod
+        path = tmp_path / "override.json"
+        path.write_text(json.dumps({"taleb_risk_cap": 5, "kelly_fraction": 0.2}))
+        monkeypatch.setattr(rm_mod, "RISK_CONFIG_OVERRIDE_PATH", str(path))
+        monkeypatch.setattr(rm_mod, "RISK_CONFIG", dict(rm_mod._DEFAULT_RISK_CONFIG))
+        rm_mod._load_risk_config_override()
+        assert "taleb_risk_cap" not in rm_mod.RISK_CONFIG
+        assert rm_mod.RISK_CONFIG["kelly_fraction"] == 0.2
 
     def test_persists_to_override_file(self, tmp_path):
         import risk_manager as rm_mod
