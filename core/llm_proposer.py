@@ -458,6 +458,38 @@ def _ollama_unload(base, model, post=None):
         pass
 
 
+def _going_in_circles(trace, probe=200, times=3):
+    """True once the trace's last `probe` chars already occur `times` times in it.
+
+    What a lost trace looked like (gemma4:26b, 20d, 2026-09-19): the same
+    thirteen "Final check on <field>: Used." lines, over and over, until the
+    cap. A trace that is still reasoning does not repeat 200 characters thrice.
+    """
+    return len(trace) > probe * times and trace.count(trace[-probe:]) >= times
+
+
+def _ollama_stream_trace(client, url, payload):
+    """(content, thinking) of a streamed call, cut short once the trace loops.
+
+    Leaving the stream closes the connection and Ollama cancels the generation,
+    so a loop costs about a minute instead of the rest of the cap.
+    """
+    content, thinking, checked = [], "", 0
+    with client.stream("POST", url, json=dict(payload, stream=True)) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            msg = json.loads(line).get("message") or {}
+            content.append(msg.get("content") or "")
+            thinking += msg.get("thinking") or ""
+            if len(thinking) - checked >= 500:
+                checked = len(thinking)
+                if _going_in_circles(thinking):
+                    return "", thinking.strip()
+    return "".join(content).strip(), thinking.strip()
+
+
 def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     """One call over Ollama's OWN /api/chat, which is the only place `think`
     is honoured.
@@ -493,6 +525,9 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
         timeout = max(timeout, max_tokens / 3.0)
     client = httpx.Client(trust_env=False, timeout=timeout)
     try:
+        if think:
+            # Only a trace can loop, so only a traced call pays for streaming.
+            return _ollama_stream_trace(client, url, payload)
         resp = client.post(url, json=payload)
     except httpx.TimeoutException as exc:
         raise CallTimedOut(
@@ -563,8 +598,8 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
             except OSError:
                 dump = "not saved"
             raise AnswerLostToTrace(
-                "the model spent its whole budget (%s tokens) on reasoning and "
-                "returned no answer (trace tail: %s)."
+                "the model's reasoning never reached an answer: it went in "
+                "circles or ran past the %s-token cap (trace tail: %s)."
                 % ("no" if max_toks is None else max_toks, dump))
         return out
     raise RuntimeError(
@@ -581,7 +616,7 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
 ANALYST_TEMPERATURE = 0.0
 
 
-def analyst_temperature():
+def analyst_temperature(thinking=False):
     """GTRADE_ANALYST_TEMPERATURE: 0 by default, or empty/none to send nothing
     and let the provider decide.
 
@@ -591,7 +626,13 @@ def analyst_temperature():
     describes. Leave it at 0 for an auditable judgment; clear it if a
     particular model starts writing forever.
     """
-    raw = (os.getenv("GTRADE_ANALYST_TEMPERATURE") or str(ANALYST_TEMPERATURE)).strip().lower()
+    # With the trace on, greedy decoding is exactly the repetition loop above:
+    # gemma4:26b at 0 repeated one checklist until the cap (2026-09-19). A
+    # reasoning model is asked at its own sampling defaults instead.
+    raw = os.getenv("GTRADE_ANALYST_TEMPERATURE")
+    if raw is None:
+        return None if thinking else ANALYST_TEMPERATURE
+    raw = raw.strip().lower()
     if raw in ("", "none", "default"):
         return None
     try:
@@ -698,7 +739,7 @@ def _backend(what="llm"):
     if what == "analyst":
         base_fn = fn
         think = provider == "ollama" and analyst_think()
-        kw = {"temperature": analyst_temperature(),
+        kw = {"temperature": analyst_temperature(thinking=think),
               "max_tokens": analyst_max_tokens(thinking=think)}
         if provider == "ollama":
             kw["think"] = think
@@ -714,7 +755,8 @@ def _backend(what="llm"):
                 print("[llm] analyst: %s Asking again without the trace." % exc,
                       flush=True)
                 return base_fn(prompt, **dict(
-                    kw, think=False, max_tokens=analyst_max_tokens(thinking=False)))
+                    kw, think=False, temperature=analyst_temperature(),
+                    max_tokens=analyst_max_tokens(thinking=False)))
     return _traced(fn, what, provider)
 
 

@@ -651,7 +651,9 @@ def test_the_analyst_asks_at_temperature_zero_and_the_proposer_does_not():
         lp._backend("genome")("hello")
     finally:
         lp._call_ollama = original
-    assert seen == [(0.0, lp.ANALYST_THINK_TOKENS, True), (None, lp._UNSET, None)], seen
+    # None while it reasons: greedy decoding is what looped (see
+    # test_a_looping_trace_is_cut_short).
+    assert seen == [(None, lp.ANALYST_THINK_TOKENS, True), (None, lp._UNSET, None)], seen
 
 
 def test_the_analyst_cap_is_a_number_by_default(monkeypatch):
@@ -687,9 +689,9 @@ def test_a_reasoning_analyst_gets_room_and_a_timeout_that_outlasts_it(monkeypatc
 
     monkeypatch.setattr(httpx, "Client", Client)
     monkeypatch.setenv("GTRADE_AR_LLM_TIMEOUT", "3600")
-    lp._ollama_native_chat("http://x", "m", "p", 0.0, 16000, True)
+    lp._ollama_native_chat("http://x", "m", "p", 0.0, 16000, False)
     assert seen["timeout"] > 16000 / 4.7, "the cap must end the call, not the timeout"
-    lp._ollama_native_chat("http://x", "m", "p", 0.0, 8000, True)
+    lp._ollama_native_chat("http://x", "m", "p", 0.0, 8000, False)
     assert seen["timeout"] == 3600, "a small cap keeps the configured timeout"
 
 
@@ -851,3 +853,61 @@ def test_a_trace_that_eats_the_cap_is_asked_again_without_it(monkeypatch):
     monkeypatch.setattr(lp, "_call_ollama", fake)
     assert lp._backend("analyst")("p") == '{"direction": "flat"}'
     assert calls == [(True, lp.ANALYST_THINK_TOKENS), (False, 8000)]
+
+
+def _stream_client(monkeypatch, chunks, sent):
+    """httpx.Client whose stream() yields Ollama's NDJSON chunks."""
+    import json as _json
+
+    import httpx
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def iter_lines(self):
+            for c in chunks:
+                sent["read"] += 1
+                yield _json.dumps({"message": c})
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        def stream(self, method, url, json=None):
+            sent["body"] = json
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+
+
+def test_a_looping_trace_is_cut_short(monkeypatch):
+    """gemma4:26b, 20d, 2026-09-19: one checklist repeated until the 16000 cap."""
+    from core import llm_proposer as lp
+    lines = "".join('* Final check on "f%d": Used.\n' % i for i in range(13))
+    looping = ([{"thinking": "Weighing the evidence first. "}]
+               + [{"thinking": lines} for _ in range(200)]
+               + [{"content": "never reached"}])
+    sent = {"read": 0}
+    _stream_client(monkeypatch, looping, sent)
+    out, trace = lp._ollama_native_chat("http://x", "m", "p", None, 16000, True)
+    assert out == "" and trace, "a loop must come back as a lost trace"
+    assert sent["read"] < 20, "and it must stop reading, not wait for the cap"
+    assert sent["body"]["stream"] is True
+
+
+def test_a_trace_that_reasons_is_left_alone(monkeypatch):
+    from core import llm_proposer as lp
+    thinking = [{"thinking": "step %d: ret_20 is %d, so the drift is %s. " % (i, i, i % 7)}
+                for i in range(400)]
+    sent = {"read": 0}
+    _stream_client(monkeypatch, thinking + [{"content": '{"direction":'},
+                                            {"content": ' "up"}'}], sent)
+    out, trace = lp._ollama_native_chat("http://x", "m", "p", None, 16000, True)
+    assert out == '{"direction": "up"}' and trace.startswith("step 0")
