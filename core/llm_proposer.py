@@ -552,11 +552,20 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
             continue
         _ollama_unload(base, model)
         if not out and trace:
+            # Keep the tail: whether the trace was still reasoning or going in
+            # circles decides whether a bigger cap could ever help.
+            import tempfile
+
+            dump = os.path.join(tempfile.gettempdir(), "atratus_lost_trace.txt")
+            try:
+                with open(dump, "w", encoding="utf-8") as fh:
+                    fh.write(trace[-6000:])
+            except OSError:
+                dump = "not saved"
             raise AnswerLostToTrace(
                 "the model spent its whole budget (%s tokens) on reasoning and "
-                "returned no answer. Raise the cap, or ask without the trace "
-                "(GTRADE_ANALYST_THINK=0 on the analyst path)."
-                % ("no" if max_toks is None else max_toks))
+                "returned no answer (trace tail: %s)."
+                % ("no" if max_toks is None else max_toks, dump))
         return out
     raise RuntimeError(
         f"ollama proposer failed after 3 attempts (is Ollama running at {base}?): {last_err}")
@@ -619,11 +628,12 @@ def analyst_think():
 # half hour. The analyst therefore asks with no cap by default: it is ONE call
 # per asset, unlike the proposer, where an uncapped trace would be paid for on
 # every step of a hundred-step search.
-# The cap when the analyst reasons on Ollama: as much trace as the context
-# holds. Ollama loads gemma4:26b with n_ctx 32768 and the analyst prompt is
-# ~3.2k tokens, so 28000 fits with margin; above that the window, not the cap,
-# ends the call. At ~4.7 tok/s that is up to 1h40m per asset.
-ANALYST_THINK_TOKENS = 28000
+# The cap when the analyst reasons on Ollama. A trace that finishes is short:
+# gemma4:26b answered a 1d question in 9740 tokens (2026-09-19). The same model
+# then spent all 28000 of the previous cap on a 20d question and answered
+# nothing after 5467s, so a trace past ~1.6x a finished one is going in circles
+# and more room only buys more circles. What happens then: see _backend.
+ANALYST_THINK_TOKENS = 16000
 
 
 def analyst_max_tokens(thinking=False):
@@ -694,7 +704,17 @@ def _backend(what="llm"):
             kw["think"] = think
 
         def fn(prompt):
-            return base_fn(prompt, **kw)
+            try:
+                return base_fn(prompt, **kw)
+            except AnswerLostToTrace as exc:
+                if not kw.get("think"):
+                    raise
+                # Without the trace this prompt has always answered (983s on
+                # 09-18), so a lost trace costs one more call, never the judgment.
+                print("[llm] analyst: %s Asking again without the trace." % exc,
+                      flush=True)
+                return base_fn(prompt, **dict(
+                    kw, think=False, max_tokens=analyst_max_tokens(thinking=False)))
     return _traced(fn, what, provider)
 
 

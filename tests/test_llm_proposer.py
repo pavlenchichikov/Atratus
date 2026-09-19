@@ -687,8 +687,8 @@ def test_a_reasoning_analyst_gets_room_and_a_timeout_that_outlasts_it(monkeypatc
 
     monkeypatch.setattr(httpx, "Client", Client)
     monkeypatch.setenv("GTRADE_AR_LLM_TIMEOUT", "3600")
-    lp._ollama_native_chat("http://x", "m", "p", 0.0, 28000, True)
-    assert seen["timeout"] > 28000 / 4.7, "the cap must end the call, not the timeout"
+    lp._ollama_native_chat("http://x", "m", "p", 0.0, 16000, True)
+    assert seen["timeout"] > 16000 / 4.7, "the cap must end the call, not the timeout"
     lp._ollama_native_chat("http://x", "m", "p", 0.0, 8000, True)
     assert seen["timeout"] == 3600, "a small cap keeps the configured timeout"
 
@@ -832,3 +832,22 @@ def test_the_analyst_reasons_and_the_knob_turns_it_off(monkeypatch):
     assert lp.analyst_think() is True
     monkeypatch.setenv("GTRADE_ANALYST_THINK", "0")
     assert lp.analyst_think() is False
+
+
+def test_a_trace_that_eats_the_cap_is_asked_again_without_it(monkeypatch):
+    """20d on gemma4:26b, 09-19: 28000 tokens of trace, no answer, 5467s."""
+    from core import llm_proposer as lp
+    calls = []
+
+    def fake(prompt, temperature=None, max_tokens=lp._UNSET, think=None):
+        calls.append((think, max_tokens))
+        if think:
+            raise lp.AnswerLostToTrace("trace ate it")
+        return '{"direction": "flat"}'
+
+    monkeypatch.setenv("GTRADE_AR_LLM", "ollama")
+    monkeypatch.delenv("GTRADE_ANALYST_THINK", raising=False)
+    monkeypatch.delenv("GTRADE_ANALYST_MAX_TOKENS", raising=False)
+    monkeypatch.setattr(lp, "_call_ollama", fake)
+    assert lp._backend("analyst")("p") == '{"direction": "flat"}'
+    assert calls == [(True, lp.ANALYST_THINK_TOKENS), (False, 8000)]
