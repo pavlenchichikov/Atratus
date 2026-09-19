@@ -140,3 +140,18 @@ def test_the_window_never_starts_exactly_on_the_next_bars_open(monkeypatch):
     assert period1 < int(last.timestamp()) + 86400
     # ...but still after the stored bar itself, so the window stays a top-up
     assert period1 > int(last.timestamp())
+
+
+def test_a_row_for_a_session_that_has_not_begun_is_dropped(monkeypatch):
+    """Between one close and the next open Yahoo lists a row for the day that
+    has not started yet, carrying the previous close. Stored, it becomes the
+    newest row and the incremental filter never asks for the day in between:
+    NASDAQ and NASDAQ100 hold 2026-09-16 and 09-18 with no 09-17 because of it."""
+    now = dt.datetime.now().replace(microsecond=0)
+    closed = (now - dt.timedelta(hours=14), now - dt.timedelta(hours=8))
+    stamps = [now - dt.timedelta(days=1), now - dt.timedelta(hours=9),
+              now + dt.timedelta(hours=10)]          # tomorrow's placeholder
+    payload = _daily_payload(stamps, [1.0, 2.0, 2.0], closed)
+    monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(payload))
+    got = de.fetch_yahoo_smart("AAPL", None)
+    assert len(got) == 2 and got["Close"].iloc[-1] == 2.0

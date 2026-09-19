@@ -158,3 +158,5 @@ tests/test_breadth.py
 tests/test_cot_fetch.py
 ab_lead_universe.py
 lead_baseline.json
+_repair_backup_*.json
+repair_index_weekends.py

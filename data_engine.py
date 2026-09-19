@@ -121,9 +121,21 @@ def _drop_unfinished_session(df, meta, now_ts):
     """
     reg = ((meta or {}).get("currentTradingPeriod") or {}).get("regular") or {}
     start, end = reg.get("start"), reg.get("end")
-    if start is None or end is None or now_ts >= end:
+    if start is None or end is None:
         return df
-    return df[df["Date"] < pd.Timestamp(datetime.fromtimestamp(start))]
+    if now_ts < end:
+        return df[df["Date"] < pd.Timestamp(datetime.fromtimestamp(start))]
+    # The session named by the metadata has ENDED, and that used to mean "keep
+    # everything". It does not: between one close and the next open Yahoo also
+    # lists a row for the day that has not begun, carrying the previous close or
+    # a pre-market print. Stored, it becomes the newest row, and the incremental
+    # filter then only asks for dates AFTER it - so the real bar for the day in
+    # between is never fetched again.
+    #
+    # Measured 2026-09-19: NASDAQ and NASDAQ100 have 09-16 and 09-18 and no
+    # 09-17, both written by a 08:33 MSK run, hours before the US open. A hole
+    # a daily fetch cannot heal is worse than a missing row.
+    return df[df["Date"] <= pd.Timestamp(datetime.fromtimestamp(end))]
 
 
 def _moex_today():
