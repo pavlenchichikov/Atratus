@@ -629,6 +629,13 @@ REM  arguments and the run died with "unrecognized arguments" after the YES,
 REM  which is the most expensive moment to find a typo.
 if not "%an_name%"=="" set "an_flag=%an_flag% --model "%an_name%""
 echo.
+echo    Horizon = how many trading days ahead the call is for: 1 = next close,
+echo    5 = a week, 20 = a month. LONG 20d means "higher in 20 trading days".
+echo    Several at once, e.g. 1,5,20: one LLM call per asset per horizon.
+set "an_hz="
+set /p an_hz="Horizons in trading days, Enter = 1: "
+if not "%an_hz%"=="" set "an_flag=%an_flag% --horizons "%an_hz%""
+echo.
 set "an_ok="
 set /p an_ok="Type YES to run: "
 if /i not "%an_ok%"=="YES" goto analyst
