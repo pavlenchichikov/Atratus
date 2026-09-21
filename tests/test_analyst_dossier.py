@@ -656,3 +656,18 @@ def test_only_macro_events_that_are_near_and_that_apply_reach_the_dossier(
         "the Fed sets the price of risk everywhere, so it reaches Moscow too"
     assert ru[0]["days_away"] == 8, "and the model can tell 8 days from 13"
     assert all(e["name"] not in ("ancient", "far off") for e in ru + us)
+
+
+def test_a_bar_with_no_range_reports_none_rather_than_a_calm_zero():
+    """ARKVX carries a close-only bar on 100% of its last 60 days: filled from
+    the close, its high-low is 0, and 0 ATR of range reads as the calmest day
+    the asset ever had. None says the range was not measured."""
+    from core.analyst import dossier
+
+    flat = [{"date": "2026-09-%02d" % (i + 1), "open": 10.0, "high": 10.0,
+             "low": 10.0, "close": 10.0} for i in range(3)]
+    assert dossier._flow("X", flat, 0.5, None, None)["range_atr"] is None
+
+    real = flat[:-1] + [{"date": "2026-09-03", "open": 10.0, "high": 10.5,
+                         "low": 9.5, "close": 10.0}]
+    assert dossier._flow("X", real, 0.5, None, None)["range_atr"] == pytest.approx(2.0)

@@ -3086,3 +3086,13 @@ def test_a_step_toward_a_far_count_bin_counts_as_progress():
     assert ar._bin(38, ar._COUNT_EDGES) == ar._bin(39, ar._COUNT_EDGES)   # same bin
     # inside the target bin the gap is zero, and bin 4 is open-ended upward.
     assert ar._count_gap(20, 2) == 0 and ar._count_gap(31, 4) == 0
+
+
+def test_the_suite_never_writes_the_live_qd_archive():
+    """A positive control for the conftest fixture: without it, run_qd saves the
+    archive to the project root, and ten tests call run_qd. That is how the live
+    archive got "hi"/"lo" fixtures and four zeroed cells on 2026-09-21."""
+    import os
+
+    import auto_research as ar
+    assert ar._QD_ARCHIVE_PATH != os.path.join(ar.BASE, "_qd_archive.json")

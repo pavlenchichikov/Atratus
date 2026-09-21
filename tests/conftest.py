@@ -46,6 +46,15 @@ def _isolate_ar_memory(tmp_path, monkeypatch):
     # the filename from whatever AGENT_FILE/UNIT_FILE currently is, so the two
     # mechanisms agree as long as both point at this same tmp_path, which they do.
     monkeypatch.setenv("AR_PROGRESS_DIR", str(tmp_path))
+    # The QD archive is fitted state at the project root and run_qd WRITES it.
+    # Only two of the ten tests that call run_qd redirected the path, so a suite
+    # run in the main checkout overwrote the live archive with its own fixtures:
+    # on 2026-09-21 it left "hi"/"lo" entries at fitness 9.0/1.0 and zeroed every
+    # real cell, because an injected trainer scores every asset the same.
+    import auto_research as _ar
+    monkeypatch.setattr(_ar, "_QD_ARCHIVE_PATH", str(tmp_path / "_qd_archive.json"))
+    monkeypatch.setattr(_ar, "_REGATE_PROGRESS_PATH",
+                        str(tmp_path / "_regate_progress.json"), raising=False)
     # Tests must never talk to a real LLM, no matter what the local .env enables:
     # GTRADE_AR_WIKI=1 + GTRADE_AR_LLM=ollama would otherwise make any test that
     # walks a run_qd/regate path fire compile_wiki() and load a real local model

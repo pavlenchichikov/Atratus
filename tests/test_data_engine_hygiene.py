@@ -69,3 +69,27 @@ def test_the_repaired_bar_can_no_longer_produce_an_infinite_return():
     out, _fixed, _dropped = scrub_ohlc(df)
     row = out.iloc[0]
     assert min(row["open"], row["high"], row["low"], row["close"]) > 0
+
+
+def test_flat_bar_report_names_the_assets_whose_bars_record_no_range(tmp_path, monkeypatch):
+    """111 assets carry close-only bars and nothing said so: the health block
+    printed "Daily: clean" while ARKVX had not recorded a range in 60 days."""
+    import sqlite3
+
+    import config
+    import data_engine as de
+
+    path = str(tmp_path / "market.db")
+    con = sqlite3.connect(path)
+    for table in ("arkvx", "btc"):
+        con.execute('CREATE TABLE %s (Date TEXT, Open REAL, High REAL, '
+                    'Low REAL, Close REAL)' % table)
+    con.executemany('INSERT INTO arkvx VALUES (?,?,?,?,?)',
+                    [("2026-09-%02d" % (i + 1), 10.0, 10.0, 10.0, 10.0) for i in range(30)])
+    con.executemany('INSERT INTO btc VALUES (?,?,?,?,?)',
+                    [("2026-09-%02d" % (i + 1), 10.0, 10.5, 9.5, 10.0) for i in range(30)])
+    con.commit()
+    con.close()
+
+    monkeypatch.setattr(config, "FULL_ASSET_MAP", {"ARKVX": "x", "BTC": "y"})
+    assert de.flat_bar_report(path) == [("ARKVX", 100, 30)]

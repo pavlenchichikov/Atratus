@@ -810,6 +810,60 @@ def _preflight_repair(width):
     except Exception as exc:
         print('  Daily   : scan failed: %s' % str(exc)[:60])
 
+    try:
+        worst = flat_bar_report(MARKET_DB)
+        if worst:
+            head = ", ".join("%s %d%%" % (a, pct) for a, pct, _n in worst[:4])
+            print('  No range: %d asset(s) whose recent bars carry no high-low '
+                  'range (%s)' % (len(worst), head))
+            print('            a close-only bar is filled from its close, so its '
+                  'range reads 0 - real, but not measured')
+        else:
+            print('  No range: clean')
+    except Exception as exc:
+        print('  No range: scan failed: %s' % str(exc)[:60])
+
+
+# A bar whose four prices are equal records NO intraday range. Two ways it
+# happens and both look the same afterwards: scrub_ohlc fills open/high/low
+# from the close when the vendor sent only a close, and a sub-cent price
+# (PEPE, SHIB) collapses to one value at the vendor's rounding. Either way
+# every range-based number derived from it - vol_z, the dossier's range_atr,
+# a triple-barrier touch - reads a calm day that was never measured. Measured
+# 2026-09-21: 111 assets carry such bars since July, and ARKVX 56 of 56,
+# ALUMINIUM 54 of 57, USDCNH 54 of 71, PEPE 68 of 80.
+FLAT_BAR_WINDOW = 60
+FLAT_BAR_SHARE = 0.3
+
+
+def flat_bar_report(db_path, window=FLAT_BAR_WINDOW, share=FLAT_BAR_SHARE):
+    """[(asset, percent, n)] for assets whose last `window` bars are flat more
+    often than `share`, worst first. Pure reading: repairs nothing."""
+    import sqlite3
+
+    from config import FULL_ASSET_MAP
+
+    out = []
+    con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+    try:
+        for asset in FULL_ASSET_MAP:
+            table = _daily_table(asset)
+            try:
+                rows = con.execute(
+                    'SELECT Open, High, Low, Close FROM "%s" '
+                    'ORDER BY Date DESC LIMIT ?' % table, (window,)).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            rows = [r for r in rows if None not in r]
+            if len(rows) < 20:
+                continue
+            flat = sum(1 for o, h, low, c in rows if o == h == low == c)
+            if flat / len(rows) > share:
+                out.append((asset, round(100.0 * flat / len(rows)), len(rows)))
+    finally:
+        con.close()
+    return sorted(out, key=lambda x: -x[1])
+
 
 def main():
     global _real_stdout

@@ -334,7 +334,15 @@ def _flow(asset, bars, atr, db_path, today):
     if len(bars) >= 2 and bars[-2]["close"]:
         out["gap_open"] = (bars[-1]["open"] - bars[-2]["close"]) / bars[-2]["close"]
     if bars and atr:
-        out["range_atr"] = (bars[-1]["high"] - bars[-1]["low"]) / atr
+        b = bars[-1]
+        # A bar whose four prices are equal recorded NO range: either the vendor
+        # sent a close alone and data_engine.scrub_ohlc filled the rest from it,
+        # or a sub-cent price collapsed at the vendor's rounding. 7 assets are
+        # above 60% such bars (ARKVX 100%, ALUMINIUM 93%, PEPE 82%, measured
+        # 2026-09-21). Reported as 0.0 it reads as the calmest day on record,
+        # which is a measurement nobody made; None says so.
+        flat = b["open"] == b["high"] == b["low"] == b["close"]
+        out["range_atr"] = None if flat else (b["high"] - b["low"]) / atr
     return out
 
 
