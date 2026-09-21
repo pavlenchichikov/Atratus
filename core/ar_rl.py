@@ -337,9 +337,15 @@ class NoveltyEmitter:
         if not empty or not elites:
             return None
         target_bin, target_group = self.rng.choice(empty)
+        # Group first, then count. A lever mutation ADDS to whatever the parent
+        # already touches, so mutating a label-touching elite toward "hyper"
+        # yields group 5 (mixed) and is rejected - 563 of 1000 rejections on
+        # 2026-09-21. An elite that touches nothing (group 0) or the target
+        # group itself lands in the target group in one step.
         parent = min(
             elites,
-            key=lambda e: (abs(count_bin_of(count_of(e["genome"])) - target_bin),
+            key=lambda e: (0 if group_of(e["genome"]) in (0, target_group) else 1,
+                           abs(count_bin_of(count_of(e["genome"])) - target_bin),
                            -e["fitness"]))["genome"]
         for _ in range(self.ATTEMPTS):
             child = mutate_toward(parent, target_bin, target_group)

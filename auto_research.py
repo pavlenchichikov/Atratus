@@ -1593,6 +1593,25 @@ def _bin(value, edges):
     return bisect.bisect_right(edges, value)
 
 
+def _count_gap(count, target_bin, edges=_COUNT_EDGES):
+    """How many features separate `count` from the target bin's own range.
+
+    The novelty arm used to compare BIN distances, and a mutation moves the
+    count by one while a bin spans six, so a step in the right direction never
+    changed the bin and was rejected as "no closer". Measured 2026-09-21 on the
+    live archive: every elite carried 38-39 features (bin 4) and 437 of 1000
+    rejections were targets in bins 0-3 that one mutation cannot reach. In
+    features the same step is progress, which is what the emitter can act on.
+    """
+    lo = (edges[target_bin - 1] + 1) if target_bin > 0 else None
+    hi = edges[target_bin] if target_bin < len(edges) else None
+    if lo is not None and count < lo:
+        return lo - count
+    if hi is not None and count > hi:
+        return count - hi
+    return 0
+
+
 def _gene_group(genome):
     """Categorical lever-group for the v2 niche descriptor: which non-feature
     lever the genome touches. 0 none/features-only, 1 label, 2 hyper, 3 nets,
@@ -1938,9 +1957,9 @@ class _RlController:
                 cand = mutate(p, active, base_features, ops=ops)
                 cnt = len(active) - len(set(cand.drops)) + len(cand.extra)
                 pcnt = len(active) - len(set(p.drops)) + len(p.extra)
-                cb, pb = _bin(cnt, _COUNT_EDGES), _bin(pcnt, _COUNT_EDGES)
                 good_group = tgroup in (0, 5) or _gene_group(cand) == tgroup
-                if good_group and (cb == tbin or abs(cb - tbin) < abs(pb - tbin)):
+                closer = _count_gap(cnt, tbin) < _count_gap(pcnt, tbin)
+                if good_group and (_bin(cnt, _COUNT_EDGES) == tbin or closer):
                     return cand
                 return None
 

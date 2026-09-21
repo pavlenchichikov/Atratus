@@ -378,3 +378,25 @@ def test_an_arm_that_never_emits_is_discounted_not_left_at_the_prior():
         s.update("surr", "fill", False)
     assert s.posterior_mean("surr", "fill") < 0.3
     assert s.observations("surr", "fill") >= 4
+
+
+def test_the_novelty_parent_is_chosen_so_one_mutation_lands_in_the_target_group():
+    """A lever mutation ADDS to what the parent already touches, so a parent
+    that touches the label becomes group 5 (mixed) under a hyper mutation, not
+    group 2. 563 of 1000 rejections on 2026-09-21 were exactly that."""
+    from core import ar_rl
+    elites = [{"genome": "touches_label", "fitness": 9.0},
+              {"genome": "touches_nothing", "fitness": 1.0}]
+    groups = {"touches_label": 1, "touches_nothing": 0}
+    seen = []
+
+    def mutate_toward(parent, tbin, tgroup):
+        seen.append(parent)              # never succeeds: forces all ATTEMPTS
+
+    ar_rl.NoveltyEmitter(count_bins=5, groups=6, rng=random.Random(0)).emit(
+        ["2_4_1"], elites,
+        count_of=lambda g: 39, group_of=groups.get,
+        count_bin_of=lambda c: 4, mutate_toward=mutate_toward)
+    # The fitter elite is the label one; the emitter must still not pick it for
+    # a lever target it cannot reach in one step.
+    assert set(seen) == {"touches_nothing"}, seen

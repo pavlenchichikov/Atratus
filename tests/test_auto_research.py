@@ -3071,3 +3071,18 @@ def test_the_gate_tag_names_the_basis_it_measured(monkeypatch):
 
     monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
     assert "dScore +0.0100" in ar.holdout_stats(base, var, "mean")[3]
+
+
+def test_a_step_toward_a_far_count_bin_counts_as_progress():
+    """Bins are six features wide and a mutation moves the count by one, so the
+    old bin-level "closer" test rejected every step: 437 of 1000 rejections on
+    2026-09-21 were an archive of 38-39-feature elites against targets in bins
+    0-3, which one mutation cannot reach."""
+    import auto_research as ar
+    assert ar._COUNT_EDGES == (12, 18, 24, 30)
+    # bin 2 covers 19..24; from 39 features, 38 is one feature closer.
+    assert ar._count_gap(39, 2) == 15
+    assert ar._count_gap(38, 2) < ar._count_gap(39, 2)
+    assert ar._bin(38, ar._COUNT_EDGES) == ar._bin(39, ar._COUNT_EDGES)   # same bin
+    # inside the target bin the gap is zero, and bin 4 is open-ended upward.
+    assert ar._count_gap(20, 2) == 0 and ar._count_gap(31, 4) == 0
