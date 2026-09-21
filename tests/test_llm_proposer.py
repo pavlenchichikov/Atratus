@@ -911,3 +911,24 @@ def test_a_trace_that_reasons_is_left_alone(monkeypatch):
                                             {"content": ' "up"}'}], sent)
     out, trace = lp._ollama_native_chat("http://x", "m", "p", None, 16000, True)
     assert out == '{"direction": "up"}' and trace.startswith("step 0")
+
+
+def test_a_lost_trace_is_retried_without_it_on_every_ollama_task(monkeypatch):
+    """The wiki lost a 1613s call to this on 2026-09-21: the retry lived in the
+    analyst branch, so every other task raised instead of asking again. The wiki
+    fills in sections rather than writing a hypothesis, so it never asks for a
+    trace in the first place; the genome proposer still may, and falls back."""
+    from core import llm_proposer as lp
+    calls = []
+
+    def fake(prompt, temperature=None, max_tokens=lp._UNSET, think=None):
+        calls.append(think)
+        if think is not False:
+            raise lp.AnswerLostToTrace("trace ate it")
+        return "## general\nok"
+
+    monkeypatch.setenv("GTRADE_AR_LLM", "ollama")
+    monkeypatch.setattr(lp, "_call_ollama", fake)
+    assert lp._backend("wiki")("p") == "## general\nok"
+    assert lp._backend("genome")("p") == "## general\nok"
+    assert calls == [False, None, False]

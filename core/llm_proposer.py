@@ -726,9 +726,23 @@ def _traced(fn, what, provider):
     return call
 
 
+# Ollama tasks that fill in a FORM rather than write a hypothesis: their answer
+# is short and structured, and a reasoning trace only buys circles. The wiki is
+# the case that taught it (2026-09-21: 1613s of trace, no answer, the tail in
+# atratus_lost_trace.txt deliberating with itself about one section). The genome
+# proposer is deliberately absent: there a trace may earn its minutes.
+_NO_TRACE_TASKS = ("wiki",)
+
+
 def _backend(what="llm"):
     """The provider call function for GTRADE_AR_LLM, resolved at call time so
-    tests can monkeypatch the _call_* functions. `what` labels the console trace."""
+    tests can monkeypatch the _call_* functions. `what` labels the console trace.
+
+    On Ollama every task gets the retry without the trace, not only the analyst:
+    a reasoning model spends its cap on the trace and returns nothing, and that
+    is a property of the model, not of the caller. The wiki lost a 1613-second
+    call to it on 2026-09-21 because the fallback lived in the analyst branch.
+    """
     provider = (os.getenv("GTRADE_AR_LLM") or "anthropic").strip().lower()
     backends = {"anthropic": _call_anthropic, "openai": _call_openai,
                 "ollama": _call_ollama}
@@ -736,27 +750,33 @@ def _backend(what="llm"):
     if fn is None:
         raise RuntimeError(
             f"unknown GTRADE_AR_LLM {provider!r} (use anthropic, openai or ollama)")
+
+    kw, retry_kw = {}, {}
     if what == "analyst":
-        base_fn = fn
         think = provider == "ollama" and analyst_think()
         kw = {"temperature": analyst_temperature(thinking=think),
               "max_tokens": analyst_max_tokens(thinking=think)}
         if provider == "ollama":
             kw["think"] = think
+        retry_kw = {"temperature": analyst_temperature(),
+                    "max_tokens": analyst_max_tokens(thinking=False)}
+    elif provider == "ollama" and what in _NO_TRACE_TASKS:
+        kw = {"think": False}
+
+    if provider == "ollama":
+        base_fn = fn
 
         def fn(prompt):
             try:
                 return base_fn(prompt, **kw)
             except AnswerLostToTrace as exc:
-                if not kw.get("think"):
+                if kw.get("think") is False:
                     raise
                 # Without the trace this prompt has always answered (983s on
-                # 09-18), so a lost trace costs one more call, never the judgment.
-                print("[llm] analyst: %s Asking again without the trace." % exc,
+                # 09-18), so a lost trace costs one more call, never the answer.
+                print("[llm] %s: %s Asking again without the trace." % (what, exc),
                       flush=True)
-                return base_fn(prompt, **dict(
-                    kw, think=False, temperature=analyst_temperature(),
-                    max_tokens=analyst_max_tokens(thinking=False)))
+                return base_fn(prompt, **{**kw, **retry_kw, "think": False})
     return _traced(fn, what, provider)
 
 
