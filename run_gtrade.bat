@@ -241,7 +241,7 @@ echo   [AS]  What is adopted prints it, exceptions included.
 echo   [AR]  Revert         undoes the last adoption.
 echo   [PA]  Per-asset      adopt a genome for ONE asset that failed on the
 echo                        average but was measured to help that asset.
-echo   [ABC] Configure A/B  picks the holdout and the floor for a comparison.
+echo   [ABC] Configure A/B  picks the holdout, the basis and the floor.
 echo   [ABR] Run it         trains both arms. Hours. Not during a retrain.
 echo.
 echo  SERVICES
@@ -830,21 +830,26 @@ echo     noise; this one decides what counts as an improvement to production.
 echo     Measured 2026-08-18: over one holdout, mean Net_AUC +0.036 while mean
 echo     Score was -1.85, rank correlation -0.24. The A/B passed and the retrain
 echo     it authorised kept the champion on 23 of the first 29 assets.
-echo     1 = raw Score, the TRADING result after costs (recommended). It is
-echo         the only basis that prices the thing production does with a
-echo         call, so an adoption that raises accuracy while losing money is
-echo         refused here. Two warnings that come with it: on 339 of 839
-echo         assets the Score is the -999 "too few trades" marker rather than
-echo         a number, and it does not reproduce on this GPU (same seed, 0.45
-echo         to 1.52 apart). Search on ens_acc, decide on this.
-echo         NOTE: champions themselves have been promoted on ACCURACY since
-echo         2026-09-12, so this is no longer the number train_hybrid selects
-echo         on - it is the number an ADOPTION is still judged on.
-echo     2 = same as the search basis (the behaviour before this existed)
+echo     1 = ens_acc, prediction ACCURACY (recommended, default). What
+echo         champions have been promoted on since 2026-09-12, so an adoption
+echo         is judged in the units the rest of the system already runs on.
+echo         Named outright rather than "same as the search", because the
+echo         search basis above defaults to net_auc and that is a proxy: over
+echo         one holdout its rank correlation to the target was -0.24.
+echo         Adoption floor 0.005.
+echo     2 = raw Score, the TRADING result after costs. It is the only basis
+echo         that prices what production does with a call, and it was the
+echo         default until 2026-09-21. Why it is no longer: the same genome at
+echo         one seed scored 0.45 to 1.52 apart on this GPU, wider than its own
+echo         0.5 floor, and on 339 of 839 assets the Score is the -999 "too few
+echo         trades" marker rather than a number. Pick it when the question
+echo         really is about money, knowing the verdict carries that noise.
+echo     3 = same as the search basis (the behaviour before this existed)
 set "DEC=1"
 set /p "DEC=    choice [1]: "
-set "GTRADE_AR_DECISION_BASIS=raw"
-if "%DEC%"=="2" set "GTRADE_AR_DECISION_BASIS="
+set "GTRADE_AR_DECISION_BASIS=ens_acc"
+if "%DEC%"=="2" set "GTRADE_AR_DECISION_BASIS=raw"
+if "%DEC%"=="3" set "GTRADE_AR_DECISION_BASIS="
 REM  Not asked, because there is one right answer. tier_neural_floor() is
 REM  2 * neural_floor(), and neural_floor() is -inf on every net basis, so the
 REM  tier check that refuses a genome for starving the nets never fires on the
@@ -1239,6 +1244,20 @@ echo.
 echo  If the run refuses on power, it prints which floors this holdout CAN
 echo  resolve. Come back here and type one of them.
 echo.
+echo  The BASIS is the number this verdict is read in. This menu used to ask
+echo  nothing and fall back to raw Score, so an A/B started here judged a
+echo  campaign that searched on accuracy in Score units.
+echo     1 = ens_acc, prediction ACCURACY (default). What champions have been
+echo         promoted on since 2026-09-12. Adoption floor 0.005.
+echo     2 = raw Score after costs. Floor 0.5, and the same genome at one seed
+echo         scored 0.45 to 1.52 apart on this GPU - wider than that floor.
+echo     3 = whatever the last campaign set (leave the environment alone).
+set "AB_BAS=1"
+set /p "AB_BAS=    choice [1]: "
+set "GTRADE_AR_DECISION_BASIS=ens_acc"
+if "%AB_BAS%"=="2" set "GTRADE_AR_DECISION_BASIS=raw"
+if "%AB_BAS%"=="3" set "GTRADE_AR_DECISION_BASIS="
+echo.
 set "ab_floor="
 set /p ab_floor="Floor, Enter = basis default: "
 REM Same environment as the run below, so the picker and the measurement agree
@@ -1264,6 +1283,13 @@ REM serving stays on the base env until the full retrain. It matters for more
 REM than speed - the training cache is keyed without the environment, so a run
 REM started on base python could reuse rows trained on the GPU and compare two
 REM arms measured under different TensorFlow builds.
+REM  The basis picked in [ABC] lives in this cmd session, so a --run started
+REM  from the same menu inherits it. A window opened fresh has nothing set and
+REM  would fall back to raw Score, which is how a campaign searched on accuracy
+REM  got judged in Score units, so the fallback is named here instead.
+if not defined GTRADE_AR_DECISION_BASIS set "GTRADE_AR_DECISION_BASIS=ens_acc"
+echo Deciding on basis: %GTRADE_AR_DECISION_BASIS%
+echo.
 cmd /c ""%~dp0run_in_env.bat" python ab_build.py --run"
 pause
 goto menu
