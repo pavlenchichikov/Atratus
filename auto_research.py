@@ -1871,20 +1871,36 @@ class _RlController:
                 arm, was_floor = self.sched.choose(available, phase)
             child = self._emit(arm, archive, active, base_features)
             if child is None:
+                # An arm that emits nothing used to cost the bandit NOTHING: no
+                # origin, no reward, no penalty, so its posterior stayed at the
+                # 0.5 prior - the HIGHEST mean of all arms - and Thompson kept
+                # drawing it forever. Measured 2026-09-21: surr and novelty sat
+                # at exactly [1.0, 1.0] after 500 recorded draws, having produced
+                # 0 children, while every arm that did work had been discounted
+                # to 0.14-0.42. A draw that yields no child is evidence about the
+                # arm, so it is booked as a failure.
+                self._book_empty(arm, phase)
                 continue
             child = _canon_genome(child)
             cont = arm == "cma"
             prune_min = int(os.getenv("GTRADE_AR_PRUNE_MIN", "8"))
             if not valid(child, active, prune_min, continuous=cont):
+                self._book_empty(arm, phase)
                 continue
             sig = genome_sig(child)
             if ar_memory.tried_seen("genome", sig):
+                self._book_empty(arm, phase)
                 continue
             self._note_origin(sig, arm, phase)
             self._last_draw = (arm, phase, was_floor)
             self._last_parent_sig = getattr(self, "_pending_parent_sig", None)
             return child
         return None
+
+    def _book_empty(self, arm, phase):
+        """A draw that produced no usable child: a failure for that arm."""
+        if not self.disabled:
+            self.sched.update(arm, phase, False)
 
     def _emit(self, arm, archive, active, base_features):
         elites = list(archive.values())
@@ -1976,7 +1992,11 @@ class _RlController:
     def report(self, tag):
         lines = [f"[rl] {tag} scheduler snapshot:"]
         for p in ar_rl.PHASES:
-            means = ", ".join(f"{a}={self.sched.posterior_mean(a, p):.2f}"
+            # n is what says whether a 0.50 is a verdict or an untouched prior:
+            # `refine` starts at occupancy 0.5 (ar_rl.phase_of) and the archive
+            # has never been a tenth of that, so every refine mean is the prior.
+            means = ", ".join("%s=%.2f(n%d)" % (a, self.sched.posterior_mean(a, p),
+                                                self.sched.observations(a, p))
                               for a in ar_rl.ARMS)
             lines.append(f"[rl]   {p}: {means}")
         lines.append(f"[rl]   curiosity top: {self.cur.top(5)}")

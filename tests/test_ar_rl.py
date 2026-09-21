@@ -365,3 +365,16 @@ def test_the_default_scheduler_is_unchanged():
     s = ar_rl.Scheduler()
     assert tuple(s.posteriors["fill"]) == ar_rl.ARMS
     assert set(s.posteriors) == set(ar_rl.PHASES)
+
+
+def test_an_arm_that_never_emits_is_discounted_not_left_at_the_prior():
+    """Measured 2026-09-21: surr and novelty sat at [1.0, 1.0] after 500 draws,
+    0 children each, so their 0.50 was the HIGHEST mean and Thompson kept
+    drawing them. A draw that yields no child is evidence about the arm."""
+    from core import ar_rl
+    s = ar_rl.Scheduler()
+    assert s.observations("surr", "fill") == 0
+    for _ in range(5):
+        s.update("surr", "fill", False)
+    assert s.posterior_mean("surr", "fill") < 0.3
+    assert s.observations("surr", "fill") >= 4

@@ -2007,6 +2007,23 @@ class TestRlIntegration:
         ctl.on_adopt("sigY")
         assert ctl.sched.posterior_mean("cma", "fill") > b2
 
+    def test_an_arm_that_emits_nothing_is_booked_as_a_failure(self, monkeypatch):
+        """surr and novelty produced 0 children over 500 recorded draws and kept
+        their 0.5 prior, which was the highest mean of any arm, so the bandit
+        kept picking the two arms that never worked (measured 2026-09-21)."""
+        import auto_research as ar
+        monkeypatch.setenv("GTRADE_AR_RL", "1")
+        monkeypatch.setattr(ar.ar_memory, "blob_get", lambda *a, **k: None)
+        monkeypatch.setattr(ar.ar_memory, "blob_put", lambda *a, **k: None)
+        monkeypatch.setattr(ar.ar_memory, "tried_seen", lambda k, s: False)
+        ar._rl_controller_reset_for_tests()
+        ctl = ar._rl_controller()
+        monkeypatch.setattr(ctl, "_emit", lambda *a, **k: None)
+        assert ctl.next_child(self._archive(ar), ["ret_1", "vol_z"],
+                              ["ret_1", "vol_z"]) is None
+        fill = [ctl.sched.observations(a, "fill") for a in ar.ar_rl.ARMS]
+        assert sum(fill) == 10, fill        # one per attempt, none unbooked
+
     def test_fallback_disables_scheduler(self, monkeypatch):
         import auto_research as ar
         monkeypatch.setenv("GTRADE_AR_RL", "1")

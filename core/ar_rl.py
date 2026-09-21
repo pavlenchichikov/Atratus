@@ -85,6 +85,12 @@ class Scheduler:
         for _ in range(n):
             self.update(arm, phase, True)
 
+    def observations(self, arm, phase):
+        """Evidence behind this arm's mean, discounted the way update() does.
+        0 means the mean is the untouched prior, not a measurement."""
+        al, be = self.posteriors[phase][arm]
+        return round(al + be - 2.0)
+
     def posterior_mean(self, arm, phase):
         al, be = self.posteriors[phase][arm]
         return al / (al + be)
