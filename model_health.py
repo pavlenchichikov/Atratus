@@ -432,9 +432,14 @@ def unservable_champions(registry=None):
     # features - reads as unservable while it serves fine.
     have |= {"open", "high", "low", "close", "volume", "value"}
     reg = registry if registry is not None else _load_json(REGISTRY_PATH)
+    # Entries for assets no longer in the map are ORPHANS, not silent assets:
+    # nothing scans them, so nothing skips them either. Listing them here fed
+    # three of them (AVB, EQR, WBS) to the trainer on 2026-09-23, which refused
+    # the whole run with "not in the asset map".
+    tracked = set(FULL_ASSET_MAP)
     out = []
     for asset, entry in (reg or {}).items():
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or asset not in tracked:
             continue
         missing = [f for f in (entry.get("features") or []) if f not in have]
         if missing:

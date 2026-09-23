@@ -76,6 +76,11 @@ def test_unservable_champions_names_the_assets_the_current_genome_cannot_feed(mo
         # Raw price columns are in every frame and in no candidate list.
         "RAW": {"features": ["ret_1", "close", "volume"], "updated_at": "2026-03-20"},
     }
+    # AVB left the asset map long ago: nothing scans it, so nothing skips it,
+    # and listing it made the trainer refuse the whole run on 2026-09-23.
+    registry["AVB"] = {"features": ["m59561"], "updated_at": "2026-08-25"}
+    monkeypatch.setattr(mh, "FULL_ASSET_MAP", {"NEW": 1, "OLD": 2, "RAW": 3})
+
     rows = mh.unservable_champions(registry)
     assert [r["asset"] for r in rows] == ["OLD"]
     assert rows[0]["missing"] == ["m59561"]
