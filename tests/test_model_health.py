@@ -57,3 +57,26 @@ def test_a_timestamp_check_cannot_see_an_unreadable_champion(tmp_path, monkeypat
     monkeypatch.setattr("core.model_io.load_keras_native", lambda *a, **k: None)
     assert model_health.mismatched_registry(base) == []
     assert model_health.degraded_members(base)[0]["asset"] == "DEAD"
+
+
+def test_unservable_champions_names_the_assets_the_current_genome_cannot_feed(monkeypatch):
+    """After adopting axis:qd+ref, 83 champions still wanted the previous
+    genome's synthetic features, so core.scoring skipped them and those assets
+    went silent while their registry entry looked healthy."""
+    import model_health as mh
+    from core import feature_dsl, features
+
+    monkeypatch.setattr(features, "active_candidate_features",
+                        lambda: ["ret_1", "rsi"])
+    monkeypatch.setattr(feature_dsl, "load_dsl_specs",
+                        lambda: [{"name": "m74807", "op": "ratio"}])
+    registry = {
+        "NEW": {"features": ["ret_1", "rsi", "m74807"], "updated_at": "2026-09-23"},
+        "OLD": {"features": ["ret_1", "m59561"], "updated_at": "2026-09-14"},
+        # Raw price columns are in every frame and in no candidate list.
+        "RAW": {"features": ["ret_1", "close", "volume"], "updated_at": "2026-03-20"},
+    }
+    rows = mh.unservable_champions(registry)
+    assert [r["asset"] for r in rows] == ["OLD"]
+    assert rows[0]["missing"] == ["m59561"]
+    assert mh._collect("unservable") is not None

@@ -171,6 +171,7 @@ def _score_color(score):
         return "\033[33m"   # dark yellow
     return "\033[91m"       # red
 
+RED  = "\033[91m"
 _RST = "\033[0m"
 _W   = 62
 
@@ -225,6 +226,25 @@ def _print_report(max_age_days=7):
         print("  All assets have models.")
     print()
 
+    # -- UNSERVABLE ------------------------------------------------
+    # Counted here because the only other place it shows is one [SKIP] line per
+    # asset in the radar's log, which nobody totals.
+    print("  -- UNSERVABLE ------------------------------------------")
+    try:
+        stranded = unservable_champions()
+    except Exception as exc:                       # never block the report
+        stranded = None
+        print("  check failed: %s" % str(exc)[:60])
+    if stranded is not None:
+        if stranded:
+            print("  %s%d%s champion(s) ask for features the adopted"
+                  " genome no longer builds," % (RED, len(stranded), _RST))
+            print("  so those assets produce no signal. Names and the fix:")
+            print("  python model_health.py --unservable")
+        else:
+            print("  Every champion's features can be built.")
+    print()
+
     # -- QUALITY RANKING -------------------------------------------
     print("  -- QUALITY RANKING -------------------------------------")
     print(f"  {'Asset':<10}  {'Score':>7}  {'Policy':<12}  Updated")
@@ -242,6 +262,7 @@ def _print_json(max_age_days=7):
         "summary": get_health_summary(),
         "stale": get_stale_models(max_age_days),
         "missing": get_missing_models(),
+        "unservable": [r["asset"] for r in unservable_champions()],
         "ranking": get_quality_ranking(),
     }
     print(json.dumps(data, indent=2, ensure_ascii=False))
@@ -383,6 +404,66 @@ def degraded_members(base=None):
     return sorted(out, key=lambda r: (-len(r["lost"]), r["asset"]))
 
 
+def unservable_champions(registry=None):
+    """[{asset, missing, updated_at}] for champions the serving frame cannot feed.
+
+    A champion stores the feature list it was fit on. Serving builds the frame
+    from the genome in force NOW: the base candidate set plus the adopted DSL
+    specs. When an adoption changes the synthetic features, every champion the
+    retrain did NOT replace still asks for the old ones, and core.scoring skips
+    it rather than score a model on a vector it was never fit on. That is the
+    right call and it is silent: the radar prints one [SKIP] line per asset and
+    nothing counts them.
+
+    Measured 2026-09-23, after adopting axis:qd+ref: 83 of 843 champions still
+    wanted m59561, m27714, m5851, m51698, m17057 and m77763 from the previous
+    genome, so 83 assets produced no signal at all while their registry entry
+    looked healthy. A champion that cannot be served is worth nothing, which is
+    why the fix is a targeted retrain WITH force-promote - the one case the
+    trainer's own prompt names, a score measured on numbers that no longer exist.
+    """
+    from core.feature_dsl import load_dsl_specs
+    from core.features import active_candidate_features
+
+    have = set(active_candidate_features())
+    have |= {s.get("name") for s in (load_dsl_specs() or []) if isinstance(s, dict)}
+    # The raw price columns are in every frame and in no candidate list, so
+    # without them YNDX - whose 2026-03-20 entry stored "close" and "volume" as
+    # features - reads as unservable while it serves fine.
+    have |= {"open", "high", "low", "close", "volume", "value"}
+    reg = registry if registry is not None else _load_json(REGISTRY_PATH)
+    out = []
+    for asset, entry in (reg or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        missing = [f for f in (entry.get("features") or []) if f not in have]
+        if missing:
+            out.append({"asset": asset, "missing": missing,
+                        "updated_at": entry.get("updated_at", "")})
+    return sorted(out, key=lambda r: r["asset"])
+
+
+def print_unservable():
+    """One line per champion whose features the current genome does not build."""
+    rows = unservable_champions()
+    total = len(_load_json(REGISTRY_PATH) or {})
+    if not rows:
+        print("  every champion's feature list can be built under the adopted "
+              "genome.")
+        return []
+    print("  %-10s %-12s %s" % ("asset", "champion", "features the frame lacks"))
+    for r in rows:
+        print("  %-10s %-12s %s" % (r["asset"], (r["updated_at"] or "?")[:10],
+                                    ", ".join(r["missing"])))
+    print()
+    print("  %d of %d champions cannot be served; those assets produce no "
+          "signal." % (len(rows), total))
+    print("  retrain exactly these, with force-promote:")
+    print("  python model_health.py --list unservable --out _stranded.txt")
+    print("  python train_chunked.py --assets-file _stranded.txt --force-promote")
+    return rows
+
+
 def print_degraded():
     """One line per asset serving without some of its neural members."""
     try:
@@ -471,6 +552,8 @@ def _collect(kind):
     from config import FULL_ASSET_MAP
     from core.track_record import _table_name
 
+    if kind == "unservable":
+        return [r["asset"] for r in unservable_champions()]
     if kind == "missing":
         names = [a for a in FULL_ASSET_MAP
                  if not _os.path.exists(_os.path.join(
@@ -574,7 +657,8 @@ def main():
                         help="live accuracy split by which champion generation "
                              "wrote the row. The log is out of sample either "
                              "way; this says which model earned the number")
-    parser.add_argument("--list", choices=("missing", "degraded", "all"),
+    parser.add_argument("--list", choices=("missing", "degraded",
+                                          "unservable", "all"),
                         default=None,
                         help="print ONLY the asset names, one per line, for a "
                              "launcher to redirect into a file and hand to the "
@@ -585,6 +669,10 @@ def main():
     parser.add_argument("--missing", action="store_true",
                         help="List assets in the map that have no CatBoost "
                              "champion at all, so every policy fit skips them")
+    parser.add_argument("--unservable", action="store_true",
+                        help="List champions whose stored feature list the "
+                             "current genome no longer builds, so serving skips "
+                             "them and the asset goes silent")
     parser.add_argument("--degraded", action="store_true",
                         help="List assets whose neural champions do not load "
                              "here, so they serve on fewer members than the "
@@ -605,6 +693,9 @@ def main():
         return 0
     if args.missing:
         print_missing()
+        return
+    if args.unservable:
+        print_unservable()
         return
     if args.degraded:
         print_degraded()
