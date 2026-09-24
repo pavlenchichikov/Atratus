@@ -1054,6 +1054,23 @@ def main():
             parts.append(f"{w_err} errors")
         print(f"  >> {' | '.join(parts)}")
 
+    # market_breadth is a model feature derived from these closes. Nothing else
+    # rebuilds it, and add_breadth_features forward-fills without a limit, so a
+    # stale table fed the 09-10 reading into every prediction until 09-24.
+    print()
+    print('  BREADTH')
+    print('  ' + '-' * (W - 2))
+    try:
+        import build_breadth
+        frame = build_breadth.breadth(build_breadth.close_panel())
+        if frame.empty:
+            print('  nothing to store')
+        else:
+            build_breadth.store(frame)
+            print(f'  >> rebuilt through {frame.index.max().date()}')
+    except Exception as exc:
+        print(f'  !! breadth not rebuilt: {exc} - run build_breadth.py by hand')
+
     # -- SUMMARY ------------------------------------------------------------
     elapsed = time.time() - t_start
     print()
