@@ -26,12 +26,19 @@ FORBIDDEN_KEYS = frozenset({
     # A dossier carrying it would be look-ahead, which is worse than the
     # failure this set was written to catch.
     "actual_next_ret",
-    # Somebody else's reading of the asset, removed by decision of the owner,
-    # 2026-09-24: the judgment stands on raw data alone. SBER's feed was six
-    # stories about its own India expansion, the company's framing of itself,
-    # and the guru council is a value-investing opinion however well scored.
-    "headlines", "guru_verdict", "guru_pct",
+    # The guru council is a value-investing OPINION however well scored, and
+    # the judgment stands on raw data (owner, 2026-09-24). News stays, but only
+    # as a spread of publishers: see diverse_headlines.
+    "guru_verdict", "guru_pct",
 })
+
+# News is material, not a foundation. SBER on 2026-09-24 was handed six stories,
+# four of them about its own India expansion and one from 2022, so one angle
+# and one publicity push was the whole news block. These bound it.
+NEWS_LIMIT = 8
+NEWS_PER_PUBLISHER = 2
+NEWS_MAX_AGE_DAYS = 90
+NEWS_MIN_PUBLISHERS = 3
 
 HISTORY_BARS = 120
 RECENT_BARS = 20
@@ -695,11 +702,76 @@ def _headline_age(published, today=None):
         return None
 
 
+def _company_words(asset):
+    """Lower-case words that name the company, for spotting its own channels."""
+    try:
+        import news_analyzer
+
+        name = news_analyzer.SEARCH_NAMES.get(asset, asset)
+    except Exception:
+        name = asset
+    words = {w for w in str(name).lower().replace(",", " ").split() if len(w) >= 4}
+    return words | {asset.lower()} if len(asset) >= 3 else words
+
+
+def diverse_headlines(items, asset, limit=NEWS_LIMIT, today=None):
+    """Headlines spread across publishers, and how wide the spread is.
+
+    At most NEWS_PER_PUBLISHER per publisher, taken newest first, so no single
+    outlet can fill the block; nothing older than NEWS_MAX_AGE_DAYS; and a
+    story from the company's own channel (the publisher's name contains the
+    company's) is marked `company_own`, because that is the company describing
+    itself. `news_publishers` counts the independent outlets actually shown,
+    so a block carried by one voice says so instead of looking like a consensus.
+    """
+    own_words = _company_words(asset)
+    rows = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        title = (it.get("title") or "").strip()
+        if not title:
+            continue
+        age = _headline_age(it.get("published"), today=today)
+        if age is not None and age > NEWS_MAX_AGE_DAYS:
+            continue
+        source = (it.get("source") or "unknown")[:40]
+        rows.append({"title": title[:180], "source": source, "age_days": age,
+                     "company_own": any(w in source.lower() for w in own_words)})
+    # unknown age last rather than first: a headline that would not say when
+    # it was written does not get to lead.
+    rows.sort(key=lambda h: (h["age_days"] is None, h["age_days"] or 0))
+    per, out = {}, []
+    for h in rows:
+        key = h["source"].lower()
+        if per.get(key, 0) >= NEWS_PER_PUBLISHER:
+            continue
+        per[key] = per.get(key, 0) + 1
+        out.append(h)
+        if len(out) >= limit:
+            break
+    publishers = len({h["source"].lower() for h in out if not h["company_own"]})
+    return {"headlines": out, "news_publishers": publishers}
+
+
+def _headlines(asset, today=None):
+    """Raw titles from many publishers, no sentiment score. Google News is
+    asked in English and, for Moscow names, in Russian, so it is two wires
+    over dozens of outlets rather than one feed."""
+    try:
+        import news_analyzer
+
+        items = news_analyzer.fetch_news(asset, max_articles=NEWS_LIMIT * 5) or []
+    except Exception:
+        items = []
+    return diverse_headlines(items, asset, today=today)
+
+
 # Which dossier blocks come off the network rather than out of market.db.
 # Ordered, because they are printed as a run summary. macro is NOT here: it is
 # read from a local calendar file, so an empty one says nothing about the
 # connection and gets its own line.
-NETWORK_BLOCKS = ("fundamentals", "earnings")
+NETWORK_BLOCKS = ("headlines", "fundamentals", "earnings")
 
 # What kind of evidence each field is. Used to report, per run, which KINDS of
 # evidence a judgment drew on: a count of cited fields hides the case that
@@ -727,6 +799,7 @@ BLOCKS = {
                      "div_yield_pref", "fundamentals_asof"),
     # The bank's calendar and the bank's rate are one subject: when it
     # decides, and what it decided last time.
+    "news": ("headlines", "news_publishers"),
     "calendar": ("next_earnings", "macro_events", "ex_dividend_date",
                  "policy_rate", "policy_rate_prev", "policy_rate_direction",
                  "policy_rate_days_since_change", "policy_rate_bank"),
@@ -783,6 +856,7 @@ def filled_blocks(dossier):
     """
     funda_ok, earn_ok = _applicable(dossier.get("asset"))
     return {
+        "headlines": int(bool(dossier.get("headlines"))),
         "fundamentals": int(any(dossier.get(k) is not None for k in
                                 ("sector", "market_cap", "beta", "pe", "roe",
                                  "div_yield"))) if funda_ok else None,
@@ -835,13 +909,14 @@ def _as_of(asset, today):
     """
     if today is None:
         return {**_profile(asset), **_regime(asset), **_market_state(),
-                **_sector_state(asset), **_context(asset),
+                **_sector_state(asset), **_headlines(asset), **_context(asset),
                 **_performance(asset), **_policy_rate(asset),
                 **_own_record(asset)}
     # The year block is on the rewinding side with the own record: it is
     # computed from market.db prices, which are dated, and core/performance.py
     # bounds the window at both ends for exactly this call.
     return {**PROFILE_BLANK, **_REGIME_BLANK, **_MARKET_BLANK, **_SECTOR_BLANK,
+            "headlines": [], "news_publishers": None,
             "next_earnings": None, "macro_events": [],
             **_performance(asset, today=today),
             **_policy_rate(asset, today=today),

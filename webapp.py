@@ -106,21 +106,51 @@ def _payoff_evidence(table, asset, asset_class, side):
     return f"{cls_n} on class {asset_class}"
 
 
-def _analyst_for_asset(name):
-    """The analyst's own words for this asset, or None when it has not spoken.
+def _horizon_label(h):
+    h = int(h or 1)
+    if h == 1:
+        return "1 trading day (next close)"
+    if h == 5:
+        return "5 trading days (a week)"
+    if h == 20:
+        return "20 trading days (about a month)"
+    return "%d trading days" % h
 
-    Its evidence list is decoded here rather than in the template, so a row
-    written before the column existed degrades to an empty list instead of
-    breaking the page.
-    """
+
+def _analyst_judgments(name):
+    """The analyst's newest judgment per horizon for this asset, shortest
+    horizon first, each labelled with its horizon and the day it resolves.
+    [] when it has not spoken."""
     try:
         from core.analyst import store as analyst_store
 
-        row = analyst_store.latest_judgment(name)
+        rows = analyst_store.latest_judgments(name)
     except Exception:
-        return None
-    if not row:
-        return None
+        return []
+    return [_decorate_judgment(r) for r in rows]
+
+
+def _analyst_for_asset(name):
+    """The shortest-horizon judgment, or None: the payoff panel's input."""
+    rows = _analyst_judgments(name)
+    return rows[0] if rows else None
+
+
+def _decorate_judgment(row):
+    """Evidence decoded, age, horizon label and resolve date added.
+
+    The evidence list is decoded here rather than in the template, so a row
+    written before the column existed degrades to an empty list instead of
+    breaking the page.
+    """
+    row["horizon_label"] = _horizon_label(row.get("horizon"))
+    try:
+        import pandas as pd
+
+        row["resolves"] = (pd.Timestamp(str(row["date"])[:10])
+                           + pd.offsets.BDay(int(row.get("horizon") or 1))).date().isoformat()
+    except Exception:
+        row["resolves"] = None
     try:
         row["evidence"] = json.loads(row.get("evidence_json") or "[]")
     except Exception:
@@ -694,6 +724,7 @@ def asset_page(request: Request, name: str):
         "payoff": _payoff_context(name, asset_levels.get("atr"),
                                   asset_levels.get("close")),
         "analyst": _analyst_for_asset(name),
+        "analyst_all": _analyst_judgments(name),
         "analyst_intraday": _analyst_intraday_for_asset(name),
     })
 

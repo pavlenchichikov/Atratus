@@ -133,7 +133,9 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         "vol_regime": j["vol_regime"], "key_risk": j["key_risk"],
         "thesis": j["thesis"],
         "evidence_json": json.dumps(j["evidence"]),
-        "dossier_hash": h, "llm_model": os.getenv("GTRADE_AR_LLM", "default"),
+        "dossier_hash": h, "llm_model": ":".join(
+            v for v in (os.getenv("GTRADE_AR_LLM", "default"),
+                        os.getenv("GTRADE_AR_LLM_MODEL")) if v),
         # The sources the model asked for, beside the judgment they produced.
         "tool_calls_json": json.dumps(tool_calls, ensure_ascii=False) or None,
         "forecast_pct": fc["pct"], "lo_pct": fc["lo"], "hi_pct": fc["hi"],
@@ -183,6 +185,10 @@ def cmd_run(args):
         os.environ["GTRADE_AR_LLM"] = args.llm
     if getattr(args, "model", None):
         os.environ["GTRADE_AR_LLM_MODEL"] = args.model
+    elif os.getenv("GTRADE_ANALYST_MODEL"):
+        # The analyst's own model, apart from the one the research loop's
+        # director uses: a bigger model is worth its time here and not there.
+        os.environ["GTRADE_AR_LLM_MODEL"] = os.environ["GTRADE_ANALYST_MODEL"]
 
     call = _provider_call()
     store.ensure_table()
@@ -356,6 +362,10 @@ def cmd_intraday(args):
         os.environ["GTRADE_AR_LLM"] = args.llm
     if getattr(args, "model", None):
         os.environ["GTRADE_AR_LLM_MODEL"] = args.model
+    elif os.getenv("GTRADE_ANALYST_MODEL"):
+        # The analyst's own model, apart from the one the research loop's
+        # director uses: a bigger model is worth its time here and not there.
+        os.environ["GTRADE_AR_LLM_MODEL"] = os.environ["GTRADE_ANALYST_MODEL"]
 
     call = _provider_call()
     named = _named_assets(getattr(args, "assets", None))
@@ -664,8 +674,9 @@ def main(argv=None):
                      help="refuse to start if assets x horizons exceeds this. "
                           "0 = no ceiling. Checked BEFORE the first call, so a "
                           "run that would overspend costs nothing")
-    run.add_argument("--horizons", default="1",
-                     help="comma-separated horizons in exchange trading days (default 1): "
+    run.add_argument("--horizons", default=os.getenv("GTRADE_ANALYST_HORIZONS", "1,20"),
+                     help="comma-separated horizons in exchange trading days "
+                          "(default GTRADE_ANALYST_HORIZONS, else 1,20): "
                           "5 is a week, 20 a month, for every class; crypto "
                           "is scored over the same calendar span (20 -> 28 bars). "
                           "Each is its own question and its own LLM call; the "

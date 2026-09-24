@@ -81,8 +81,8 @@ SESSION_TAIL = (
     "- vol_regime here means the size of the session's high-low range against "
     "this asset's usual session: calm = narrow, normal, elevated = wide.\n"
     "- stand_aside is true|false: true when the session should not be traded at "
-    "all, for example an event inside it (macro_events, next_earnings) that "
-    "makes the range unpredictable. stand_aside_reason is one sentence.\n"
+    "all, for example an event inside it (macro_events, next_earnings) or news "
+    "that makes the range unpredictable. stand_aside_reason is one sentence.\n"
     'Add these keys to the JSON: "gap": "up|down|flat", "stand_aside": '
     'true|false, "stand_aside_reason": "one sentence".'
 )
@@ -110,8 +110,8 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
     Note what is absent: the ensemble's probability, signal, timing/shadow
     action - no channel of the model's own opinion reaches this prompt (see
     core/analyst/dossier.py's FORBIDDEN_KEYS, which is what actually
-    enforces that). Nobody else's opinion reaches it either: no headlines and
-    no guru verdict, by the owner's decision of 2026-09-24.
+    enforces that). Nor does anyone else's verdict: no ratings, no guru
+    council (owner, 2026-09-24). News does, spread across publishers.
     """
     return (
         "You are an independent market analyst. Below is everything known "
@@ -162,9 +162,17 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
           "policy_rate_days_since_change how long it has sat there. A bank on "
           "a P/E of 3.7 with a 13.6 percent yield is a bet on that number, "
           "and a cutting cycle and a hiking one are opposite cases for it.\n"
-          "5. There is no news and no one's rating here, on purpose: the "
-          "judgment is yours, formed from the data above. Do not import a "
-          "story you remember about this company in their place.\n"
+          "5. The news, as material and never as the foundation. headlines "
+          "are raw titles from many publishers, at most two each, and "
+          "news_publishers says how many independent outlets that is. A "
+          "story carried by one outlet is a claim; one that two or more "
+          "independent outlets report is closer to a fact. company_own marks "
+          "the company describing itself, which is its framing, not evidence. "
+          "Check each story against the numbers above: say what the data "
+          "confirms, what it contradicts, and what is stale or about a "
+          "different part of the business. If news_publishers is below 3, "
+          "say the coverage is too thin to lean on. There is no rating or "
+          "anyone's verdict here by design; do not import one you remember.\n"
           "6. Whether it moved alone. benchmark_ret_1 and benchmark_ret_20 "
           "are its index, corr_to_benchmark_60 how tightly it usually "
           "follows, breadth_above_sma50_pct and breadth_positive_20d_pct how "
@@ -341,6 +349,9 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
     from core.analyst import tools
 
     budget = tools.max_calls() if tool_calls is not None else 0
+    # Sources and round trips are bounded apart: one reply may ask for several
+    # tools, because each round is another full model call.
+    rounds = min(budget, tools.max_rounds())
     extra = ""
     if call is None:
         raise ValueError("judge() needs an injected call; see analyst.py")
@@ -353,7 +364,7 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
     empty = {k for k, v in dossier.items() if v is None or v == []}
     from core.llm_proposer import ProviderUnavailable, TerminalCallError
 
-    for _ in range(MAX_ATTEMPTS + budget):
+    for _ in range(MAX_ATTEMPTS + rounds):
         try:
             answer = call(prompt + extra)
         except TerminalCallError:
@@ -372,18 +383,20 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
             continue
         # A request for evidence is not a failed judgment, so it is checked
         # first and does not spend a parse attempt.
-        if budget > 0:
-            request = tools.parse_request(_first_json_object(answer))
-            if request is not None:
-                budget -= 1
-                entry = tools.call(request, asset=dossier.get("asset"),
-                                   today=today)
-                tool_calls.append(entry)
-                extra += ("\n\nYou asked for %s and received:\n%s\n"
-                          "Now return the judgment JSON."
-                          % (request["tool"],
-                             json.dumps(entry.get("result", entry.get("error")),
-                                        ensure_ascii=True)[:1800]))
+        if budget > 0 and rounds > 0:
+            requests = tools.parse_requests(_first_json_object(answer))[:budget]
+            if requests:
+                budget -= len(requests)
+                rounds -= 1
+                for request in requests:
+                    entry = tools.call(request, asset=dossier.get("asset"),
+                                       today=today)
+                    tool_calls.append(entry)
+                    extra += ("\n\nYou asked for %s and received:\n%s\n"
+                              % (request["tool"],
+                                 json.dumps(entry.get("result", entry.get("error")),
+                                            ensure_ascii=True)[:1800]))
+                extra += "Now return the judgment JSON.\n"
                 continue
 
         why = []

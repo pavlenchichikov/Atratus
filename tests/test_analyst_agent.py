@@ -295,7 +295,7 @@ def test_the_checklist_names_the_fields_it_expects_to_be_read():
     for horizon in (1, 5):
         instructions = agent.prompt_for(
             d, depth="full", horizon=horizon).split("in order")[1]
-        for field in ("breadth_above_sma50_pct", "cross_asset_corr",
+        for field in ("headlines", "news_publishers", "breadth_above_sma50_pct", "cross_asset_corr",
                       "vix_level", "regime_trend", "rsi_14", "sector_momentum",
                       "volume_vs_20", "turnover", "gap_open", "range_atr",
                       "ex_dividend_date", "market_cap"):

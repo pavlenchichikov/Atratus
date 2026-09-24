@@ -45,13 +45,15 @@ def _no_network(monkeypatch):
     monkeypatch.setattr("core.events.earnings_for",
                         lambda symbols_by_asset, session=None, fetch=None: {})
     monkeypatch.setattr("core.events.load_macro", lambda path=None: [])
-    # The profile reaches yfinance, so it is stubbed at the dossier's own
-    # boundary.
+    # The profile and the headlines reach yfinance and the news feeds, so they
+    # are stubbed at the dossier's own boundary. One seam per source.
     from core.analyst import dossier as _d
     # dict(PROFILE_BLANK), not a restatement of it: the stub must inherit the
     # real block's shape or it goes stale the next time a field is added, which
     # is exactly what happened when the valuation fields arrived.
     monkeypatch.setattr(_d, "_profile", lambda asset: dict(_d.PROFILE_BLANK))
+    monkeypatch.setattr(_d, "_headlines", lambda asset, today=None:
+                        {"headlines": [], "news_publishers": None})
     # The regime, market and sector blocks read the REAL market.db through
     # their own engines, not through the db_path this suite hands in, and
     # get_market_breadth walks every table in it (12.7s measured). Stubbed at
@@ -137,6 +139,8 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # without which a P/E of 3.7 has no age at all.
         "ps", "pb", "ev_ebitda", "ebitda_margin", "roa", "nim",
         "div_yield_pref", "fundamentals_asof",
+        # raw titles spread across publishers, and how many independent ones
+        "headlines", "news_publishers",
         # this asset's own regime, classified from prices alone. rsi_14 is new
         # to the dossier entirely, and atr_vs_90d measures volatility against a
         # much longer norm than vol_20_vs_60 does.
@@ -253,7 +257,7 @@ def test_a_dead_network_is_visible_block_by_block():
     """Every network field is wrapped in _safe, so a run with no connection
     produces judgments and no complaint. filled_blocks is what the CLI counts
     to say so out loud."""
-    full = {"asset": "AAPL", "pe": 3.5, "next_earnings": "2026-09-01"}
+    full = {"asset": "AAPL", "headlines": ["x"], "pe": 3.5, "next_earnings": "2026-09-01"}
     assert dossier.filled_blocks(full) == {k: 1 for k in dossier.NETWORK_BLOCKS}
     assert dossier.filled_blocks({"asset": "AAPL"}) == {
         k: 0 for k in dossier.NETWORK_BLOCKS}
@@ -654,14 +658,39 @@ def test_a_bar_with_no_range_reports_none_rather_than_a_calm_zero():
     assert dossier._flow("X", real, 0.5, None, None)["range_atr"] == pytest.approx(2.0)
 
 
-def test_no_one_elses_opinion_reaches_the_dossier(db, monkeypatch):
-    """Owner's decision, 2026-09-24: the judgment stands on raw data. SBER was
-    handed six stories about its own India expansion; the guru council is an
-    opinion however well scored. The guru stub is the positive control: were
-    _context still reading it, the verdict would land in the dossier."""
+def test_the_guru_verdict_never_reaches_the_dossier(db, monkeypatch):
+    """Owner's decision, 2026-09-24: a verdict is somebody's opinion however
+    well scored. The stub is the positive control: were _context still reading
+    the council, the verdict would land in the dossier."""
     monkeypatch.setattr("core.dashboard.guru_for_asset",
                         lambda asset, db_path=None: {"verdict": "BUY", "pct": 75.0})
     d = dossier.build("SBER", db_path=db)
-    for key in ("headlines", "guru_verdict", "guru_pct"):
+    for key in ("guru_verdict", "guru_pct"):
         assert key in dossier.FORBIDDEN_KEYS
         assert key not in d, key
+
+
+def _item(source, age=1, title=None):
+    day = (datetime.date.today() - datetime.timedelta(days=age)).isoformat()
+    return {"title": title or "%s story %d" % (source, age), "source": source,
+            "published": day}
+
+
+def test_no_single_publisher_fills_the_news_block():
+    """SBER on 2026-09-24: six stories, four on the same India push. At most
+    two per outlet, so the block is a spread of voices, and the count of
+    independent outlets travels with it."""
+    items = [_item("Times of India", a) for a in range(1, 7)] + [
+        _item("Reuters", 2), _item("Interfax", 3)]
+    out = dossier.diverse_headlines(items, "SBER")
+    sources = [h["source"] for h in out["headlines"]]
+    assert sources.count("Times of India") == 2
+    assert out["news_publishers"] == 3
+
+
+def test_stale_news_is_dropped_and_the_companys_own_channel_is_marked():
+    items = [_item("Reuters", 400), _item("Sberbank Press", 1), _item("RBC", 2)]
+    out = dossier.diverse_headlines(items, "SBER")
+    assert [h["source"] for h in out["headlines"]] == ["Sberbank Press", "RBC"]
+    assert out["headlines"][0]["company_own"] is True
+    assert out["news_publishers"] == 1, "the company is not an independent outlet"

@@ -168,6 +168,8 @@
     It judges a direction and a conviction; the percentage beside it is what
     that judgment cell has historically been worth, not something the analyst
     asserted.</p>
+  {% for analyst in analyst_all %}
+  <h3 class="mono">Horizon: {{ analyst.horizon_label }}{% if analyst.resolves %} <span class="dim">&middot; resolves {{ analyst.resolves }}</span>{% endif %}</h3>
   <div class="statgrid">
     <div class="stat">
       <span class="stat-label">Call</span>
@@ -187,6 +189,10 @@
       <span class="stat-sub">{% if analyst.realized_ret is not none %}error {{ "%.2f"|format(analyst.abs_err_atr) }} ATR &middot; {{ 'inside' if analyst.inside_interval == 1 else 'outside' }} the band{% else %}scored once the horizon elapses{% endif %}</span>
     </div>
   </div>
+  {% if analyst.key_risk %}<p><b>Key risk.</b> {{ analyst.key_risk }}</p>{% endif %}
+  {% if analyst.thesis %}<p>{{ analyst.thesis }}</p>{% endif %}
+  <p class="dim mono">judged {{ analyst.date }}{% if analyst.age_days and analyst.age_days > 3 %} &middot; <b class="t-sell">{{ analyst.age_days }} days old, run it again on <a href="/analyst">the analyst page</a></b>{% endif %}{% if analyst.evidence %} &middot; read: {{ analyst.evidence|join(", ") }}{% endif %}</p>
+  {% endfor %}
   {% if payoff and payoff.long and payoff.long.source == 'prior' %}
   <p class="dim"><b>Read this carefully.</b> No judgment in this
     conviction cell has been scored yet, so the figure above is the class
@@ -194,9 +200,6 @@
     the same direction currently produce the same number. It becomes responsive
     once the cell has its own outcomes.</p>
   {% endif %}
-  {% if analyst.key_risk %}<p><b>Key risk.</b> {{ analyst.key_risk }}</p>{% endif %}
-  {% if analyst.thesis %}<p>{{ analyst.thesis }}</p>{% endif %}
-  <p class="dim mono">judged {{ analyst.date }}{% if analyst.age_days and analyst.age_days > 3 %} &middot; <b class="t-sell">{{ analyst.age_days }} days old, run it again on <a href="/analyst">the analyst page</a></b>{% endif %}{% if analyst.evidence %} &middot; read: {{ analyst.evidence|join(", ") }}{% endif %}</p>
 </section>
 {% endif %}
 

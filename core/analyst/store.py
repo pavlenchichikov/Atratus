@@ -186,6 +186,25 @@ def latest_judgment(asset, db_path=None):
         return dict(row) if row else None
 
 
+def latest_judgments(asset, db_path=None):
+    """The newest judgment for EACH horizon this asset has, shortest first.
+
+    A run judges several horizons (1 and 20 trading days by default) and the
+    card must show every one, labelled, not whichever was written last."""
+    with _connect(db_path) as con:
+        con.execute(DDL)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM (SELECT *, ROW_NUMBER() OVER ("
+            " PARTITION BY horizon ORDER BY date DESC, rowid DESC) AS _rn"
+            " FROM analyst_log WHERE asset=?) WHERE _rn = 1 ORDER BY horizon",
+            (asset,)).fetchall()
+        out = [dict(r) for r in rows]
+        for r in out:
+            r.pop("_rn", None)
+        return out
+
+
 def backfill_outcomes(db_path=None, today=None):
     """Score every judgment whose horizon has now elapsed. Returns rows filled.
 

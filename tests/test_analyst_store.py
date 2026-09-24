@@ -220,3 +220,17 @@ def test_a_week_is_five_exchange_bars_and_seven_crypto_bars(tmp_path):
 
     assert "next 28 days" in agent.prompt_for({"asset": "BTC"}, horizon=20)
     assert "about 28 calendar days" in agent.prompt_for({"asset": "SBER"}, horizon=20)
+
+
+def test_the_card_gets_the_newest_judgment_of_every_horizon(tmp_path):
+    """A run judges 1 and 20 trading days; the card must show both, and the
+    newest of each, not whichever row was written last."""
+    db = str(tmp_path / "a.db")
+    for date, horizon, direction in (("2026-09-20", 1, "up"),
+                                     ("2026-09-23", 1, "down"),
+                                     ("2026-09-20", 20, "up")):
+        store.write_judgment({"date": date, "asset": "SBER", "horizon": horizon,
+                              "direction": direction, "conviction": 3}, db_path=db)
+    rows = store.latest_judgments("SBER", db_path=db)
+    assert [(r["horizon"], r["date"], r["direction"]) for r in rows] == [
+        (1, "2026-09-23", "down"), (20, "2026-09-20", "up")]

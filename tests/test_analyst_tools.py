@@ -31,14 +31,56 @@ def probe(monkeypatch):
         describe="a live-only test source", run=lambda **kw: {"items": []}))
 
 
-def test_news_and_the_guru_are_refused_as_opinion_sources():
-    """Owner's decision, 2026-09-24: the analyst reads raw data only."""
-    for name, describe in (("news_search", "search the news feeds"),
-                           ("council", "the guru council verdict")):
-        with pytest.raises(tools.OpinionSource):
-            tools.register(tools.Tool(name=name, args={}, rewinds=False,
-                                      describe=describe, run=lambda **kw: {}))
-    assert "news_search" not in tools._REGISTRY
+def test_a_verdict_source_is_refused_but_news_is_material():
+    """Owner, 2026-09-24: raw data first, news allowed as a spread of
+    publishers, nobody's verdict."""
+    with pytest.raises(tools.OpinionSource):
+        tools.register(tools.Tool(name="council", args={}, rewinds=False,
+                                  describe="the guru council verdict",
+                                  run=lambda **kw: {}))
+    assert "news_search" in tools._REGISTRY
+
+
+def test_several_tools_are_asked_for_in_one_reply():
+    """Each round is a full model call, 9 to 25 minutes on the local model,
+    so a reply may carry a batch; junk entries in it are dropped."""
+    got = tools.parse_requests({"tools": [
+        {"tool": "probe", "args": {"query": "a"}},
+        {"tool": "http_get", "args": {"url": "http://evil/"}},
+        {"tool": "probe", "args": {}}]})
+    assert [r["tool"] for r in got] == ["probe", "probe"]
+    assert tools.parse_requests({"tool": "probe"}) == [{"tool": "probe", "args": {}}]
+    assert tools.parse_requests(_judgment()) == []
+
+
+def test_a_batch_is_one_round_and_the_rounds_are_capped(monkeypatch):
+    monkeypatch.setenv("GTRADE_ANALYST_TOOL_CALLS", "6")
+    monkeypatch.setenv("GTRADE_ANALYST_TOOL_ROUNDS", "1")
+    batch = json.dumps({"tools": [{"tool": "probe", "args": {"query": q}}
+                                  for q in ("a", "b", "c")]})
+    replies = [batch, batch, json.dumps(_judgment())]
+    calls = []
+    out = agent.judge(_dossier(), call=lambda p: replies.pop(0), tool_calls=calls)
+    assert len(calls) == 3, "three sources in one round, the second batch refused"
+    assert out["direction"] == "up", "a refused batch spends an attempt, not the judgment"
+
+
+def test_fred_holidays_are_skipped():
+    raw = "observation_date,DGS10\n2026-09-01,4.79\n2026-09-07,\n2026-09-08,.\n2026-09-09,4.80\n"
+    assert tools._fred_observations(raw) == [("2026-09-01", 4.79), ("2026-09-09", 4.80)]
+
+
+def test_filed_financials_rewind_on_the_filing_date():
+    facts = {"NetIncomeLoss": {"units": {"USD": [
+        {"end": "2026-03-31", "val": 1, "form": "10-Q", "fp": "Q1", "filed": "2026-04-30"},
+        {"end": "2026-06-30", "val": 2, "form": "10-Q", "fp": "Q2", "filed": "2026-07-30"},
+        {"end": "2026-06-30", "val": 3, "form": "10-Q", "fp": "Q2", "filed": "2026-08-15"},
+        {"end": "2026-06-30", "val": 9, "form": "8-K", "fp": "Q2", "filed": "2026-07-01"},
+    ]}}}
+    live = tools._filed_series(facts, ("NetIncomeLoss",))
+    assert [r["value"] for r in live] == [1, 3], "the amended filing wins"
+    past = tools._filed_series(facts, ("NetIncomeLoss",), today="2026-05-15")
+    assert [r["value"] for r in past] == [1], "nothing filed after the date"
 
 
 @pytest.fixture()
