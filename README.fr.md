@@ -123,7 +123,7 @@ Deux conséquences valent mieux d'être attendues que découvertes : **chaque ad
 
 Un second avis sur chaque actif, formé **sans jamais voir l'avis de l'ensemble**. Il ne voit ni la probabilité du modèle, ni le signal émis, ni l'action de timing, ni le dimensionnement ; deux tests l'imposent, l'un balayant le dossier sérialisé à la recherche de clés interdites, l'autre figeant l'ensemble exact des clés pour qu'aucun champ ne puisse être ajouté sans être déclaré.
 
-Il lit ce que le projet calcule déjà - 80 champs répartis en douze blocs nommés : prix et mouvement, position du prix dans ses propres unités de volatilité, l'année écoulée face à son indice, les flux, le marché dans lequel il a bougé, son régime et son secteur, les fondamentaux, les titres de presse bruts, le calendrier et le taux directeur, le verdict du Guru Council, et ses propres appels passés sur cet actif.
+Il lit ce que le projet calcule déjà - 80 champs répartis en douze blocs nommés : prix et mouvement, position du prix dans ses propres unités de volatilité, l'année écoulée face à son indice, les flux, le marché dans lequel il a bougé, son régime et son secteur, les fondamentaux, les titres de presse bruts, le calendrier et le taux directeur, et ses propres appels passés sur cet actif. Aucun verdict d'autrui n'y figure : celui du Guru Council a été retiré le 2026-09-24, car un verdict reste une opinion, si bien noté soit-il. Les titres viennent de nombreuses sources : deux au plus par média, rien de plus de 90 jours, le titre doit nommer l'entreprise, le canal propre de l'entreprise est marqué `company_own`, et `news_publishers` compte les médias indépendants derrière le bloc.
 
 **Un champ que l'invite ne demande pas est un champ que le modèle ne lit pas.** Mesuré sur les 35 premiers jugements : sur les 21 champs que la liste d'instructions nommait, 16 ont été cités comme preuve ; sur les 39 autres, neuf, le plus souvent une seule fois. Aucun titre de presse n'a été lu. La liste nomme désormais 65 des 80 champs, et chaque exécution imprime sa propre couverture.
 
@@ -131,7 +131,7 @@ Il lit ce que le projet calcule déjà - 80 champs répartis en douze blocs nomm
 
 Le pourcentage affiché sur la fiche n'est donc **pas le chiffre de l'analyste** : c'est ce que cette case de jugement a historiquement rapporté, et il peut contredire l'appel qui le surmonte. Ce chiffre est net de la dérive du marché : sur juin-septembre 2026, la classe russe affichait un rendement brut à l'achat de -0,116 ATR, dont -0,101 n'était que la baisse générale du marché.
 
-**Sources qu'il peut demander.** Au-delà du dossier qu'on lui remet, l'analyste peut *réclamer* des éléments avant de trancher : `insider_filings` (les opérations que les dirigeants ont **déclarées** à la SEC via le formulaire 4) et `news_search` (les flux du projet sur une requête qu'il choisit). Trois règles préservent la reproductibilité : chaque appel et son résultat sont **enregistrés** sur la ligne du jugement ; chaque outil déclare s'il **respecte une date passée**, faute de quoi il est refusé lors d'une exécution rembobinée ; et le registre est une **liste blanche**, jamais un accès libre à une URL quelconque.
+**Sources qu'il réclame.** Au-delà du dossier, l'analyste **doit** réclamer d'autres données brutes avant de trancher (`GTRADE_ANALYST_REQUIRE_TOOL=0` rend la demande facultative) : `news_search` (titres de nombreux médias), `macro_series` (statistiques FRED), `attention` (vues Wikipédia), pour les valeurs américaines `company_financials` (chiffres déposés à la SEC), `insider_filings` (opérations d'initiés **déclarées** via le formulaire 4) et `options_positioning` (intérêt ouvert des options), pour la crypto `crypto_derivatives` (funding et intérêt ouvert des perpétuels Binance). Le menu ne montre que ce qui peut répondre pour l'actif, et une réponse peut réclamer plusieurs outils à la fois. Trois règles préservent la reproductibilité : chaque appel et son résultat sont **enregistrés** sur la ligne du jugement ; chaque outil déclare s'il **respecte une date passée**, faute de quoi il est refusé lors d'une exécution rembobinée ; et le registre est une **liste blanche**, jamais un accès libre à une URL quelconque.
 
 Un outil peut renvoyer de la matière. Il ne peut pas renvoyer la conclusion d'autrui : consensus des analystes, objectifs de cours et notations de courtiers sont exclus par décision, et `tools.register()` lève une exception plutôt que d'en accepter un. L'analyste existe pour se forger son propre avis, et un consensus se consulte très bien soi-même.
 
@@ -320,8 +320,12 @@ La configuration se fait par variables d'environnement, lues depuis `.env` puis 
 | `GTRADE_ASSETS` | limite une exécution à cette liste d'actifs |
 | `GTRADE_SEED` | fixe la graine d'entraînement |
 | `GTRADE_ANALYST=0` | coupe entièrement l'agent analyste, en console comme sur le web |
-| `GTRADE_ANALYST_TOOL_CALLS` | nombre de sources supplémentaires qu'un jugement peut demander (2 par défaut, `0` interdit) |
-| `GTRADE_SEC_CONTACT` | une adresse e-mail pour l'en-tête que la SEC exige ; sans elle, `insider_filings` renvoie la consigne au lieu d'un 403 |
+| `GTRADE_ANALYST_TOOL_CALLS` | nombre de sources supplémentaires qu'un jugement peut demander (6 par défaut, `0` interdit) |
+| `GTRADE_ANALYST_TOOL_ROUNDS` | en combien d'allers-retours (2 par défaut) ; chacun est un appel complet au modèle |
+| `GTRADE_ANALYST_MODEL` | le modèle propre de l'analyste, distinct de celui du directeur de recherche |
+| `GTRADE_ANALYST_HORIZONS` | les horizons jugés, en jours de bourse (`1,20` par défaut) ; la fiche montre chaque horizon avec sa date d'échéance |
+| `GTRADE_OLLAMA_NUM_GPU` | combien de couches du modèle Ollama place sur le GPU, à régler par machine. Sur une RTX 2050 de 4 Go, Ollama en plaçait 0 sur 31 (3,3 jetons/s) ; `4` donne 5,1 jetons/s, et dès `5` le contexte ne tient plus. Point de départ pour gemma4:26b : environ `(VRAM en Go - 2) / 0,5` ; si le chargement échoue parce qu'un entraînement occupe le GPU, la requête est relancée sans `num_gpu`, sur le CPU |
+| `GTRADE_SEC_CONTACT` | une adresse e-mail pour l'en-tête que la SEC exige ; sans elle, `company_financials` et `insider_filings` renvoient la consigne au lieu d'un 403 |
 | `SOCKS5_PROXY` | proxy sortant pour les sources de données |
 | `GTRADE_MODEL_DIR` | où lire et écrire les modèles |
 

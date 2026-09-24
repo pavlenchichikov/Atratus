@@ -123,7 +123,7 @@ Die Entscheidung war zugleich richtig und nicht ausführbar: nach Score gewinnt 
 
 Eine zweite Einschätzung je Wert, gebildet **ohne je die Einschätzung des Ensembles zu sehen**. Er sieht weder die Modellwahrscheinlichkeit noch das ausgegebene Signal, die Timing-Entscheidung oder die Positionsgröße; zwei Tests erzwingen das - einer durchsucht das serialisierte Dossier nach verbotenen Schlüsseln, der andere fixiert dessen exakte Schlüsselmenge, sodass kein Feld hinzukommen kann, ohne dass jemand es deklariert.
 
-Er liest, was das Projekt ohnehin berechnet - 80 Felder in zwölf benannten Blöcken: Preis und Bewegung, wo der Kurs in seinen eigenen Volatilitätseinheiten steht, das zurückliegende Jahr gegen seinen Index, Handelsfluss, der Markt, in dem er sich bewegt hat, sein Regime und sein Sektor, Fundamentaldaten, rohe Schlagzeilen, Kalender und Leitzins, das Urteil des Guru Council sowie seine eigenen früheren Einschätzungen zu diesem Wert.
+Er liest, was das Projekt ohnehin berechnet - 80 Felder in zwölf benannten Blöcken: Preis und Bewegung, wo der Kurs in seinen eigenen Volatilitätseinheiten steht, das zurückliegende Jahr gegen seinen Index, Handelsfluss, der Markt, in dem er sich bewegt hat, sein Regime und sein Sektor, Fundamentaldaten, rohe Schlagzeilen, Kalender und Leitzins sowie seine eigenen früheren Einschätzungen zu diesem Wert. Fremde Urteile enthält es nicht: das des Guru Council wurde am 2026-09-24 entfernt, weil ein Urteil eine Meinung bleibt, wie gut es auch bewertet sein mag. Schlagzeilen kommen aus vielen Quellen: höchstens zwei je Medium, nichts älter als 90 Tage, der Titel muss das Unternehmen nennen, der eigene Kanal des Unternehmens wird als `company_own` markiert, und `news_publishers` zählt die unabhängigen Medien dahinter.
 
 **Ein Feld, nach dem der Prompt nicht fragt, ist ein Feld, das das Modell nicht liest.** Über die ersten 35 Einschätzungen gemessen: von den 21 Feldern, die die Anweisungsliste benannte, wurden 16 als Beleg zitiert; von den übrigen 39 nur neun, meist ein einziges Mal. Keine einzige Schlagzeile wurde gelesen. Die Liste benennt inzwischen 65 der 80 Felder, und jeder Lauf gibt seine eigene Abdeckung aus.
 
@@ -131,7 +131,7 @@ Er liest, was das Projekt ohnehin berechnet - 80 Felder in zwölf benannten Blö
 
 Der Prozentwert auf der Karte ist deshalb **nicht die Zahl des Analysten**: er ist das, was diese Urteilszelle historisch wert war, und darf der Einschätzung darüber widersprechen. Diese Zahl ist um die Marktdrift bereinigt: von Juni bis September 2026 zeigte die russische Klasse einen rohen Kaufertrag von -0,116 ATR, wovon -0,101 schlicht ein fallender Markt war.
 
-**Quellen, die er anfordern darf.** Über das ihm gereichte Dossier hinaus darf der Analyst vor der Entscheidung weitere Belege *anfordern*: `insider_filings` (Geschäfte, die Unternehmensverantwortliche der SEC per Formular 4 **offengelegt** haben) und `news_search` (die Nachrichtenquellen des Projekts zu einer selbst gewählten Anfrage). Drei Regeln sichern die Reproduzierbarkeit: jeder Aufruf und sein Ergebnis werden auf der Urteilszeile **protokolliert**; jedes Werkzeug erklärt, ob es ein **vergangenes Datum respektiert**, andernfalls wird es in einem zurückgespulten Lauf verweigert; und die Registrierung ist eine **Positivliste**, nie ein freier Zugriff auf beliebige URLs.
+**Quellen, die er anfordert.** Über das Dossier hinaus **muss** der Analyst vor der Entscheidung weitere Rohdaten anfordern (`GTRADE_ANALYST_REQUIRE_TOOL=0` macht es freiwillig): `news_search` (Titel aus vielen Medien), `macro_series` (FRED-Statistiken), `attention` (Wikipedia-Seitenaufrufe), für US-Werte `company_financials` (bei der SEC eingereichte Zahlen), `insider_filings` (per Formular 4 **offengelegte** Insidergeschäfte) und `options_positioning` (Open Interest der Optionen), für Krypto `crypto_derivatives` (Funding und Open Interest der Binance-Perpetuals). Das Menü zeigt nur, was für den jeweiligen Wert antworten kann, und eine Antwort darf mehrere Werkzeuge auf einmal anfordern. Drei Regeln sichern die Reproduzierbarkeit: jeder Aufruf und sein Ergebnis werden auf der Urteilszeile **protokolliert**; jedes Werkzeug erklärt, ob es ein **vergangenes Datum respektiert**, andernfalls wird es in einem zurückgespulten Lauf verweigert; und die Registrierung ist eine **Positivliste**, nie ein freier Zugriff auf beliebige URLs.
 
 Ein Werkzeug darf Material liefern. Die Schlussfolgerung anderer darf es nicht liefern: Analystenkonsens, Kursziele und Broker-Ratings sind bewusst ausgeschlossen, und `tools.register()` wirft eine Ausnahme, statt so etwas aufzunehmen. Der Analyst existiert, um sich eine eigene Meinung zu bilden, und einen Konsens kann man selbst nachschlagen.
 
@@ -320,8 +320,12 @@ Konfiguriert wird über Umgebungsvariablen, gelesen zuerst aus `.env` und dann a
 | `GTRADE_ASSETS` | beschränkt einen Lauf auf diese Werteliste |
 | `GTRADE_SEED` | legt den Trainings-Seed fest |
 | `GTRADE_ANALYST=0` | schaltet den Analystenagenten vollständig ab, in Konsole wie im Web |
-| `GTRADE_ANALYST_TOOL_CALLS` | wie viele zusätzliche Quellen ein Urteil anfordern darf (Vorgabe 2, `0` verbietet es) |
-| `GTRADE_SEC_CONTACT` | eine E-Mail-Adresse für den von der SEC verlangten Header; ohne sie liefert `insider_filings` den Hinweis statt eines 403 |
+| `GTRADE_ANALYST_TOOL_CALLS` | wie viele zusätzliche Quellen ein Urteil anfordern darf (Vorgabe 6, `0` verbietet es) |
+| `GTRADE_ANALYST_TOOL_ROUNDS` | in wie vielen Runden (Vorgabe 2); jede Runde ist ein voller Modellaufruf |
+| `GTRADE_ANALYST_MODEL` | das eigene Modell des Analysten, getrennt vom Forschungsdirektor |
+| `GTRADE_ANALYST_HORIZONS` | die beurteilten Horizonte in Handelstagen (Vorgabe `1,20`); die Karte zeigt jeden Horizont mit seinem Auflösungsdatum |
+| `GTRADE_OLLAMA_NUM_GPU` | wie viele Modellschichten Ollama auf die GPU legt, je Maschine einzustellen. Auf einer RTX 2050 mit 4 GB legte Ollama selbst 0 von 31 Schichten dorthin (3,3 Token/s); `4` ergab 5,1 Token/s, ab `5` passt der Kontext nicht mehr. Ausgangswert für gemma4:26b etwa `(VRAM in GB - 2) / 0,5`; schlägt das Laden fehl, weil ein Training die GPU belegt, wird die Anfrage ohne `num_gpu` auf der CPU wiederholt |
+| `GTRADE_SEC_CONTACT` | eine E-Mail-Adresse für den von der SEC verlangten Header; ohne sie liefern `company_financials` und `insider_filings` den Hinweis statt eines 403 |
 | `SOCKS5_PROXY` | ausgehender Proxy für die Datenquellen |
 | `GTRADE_MODEL_DIR` | wo Modelle gelesen und geschrieben werden |
 

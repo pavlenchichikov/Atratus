@@ -64,7 +64,7 @@
 
 ## How it works
 
-1. `data_engine.py` downloads up to 15 years of daily and weekly quotes from Yahoo Finance and MOEX into `market.db` (SQLite).
+1. `data_engine.py` downloads up to 15 years of daily and weekly quotes from Yahoo Finance and MOEX into `market.db` (SQLite). PEPE and SHIB come from Binance instead: Yahoo rounds them to 1e-6 and 1e-8, so 90% and 81% of their closes repeated the previous one and a single rounding step read as a 20% move. Every run ends by rebuilding `market_breadth`, the book-wide breadth feature, which nothing else refreshes.
 2. `train_hybrid.py` builds the features (above), trains the ensemble, and saves the champion together with its scaler and probability calibrator, chosen by walk-forward accuracy on the next bar. The quality report carries `Ens_Acc` and `CB_Acc_Mean` beside the older columns: those two are averaged over every fold, while `CB_Acc` belongs to the champion fold alone.
 3. `predict.py` prints BUY / SELL / WAIT with confidence for all assets.
 4. `backtest.py` checks champions on held-out data: PnL, win rate, Sharpe, directional accuracy, Brier, alpha vs buy & hold.
@@ -83,7 +83,7 @@ uvicorn webapp:app --host 0.0.0.0 --port 8000
 Lightweight web interface - no TensorFlow needed, reads predictions from the database, starts instantly. Pages:
 
 - `/` - signal radar: BUY / SELL / WAIT per asset with confidence, live accuracy, a Taleb risk column (0-100), a live market-breadth panel and regime / fear-greed gauges, and a line saying how much of the asset map the snapshot covers and why the rest is absent (no champion, or no bar dated today)
-- `/asset/BTC` - per-asset detail: price and candle charts, signal history, model consensus, Taleb risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **intraday reach odds** ("Reaches up/down today") with an **Update hourly bars** button that tops up that one asset, the **expected payoff** for a long and a short in that asset, the **analyst's own call** with its reasoning, and its latest call on the **next session** (open to close, gap, range, stand aside) with the outcome once the session has closed
+- `/asset/BTC` - per-asset detail: price and candle charts, signal history (built from the signal the radar showed: a call the live gate held back is marked `gated BUY` and opens no position), model consensus, Taleb risk, the Guru Council value verdict (N/A for non-stocks) with on-demand recalculate, the **intraday reach odds** ("Reaches up/down today") with an **Update hourly bars** button that tops up that one asset, the **expected payoff** for a long and a short in that asset, the **analyst's own call** for each horizon (1 and 20 trading days by default), labelled with the day it resolves, with its reasoning, and its latest call on the **next session** (open to close, gap, range, stand aside) with the outcome once the session has closed
 - `/analyst` - the analyst agent: how many judgments it has made and how many are scored, interval coverage, the latest judgments with forecast against outcome, a button that runs a pass, and an **Intraday** block: each of the four session questions against its baseline with its verdict, and the latest session calls with their outcomes
 - `/levels` - the trade-level sheet: entry zone, stop and position size per active signal, with a reason on every row that has none
 - `/portfolio` - portfolio analytics over open positions: diversification score, sector-exposure heat, held-asset correlation, per-position warnings
@@ -619,19 +619,20 @@ action or the sizing decision; two tests enforce that, one scanning the
 serialized dossier for forbidden keys and one pinning the dossier's exact key
 set so a new field cannot be added without somebody declaring it.
 
-It reads what the project already computes - 80 fields in twelve named
-blocks: price and movement, where the price sits in its own units of
-volatility, the year behind it against its index, flow, the market it moved in,
-its regime and sector, fundamentals, raw headlines, the calendar and the policy
-rate, the Guru Council's verdict, and its own past calls on this asset. The
-council verdict is fundamentals rather than the ensemble, so it is allowed in
-on purpose.
+It is built on raw data - 79 fields in twelve named blocks: price and
+movement, where the price sits in its own units of volatility, the year behind
+it against its index, flow, the market it moved in, its regime and sector,
+reported fundamentals, headlines spread across publishers, the calendar and the
+policy rate, and its own past calls on this asset. Nobody's verdict is in it:
+the Guru Council's was removed on 2026-09-24, because a verdict is an opinion
+however well it is scored. On top of the dossier it goes and fetches more, see
+[Sources it can ask for](#sources-it-can-ask-for).
 
 **A field the prompt does not ask for is a field the model does not read.**
 Measured over the first 35 judgments: of the 21 fields the instruction
 checklist named, 16 were cited as evidence; of the other 39, nine, mostly once
 each. Every headline went unread. The dossier had grown and the checklist had
-not. It now names 65 of the 80, and every run prints its own coverage:
+not. It now names most of them, and every run prints its own coverage:
 
 ```
 [analyst] dossier coverage: 11 fields cited; nothing read from flow, news
@@ -690,13 +691,41 @@ any number arrived.
 
 ### Sources it can ask for
 
-Beyond the dossier it is handed, the analyst may **request** more evidence
-before deciding, by returning `{"tool": "...", "args": {...}}` instead of a
-judgment. Two are wired: `insider_filings`, the trades company officers have
-DISCLOSED to the SEC on Form 4, and `news_search`, the project's own feeds on a
-query the model chooses.
+The dossier is the floor, not the ceiling. Before it judges, the analyst
+**asks for more raw evidence**, and by default it has to: its first reply must
+be a request, and a judgment that arrives before any evidence was asked for is
+sent back once (`GTRADE_ANALYST_REQUIRE_TOOL=0` makes asking optional). Left to
+choose, gemma4:26b judged SBER from the dossier alone.
 
-Three rules keep that from breaking the guarantee that a judgment can be
+| Tool | What comes back | Covers |
+|---|---|---|
+| `news_search` | titles on a query the model picks, from many publishers | every asset |
+| `macro_series` | FRED statistics: US 2y/10y yields and curve, fed funds, CPI, unemployment, breakevens, high-yield spread, Brent, broad dollar, with 1m/3m/1y changes | every asset |
+| `attention` | daily English Wikipedia page views, last week against the prior quarter | every asset |
+| `company_financials` | revenue, net income, operating cash flow, EPS and shares as filed with the SEC (XBRL) | US-listed names |
+| `insider_filings` | trades officers DISCLOSED to the SEC on Form 4 | US-listed names |
+| `options_positioning` | put/call open interest and volume for the next two expiries | US-listed names |
+| `crypto_derivatives` | Binance perpetuals: funding, open interest and its 7d/30d change, long/short account ratio | crypto |
+
+The menu in the prompt lists only the tools that can answer for the asset in
+front of it. Offered SEC filings and US options for SBER, the model spent two
+of its six requests on empty replies. Implied volatility is left out of the
+options tool on purpose: outside the session Yahoo reports it off an empty
+book, and NVDA read 2 percent at a true 40.
+
+**News is material, never the foundation.** Every headline block, in the
+dossier and from `news_search`, is built the same way: at most two titles per
+publisher, nothing older than 90 days, a title must name the company (a search
+that does not name it, such as the key rate, must share half its own words),
+the company's own channel is marked `company_own`, and `news_publishers` says
+how many independent outlets are actually behind the block. The prompt tells
+the model to treat one outlet as a claim and two or more as closer to a fact,
+and to check every story against the numbers. SBER was once handed six
+stories, four of them about its own India expansion; a Google News search for
+"Sberbank crypto" returned Kalshi and an Ethereum explainer. Both are what
+these rules remove.
+
+Three rules keep asking from breaking the guarantee that a judgment can be
 rebuilt from what it saw:
 
 - **Every call and its result is recorded** on the judgment row
@@ -710,14 +739,15 @@ rebuilt from what it saw:
   to read would be steerable through a headline.
 
 A tool may return material. It may not return somebody's conclusion: sell-side
-consensus, price targets and broker ratings are out by decision, and
-`tools.register()` raises rather than accepting one. The analyst exists to form
-its own view, and consensus is a thing you can look up yourself.
+consensus, price targets, broker ratings and the project's own Guru Council are
+out by decision, and `tools.register()` raises rather than accepting one. The
+analyst exists to form its own view.
 
-Each request costs a full extra model call - on a local 26B model that is
-another nine to twenty-five minutes - so the budget is small and per judgment:
-`GTRADE_ANALYST_TOOL_CALLS` (default 2, `0` disables asking). `insider_filings`
-needs `GTRADE_SEC_CONTACT` set to an email, because the SEC answers 403 to a
+One reply may ask for several tools at once, `{"tools": [{...}, {...}]}`,
+because each round is a full model call. `GTRADE_ANALYST_TOOL_CALLS` bounds the
+sources per judgment (default 6) and `GTRADE_ANALYST_TOOL_ROUNDS` the round
+trips (default 2). `company_financials` and `insider_filings` need
+`GTRADE_SEC_CONTACT` set to an email, because the SEC answers 403 to a
 User-Agent without a contact address.
 
 ### Running it
@@ -732,10 +762,16 @@ python analyst.py score                      # standings against the baselines, 
 python analyst.py backfill                   # fill outcomes whose horizon has elapsed
 ```
 
-The horizon is in trading days and defaults to 1. `LONG 20d` means "higher in
-20 trading days": LONG and SHORT name the side of the trade, the `Nd` beside
+The horizon is in trading days. A run judges **1 and 20** unless told
+otherwise (`GTRADE_ANALYST_HORIZONS`, `--horizons`). `LONG 20d` means "higher
+in 20 trading days": LONG and SHORT name the side of the trade, the `Nd` beside
 them names how long it is held. Each horizon is its own question and its own
-model call.
+model call, and the asset card shows the newest judgment of every horizon, each
+labelled with its horizon and the day it resolves.
+
+`GTRADE_ANALYST_MODEL` is the analyst's own model, apart from the one the
+research loop's director uses, so a larger and slower model can judge without
+slowing the search down.
 
 `run_gtrade.bat` has the same under `[AN]`, which asks for the asset list, the
 provider, the model and the horizon, and requires a typed YES for anything that
@@ -745,7 +781,8 @@ because a double click would pay for every eligible asset twice.
 
 Cost is bounded four ways: it runs the watchlist plus earnings-today assets
 rather than the whole map, it skips any asset whose dossier is unchanged since
-it was last judged, `GTRADE_ANALYST_TOOL_CALLS` caps the extra round trips, and
+it was last judged, `GTRADE_ANALYST_TOOL_CALLS` and `GTRADE_ANALYST_TOOL_ROUNDS`
+cap what it may fetch, and
 `GTRADE_ANALYST=0` switches it off entirely - in the web exactly as on the
 command line.
 
@@ -779,6 +816,37 @@ turning into an hour of nothing, both measured on gemma4:26b:
 
 A finished judgment with reasoning took about 35 minutes on that machine, one
 without about 16. `GTRADE_ANALYST_THINK=0` always asks without it.
+
+### GPU layers, set for your own card
+
+Ollama decides by itself how many of a model's layers go on the GPU, and on a
+small card it can decide on none. It keeps about 2.2 GB of the card free and
+reserves another 1.3 GB for gemma4's vision projector, so on a 4 GB RTX 2050 it
+put **0 of 31** text layers on the GPU and ran the analyst on the CPU.
+
+`GTRADE_OLLAMA_NUM_GPU` sets the number yourself. It is per machine: put it in
+your own `.env`, never in the repository. Measured on gemma4:26b (Q4_K_M) at a
+32k context:
+
+| RTX 2050, 4 GB | result |
+|---|---|
+| unset (Ollama decides: 0) | 3.3 tokens/s |
+| `4` | **5.1 tokens/s**, 3.6 GB of the card in use |
+| `5` or more | does not load: the context no longer fits |
+
+To find the number for your card:
+
+1. Start from about `(VRAM in GB - 2) / 0.5` for gemma4:26b: 4 on a 4 GB card,
+   12 on 8 GB, 20 on 12 GB. On 24 GB set 99, which means every layer.
+2. Run one judgment and look for `offloaded N/31 layers to GPU` in
+   `%LOCALAPPDATA%\Ollama\server.log`.
+3. Raise it until the load fails, then keep the last value that loaded. A
+   smaller context (`OLLAMA_CONTEXT_LENGTH` on the Ollama side) leaves room for
+   more layers.
+
+A value that fits only while the card is idle is safe to keep: when a training
+run is holding the GPU and the load fails, the same request is sent again
+without `num_gpu` and answers on the CPU, slower, instead of not at all.
 
 ### Intraday
 
@@ -1625,8 +1693,13 @@ The switches that change what is served, all default to off:
 | `GTRADE_ANALYST_TEMPERATURE` | unset = 0 without reasoning, the model's own default with it; a number forces one |
 | `GTRADE_ANALYST_PANEL` | the fixed daily panel for `run --panel` |
 | `GTRADE_ANALYST_INTRADAY_PANEL` | the assets `analyst.py intraday` judges when none are named |
-| `GTRADE_ANALYST_TOOL_CALLS` | how many extra sources one judgment may ask for (default 2, `0` disables asking). Each one is another full model round trip, so on a local 26b it is another 9 to 25 minutes |
-| `GTRADE_SEC_CONTACT` | an email for the User-Agent SEC requires; without it `insider_filings` returns the instruction instead of a 403. Never committed: it is your address, not the project's |
+| `GTRADE_ANALYST_TOOL_CALLS` | how many extra sources one judgment may ask for (default 6, `0` disables asking) |
+| `GTRADE_ANALYST_TOOL_ROUNDS` | how many round trips those requests may take (default 2). Each round is another full model call, on a local 26b another 10 to 25 minutes |
+| `GTRADE_ANALYST_REQUIRE_TOOL` | `1` (default): the first reply must ask for evidence before judging; `0` makes asking optional |
+| `GTRADE_ANALYST_MODEL` | the analyst's own model, apart from the research director's (for example `gemma4:26b`) |
+| `GTRADE_ANALYST_HORIZONS` | the horizons a run judges when `--horizons` is not given, in trading days (default `1,20`) |
+| `GTRADE_OLLAMA_NUM_GPU` | how many model layers Ollama puts on the GPU; unset lets Ollama decide. Per machine, see [GPU layers](#gpu-layers-set-for-your-own-card) |
+| `GTRADE_SEC_CONTACT` | an email for the User-Agent SEC requires; without it `company_financials` and `insider_filings` return the instruction instead of a 403. Never committed: it is your address, not the project's |
 | `GTRADE_AR_WIKI_CHARS` | how much research wiki a prompt may carry (default 20000) |
 | `GTRADE_NO_TICKER=1` | the trainer draws no progress bar, for a parent that owns the console |
 | `GTRADE_TF_DETERMINISM=1` | pin the GPU kernels too. Costs nothing measurable (177s against 174s) and is NOT sufficient: two runs under it still scored 0.35 and 0.95 |
@@ -1635,7 +1708,7 @@ The switches that change what is served, all default to off:
 ## Project layout
 
 ```text
-data_engine.py        fetch daily/weekly quotes (Yahoo + MOEX) into market.db
+data_engine.py        fetch daily/weekly quotes (Yahoo + MOEX, Binance for PEPE/SHIB) into market.db
 intraday_fetch.py     hourly bars (Yahoo + MOEX ISS) into intraday.db, for the intraday card
 train_hybrid.py       train the per-asset ensemble + walk-forward selection
 train_chunked.py      RAM-safe full retrain (fresh process per chunk)
