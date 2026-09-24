@@ -352,11 +352,14 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
     # Sources and round trips are bounded apart: one reply may ask for several
     # tools, because each round is another full model call.
     rounds = min(budget, tools.max_rounds())
+    must_ask = bool(budget and rounds and tools.require_first()
+                    and tools.available(today, dossier.get("asset")))
     extra = ""
     if call is None:
         raise ValueError("judge() needs an injected call; see analyst.py")
     prompt = prompt_for(dossier, depth=depth, horizon=horizon,
-                        tool_menu=tools.spec_lines(today) if budget else "",
+                        tool_menu=(tools.spec_lines(today, dossier.get("asset"))
+                                   if budget else ""),
                         session=session)
     allowed = set(dossier)
     # A field the dossier carries as None or [] was shown to the model as empty,
@@ -364,7 +367,7 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
     empty = {k for k, v in dossier.items() if v is None or v == []}
     from core.llm_proposer import ProviderUnavailable, TerminalCallError
 
-    for _ in range(MAX_ATTEMPTS + rounds):
+    for _ in range(MAX_ATTEMPTS + rounds + int(must_ask)):
         try:
             answer = call(prompt + extra)
         except TerminalCallError:
@@ -397,7 +400,17 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
                                  json.dumps(entry.get("result", entry.get("error")),
                                             ensure_ascii=True)[:1800]))
                 extra += "Now return the judgment JSON.\n"
+                must_ask = False
                 continue
+
+        if must_ask:
+            # A judgment before any evidence was asked for. Sent back once:
+            # the prompt said to look first, and this says it again.
+            must_ask = False
+            extra += ("\n\nYou returned a judgment without asking for any "
+                      "evidence. Ask first: reply ONLY with the "
+                      '{"tools": [...]} request.\n')
+            continue
 
         why = []
         parsed = parse_judgment(answer, allowed=allowed, empty=empty, why=why,

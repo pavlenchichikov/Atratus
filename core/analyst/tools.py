@@ -78,12 +78,32 @@ class OpinionSource(Exception):
 
 
 class Tool:
-    def __init__(self, name, args, rewinds, describe, run):
+    def __init__(self, name, args, rewinds, describe, run, applies=None):
         self.name = name
         self.args = args           # {arg: "what it is"}
         self.rewinds = rewinds     # honours `today`, so a backfill may use it
         self.describe = describe
         self.run = run
+        # asset -> bool. The menu shows only what can answer for this asset:
+        # offered SEC filings and US options for SBER, gemma spent two of its
+        # six requests on empty replies (2026-09-24).
+        self.applies = applies
+
+
+def us_listed(asset):
+    """A name with SEC filings and listed US options: a plain US ticker."""
+    import re
+
+    from config import FULL_ASSET_MAP, MOEX_ASSETS
+
+    sym = FULL_ASSET_MAP.get(asset) or asset
+    return asset not in MOEX_ASSETS and bool(re.fullmatch(r"[A-Z]{1,5}(-[A-Z])?", sym))
+
+
+def is_crypto(asset):
+    from config import ASSET_TYPES
+
+    return asset in ASSET_TYPES.get("CRYPTO", [])
 
 
 def register(tool):
@@ -99,20 +119,26 @@ def register(tool):
     return tool
 
 
-def available(today=None):
-    """The tools this run may use. A rewound run keeps only the dated ones."""
-    return [t for t in _REGISTRY.values() if t.rewinds or today is None]
+def available(today=None, asset=None):
+    """The tools this run may use. A rewound run keeps only the dated ones,
+    and with an asset named, only the ones that can answer for it."""
+    return [t for t in _REGISTRY.values()
+            if (t.rewinds or today is None)
+            and (asset is None or t.applies is None or t.applies(asset))]
 
 
-def spec_lines(today=None):
+def spec_lines(today=None, asset=None):
     """The tool menu as it appears in the prompt, or "" when there is none."""
-    tools = available(today)
+    tools = available(today, asset)
     if not tools:
         return ""
     lines = [
         "",
-        ("You may ask for MORE raw evidence before deciding. To do that, "
-         "return this instead of a judgment, with up to %d requests at once:"
+        (("Your FIRST reply must be a request for more raw evidence, not a "
+          "judgment: pick the sources below that bear on this asset and "
+          "horizon, up to %d at once, in this form:" if require_first() else
+          "You may ask for MORE raw evidence before deciding. To do that, "
+          "return this instead of a judgment, with up to %d requests at once:")
          % max_calls()),
         '{"tools": [{"tool": "<name>", "args": {...}}, ...]}',
         ("You get every result together and are asked again. Each round "
@@ -167,6 +193,8 @@ def call(request, asset, today=None):
              "at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")}
     if tool is None:
         return {**entry, "error": "no such tool"}
+    if tool.applies is not None and asset and not tool.applies(asset):
+        return {**entry, "error": "this tool does not cover %s" % asset}
     if today is not None and not tool.rewinds:
         # Not an error the model caused, so it is told plainly rather than
         # being left to wonder why the answer was empty.
@@ -261,7 +289,7 @@ register(Tool(
     args={},
     rewinds=True,
     describe="recent disclosed insider trades (SEC Form 4) for this asset",
-    run=_insider_filings))
+    run=_insider_filings, applies=us_listed))
 
 
 # --------------------------------------------------------------------------
@@ -275,7 +303,7 @@ def _news_search(asset, today=None, query=""):
 
     term = str(query or asset).strip()[:80]
     items = news_analyzer.fetch_news(term, max_articles=NEWS_LIMIT * 5) or []
-    return {"query": term, **diverse_headlines(items, asset)}
+    return {"query": term, **diverse_headlines(items, asset, query=term)}
 
 
 register(Tool(
@@ -405,7 +433,7 @@ register(Tool(
     args={"quarters": "how many recent periods, default 6"},
     rewinds=True,
     describe="revenue, net income, cash flow, EPS and shares as filed with the SEC",
-    run=_company_financials))
+    run=_company_financials, applies=us_listed))
 
 
 # --------------------------------------------------------------------------
@@ -450,7 +478,7 @@ register(Tool(
     args={},
     rewinds=False,
     describe="listed options: put/call open interest and volume for the next two expiries",
-    run=_options_positioning))
+    run=_options_positioning, applies=us_listed))
 
 
 # --------------------------------------------------------------------------
@@ -497,7 +525,7 @@ register(Tool(
     args={},
     rewinds=False,
     describe="Binance perpetuals: funding, open interest and its change, long/short account ratio",
-    run=_crypto_derivatives))
+    run=_crypto_derivatives, applies=is_crypto))
 
 
 # --------------------------------------------------------------------------
@@ -548,6 +576,13 @@ def max_calls():
         return max(0, int(os.getenv("GTRADE_ANALYST_TOOL_CALLS", MAX_CALLS)))
     except ValueError:
         return MAX_CALLS
+
+
+def require_first():
+    """Whether the first reply must ask for evidence. A 26b model left to
+    choose asked for nothing on SBER (2026-09-24) and judged from the dossier
+    alone; the owner wants an agent that goes and looks."""
+    return (os.getenv("GTRADE_ANALYST_REQUIRE_TOOL") or "1").strip() != "0"
 
 
 def max_rounds():

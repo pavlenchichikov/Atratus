@@ -702,19 +702,50 @@ def _headline_age(published, today=None):
         return None
 
 
-def _company_words(asset):
-    """Lower-case words that name the company, for spotting its own channels."""
+def _names(asset):
     try:
         import news_analyzer
 
-        name = news_analyzer.SEARCH_NAMES.get(asset, asset)
+        return [news_analyzer.SEARCH_NAMES.get(asset, asset),
+                news_analyzer.SEARCH_NAMES_RU.get(asset, "")]
     except Exception:
-        name = asset
-    words = {w for w in str(name).lower().replace(",", " ").split() if len(w) >= 4}
+        return [asset]
+
+
+def _words(text, min_len):
+    return {w for w in str(text).lower().replace(",", " ").replace(".", " ").split()
+            if len(w) >= min_len and not w.isdigit()}
+
+
+def _company_words(asset):
+    """Lower-case words that name the company, for spotting its own channels."""
+    words = set().union(*(_words(n, 4) for n in _names(asset)))
     return words | {asset.lower()} if len(asset) >= 3 else words
 
 
-def diverse_headlines(items, asset, limit=NEWS_LIMIT, today=None):
+def _stems(words):
+    """Four-letter stems, so Sber, Sberbank and Сбер all meet one key."""
+    return {w[:4] for w in words if len(w) >= 3}
+
+
+def _relevant(title, asset, query=None):
+    """Whether a title is about what was asked. Google News answered "Sberbank
+    crypto trading" with Kalshi and an Ethereum explainer, and "Sberbank
+    dividend" with an Indian company's payout (2026-09-24), and the model then
+    cited "seven publishers" for news that was not about Sber at all.
+
+    A title must name the company. A search that does not name it (a macro
+    topic) must instead share half of its own significant words."""
+    low = str(title).lower()
+    company = _stems(_company_words(asset))
+    q_words = _words(query or "", 4)
+    if query is None or _stems(q_words) & company:
+        return any(s in low for s in company)
+    q = _stems(q_words)
+    return not q or sum(s in low for s in q) * 2 >= len(q)
+
+
+def diverse_headlines(items, asset, limit=NEWS_LIMIT, today=None, query=None):
     """Headlines spread across publishers, and how wide the spread is.
 
     At most NEWS_PER_PUBLISHER per publisher, taken newest first, so no single
@@ -730,7 +761,7 @@ def diverse_headlines(items, asset, limit=NEWS_LIMIT, today=None):
         if not isinstance(it, dict):
             continue
         title = (it.get("title") or "").strip()
-        if not title:
+        if not title or not _relevant(title, asset, query):
             continue
         age = _headline_age(it.get("published"), today=today)
         if age is not None and age > NEWS_MAX_AGE_DAYS:

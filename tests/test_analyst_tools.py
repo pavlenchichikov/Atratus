@@ -251,3 +251,43 @@ def test_the_shipped_tools_return_material_rather_than_a_verdict():
     for tool in tools._REGISTRY.values():
         text = ("%s %s" % (tool.name, tool.describe)).lower()
         assert not any(w in text for w in tools.OPINION_WORDS)
+
+
+def test_the_first_reply_must_ask_for_evidence(monkeypatch, budget):
+    """Owner, 2026-09-24: an agent that goes and looks. gemma 26b left to
+    choose judged SBER from the dossier alone, so a judgment that arrives
+    before any request is sent back once."""
+    replies = [json.dumps(_judgment(direction="down")),
+               json.dumps({"tools": [{"tool": "probe", "args": {"query": "x"}}]}),
+               json.dumps(_judgment())]
+    seen, calls = [], []
+
+    def call(prompt):
+        seen.append(prompt)
+        return replies.pop(0)
+
+    out = agent.judge(_dossier(), call=call, tool_calls=calls)
+    assert out["direction"] == "up", "the pre-evidence judgment was not kept"
+    assert [c["tool"] for c in calls] == ["probe"]
+    assert "without asking for any evidence" in seen[1]
+    assert "FIRST reply must be a request" in seen[0]
+
+
+def test_the_ask_first_rule_can_be_switched_off(monkeypatch, budget):
+    monkeypatch.setenv("GTRADE_ANALYST_REQUIRE_TOOL", "0")
+    calls = []
+    out = agent.judge(_dossier(), call=lambda p: json.dumps(_judgment()),
+                      tool_calls=calls)
+    assert out["direction"] == "up" and calls == []
+
+
+def test_the_menu_offers_only_what_can_answer_for_the_asset():
+    """SBER was offered SEC filings and US options and spent two of six
+    requests on empty replies (2026-09-24)."""
+    names = lambda a: {t.name for t in tools.available(None, a)}
+    assert "company_financials" not in names("SBER")
+    assert "options_positioning" not in names("SBER")
+    assert {"company_financials", "options_positioning"} <= names("NVDA")
+    assert "crypto_derivatives" in names("BTC") and "crypto_derivatives" not in names("NVDA")
+    entry = tools.call({"tool": "company_financials", "args": {}}, asset="SBER")
+    assert "does not cover SBER" in entry["error"]

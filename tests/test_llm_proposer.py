@@ -740,6 +740,8 @@ def test_the_native_call_builds_ollamas_own_payload(monkeypatch):
 
     import httpx
     monkeypatch.setattr(httpx, "Client", _Client)
+    # .env on the owner's machine sets it; this test pins the bare payload
+    monkeypatch.delenv("GTRADE_OLLAMA_NUM_GPU", raising=False)
     got, trace = lp._ollama_native_chat("http://127.0.0.1:11434/v1", "m", "hi",
                                        0.0, 8000, False)
     assert got == "ok" and trace == ""
@@ -932,3 +934,39 @@ def test_a_lost_trace_is_retried_without_it_on_every_ollama_task(monkeypatch):
     assert lp._backend("wiki")("p") == "## general\nok"
     assert lp._backend("genome")("p") == "## general\nok"
     assert calls == [False, None, False]
+
+
+def test_gpu_layers_are_asked_for_and_dropped_when_the_card_is_full(monkeypatch):
+    """num_gpu=4 is what fits a 4 GB card beside a 32k context (measured
+    2026-09-24: 3.3 -> 5.1 tok/s). With training holding the card the load
+    fails outright, and a CPU answer beats none."""
+    import httpx
+
+    from core import llm_proposer as lp
+    bodies = []
+
+    class _Resp:
+        def __init__(self, ok):
+            self.ok = ok
+
+        def raise_for_status(self):
+            if not self.ok:
+                raise httpx.HTTPStatusError("500", request=None, response=None)
+
+        def json(self):
+            return {"message": {"content": "ok"}}
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        def post(self, url, json=None):
+            bodies.append(dict(json.get("options") or {}))
+            return _Resp(ok=len(bodies) > 1)
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    monkeypatch.setenv("GTRADE_OLLAMA_NUM_GPU", "4")
+    got, _ = lp._ollama_native_chat("http://x", "m", "hi", 0.0, 100, False)
+    assert got == "ok"
+    assert bodies[0]["num_gpu"] == 4
+    assert "num_gpu" not in bodies[1], "the retry runs without the GPU layers"

@@ -574,6 +574,8 @@ def test_a_discarded_attempt_is_named_in_the_run_summary(monkeypatch, tmp_path,
     """A retry costs a full call and used to leave no trace at all: the run
     that prompted this made three calls for two assets and reported
     `written=2 skipped=0 refused=0`."""
+    # retries are the subject here, not the ask-first rule
+    monkeypatch.setenv("GTRADE_ANALYST_REQUIRE_TOOL", "0")
     db = _cli_e2e_db(tmp_path)
     monkeypatch.setattr(store, "DB_PATH", db)
     monkeypatch.setattr("core.track_record.DB_PATH", db)

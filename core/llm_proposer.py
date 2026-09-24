@@ -510,6 +510,12 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
         options["temperature"] = float(temperature)
     if max_tokens is not None:
         options["num_predict"] = int(max_tokens)
+    # Layers to put on the GPU. Ollama's own fit keeps a 2.2 GB free margin
+    # plus 1.3 GB for gemma4's vision projector, so on a 4 GB card it placed
+    # 0 of 31 text layers there (2026-09-24) and ran the analyst on the CPU.
+    num_gpu = (os.getenv("GTRADE_OLLAMA_NUM_GPU") or "").strip()
+    if num_gpu.isdigit():
+        options["num_gpu"] = int(num_gpu)
     payload = {"model": model, "stream": False,
                "messages": [{"role": "user", "content": prompt}]}
     if think is not None:
@@ -524,16 +530,31 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     if timeout is not None and max_tokens is not None:
         timeout = max(timeout, max_tokens / 3.0)
     client = httpx.Client(trust_env=False, timeout=timeout)
+
+    def send(body):
+        try:
+            if think:
+                # Only a trace can loop, so only a traced call pays for streaming.
+                return _ollama_stream_trace(client, url, body)
+            resp = client.post(url, json=body)
+        except httpx.TimeoutException as exc:
+            raise CallTimedOut(
+                f"ollama call timed out after {timeout:.0f}s (model too slow for "
+                "this prompt; try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)") from exc
+        resp.raise_for_status()
+        return resp
+
     try:
-        if think:
-            # Only a trace can loop, so only a traced call pays for streaming.
-            return _ollama_stream_trace(client, url, payload)
-        resp = client.post(url, json=payload)
-    except httpx.TimeoutException as exc:
-        raise CallTimedOut(
-            f"ollama call timed out after {timeout:.0f}s (model too slow for "
-            "this prompt; try a smaller model or raise GTRADE_AR_LLM_TIMEOUT)") from exc
-    resp.raise_for_status()
+        resp = send(payload)
+    except httpx.HTTPStatusError:
+        # num_gpu=4 leaves ~0.5 GB of a 4 GB card, so a training run holding the
+        # GPU makes the load fail outright. Slower on the CPU beats no answer.
+        if "num_gpu" not in options:
+            raise
+        options.pop("num_gpu")
+        resp = send(payload)
+    if isinstance(resp, tuple):
+        return resp
     msg = (resp.json().get("message") or {})
     # Separate fields, which is the point of this endpoint: an empty answer
     # beside a long trace is a budget problem, an empty answer beside no trace

@@ -672,7 +672,7 @@ def test_the_guru_verdict_never_reaches_the_dossier(db, monkeypatch):
 
 def _item(source, age=1, title=None):
     day = (datetime.date.today() - datetime.timedelta(days=age)).isoformat()
-    return {"title": title or "%s story %d" % (source, age), "source": source,
+    return {"title": title or "Sberbank: %s story %d" % (source, age), "source": source,
             "published": day}
 
 
@@ -694,3 +694,18 @@ def test_stale_news_is_dropped_and_the_companys_own_channel_is_marked():
     assert [h["source"] for h in out["headlines"]] == ["Sberbank Press", "RBC"]
     assert out["headlines"][0]["company_own"] is True
     assert out["news_publishers"] == 1, "the company is not an independent outlet"
+
+
+def test_a_headline_that_does_not_name_the_company_is_dropped():
+    """Google News answered "Sberbank crypto trading" with Kalshi and an
+    Ethereum explainer (2026-09-24); a macro search keeps titles that share
+    its own words instead."""
+    items = [_item("MEXC", 1, "ETH Blockchain: How It Works"),
+             _item("RBC", 1, "Сбер повысил ставки по вкладам"),
+             _item("Reuters", 2, "Sberbank lowers lending expectations")]
+    kept = [h["source"] for h in dossier.diverse_headlines(items, "SBER")["headlines"]]
+    assert kept == ["RBC", "Reuters"]
+    macro = [_item("CBR", 1, "Bank of Russia cuts the key rate to 14%"),
+             _item("MEXC", 1, "ETH Blockchain: How It Works")]
+    out = dossier.diverse_headlines(macro, "SBER", query="Bank of Russia key rate")
+    assert [h["source"] for h in out["headlines"]] == ["CBR"]
