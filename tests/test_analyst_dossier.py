@@ -42,20 +42,16 @@ def _no_network(monkeypatch):
     """The context sources each reach a database or the network on their own.
     No test may trigger any of them unmocked, so every one is stubbed here
     regardless of which test is running."""
-    monkeypatch.setattr("core.dashboard.guru_for_asset", lambda asset, db_path=None: None)
     monkeypatch.setattr("core.events.earnings_for",
                         lambda symbols_by_asset, session=None, fetch=None: {})
     monkeypatch.setattr("core.events.load_macro", lambda path=None: [])
-    # The profile and the headlines reach yfinance and the news feeds, so they
-    # are stubbed at the dossier's own boundary: patching yfinance itself would
-    # leave the news path live, and patching news_analyzer would leave yfinance
-    # live. One seam per source, both closed.
+    # The profile reaches yfinance, so it is stubbed at the dossier's own
+    # boundary.
     from core.analyst import dossier as _d
     # dict(PROFILE_BLANK), not a restatement of it: the stub must inherit the
     # real block's shape or it goes stale the next time a field is added, which
     # is exactly what happened when the valuation fields arrived.
     monkeypatch.setattr(_d, "_profile", lambda asset: dict(_d.PROFILE_BLANK))
-    monkeypatch.setattr(_d, "_headlines", lambda asset, limit=6: {"headlines": []})
     # The regime, market and sector blocks read the REAL market.db through
     # their own engines, not through the db_path this suite hands in, and
     # get_market_breadth walks every table in it (12.7s measured). Stubbed at
@@ -111,7 +107,7 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # volatility against this asset's own norm, not an absolute threshold
         "vol_20", "vol_20_vs_60",
         # fundamentals and the calendar
-        "guru_verdict", "guru_pct", "next_earnings", "macro_events",
+        "next_earnings", "macro_events",
         # the analyst's OWN history on this asset. Not the ensemble's: these
         # come from analyst_log, so they say what this agent previously called
         # and how that turned out, which is the one track record it is entitled
@@ -141,8 +137,6 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # without which a P/E of 3.7 has no age at all.
         "ps", "pb", "ev_ebitda", "ebitda_margin", "roa", "nim",
         "div_yield_pref", "fundamentals_asof",
-        # raw headlines, without the sentiment score computed on them
-        "headlines",
         # this asset's own regime, classified from prices alone. rsi_14 is new
         # to the dossier entirely, and atr_vs_90d measures volatility against a
         # much longer norm than vol_20_vs_60 does.
@@ -248,26 +242,24 @@ def test_moscow_capitalisation_is_rescaled_out_of_billions(monkeypatch):
 def test_a_block_is_unread_only_when_it_had_something_to_read():
     """A coverage line that counts blank blocks as unread cries wolf on every
     asset Yahoo cannot resolve."""
-    assert dossier.blocks_of(["headlines", "ret_5"]) == {"news", "movement"}
-    thin = {"asset": "SBER", "ret_5": 0.01, "headlines": [], "pe": None}
+    assert dossier.blocks_of(["pe", "ret_5"]) == {"fundamentals", "movement"}
+    thin = {"asset": "SBER", "ret_5": 0.01, "pe": None}
     assert dossier.available_blocks(thin) == {"movement"}
-    fat = {"asset": "SBER", "ret_5": 0.01, "headlines": ["a"], "pe": 3.7}
-    assert dossier.available_blocks(fat) == {"movement", "news", "fundamentals"}
+    fat = {"asset": "SBER", "ret_5": 0.01, "pe": 3.7}
+    assert dossier.available_blocks(fat) == {"movement", "fundamentals"}
 
 
 def test_a_dead_network_is_visible_block_by_block():
     """Every network field is wrapped in _safe, so a run with no connection
     produces judgments and no complaint. filled_blocks is what the CLI counts
     to say so out loud."""
-    full = {"asset": "AAPL", "headlines": ["x"], "guru_verdict": "BUY",
-            "pe": 3.5, "next_earnings": "2026-09-01"}
+    full = {"asset": "AAPL", "pe": 3.5, "next_earnings": "2026-09-01"}
     assert dossier.filled_blocks(full) == {k: 1 for k in dossier.NETWORK_BLOCKS}
     assert dossier.filled_blocks({"asset": "AAPL"}) == {
         k: 0 for k in dossier.NETWORK_BLOCKS}
     # a Moscow name carrying only its Smart-Lab valuation is a FILLED block,
     # not a thin one: sector and market cap were never available for it
-    thin = {"asset": "SBER", "headlines": ["x"], "guru_verdict": "BUY",
-            "sector": None, "market_cap": None, "pe": 3.5}
+    thin = {"asset": "SBER", "sector": None, "market_cap": None, "pe": 3.5}
     assert dossier.filled_blocks(thin)["fundamentals"] == 1
 
 
@@ -281,7 +273,6 @@ def test_what_an_asset_cannot_have_is_not_a_missing_source():
     assert dossier.filled_blocks({"asset": "SBER"})["fundamentals"] == 0
     gold = dossier.filled_blocks({"asset": "GOLD"})
     assert gold["earnings"] is None and gold["fundamentals"] is None
-    assert gold["headlines"] == 0 and gold["guru"] == 0
     aapl = dossier.filled_blocks({"asset": "AAPL"})
     assert aapl["earnings"] == 0 and aapl["fundamentals"] == 0
 
@@ -326,10 +317,7 @@ def test_an_asset_with_no_bars_returns_an_empty_dossier(db):
 
 
 def test_context_fields_are_mapped_from_the_real_source_shapes(db, monkeypatch):
-    # guru_for_asset returns "verdict"/"pct", not "council_verdict"/"council_pct";
-    # load_macro returns "name", not "title". This test pins those field names.
-    monkeypatch.setattr("core.dashboard.guru_for_asset",
-                        lambda asset, db_path=None: {"verdict": "BUY", "pct": 75.0})
+    # load_macro returns "name", not "title". This test pins that field name.
     monkeypatch.setattr(
         "core.events.earnings_for",
         lambda symbols_by_asset, session=None, fetch=None:
@@ -341,8 +329,6 @@ def test_context_fields_are_mapped_from_the_real_source_shapes(db, monkeypatch):
                             "importance": "high", "region": None,
                             "confirmed": True}])
     d = dossier.build("SBER", db_path=db)
-    assert d["guru_verdict"] == "BUY"
-    assert d["guru_pct"] == 75.0
     assert d["next_earnings"] == {"date": "2026-09-01", "confirmed": True}
     # the entry carries its distance now: an event in two days and one in
     # thirteen are different facts and the name alone could not say which.
@@ -353,12 +339,9 @@ def test_context_fields_are_mapped_from_the_real_source_shapes(db, monkeypatch):
 def test_a_dead_context_source_does_not_stop_the_dossier(db, monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("network is down")
-    monkeypatch.setattr("core.dashboard.guru_for_asset", _boom)
     monkeypatch.setattr("core.events.earnings_for", _boom)
     monkeypatch.setattr("core.events.load_macro", _boom)
     d = dossier.build("SBER", db_path=db)
-    assert d["guru_verdict"] is None
-    assert d["guru_pct"] is None
     assert d["next_earnings"] is None
     assert d["macro_events"] == []
 
@@ -459,7 +442,7 @@ def test_the_sector_group_comes_from_the_projects_own_map(monkeypatch):
 
 def test_a_rewound_dossier_carries_nothing_from_after_its_date(db, monkeypatch):
     """The trap in backfilling judgments. Only the bars were ever clipped by
-    `today`; fundamentals, headlines, the guru verdict and the three market
+    `today`; fundamentals and the three market
     classifiers all answer as of NOW, and regime/breadth/sector read the whole
     price table with no date argument at all. A backfill fed any of that would
     not be a weak measurement, it would be a flattering one.
@@ -477,23 +460,21 @@ def test_a_rewound_dossier_carries_nothing_from_after_its_date(db, monkeypatch):
                                      breadth_above_sma50_pct=57.8))
     monkeypatch.setattr(_d, "_sector_state",
                         lambda a: dict(_d._SECTOR_BLANK, sector_group="Russia"))
-    monkeypatch.setattr(_d, "_headlines", lambda a, limit=6: {"headlines": ["x"]})
     monkeypatch.setattr(_d, "_context", lambda a: {
-        "guru_verdict": "BUY", "guru_pct": 75.0,
         "next_earnings": "2026-09-01", "macro_events": ["FOMC"]})
 
     live = dossier.build("SBER", db_path=db)
     assert live["pe"] == 3.5 and live["regime_trend"] == "DOWNTREND"
-    assert live["guru_verdict"] == "BUY" and live["headlines"] == ["x"]
+    assert live["next_earnings"] == "2026-09-01"
     assert live["breadth_above_sma50_pct"] == 57.8
     assert live["sector_group"] == "Russia"
 
     past = dossier.build("SBER", db_path=db, today="2026-01-20")
     assert set(past) == set(live), "the shape must not depend on the date"
     for key in ("pe", "sector", "regime_trend", "breadth_above_sma50_pct",
-                "sector_group", "guru_verdict", "guru_pct", "next_earnings"):
+                "sector_group", "next_earnings"):
         assert past[key] is None, key
-    assert past["headlines"] == [] and past["macro_events"] == []
+    assert past["macro_events"] == []
     # and the price half really is rewound rather than blanked too
     assert past["close"] is not None and past["close"] != live["close"]
 
@@ -671,3 +652,16 @@ def test_a_bar_with_no_range_reports_none_rather_than_a_calm_zero():
     real = flat[:-1] + [{"date": "2026-09-03", "open": 10.0, "high": 10.5,
                          "low": 9.5, "close": 10.0}]
     assert dossier._flow("X", real, 0.5, None, None)["range_atr"] == pytest.approx(2.0)
+
+
+def test_no_one_elses_opinion_reaches_the_dossier(db, monkeypatch):
+    """Owner's decision, 2026-09-24: the judgment stands on raw data. SBER was
+    handed six stories about its own India expansion; the guru council is an
+    opinion however well scored. The guru stub is the positive control: were
+    _context still reading it, the verdict would land in the dossier."""
+    monkeypatch.setattr("core.dashboard.guru_for_asset",
+                        lambda asset, db_path=None: {"verdict": "BUY", "pct": 75.0})
+    d = dossier.build("SBER", db_path=db)
+    for key in ("headlines", "guru_verdict", "guru_pct"):
+        assert key in dossier.FORBIDDEN_KEYS
+        assert key not in d, key

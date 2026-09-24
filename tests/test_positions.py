@@ -68,3 +68,14 @@ def test_empty_and_all_flat():
     r = build_positions([_b("d1", "WAIT"), _b("d2", "WAIT")])
     assert r["current"] == {"state": "FLAT"}
     assert r["trades"] == [] and r["markers"] == []
+
+
+def test_a_gated_bar_is_flat_as_shown():
+    """The radar showed WAIT on a live-gated BUY; no position may run through it."""
+    bars = [
+        {"date": "d1", "signal": "BUY", "ret": 0.01},
+        {"date": "d2", "signal": "BUY", "sig_shown": "WAIT", "ret": -0.02},
+        {"date": "d3", "signal": "BUY", "sig_shown": None, "ret": 0.01},
+    ]
+    sides = [s["side"] for s in build_positions(bars)["segments"]]
+    assert sides == [1, 0, 1]

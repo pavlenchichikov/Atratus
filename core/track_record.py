@@ -409,7 +409,8 @@ def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
         # that has only been READ since has not migrated them in.
         extra = "".join(
             (", " + name) if name in cols else (", NULL AS " + name)
-            for name in ("timing_action", "shadow_action", "tf_prob", "tcn_prob"))
+            for name in ("timing_action", "shadow_action", "tf_prob", "tcn_prob",
+                         "sig_shown"))
         try:
             rows = con.execute(
                 "SELECT date, signal, probability, actual_next_ret, correct, "
@@ -424,8 +425,9 @@ def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
              "actual_next_ret": r, "correct": c,
              "cb_prob": cb, "lstm_prob": lstm,
              "tf_prob": tf, "tcn_prob": tcn,
-             "timing_action": t_act, "shadow_action": s_act}
-            for d, s, p, r, c, cb, lstm, t_act, s_act, tf, tcn in rows
+             "timing_action": t_act, "shadow_action": s_act,
+             "sig_shown": shown}
+            for d, s, p, r, c, cb, lstm, t_act, s_act, tf, tcn, shown in rows
         ]
 
 

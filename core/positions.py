@@ -23,6 +23,15 @@ def _side(signal) -> int:
     return 0
 
 
+def _bar_side(bar) -> int:
+    """The side the owner was SHOWN. A live-gated bar keeps the model's raw call
+    in `signal` and the WAIT the radar displayed in `sig_shown`; building
+    positions from the raw call drew trades nobody could have taken (SBER,
+    2026-09-17/18: BUY p=1.00 gated to WAIT, still counted inside a long).
+    Rows logged before sig_shown existed fall back to the raw call."""
+    return _side(bar.get("sig_shown") or bar["signal"])
+
+
 def _segment_return(side: int, seg_bars: list):
     """Chained return of a held position over its bars, or None if no bar in the
     segment has a realized forward return yet."""
@@ -56,9 +65,9 @@ def build_positions(bars: list) -> dict:
     segments = []
     i = 0
     while i < n:
-        side = _side(bars[i]["signal"])
+        side = _bar_side(bars[i])
         j = i
-        while j + 1 < n and _side(bars[j + 1]["signal"]) == side:
+        while j + 1 < n and _bar_side(bars[j + 1]) == side:
             j += 1
         seg_bars = bars[i:j + 1]
         segments.append({

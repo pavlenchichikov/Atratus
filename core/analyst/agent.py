@@ -81,8 +81,8 @@ SESSION_TAIL = (
     "- vol_regime here means the size of the session's high-low range against "
     "this asset's usual session: calm = narrow, normal, elevated = wide.\n"
     "- stand_aside is true|false: true when the session should not be traded at "
-    "all, for example an event inside it (macro_events, next_earnings) or news "
-    "that makes the range unpredictable. stand_aside_reason is one sentence.\n"
+    "all, for example an event inside it (macro_events, next_earnings) that "
+    "makes the range unpredictable. stand_aside_reason is one sentence.\n"
     'Add these keys to the JSON: "gap": "up|down|flat", "stand_aside": '
     'true|false, "stand_aside_reason": "one sentence".'
 )
@@ -110,9 +110,8 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
     Note what is absent: the ensemble's probability, signal, timing/shadow
     action - no channel of the model's own opinion reaches this prompt (see
     core/analyst/dossier.py's FORBIDDEN_KEYS, which is what actually
-    enforces that). The words BUY and SELL DO appear, by design, whenever the
-    dossier carries a guru_verdict: that is the guru council's own
-    fundamentals opinion, a second, independent source, not the ensemble's.
+    enforces that). Nobody else's opinion reaches it either: no headlines and
+    no guru verdict, by the owner's decision of 2026-09-24.
     """
     return (
         "You are an independent market analyst. Below is everything known "
@@ -142,17 +141,15 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
           "against this asset's own recent norm, so a value near 1 means "
           "ordinary conditions for THIS asset regardless of the absolute "
           "number.\n"
-          + ("4. What the fundamentals and the calendar add. guru_verdict "
-             "is a value-investing council and pe, roe, div_yield, "
-             "debt_ebitda, market_cap, beta and short_ratio are slow facts. "
+          + ("4. What the fundamentals and the calendar add. pe, roe, "
+             "div_yield, debt_ebitda, market_cap, beta and short_ratio are slow facts. "
              "Over %s they are part of the case rather than decoration, so "
              "weigh them instead of waving them off. ex_dividend_date, "
              "next_earnings and macro_events matter if they fall inside the "
              "window.\n" % _span(horizon, dossier.get("asset"))
              if int(horizon) > 1 else
              "4. What the fundamentals and the calendar add, if anything. "
-             "guru_verdict is a value-investing council and pe, roe, "
-             "div_yield, debt_ebitda, market_cap, beta and short_ratio are "
+             "pe, roe, div_yield, debt_ebitda, market_cap, beta and short_ratio are "
              "slow facts; say plainly when they are irrelevant to a one-day "
              "view rather than citing them for the sake of it. Two are NOT "
              "slow: ex_dividend_date, because a dividend gap looks exactly "
@@ -165,10 +162,9 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
           "policy_rate_days_since_change how long it has sat there. A bank on "
           "a P/E of 3.7 with a 13.6 percent yield is a bet on that number, "
           "and a cutting cycle and a hiking one are opposite cases for it.\n"
-          "5. The news. headlines is the actual wire, not a sentiment score. "
-          "Read it. If it says something the numbers do not, say so; if it is "
-          "stale, generic, or about a different part of the business, say "
-          "that instead of passing over it in silence.\n"
+          "5. There is no news and no one's rating here, on purpose: the "
+          "judgment is yours, formed from the data above. Do not import a "
+          "story you remember about this company in their place.\n"
           "6. Whether it moved alone. benchmark_ret_1 and benchmark_ret_20 "
           "are its index, corr_to_benchmark_60 how tightly it usually "
           "follows, breadth_above_sma50_pct and breadth_positive_20d_pct how "

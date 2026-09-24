@@ -18,7 +18,6 @@ def _dossier():
     return {"asset": "SBER", "date": "2026-01-20", "close": 100.0, "atr": 2.0,
             "atr_pct": 0.02, "ret_1": 0.001, "ret_5": 0.01, "ret_20": -0.03,
             "high_20": 104.0, "low_20": 96.0, "bars_available": 120,
-            "guru_verdict": "BUY", "guru_pct": 62.0,
             "next_earnings": {"date": "2026-02-01", "confirmed": True},
             "macro_events": ["CPI"]}
 
@@ -134,10 +133,8 @@ def test_two_json_objects_returns_the_first():
 
 
 def test_the_prompt_never_contains_the_ensembles_opinion():
-    # The dossier's guru_verdict is legitimately "BUY" here - the guru
-    # council's fundamentals opinion is included by design (dossier.py's own
-    # docstring says so). What must never reach the prompt is the ENSEMBLE's
-    # channels: its probability and its emitted signal/timing/shadow actions.
+    # What must never reach the prompt is the ENSEMBLE's channels: its
+    # probability and its emitted signal/timing/shadow actions.
     text = agent.prompt_for(_dossier()).lower()
     for banned in ("probability", "cb_prob", "lstm_prob", "meta_prob",
                    "timing_action", "shadow_action", "sig_shown"):
@@ -298,7 +295,7 @@ def test_the_checklist_names_the_fields_it_expects_to_be_read():
     for horizon in (1, 5):
         instructions = agent.prompt_for(
             d, depth="full", horizon=horizon).split("in order")[1]
-        for field in ("headlines", "breadth_above_sma50_pct", "cross_asset_corr",
+        for field in ("breadth_above_sma50_pct", "cross_asset_corr",
                       "vix_level", "regime_trend", "rsi_14", "sector_momentum",
                       "volume_vs_20", "turnover", "gap_open", "range_atr",
                       "ex_dividend_date", "market_cap"):

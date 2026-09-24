@@ -26,6 +26,11 @@ FORBIDDEN_KEYS = frozenset({
     # A dossier carrying it would be look-ahead, which is worse than the
     # failure this set was written to catch.
     "actual_next_ret",
+    # Somebody else's reading of the asset, removed by decision of the owner,
+    # 2026-09-24: the judgment stands on raw data alone. SBER's feed was six
+    # stories about its own India expansion, the company's framing of itself,
+    # and the guru council is a value-investing opinion however well scored.
+    "headlines", "guru_verdict", "guru_pct",
 })
 
 HISTORY_BARS = 120
@@ -54,15 +59,11 @@ def _context(asset):
     must not stop `build()` from returning a fixed-shape dossier either.
     """
     from config import FULL_ASSET_MAP
-    from core import events  # imported here, not at module level: both reach
-    from core.dashboard import guru_for_asset  # the network
+    from core import events  # imported here, not at module level: it reaches the network
 
-    verdict = _safe(lambda: guru_for_asset(asset)) or {}
     earnings = _safe(
         lambda: events.earnings_for({asset: FULL_ASSET_MAP[asset]})) or {}
     return {
-        "guru_verdict": verdict.get("verdict"),
-        "guru_pct": verdict.get("pct"),
         "next_earnings": earnings.get(asset),
         "macro_events": _safe(lambda: _macro_for(asset), default=[]),
     }
@@ -694,50 +695,11 @@ def _headline_age(published, today=None):
         return None
 
 
-def _headlines(asset, limit=6, today=None):
-    """Raw headlines with their provenance, and no sentiment score.
-
-    A headline is material the analyst can read; a sentiment number is somebody
-    else's reading of it, and the whole point of this agent is that it forms
-    its own. What is NOT somebody's reading is who published it, when, and how
-    much the project already trusts that publisher - news_analyzer keeps a
-    credibility weight per feed (Reuters 1.5, a community board 1.0) and the
-    dossier was throwing all three away and sending bare strings.
-
-    Ordered by AGE, not by news_analyzer's own ranking. That sort is by
-    |weighted_score|, which is sentiment magnitude, so letting it choose the
-    six the analyst sees would be the sentiment model picking the evidence
-    through the back door - the one thing this block exists to avoid.
-    """
-    try:
-        import news_analyzer
-
-        # asked wider than `limit` because the pick is re-made here by date
-        items = news_analyzer.fetch_news(asset, max_articles=limit * 3) or []
-    except Exception:
-        return {"headlines": []}
-    out = []
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        title = (it.get("title") or "").strip()
-        if not title:
-            continue
-        out.append({"title": title[:180],
-                    "source": (it.get("source") or "unknown")[:40],
-                    "age_days": _headline_age(it.get("published"), today=today),
-                    "credibility": it.get("credibility")})
-    # unknown age last rather than first: a headline that would not say when it
-    # was written does not get to lead.
-    out.sort(key=lambda h: (h["age_days"] is None, h["age_days"] or 0))
-    return {"headlines": out[:limit]}
-
-
 # Which dossier blocks come off the network rather than out of market.db.
 # Ordered, because they are printed as a run summary. macro is NOT here: it is
 # read from a local calendar file, so an empty one says nothing about the
 # connection and gets its own line.
-NETWORK_BLOCKS = ("headlines", "guru", "fundamentals", "earnings")
+NETWORK_BLOCKS = ("fundamentals", "earnings")
 
 # What kind of evidence each field is. Used to report, per run, which KINDS of
 # evidence a judgment drew on: a count of cited fields hides the case that
@@ -763,8 +725,6 @@ BLOCKS = {
                      "float_shares", "short_ratio", "beta", "ps", "pb",
                      "ev_ebitda", "ebitda_margin", "roa", "nim",
                      "div_yield_pref", "fundamentals_asof"),
-    "opinion": ("guru_verdict", "guru_pct"),
-    "news": ("headlines",),
     # The bank's calendar and the bank's rate are one subject: when it
     # decides, and what it decided last time.
     "calendar": ("next_earnings", "macro_events", "ex_dividend_date",
@@ -823,8 +783,6 @@ def filled_blocks(dossier):
     """
     funda_ok, earn_ok = _applicable(dossier.get("asset"))
     return {
-        "headlines": int(bool(dossier.get("headlines"))),
-        "guru": int(dossier.get("guru_verdict") is not None),
         "fundamentals": int(any(dossier.get(k) is not None for k in
                                 ("sector", "market_cap", "beta", "pe", "roe",
                                  "div_yield"))) if funda_ok else None,
@@ -877,14 +835,13 @@ def _as_of(asset, today):
     """
     if today is None:
         return {**_profile(asset), **_regime(asset), **_market_state(),
-                **_sector_state(asset), **_headlines(asset), **_context(asset),
+                **_sector_state(asset), **_context(asset),
                 **_performance(asset), **_policy_rate(asset),
                 **_own_record(asset)}
     # The year block is on the rewinding side with the own record: it is
     # computed from market.db prices, which are dated, and core/performance.py
     # bounds the window at both ends for exactly this call.
     return {**PROFILE_BLANK, **_REGIME_BLANK, **_MARKET_BLANK, **_SECTOR_BLANK,
-            "headlines": [], "guru_verdict": None, "guru_pct": None,
             "next_earnings": None, "macro_events": [],
             **_performance(asset, today=today),
             **_policy_rate(asset, today=today),

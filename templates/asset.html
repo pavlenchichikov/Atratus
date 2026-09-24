@@ -196,7 +196,7 @@
   {% endif %}
   {% if analyst.key_risk %}<p><b>Key risk.</b> {{ analyst.key_risk }}</p>{% endif %}
   {% if analyst.thesis %}<p>{{ analyst.thesis }}</p>{% endif %}
-  <p class="dim mono">judged {{ analyst.date }}{% if analyst.evidence %} &middot; read: {{ analyst.evidence|join(", ") }}{% endif %}</p>
+  <p class="dim mono">judged {{ analyst.date }}{% if analyst.age_days and analyst.age_days > 3 %} &middot; <b class="t-sell">{{ analyst.age_days }} days old, run it again on <a href="/analyst">the analyst page</a></b>{% endif %}{% if analyst.evidence %} &middot; read: {{ analyst.evidence|join(", ") }}{% endif %}</p>
 </section>
 {% endif %}
 
@@ -453,7 +453,8 @@ fetch("/api/ohlc/{{ asset }}?days=120")
       {% for t in track %}
       <tr>
         <td class="dim mono">{{ t.date }}</td>
-        <td><span class="chip chip-{{ t.signal }}">{{ t.signal }}</span></td>
+        <td>{% set shown = t.sig_shown or t.signal %}<span class="chip chip-{{ shown }}">{{ shown }}</span>
+          {% if shown != t.signal %}<span class="dim" title="the model said {{ t.signal }}, the live gate showed {{ shown }}">gated {{ t.signal }}</span>{% endif %}</td>
         <td class="num mono">{{ "%.2f"|format(t.probability) }}</td>
         <td class="num mono dim">{% if t.cb_prob is not none %}{{ "%.2f"|format(t.cb_prob) }}{% else %}-{% endif %}</td>
         <td class="num mono dim">{% if t.lstm_prob is not none %}{{ "%.2f"|format(t.lstm_prob) }}{% else %}-{% endif %}</td>

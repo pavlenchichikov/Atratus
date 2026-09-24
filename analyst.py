@@ -221,8 +221,8 @@ def cmd_run(args):
         return 1
     as_of = getattr(args, "as_of", None)
     if as_of:
-        print("[analyst] as-of %s: the dossier is rewound, so fundamentals, "
-              "headlines, the guru verdict and the market classifiers are "
+        print("[analyst] as-of %s: the dossier is rewound, so fundamentals "
+              "and the market classifiers are "
               "blank. They cannot be fetched for a past date and faking them "
               "would be look-ahead." % as_of)
 
@@ -679,8 +679,8 @@ def main(argv=None):
                           "restore")
     run.add_argument("--as-of", dest="as_of",
                      help="judge a PAST date (YYYY-MM-DD) instead of today. The "
-                          "dossier is rewound: fundamentals, headlines, the guru "
-                          "verdict and the three market classifiers cannot be, "
+                          "dossier is rewound: fundamentals and the three "
+                          "market classifiers cannot be, "
                           "so they come back blank rather than carrying data "
                           "from after the date being judged")
     run.set_defaults(fn=cmd_run)

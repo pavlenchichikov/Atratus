@@ -125,6 +125,13 @@ def _analyst_for_asset(name):
         row["evidence"] = json.loads(row.get("evidence_json") or "[]")
     except Exception:
         row["evidence"] = []
+    # The analyst runs on demand, so a judgment can sit on the card for a week
+    # with a "key risk" whose date has already passed. Say how old it is.
+    try:
+        row["age_days"] = (datetime.now().date()
+                           - datetime.strptime(str(row["date"])[:10], "%Y-%m-%d").date()).days
+    except Exception:
+        row["age_days"] = None
     return row
 
 
@@ -597,7 +604,8 @@ def asset_page(request: Request, name: str):
     # Collapse the per-bar signals into positions: enter/exit markers for the
     # chart, a state ribbon, a trade log and the current-position card.
     pos = positions_mod.build_positions(
-        [{"date": t["date"], "signal": t["signal"], "ret": t["actual_next_ret"]}
+        [{"date": t["date"], "signal": t["signal"], "sig_shown": t["sig_shown"],
+          "ret": t["actual_next_ret"]}
          for t in reversed(track)])
     markers = pos["markers"]
     tail = dashboard.tail_for_asset(name)

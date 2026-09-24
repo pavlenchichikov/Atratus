@@ -338,6 +338,66 @@ def fetch_moex_smart(symbol, last_date):
     print(f"[OK] (+{len(df)} new bars)")
     return df.set_index('Date')
 
+# Assets Yahoo quotes too coarsely to use. It rounds these to 1e-6 and 1e-8, so
+# measured 2026-09-24 over 120 days 90% of PEPE's closes and 81% of SHIB's
+# repeated the previous one, a move of one rounding step read as -20% on the
+# radar, and return correlation with Binance was 0.67 and 0.58 (every other
+# coin 0.998+). Binance quotes them to 8 significant digits. Only these two: on
+# the other coins Binance matches Yahoo to 0.1% but has shorter history and a
+# single-venue volume 8-25x smaller, which would shift every volume feature.
+BINANCE_ASSETS = {"PEPE": "PEPEUSDT", "SHIB": "SHIBUSDT"}
+BINANCE_URL = "https://api.binance.com/api/v3/klines"
+
+
+def _binance_frame(klines, now_ms):
+    """Binance klines -> the OHLCV frame _save_df takes, finished candles only.
+
+    A candle whose close time is still ahead is the session in progress, the
+    defect _drop_unfinished_session exists for on the Yahoo side. Volume is the
+    QUOTE volume (USDT), because Yahoo's crypto volume is in dollars too."""
+    rows = [k for k in klines if int(k[6]) < now_ms]
+    df = pd.DataFrame({
+        "Date": pd.to_datetime([int(k[0]) for k in rows], unit="ms"),
+        "Open": [float(k[1]) for k in rows], "High": [float(k[2]) for k in rows],
+        "Low": [float(k[3]) for k in rows], "Close": [float(k[4]) for k in rows],
+        "Volume": [float(k[7]) for k in rows],
+    })
+    return df.set_index("Date")
+
+
+def fetch_binance(symbol, last_date, interval="1d"):
+    """Daily ("1d") or weekly ("1w") bars for a BINANCE_ASSETS key."""
+    pair = BINANCE_ASSETS[symbol]
+    print(f"   - [BINANCE] {pair:<12}", end=" ", flush=True)
+    now_ms = int(time.time() * 1000)
+    start = (int(pd.Timestamp(last_date).timestamp() * 1000) + 1 if last_date is not None
+             else now_ms - HISTORY_DAYS * 86400 * 1000)
+    klines = []
+    try:
+        while True:
+            r = net.http_get(f"{BINANCE_URL}?symbol={pair}&interval={interval}"
+                             f"&startTime={start}&limit=1000", route="auto")
+            batch = r.json()
+            if not isinstance(batch, list):
+                raise TypeError(str(batch)[:120])
+            klines.extend(batch)
+            if len(batch) < 1000:
+                break
+            start = int(batch[-1][0]) + 1
+    except Exception as exc:
+        logger.warning("Binance fetch error for %s: %s", pair, exc)
+        print("[ERR] (Binance)")
+        return None
+    df = _binance_frame(klines, now_ms)
+    if last_date is not None:
+        df = df[df.index > pd.Timestamp(last_date)]
+    if df.empty:
+        print("[OK] (UP_TO_DATE)")
+        return None
+    print(f"[OK] (+{len(df)} bars)")
+    return df
+
+
 def fetch_moex_weekly(symbol, last_date):
     """Fetch weekly (interval=7) OHLCV bars from MOEX ISS API."""
     clean = symbol.split('.')[0]
@@ -637,7 +697,10 @@ def _fetch_and_save_daily(n, s):
     last_dt = None if BACKFILL else get_last_date(table_name)
     _tls.buf = io.StringIO()
     try:
-        df = fetch_moex_smart(s, last_dt) if n in MOEX_TARGETS else fetch_yahoo_smart(n, last_dt)
+        if n in BINANCE_ASSETS:
+            df = fetch_binance(n, last_dt, "1d")
+        else:
+            df = fetch_moex_smart(s, last_dt) if n in MOEX_TARGETS else fetch_yahoo_smart(n, last_dt)
         raw_out = _tls.buf.getvalue()
     except Exception as e:
         logger.error(f"Fetch error {n}: {e}")
@@ -662,7 +725,10 @@ def _fetch_and_save_weekly(n, s):
     last_dt = None if BACKFILL else get_last_date(table_name)
     _tls.buf = io.StringIO()
     try:
-        df = fetch_moex_weekly(s, last_dt) if n in MOEX_TARGETS else fetch_yahoo_weekly(n, last_dt)
+        if n in BINANCE_ASSETS:
+            df = fetch_binance(n, last_dt, "1w")
+        else:
+            df = fetch_moex_weekly(s, last_dt) if n in MOEX_TARGETS else fetch_yahoo_weekly(n, last_dt)
         raw_out = _tls.buf.getvalue()
     except Exception as e:
         logger.error(f"Weekly fetch error {n}: {e}")

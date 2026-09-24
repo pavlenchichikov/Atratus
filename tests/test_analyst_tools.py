@@ -22,6 +22,25 @@ def _judgment(**over):
             "evidence": ["ret_20"], **over}
 
 
+@pytest.fixture(autouse=True)
+def probe(monkeypatch):
+    """A live-only tool for the mechanics below. news_search used to play this
+    part; it left with the rest of the news on 2026-09-24."""
+    monkeypatch.setitem(tools._REGISTRY, "probe", tools.Tool(
+        name="probe", args={"query": "what to look up"}, rewinds=False,
+        describe="a live-only test source", run=lambda **kw: {"items": []}))
+
+
+def test_news_and_the_guru_are_refused_as_opinion_sources():
+    """Owner's decision, 2026-09-24: the analyst reads raw data only."""
+    for name, describe in (("news_search", "search the news feeds"),
+                           ("council", "the guru council verdict")):
+        with pytest.raises(tools.OpinionSource):
+            tools.register(tools.Tool(name=name, args={}, rewinds=False,
+                                      describe=describe, run=lambda **kw: {}))
+    assert "news_search" not in tools._REGISTRY
+
+
 @pytest.fixture()
 def budget(monkeypatch):
     monkeypatch.setenv("GTRADE_ANALYST_TOOL_CALLS", "2")
@@ -33,9 +52,9 @@ def test_only_a_registered_tool_is_ever_called():
     a model an attacker can steer through a headline."""
     assert tools.parse_request({"tool": "http_get",
                                 "args": {"url": "http://evil/"}}) is None
-    assert tools.parse_request({"tool": "news_search", "args": {}}) is not None
+    assert tools.parse_request({"tool": "probe", "args": {}}) is not None
     # and an unknown argument is dropped rather than forwarded
-    got = tools.parse_request({"tool": "news_search",
+    got = tools.parse_request({"tool": "probe",
                                "args": {"query": "x", "url": "http://evil/"}})
     assert got["args"] == {"query": "x"}
 
@@ -43,7 +62,7 @@ def test_only_a_registered_tool_is_ever_called():
 def test_a_judgment_is_not_mistaken_for_a_request():
     assert tools.parse_request(_judgment()) is None
     assert tools.parse_request(None) is None
-    assert tools.parse_request({"tool": "news_search", "args": "not a dict"}) is None
+    assert tools.parse_request({"tool": "probe", "args": "not a dict"}) is None
 
 
 def test_a_rewound_run_can_only_use_a_tool_that_honours_the_date():
@@ -51,14 +70,14 @@ def test_a_rewound_run_can_only_use_a_tool_that_honours_the_date():
     is the trap dossier._as_of exists to close, reopened from a new side."""
     live = {t.name for t in tools.available(today=None)}
     past = {t.name for t in tools.available(today="2026-05-01")}
-    assert "news_search" in live, "an RSS feed has no archive"
-    assert "news_search" not in past
+    assert "probe" in live, "a live-only source"
+    assert "probe" not in past
     assert past, "at least one tool must survive, or a backfill has none"
     assert past <= live
 
 
 def test_a_live_only_tool_asked_for_a_past_date_is_refused_not_answered():
-    entry = tools.call({"tool": "news_search", "args": {"query": "x"}},
+    entry = tools.call({"tool": "probe", "args": {"query": "x"}},
                        asset="NVDA", today="2026-05-01")
     assert "cannot answer for a past date" in entry["error"]
     assert "result" not in entry
@@ -68,19 +87,19 @@ def test_a_dead_source_is_a_recorded_result_rather_than_a_crash(monkeypatch):
     def boom(**kwargs):
         raise OSError("connection reset")
 
-    monkeypatch.setattr(tools._REGISTRY["news_search"], "run", boom)
-    entry = tools.call({"tool": "news_search", "args": {}}, asset="NVDA")
+    monkeypatch.setattr(tools._REGISTRY["probe"], "run", boom)
+    entry = tools.call({"tool": "probe", "args": {}}, asset="NVDA")
     assert "connection reset" in entry["error"]
-    assert entry["tool"] == "news_search" and "at" in entry
+    assert entry["tool"] == "probe" and "at" in entry
 
 
 def test_the_call_is_recorded_with_what_was_asked_not_only_what_came_back(
         monkeypatch, budget):
     """A log entry that says what arrived but not what was requested is not a
     replay, which is the same defect as a judgment nobody scored."""
-    monkeypatch.setattr(tools._REGISTRY["news_search"], "run",
-                        lambda **kw: {"headlines": ["a recall"]})
-    replies = [json.dumps({"tool": "news_search", "args": {"query": "recall"}}),
+    monkeypatch.setattr(tools._REGISTRY["probe"], "run",
+                        lambda **kw: {"items": ["a recall"]})
+    replies = [json.dumps({"tool": "probe", "args": {"query": "recall"}}),
                json.dumps(_judgment())]
     calls = []
     out = agent.judge(_dossier(), call=lambda p: replies.pop(0),
@@ -88,18 +107,18 @@ def test_the_call_is_recorded_with_what_was_asked_not_only_what_came_back(
     assert out["direction"] == "up"
     assert len(calls) == 1
     assert calls[0]["args"] == {"query": "recall"}
-    assert calls[0]["result"] == {"headlines": ["a recall"]}
+    assert calls[0]["result"] == {"items": ["a recall"]}
 
 
 def test_the_result_is_fed_back_so_the_second_answer_can_use_it(
         monkeypatch, budget):
-    monkeypatch.setattr(tools._REGISTRY["news_search"], "run",
-                        lambda **kw: {"headlines": ["a product recall"]})
+    monkeypatch.setattr(tools._REGISTRY["probe"], "run",
+                        lambda **kw: {"items": ["a product recall"]})
     seen = []
 
     def call(prompt):
         seen.append(prompt)
-        return (json.dumps({"tool": "news_search", "args": {"query": "x"}})
+        return (json.dumps({"tool": "probe", "args": {"query": "x"}})
                 if len(seen) == 1 else json.dumps(_judgment()))
 
     agent.judge(_dossier(), call=call, tool_calls=[])
@@ -111,12 +130,12 @@ def test_the_budget_is_per_judgment_and_stops_an_endless_asking(
         monkeypatch, budget):
     """A model that keeps asking would run forever, and on a local 26b each
     round is another nine to twenty-five minutes."""
-    monkeypatch.setattr(tools._REGISTRY["news_search"], "run",
-                        lambda **kw: {"headlines": []})
+    monkeypatch.setattr(tools._REGISTRY["probe"], "run",
+                        lambda **kw: {"items": []})
     calls = []
     out = agent.judge(
         _dossier(),
-        call=lambda p: json.dumps({"tool": "news_search", "args": {}}),
+        call=lambda p: json.dumps({"tool": "probe", "args": {}}),
         tool_calls=calls)
     assert out is None, "it never produced a judgment"
     assert len(calls) == 2, "and it stopped at the budget"

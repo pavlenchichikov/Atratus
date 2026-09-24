@@ -23,16 +23,14 @@ they are done carelessly, so three rules hold everything together:
   the owner, 2026-09-03: the point of this agent is its own reading, and a
   second opinion assembled from other people's opinions is not one. It is the
   same rule FORBIDDEN_KEYS applies to the ensemble's own output in
-  core/analyst/dossier.py, and the same reason _headlines carries raw titles
-  and drops news_analyzer's sentiment score. `register` enforces it rather than
+  core/analyst/dossier.py. `register` enforces it rather than
   trusting a reader to remember, because the tempting sources are exactly the
   easy ones to wire: Yahoo hands out recommendationMean in the same payload
   this project already fetches for P/E.
 
-  The one standing exception is `guru_verdict`, which predates this and stays:
-  it is the project's OWN council over fundamentals it holds, scored in
-  guru_log, not an outside house's rating. The line is whether the project can
-  check the opinion against outcomes, not whether it is an opinion.
+  Extended 2026-09-24 to news and to the project's own guru council: the
+  judgment stands on raw data alone, so news_search is gone with the dossier's
+  headlines and guru_verdict.
 
 Budget matters more here than anywhere else in the project: a local 26b model
 answers in 9 to 25 minutes, so every extra round trip is another quarter hour.
@@ -68,7 +66,9 @@ _REGISTRY = {}
 # on whoever is adding the tool instead of on a judgment months later.
 OPINION_WORDS = ("consensus", "price target", "price_target", "analyst rating",
                  "rating", "recommendation", "upgrade", "downgrade",
-                 "buy/sell call", "estimate revision")
+                 "buy/sell call", "estimate revision",
+                 # 2026-09-24: news is somebody's framing too, see FORBIDDEN_KEYS
+                 "news", "headline", "guru")
 
 
 class OpinionSource(Exception):
@@ -250,34 +250,6 @@ register(Tool(
     rewinds=True,
     describe="recent disclosed insider trades (SEC Form 4) for this asset",
     run=_insider_filings))
-
-
-# --------------------------------------------------------------------------
-# news_search: the same feeds the dossier already reads, on a query the model
-# chooses. Live only: an RSS feed has no archive, so a rewound run asking for
-# a past date would silently receive today's news.
-# --------------------------------------------------------------------------
-
-def _news_search(asset, today=None, query="", limit=6):
-    import news_analyzer
-
-    term = str(query or asset).strip()[:80]
-    items = news_analyzer.fetch_news(term, max_articles=limit * 2) or []
-    out = []
-    for it in items[:limit]:
-        if isinstance(it, dict) and it.get("title"):
-            out.append({"title": it["title"][:180],
-                        "source": (it.get("source") or "unknown")[:40],
-                        "credibility": it.get("credibility")})
-    return {"query": term, "headlines": out}
-
-
-register(Tool(
-    name="news_search",
-    args={"query": "what to search for, a few words"},
-    rewinds=False,
-    describe="search the project's news feeds for something specific",
-    run=_news_search))
 
 
 def max_calls():
