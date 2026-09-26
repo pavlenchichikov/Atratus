@@ -2160,6 +2160,8 @@ def run_qd(train_fn=None):
     # of the gate entirely. Measured 2026-09-07: 17 niches, the adopted genome
     # 3rd by fitness, and 9 of the 17 within five genes of it.
     gateable = drop_incumbent(archive)
+    # The niche key names the elite the way the ABC picker lists it (2_4_1).
+    cell_of = {id(v): k for k, v in gateable.items()}
 
     if ar_rl.rl_on():
         ctl = _rl_controller()
@@ -2199,6 +2201,7 @@ def run_qd(train_fn=None):
         results = []
         for _i, e in enumerate(elites, 1):
             g = e["genome"]
+            cell = cell_of.get(id(e), "?")
             if qd_tier_base is not None:
                 _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_tier",
                                                 "unit_kind": "tier_4"},
@@ -2209,15 +2212,14 @@ def run_qd(train_fn=None):
                                       qd_tier_base, obj, train_fn=train_fn)
                 _progress_fold_unit("tier_4", time.time() - _t0, since=_mark)
                 if not tp:
-                    print("[qd] elite tiered out (mini dScore %+.2f): drops=%s "
-                          "label=%s/%d" % (td, g.drops, g.label_mode, g.label_window))
+                    print("[qd] elite %s tiered out (mini dScore %+.2f) | %s"
+                          % (cell, td, _genome_brief(g)))
                     continue
                 nok, nlift = _tier_neural_ok(genome_to_env(g), genome_sig(g),
                                              qd_tier_neural, train_fn=train_fn)
                 if not nok:
-                    print("[qd] elite tiered out (nets pay for it: tier "
-                          "neural_lift %+.2f): drops=%s label=%s/%d"
-                          % (nlift, g.drops, g.label_mode, g.label_window))
+                    print("[qd] elite %s tiered out (nets pay for it: tier "
+                          "neural_lift %+.2f) | %s" % (cell, nlift, _genome_brief(g)))
                     continue
             _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_holdout",
                                             "unit_kind": "holdout_14"},
@@ -2240,11 +2242,11 @@ def run_qd(train_fn=None):
                           "column for basis %s" % basis)
                     continue
                 p, value, _d, tag = _st
-            results.append((g, p, value, tag, nl, var_contrib))
+            results.append((g, p, value, tag, nl, var_contrib, cell))
         flags = benjamini_hochberg([r[1] for r in results])
         ts_qd = datetime.utcnow().isoformat()
         finding_winners = []
-        for (g, p, value, tag, nl, var_rows), s in zip(results, flags):
+        for (g, p, value, tag, nl, var_rows, cell), s in zip(results, flags):
             ok = adopt_ok(s, value, obj, nl)
             replicated = clears = None
             if ok:
@@ -2260,10 +2262,10 @@ def run_qd(train_fn=None):
                                     "neural_lift": nl, "replicated": bool(replicated),
                                     "clears": clears or 0})
             nl_str = "" if nl is None else f" | neural_lift {nl:+.2f}"
-            print("[qd] elite drops=%s label=%s/%d extra=%d: %s | %s %s%s" % (
-                g.drops, g.label_mode, g.label_window, len(g.extra),
-                _gate_verdict(ok, bool(replicated), clears, nl, s), tag,
+            print("[qd] elite %s: %s | %s %s%s" % (
+                cell, _gate_verdict(ok, bool(replicated), clears, nl, s), tag,
                 REFERENCE_NOTE, nl_str))
+            print("[qd]   genome: %s" % _genome_brief(g))
             if not ok:
                 # A refusal is about the mean. Naming the assets the mean hid is
                 # the difference between "this run found nothing" and "this run
@@ -3609,6 +3611,35 @@ def _persist(axis_name, log):
     state["by_axis"] = by_axis
     state["log"] = [e for entries in by_axis.values() for e in entries]
     save_state(state)
+
+
+def _genome_brief(g):
+    """One readable line of what a genome changes, for the gate verdicts: the
+    bare `extra=4` said nothing about WHICH features, and the ABC picker lists
+    the same genomes by their niche, so a verdict could only be matched to it
+    by comparing numbers."""
+    feats = ", ".join(
+        "%s(%s%s)" % (s.get("op"), ",".join(s.get("inputs") or []),
+                      "".join(",%s=%s" % kv for kv in (s.get("params") or {}).items()))
+        for s in (g.extra or []))
+    parts = ["label %s/%d" % (g.label_mode, g.label_window)]
+    if g.drops:
+        parts.append("drop %s" % ",".join(g.drops))
+    parts.append("+%d features%s" % (len(g.extra or []), (": " + feats) if feats else ""))
+    if g.thr_margin or g.band_delta:
+        parts.append("thr %+.3f band %+.4f" % (g.thr_margin, g.band_delta))
+    if g.regime_mode != "both":
+        parts.append("regime %s" % g.regime_mode)
+    # Every other gene only when it differs from the default, so a genome whose
+    # whole change is e.g. net_calibrate=1 does not print as an empty one.
+    shown = {"label_mode", "label_window", "drops", "extra", "thr_margin",
+             "band_delta", "regime_mode"}
+    base = Genome()
+    other = ["%s=%s" % (f.name, getattr(g, f.name)) for f in fields(Genome)
+             if f.name not in shown and getattr(g, f.name) != getattr(base, f.name)]
+    if other:
+        parts.append(" ".join(other))
+    return " | ".join(parts)
 
 
 def _gate_verdict(ok, replicated, clears, neural_lift=None, significant=None):

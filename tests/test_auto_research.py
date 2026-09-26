@@ -3096,3 +3096,22 @@ def test_the_suite_never_writes_the_live_qd_archive():
 
     import auto_research as ar
     assert ar._QD_ARCHIVE_PATH != os.path.join(ar.BASE, "_qd_archive.json")
+
+
+def test_gate_verdict_names_what_the_genome_changes():
+    """The gate line used to say `extra=4` and nothing else, so a verdict could
+    only be matched to the ABC picker by comparing numbers. It now lists the
+    features and every non-default gene; a genome whose only change is a net
+    gene must not print as empty."""
+    import auto_research as ar
+
+    g = ar.Genome(label_mode="rel_median", label_window=30, thr_margin=0.02,
+                  band_delta=-0.01,
+                  extra=[{"name": "m1", "op": "lag", "inputs": ["vol_z"],
+                          "params": {"k": 3}}])
+    brief = ar._genome_brief(g)
+    assert "label rel_median/30" in brief
+    assert "lag(vol_z,k=3)" in brief
+    assert "thr +0.020 band -0.0100" in brief
+    assert "net_calibrate=1" in ar._genome_brief(ar.Genome(net_calibrate=1))
+    assert ar._genome_brief(ar.Genome()) == "label direction/30 | +0 features"

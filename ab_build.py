@@ -258,7 +258,36 @@ def resolvable_floor(n, base=None, basis=None):
     return Z_SUM * sd / (n ** 0.5)
 
 
-def power_table(n, floors=(0.5, 0.75, 1.0, 1.5), base=None, basis=None):
+def _basis_floors(basis):
+    """Candidate floors in the basis's own units: its adoption floor x 1, 1.5, 2
+    and 3. On raw Score that is the 0.5/0.75/1.0/1.5 this table always printed;
+    on accuracy it is 0.005..0.015. The fixed Score list printed on ens_acc
+    (2026-09-26) offered accuracy gains of 50-150 points, each "needing 1
+    asset", which answered nothing."""
+    import auto_research as ar
+
+    unit = ar._adopt_floor("mean", basis=basis) if basis else 0.5
+    return tuple(unit * k for k in (1, 1.5, 2, 3))
+
+
+def _fmt_floor(f):
+    """+0.50 on Score, +0.0075 on accuracy: two decimals rounded an accuracy
+    floor to +0.01 or +0.00."""
+    return "%+.2f" % f if abs(f) >= 0.1 else "%+.4f" % f
+
+
+def suggest_floor(can):
+    """The smallest round floor at or above what the holdout resolves, to two
+    significant figures (0.0103 -> 0.011, 0.954 -> 0.96). The old
+    round(can + 0.05, 1) turned an accuracy resolution of 0.0103 into a floor
+    of 0.10, a ten-point accuracy gain no genome could clear."""
+    import math
+
+    step = 10 ** (math.floor(math.log10(can)) - 1)
+    return math.ceil(round(can / step, 9)) * step
+
+
+def power_table(n, floors=None, base=None, basis=None):
     """One line per candidate floor: what it needs, and whether `n` supplies it.
 
     Printed at the refusal so the choice is made against the arithmetic rather
@@ -271,11 +300,11 @@ def power_table(n, floors=(0.5, 0.75, 1.0, 1.5), base=None, basis=None):
     if not sd or not n:
         return []
     mde = Z_SUM * sd / (n ** 0.5)
-    return ["    floor %+.2f  needs %4d assets  %s"
-            % (f, int((Z_SUM * sd / f) ** 2 + 0.999),
+    return ["    floor %s  needs %4d assets  %s"
+            % (_fmt_floor(f), int((Z_SUM * sd / f) ** 2 + 0.999),
                "this holdout of %d answers it" % n if mde <= f
                else "%d is not enough" % n)
-            for f in floors]
+            for f in (floors or _basis_floors(basis))]
 
 
 def write_config(cfg, path=None):
@@ -979,9 +1008,15 @@ def run(cfg):
         print("Refusing to start: the hours are the same whether the question "
               "is answerable or not.")
         if can:
-            print("Rebuild with a floor this holdout resolves (%+.2f or higher):"
-                  % can)
-            print("    python ab_build.py --floor %.2f" % (round(can + 0.05, 1)))
+            print("Rebuild with a floor this holdout resolves (%s or higher):"
+                  % _fmt_floor(can))
+            print("    python ab_build.py --floor %g" % suggest_floor(can))
+            sd = last_spread(basis=cfg.get("basis"))
+            if sd and cfg["floor"] > 0:
+                need = int((Z_SUM * sd / cfg["floor"]) ** 2 + 0.999)
+                print("or keep the floor %s and widen the holdout:"
+                      % _fmt_floor(cfg["floor"]))
+                print("    python ab_build.py --n %d" % need)
         print("[ABC] in the launcher now asks for the floor and shows this "
               "table, so nothing has to be exported. The floor says what is "
               "worth adopting: raise it only when the effect you are after is "

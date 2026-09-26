@@ -217,6 +217,28 @@ def test_the_refusal_says_which_floor_this_holdout_could_resolve(monkeypatch):
     assert "this holdout of 40 answers it" in rows[2], "floor 1.00 clears"
 
 
+def test_the_floor_table_speaks_the_basis_units(monkeypatch):
+    """2026-09-26 on ens_acc: spread 0.0263, 40 assets resolve +0.0103, and the
+    refusal offered Score floors 0.5..1.5 ("needs 1 asset") plus
+    `--floor 0.10`, a ten-point accuracy gain. The table and the suggestion are
+    in the basis's own units now; raw Score keeps its old rows."""
+    import ab_build
+
+    monkeypatch.delenv("GTRADE_AR_ADOPT_AUC", raising=False)
+    monkeypatch.setattr(ab_build, "last_spread", lambda *a, **k: 0.0263)
+    rows = ab_build.power_table(40, basis="ens_acc")
+    assert rows[0].startswith("    floor +0.0050  needs  172 assets")
+    assert "is not enough" in rows[0]
+    assert "floor +0.0150" in rows[3] and "answers it" in rows[3]
+    assert ab_build.resolvable_floor(40, basis="ens_acc") == pytest.approx(0.0103, abs=1e-4)
+    assert ab_build.suggest_floor(0.0103) == pytest.approx(0.011)
+    assert ab_build.suggest_floor(0.954) == pytest.approx(0.96)
+    assert ab_build.suggest_floor(0.011) == pytest.approx(0.011), "exact stays"
+
+    monkeypatch.setattr(ab_build, "last_spread", lambda *a, **k: 2.4272)
+    assert "floor +0.50  needs  146 assets" in ab_build.power_table(40, basis="raw")[0]
+
+
 def test_no_banked_spread_means_no_claim_about_power(monkeypatch):
     """Before any A/B has run there is nothing to project from, and inventing a
     spread would refuse runs on an imagined number."""
