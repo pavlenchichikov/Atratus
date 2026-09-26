@@ -1,3 +1,4 @@
+import collections
 import io
 import os
 import sys
@@ -138,6 +139,91 @@ def _drop_unfinished_session(df, meta, now_ts):
     return df[df["Date"] <= pd.Timestamp(datetime.fromtimestamp(end))]
 
 
+# Bars Yahoo lists with empty fields. 2026-09-26 06:31: the 09-25 bar came back
+# with close = None for SAP and every field None for BTC, 185 tables in all,
+# and dropna() threw them away without a word - the run said "+1 bars" and
+# "0 errors" while Friday was missing. On 09-22 the same vendor day left holes
+# a daily run can never fill, because it only asks for dates after the newest
+# stored bar.
+VENDOR_GAPS = {}                 # asset -> [dates], printed by main()
+_VENDOR_GAPS_LOCK = threading.Lock()
+# How recent an empty bar must be for the table to be HELD before it. Older
+# ones are Yahoo's history, not a bar it is still writing: holding there would
+# freeze the table for good, so those are stored past and reported.
+VENDOR_GAP_HOLD_DAYS = _env_int("GTRADE_VENDOR_GAP_HOLD_DAYS", 7)
+
+
+def _hold_at_vendor_gap(df, now):
+    """(bars to store, dates Yahoo left empty) for one asset's new bars.
+
+    A recent empty bar stops the table BEFORE it, so the newest stored row stays
+    in front of the hole and the next plain run asks for that date again. What
+    is stored is otherwise exactly what dropna() used to keep."""
+    empty = df[["Open", "Close", "High", "Low", "Volume"]].isna().any(axis=1)
+    gaps = list(df.loc[empty, "Date"])
+    recent = [d for d in gaps if (now - d).days <= VENDOR_GAP_HOLD_DAYS]
+    if recent:
+        df = df[df["Date"] < min(recent)]
+    return df.dropna(), gaps
+
+
+def vendor_gap_report(gaps, now, show=12):
+    """Console lines for VENDOR_GAPS: which dates, which assets, what to do.
+    Empty when Yahoo left nothing empty."""
+    if not gaps:
+        return []
+    by_date = {}
+    for asset, dates in gaps.items():
+        for d in dates:
+            by_date.setdefault(pd.Timestamp(d).date(), set()).add(asset)
+    held = {a for a, ds in gaps.items()
+            if any((now - pd.Timestamp(d)).days <= VENDOR_GAP_HOLD_DAYS for d in ds)}
+    lines = ["  Yahoo listed empty bars for %d asset(s), not stored:" % len(gaps)]
+    for day in sorted(by_date, reverse=True)[:5]:
+        names = sorted(by_date[day])
+        more = " +%d more" % (len(names) - show) if len(names) > show else ""
+        lines.append("    %s  %4d  %s%s" % (day, len(names), ", ".join(names[:show]), more))
+    if len(by_date) > 5:
+        lines.append("    ... and %d older date(s)" % (len(by_date) - 5))
+    if held:
+        lines.append("  %d held BEFORE the gap: run data_engine again later, it asks "
+                     "for these dates again on its own." % len(held))
+    stored_past = set(gaps) - held
+    if stored_past:
+        lines.append("  %d stored past an older gap (over %d days, the table cannot "
+                     "wait for it): once Yahoo fills it, heal with "
+                     "GTRADE_BACKFILL=1 GTRADE_HISTORY_DAYS=<days back>."
+                     % (len(stored_past), VENDOR_GAP_HOLD_DAYS))
+    return lines
+
+
+def behind_report(last_by_asset, show=12):
+    """Console lines naming the assets whose newest bar is older than the date
+    most assets end on. Checked in the database AFTER the fetch, because the
+    vendor does not always show the empty bar: for SAP on 2026-09-26 Yahoo's
+    narrow incremental window returned one live snapshot row instead of the
+    empty 09-25, so the run said "No new data" and nothing else."""
+    days = {a: pd.Timestamp(d).date() for a, d in last_by_asset.items() if d is not None}
+    if not days:
+        return []
+    common = collections.Counter(days.values()).most_common(1)[0][0]
+    behind = {}
+    for a, d in days.items():
+        if d < common:
+            behind.setdefault(d, []).append(a)
+    if not behind:
+        return []
+    n = sum(len(v) for v in behind.values())
+    lines = ["  Most assets end at %s; %d end earlier:" % (common, n)]
+    for day in sorted(behind, reverse=True):
+        names = sorted(behind[day])
+        more = " +%d more" % (len(names) - show) if len(names) > show else ""
+        lines.append("    %s  %4d  %s%s" % (day, len(names), ", ".join(names[:show]), more))
+    lines.append("  A market holiday, or a bar the vendor has not filled yet: run "
+                 "data_engine again later and the filled ones arrive on their own.")
+    return lines
+
+
 def _moex_today():
     """The Moscow calendar date. A MOEX candle for this date is still being
     written until the evening session closes."""
@@ -244,12 +330,18 @@ def fetch_yahoo_smart(symbol, last_date):
         df = pd.DataFrame({
             'Date': [datetime.fromtimestamp(ts) for ts in res['timestamp']],
             'Open': q['open'], 'Close': q['close'], 'High': q['high'], 'Low': q['low'], 'Volume': q['volume']
-        }).dropna()
+        })
 
         df['Date'] = pd.to_datetime(df['Date'])
         df = _drop_unfinished_session(df, res.get('meta'), now_ts)
         if _orig_last_date is not None:
             df = df[df['Date'] > _orig_last_date]
+        # After the session and date filters, so a bar still being written or
+        # one already stored is never reported as missing.
+        df, gaps = _hold_at_vendor_gap(df, datetime.fromtimestamp(now_ts))
+        if gaps:
+            with _VENDOR_GAPS_LOCK:
+                VENDOR_GAPS[symbol] = gaps
 
         if df.empty:
             return "NO_NEW", None
@@ -1061,6 +1153,16 @@ def main():
                     mark = '   '
                 print(f"    {mark} {name:<14} {tag}")
 
+    last_by_asset = {n: get_last_date(_daily_table(n)) for n, _ in assets}
+    behind_lines = behind_report(last_by_asset)
+    gap_lines = vendor_gap_report(VENDOR_GAPS, datetime.now())
+    if behind_lines or gap_lines:
+        print()
+        print('  MISSING BARS')
+        print('  ' + '-' * (W - 2))
+        for line in behind_lines + gap_lines:
+            print(line)
+
     # -- WEEKLY -------------------------------------------------------------
     weekly_assets = list(assets)  # all assets including MOEX
     total_w = len(weekly_assets)
@@ -1145,6 +1247,10 @@ def main():
     print('  ' + '-' * (W - 2))
     print(f'  Daily   : {stats["ok"]} updated  |  {stats["uptodate"]} current  |  {stats["err"]} errors  |  +{stats["new_bars"]} bars')
     print(f'  Weekly  : {w_ok} updated  |  {w_upd} current  |  {w_err} errors  |  +{w_bars} bars')
+    if behind_lines or VENDOR_GAPS:
+        print('  Missing : %s - see MISSING BARS'
+              % (behind_lines[0].strip() if behind_lines
+                 else "%d asset(s) with empty Yahoo bars" % len(VENDOR_GAPS)))
     print(f'  Time    : {elapsed:.1f}s')
     print('=' * W)
     print()
