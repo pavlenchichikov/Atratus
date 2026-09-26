@@ -224,6 +224,24 @@ def behind_report(last_by_asset, show=12):
     return lines
 
 
+def _fx_real_close(df, meta):
+    """Yahoo `=X` daily bars carry the day's OPEN as close (see
+    repair_fx_close.py: same-bar AUC 0.87-0.90 on the direction label). The
+    day's close is the next bar's open, so a bar is stored only once the next
+    one exists. Yahoo's live snapshot row - stamped at the last tick, a Saturday
+    00:29 or a Friday 23:59 that would replace the real Friday - is not a
+    daily bar and goes first."""
+    snap = (meta or {}).get("regularMarketTime")
+    if snap is not None:
+        df = df[df["Date"] != pd.Timestamp(datetime.fromtimestamp(snap))]
+    df = df[df["Date"].dt.dayofweek < 5].sort_values("Date").reset_index(drop=True)
+    df["Close"] = df["Open"].shift(-1)
+    df = df.iloc[:-1].copy()
+    df["High"] = df[["High", "Close"]].max(axis=1, skipna=False)
+    df["Low"] = df[["Low", "Close"]].min(axis=1, skipna=False)
+    return df
+
+
 def _moex_today():
     """The Moscow calendar date. A MOEX candle for this date is still being
     written until the evening session closes."""
@@ -333,6 +351,10 @@ def fetch_yahoo_smart(symbol, last_date):
         })
 
         df['Date'] = pd.to_datetime(df['Date'])
+        # Before the session filter: the bar still running is what supplies the
+        # previous bar's close.
+        if y_sym.endswith("=X"):
+            df = _fx_real_close(df, res.get('meta'))
         df = _drop_unfinished_session(df, res.get('meta'), now_ts)
         if _orig_last_date is not None:
             df = df[df['Date'] > _orig_last_date]
@@ -967,6 +989,19 @@ def _preflight_repair(width):
                   'vendor cover)' % (confirmed, skipped))
     except Exception as exc:
         print('  Daily   : scan failed: %s' % str(exc)[:60])
+
+    try:
+        import repair_fx_close as fxc
+        plans = fxc.scan(MARKET_DB)
+        upd, gone, touched = fxc.totals(plans)
+        if upd or gone:
+            fxc.apply(MARKET_DB, plans)
+            print('  Forex   : %d close(s) set from the next open, %d row(s) '
+                  'removed, in %d table(s)' % (upd, gone, touched))
+        else:
+            print('  Forex   : clean')
+    except Exception as exc:
+        print('  Forex   : scan failed: %s' % str(exc)[:60])
 
     try:
         worst = flat_bar_report(MARKET_DB)
