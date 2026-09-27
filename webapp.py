@@ -871,10 +871,49 @@ def api_levels_scan():
     if _scan_running():
         return {"started": False, "reason": "a scan is already running",
                 "pid": _SCAN_PROC.pid}
+    if _ASSET_SCAN_LOCK.locked():
+        return {"started": False, "reason": "an asset scan is running"}
     _SCAN_PROC = subprocess.Popen(
         [sys.executable, "predict.py"], cwd=BASE_DIR,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"started": True, "pid": _SCAN_PROC.pid}
+
+
+_ASSET_SCAN_LOCK = threading.Lock()
+
+
+@app.post("/api/radar/scan/{asset}")
+def api_asset_scan(asset: str):
+    """The radar for one asset, from its card: fetch its bars, then score it.
+
+    Without the fetch it would re-score the bar the morning scan already
+    journalled, and log_prediction keeps one row per asset per bar, so nothing
+    would change. Runs in the request (about half a minute, most of it loading
+    the models) so the card can say what the fetch found, for instance that the
+    vendor left today's bar empty. Refused while the full radar runs: two
+    writers on the same journal.
+    """
+    asset = asset.upper()
+    if asset not in FULL_ASSET_MAP:
+        raise HTTPException(404, f"Unknown asset: {asset}")
+    if _scan_running():
+        return {"started": False, "reason": "the full radar scan is running"}
+    if not _ASSET_SCAN_LOCK.acquire(blocking=False):
+        return {"started": False, "reason": "another asset scan is running"}
+    try:
+        done = subprocess.run(
+            [sys.executable, "predict.py", "--assets", asset, "--fetch"],
+            cwd=BASE_DIR, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            timeout=600, check=False)
+    except subprocess.TimeoutExpired:
+        return {"started": True, "ok": False, "fetch": None}
+    finally:
+        _ASSET_SCAN_LOCK.release()
+    dashboard.cache_clear()
+    fetch = next((ln[len("[fetch] "):] for ln in done.stdout.splitlines()
+                  if ln.startswith("[fetch] ")), None)
+    return {"started": True, "ok": done.returncode == 0, "fetch": fetch}
 
 
 @app.get("/api/levels/scan/status")

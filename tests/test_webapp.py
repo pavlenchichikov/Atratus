@@ -890,6 +890,50 @@ def test_a_finished_scan_stops_being_reported_as_running(client, monkeypatch):
     assert client.get("/api/levels/scan/status").json()["running"] is False
 
 
+class _Done:
+    """subprocess.run's result for a per-asset scan that finished."""
+
+    def __init__(self, stdout, returncode=0):
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+def test_asset_scan_fetches_then_scores_only_that_asset(client, monkeypatch):
+    """The card's button is the radar for one asset: fresh bars first, or it
+    would re-score the bar the morning scan already journalled."""
+    import webapp
+    seen = {}
+
+    def _run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Done("noise\n[fetch] BTC: +1 daily bar(s)\nmore noise\n")
+
+    monkeypatch.setattr(webapp, "_SCAN_PROC", None)
+    monkeypatch.setattr(webapp.subprocess, "run", _run)
+    body = client.post("/api/radar/scan/btc").json()
+    assert seen["cmd"][1].endswith("predict.py")
+    assert seen["cmd"][2:] == ["--assets", "BTC", "--fetch"]
+    assert body == {"started": True, "ok": True, "fetch": "BTC: +1 daily bar(s)"}
+
+
+def test_asset_scan_is_refused_while_the_full_radar_runs(client, monkeypatch):
+    import webapp
+    monkeypatch.setattr(webapp, "_SCAN_PROC", _FakeProc())
+    monkeypatch.setattr(webapp.subprocess, "run",
+                        lambda *a, **k: pytest.fail("must not start a second writer"))
+    body = client.post("/api/radar/scan/BTC").json()
+    assert body["started"] is False
+
+
+def test_asset_scan_rejects_an_unknown_asset(client):
+    assert client.post("/api/radar/scan/NOPE123").status_code == 404
+
+
+def test_asset_page_has_the_scan_button(client):
+    r = client.get("/asset/BTC")
+    assert 'id="asset-scan-btn"' in r.text
+
+
 def test_asset_page_shows_the_trade_levels(client, monkeypatch):
     """The card answers "where do I enter and where do I bail", beside the
     signal. Sizing is not here on purpose: it needs an equity figure and lives

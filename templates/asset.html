@@ -19,6 +19,8 @@
   </div>
   {% endif %}
 </div>
+<p class="dim"><button class="fbtn" id="asset-scan-btn">Scan this asset</button>
+  <span id="asset-scan-msg" class="mono"></span></p>
 
 {% if position %}
 <section class="panel fade pos-card pos-{{ position.state|lower }}">
@@ -647,6 +649,32 @@ function renderGuruBody(g) {
     '</div><div class="guru-grid">' + cards + '</div>';
   gtFlash(guruBody);
 }
+
+// The radar for this asset only: fetch its bars, score it, journal the signal.
+// The request lasts as long as the scan, so the reply says what the fetch found.
+const scanBtn = document.getElementById('asset-scan-btn');
+scanBtn.addEventListener('click', async function () {
+  const msg = document.getElementById('asset-scan-msg');
+  scanBtn.disabled = true;
+  msg.textContent = 'Fetching bars and scoring, about half a minute...';
+  try {
+    const r = await fetch('/api/radar/scan/' + ASSET, { method: 'POST' });
+    if (!r.ok) throw new Error('scan failed');
+    const d = await r.json();
+    if (!d.started) {
+      msg.textContent = d.reason;
+    } else if (!d.ok) {
+      msg.textContent = 'Scan failed' + (d.fetch ? ' (' + d.fetch + ')' : '');
+    } else {
+      msg.textContent = (d.fetch || 'done') + ' - reloading';
+      setTimeout(function () { location.reload(); }, 2500);
+    }
+  } catch (e) {
+    msg.textContent = 'Scan failed - try again.';
+  } finally {
+    scanBtn.disabled = false;
+  }
+});
 
 const intradayBtn = document.getElementById('intraday-refresh-btn');
 if (intradayBtn) {

@@ -129,7 +129,34 @@ def _predict_asset(name, registry, thresholds):
     return res
 
 
-def run_radar():
+def _refresh_bars(names):
+    """Fetch the daily and weekly bars of `names` only, before a scan of them.
+
+    A per-asset scan on yesterday's bar would score the same bar the morning
+    radar already logged, and log_prediction keeps one row per asset per bar,
+    so without fresh bars the button would change nothing. The data engine's
+    own per-asset fetchers are reused, which keeps its unfinished-session and
+    vendor-gap guards. Other tables (macro, breadth) stay as the last full
+    data update left them.
+    """
+    import data_engine
+
+    for n in names:
+        s = FULL_ASSET_MAP[n]
+        _, daily, bars = data_engine._fetch_and_save_daily(n, s)
+        _, weekly, _ = data_engine._fetch_and_save_weekly(n, s)
+        line = f"{n}: +{bars} daily bar(s)"
+        if daily == "ERR" or weekly == "ERR":
+            line += ", fetch error"
+        gaps = data_engine.VENDOR_GAPS.get(n)
+        if gaps:
+            line += ", vendor left " + ", ".join(f"{g:%Y-%m-%d}" for g in gaps) + " empty"
+        # the web card reads this line back, so it keeps its prefix
+        print(f"[fetch] {line}")
+
+
+def run_radar(names=None):
+    """Scan `names` (default: every asset in the map) and journal the signals."""
     t0 = time.time()
     registry = _load_json(REGISTRY_PATH)
     thresholds = _load_json(THRESHOLDS_PATH)
@@ -164,7 +191,7 @@ def run_radar():
     print("=" * W)
 
     # -- Scan all assets with inline progress ----------------------
-    all_names = list(FULL_ASSET_MAP.keys())
+    all_names = list(names) if names else list(FULL_ASSET_MAP.keys())
     total = len(all_names)
     results = {}
     logged = 0
@@ -259,4 +286,19 @@ def run_radar():
 
 
 if __name__ == "__main__":
-    run_radar()
+    import argparse
+
+    ap = argparse.ArgumentParser(description="radar: score assets and journal the signals")
+    ap.add_argument("--assets", help="comma-separated names; default is every asset")
+    ap.add_argument("--fetch", action="store_true",
+                    help="fetch these assets' bars first (needs --assets)")
+    args = ap.parse_args()
+    names = [a.strip().upper() for a in (args.assets or "").split(",") if a.strip()]
+    unknown = [n for n in names if n not in FULL_ASSET_MAP]
+    if unknown:
+        sys.exit(f"Unknown asset(s): {', '.join(unknown)}")
+    if args.fetch and not names:
+        sys.exit("--fetch refreshes named assets only; the full refresh is data_engine.py")
+    if args.fetch:
+        _refresh_bars(names)
+    run_radar(names)
