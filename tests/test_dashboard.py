@@ -33,6 +33,19 @@ def test_regime_score_maps_status():
     assert dash.regime_score({"status": "UNKNOWN"}) == 50
 
 
+def test_regime_score_moves_inside_its_status_band():
+    base = {"status": "RISK-ON", "vix_value": 15.0,
+            "sp500_gap50": 1.3, "sp500_gap200": 7.8}
+    calm = dash.regime_score({**base, "vix_value": 13.0})
+    jumpy = dash.regime_score({**base, "vix_value": 19.0})
+    assert calm > jumpy                      # the number follows the inputs
+    assert 60 <= jumpy <= calm <= 100        # but never leaves RISK-ON's band
+    # a strong input cannot push SIDEWAYS out of 40..60
+    side = dash.regime_score({"status": "SIDEWAYS", "vix_value": 10.0,
+                              "sp500_gap50": 10.0, "sp500_gap200": 20.0})
+    assert side == 60
+
+
 def test_tail_regime_bands():
     # soft cap 2.5, hard cap 5.0 (the RISK_CONFIG defaults)
     assert dash.tail_regime(0.50, 0.70, 0.85) == "normal"

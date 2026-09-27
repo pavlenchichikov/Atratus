@@ -180,6 +180,11 @@ def get_global_regime() -> dict:
     sp500_df = _read_table("sp500", engine, min_rows=200)
     sp500_trend = _classify_sp500_trend(sp500_df)
     sp500_det = _sp500_detail(sp500_df) if sp500_df is not None else "No data"
+    sp500_gap50 = sp500_gap200 = None
+    if sp500_df is not None:
+        close = sp500_df["close"]
+        sp500_gap50 = float((close.iloc[-1] / _sma(close, 50).iloc[-1] - 1) * 100)
+        sp500_gap200 = float((close.iloc[-1] / _sma(close, 200).iloc[-1] - 1) * 100)
 
     # DXY
     dxy_df = _read_table("dxy", engine, min_rows=50)
@@ -194,6 +199,8 @@ def get_global_regime() -> dict:
         "vix_value": vix_value,
         "sp500_trend": sp500_trend,
         "sp500_detail": sp500_det,
+        "sp500_gap50": sp500_gap50,
+        "sp500_gap200": sp500_gap200,
         "dxy_trend": dxy_trend,
         "dxy_label": dxy_lab,
         "description": description,

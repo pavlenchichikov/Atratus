@@ -60,9 +60,33 @@ def global_regime():
         return dict(_REGIME_FALLBACK)
 
 
+# status to the part of the gauge it may occupy; the inputs move the needle inside
+_REGIME_BAND = {
+    "CRISIS": (0, 20),
+    "RISK-OFF": (20, 40),
+    "SIDEWAYS": (40, 60),
+    "RISK-ON": (60, 100),
+}
+
+
 def regime_score(regime):
-    """Map a regime dict to a 0-100 bull/bear gauge score."""
-    return _REGIME_SCORE.get(regime.get("status"), 50)
+    """Map a regime dict to a 0-100 bull/bear gauge score.
+
+    The status picks the band, a blend of VIX and the S&P 500 distance to its
+    SMA50/SMA200 (percent) picks the point inside it, so the needle moves day to
+    day while the colour still agrees with the label. Missing inputs fall back to
+    the fixed per-status value.
+    """
+    status = regime.get("status")
+    band = _REGIME_BAND.get(status)
+    vix = regime.get("vix_value")
+    gap50, gap200 = regime.get("sp500_gap50"), regime.get("sp500_gap200")
+    if band is None or vix is None or gap50 is None or gap200 is None:
+        return _REGIME_SCORE.get(status, 50)
+    trend = max(0.0, min(100.0, 50.0 + 5.0 * gap50 + 2.5 * gap200))
+    raw = 0.5 * _vix_greed(vix) + 0.5 * trend
+    lo, hi = band
+    return round(max(lo, min(hi, raw)))
 
 
 @ttl_cache(120)

@@ -116,6 +116,7 @@ tests/test_ab_noise.py
 # reasoning as adopted_genome.json, and the report is local run state.
 levels_policy.json
 _levels_report.txt
+_fx_list.txt
 _chunk_progress.txt
 _chunk_progress.prev.txt
 _chunk_quality.json
