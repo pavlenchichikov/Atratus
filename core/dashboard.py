@@ -7,10 +7,13 @@ heavy or network work reads precomputed artifacts.
 """
 
 import os
+import threading
 import time
 from functools import wraps
 
 _CACHE = {}
+_REFRESHING = set()
+_REFRESH_LOCK = threading.Lock()
 
 # status to bull/bear gauge score (0 = max bearish, 100 = max bullish)
 _REGIME_SCORE = {
@@ -28,8 +31,14 @@ _REGIME_FALLBACK = {
 }
 
 
-def ttl_cache(ttl_seconds):
-    """Memoize an accessor for ttl_seconds, keyed on (name, args). No deps."""
+def ttl_cache(ttl_seconds, stale_ok=False):
+    """Memoize an accessor for ttl_seconds, keyed on (name, args). No deps.
+
+    stale_ok: once a value exists, an expired hit is returned at once and ONE
+    background thread recomputes it. For the pages whose assembly takes tens of
+    seconds (the levels sheet opens a sqlite connection per asset, and each
+    first query parses a 3300-object schema): only the very first call waits.
+    """
     def deco(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
@@ -37,6 +46,19 @@ def ttl_cache(ttl_seconds):
             now = time.time()
             hit = _CACHE.get(key)
             if hit is not None and now - hit[0] < ttl_seconds:
+                return hit[1]
+            if hit is not None and stale_ok:
+                with _REFRESH_LOCK:
+                    start = key not in _REFRESHING
+                    _REFRESHING.add(key)
+                if start:
+                    def _refresh():
+                        try:
+                            _CACHE[key] = (time.time(), fn(*args, **kwargs))
+                        finally:
+                            _REFRESHING.discard(key)
+                    threading.Thread(target=_refresh, name="ttl-refresh",
+                                     daemon=True).start()
                 return hit[1]
             value = fn(*args, **kwargs)
             _CACHE[key] = (now, value)
@@ -190,7 +212,7 @@ def gauge_zone(score):
     return "g-bad"       # red: bearish / fear
 
 
-@ttl_cache(900)
+@ttl_cache(900, stale_ok=True)
 def sector_momentum(weeks=4):
     """Per-sector momentum records (score, trend, best/worst); empty on failure."""
     try:
@@ -201,7 +223,7 @@ def sector_momentum(weeks=4):
         return []
 
 
-@ttl_cache(900)
+@ttl_cache(900, stale_ok=True)
 def sector_heatmap(weeks=8):
     """Sector-by-week return matrix shaped for an ECharts heatmap.
 
@@ -233,7 +255,7 @@ def sector_heatmap(weeks=8):
         return empty
 
 
-@ttl_cache(600)
+@ttl_cache(600, stale_ok=True)
 def correlation_stress():
     """Market stress from average pairwise correlation, with a gauge score.
 
@@ -252,7 +274,7 @@ def correlation_stress():
         return {"avg_corr": None, "label": "no data", "score": 0, "zone": ""}
 
 
-@ttl_cache(600)
+@ttl_cache(600, stale_ok=True)
 def correlation_heatmap():
     """Key-pairs correlation matrix shaped for an ECharts heatmap (range -1..1)."""
     empty = {"xLabels": [], "yLabels": [], "data": [], "min": -1, "max": 1}
@@ -397,7 +419,7 @@ def models_stale(max_age_days=30, limit=20):
         return []
 
 
-@ttl_cache(1200)
+@ttl_cache(1200, stale_ok=True)
 def news_digest(lang="all", category="all", limit=40):
     """Ranked authority news digest (console parity); empty list on failure.
 
@@ -509,7 +531,7 @@ def tail_for_asset(asset):
         return None
 
 
-@ttl_cache(300)
+@ttl_cache(300, stale_ok=True)
 def tail_index():
     """Tail rank per asset: {asset: float|None}.
 
@@ -552,7 +574,7 @@ def portfolio_manager():
         return None
 
 
-@ttl_cache(180)
+@ttl_cache(180, stale_ok=True)
 def top_movers(n=24):
     """Largest absolute 1-bar movers among assets that have a live signal, for
     the ticker tape: [{asset, signal, chg}]. Cached 3 min (reads recent prices
@@ -622,6 +644,7 @@ def _tradeable(asset):
     return not white or asset in white
 
 
+@ttl_cache(300, stale_ok=True)
 def levels_sheet(equity=0.0):
     """The trade-level sheet: one row per asset carrying an active signal.
 

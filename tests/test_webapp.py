@@ -48,6 +48,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(performance_tracker, "DB_PATH", path)
     monkeypatch.setattr(performance_tracker, "_ENGINE", None)
     monkeypatch.setattr(experience, "DB_PATH", path)
+    # cached pages (the levels sheet among them) must not carry one test's
+    # database into the next
+    from core import dashboard
+    dashboard.cache_clear()
     return TestClient(webapp.app)
 
 

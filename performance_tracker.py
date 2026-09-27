@@ -92,13 +92,26 @@ def _ensure_table(cur):
         )
     """)
     _migrate(cur)
+    # Every web page reads this table per asset (accuracy, timing state) and it
+    # had no index, so each of those ~1700 reads per radar page was a full scan.
+    cur.execute("CREATE INDEX IF NOT EXISTS ix_prediction_log_asset_date "
+                "ON prediction_log (asset, date)")
+
+
+# DB paths already prepared by this process. timing_state runs once per asset
+# on the levels sheet, and a CREATE/ALTER check plus a commit each time cost
+# ~6s per page; the schema only changes when this module does, i.e. on restart.
+_PREPARED = set()
 
 
 def _prepare():
     """Ensure the table exists and is migrated before an aggregate read."""
+    if DB_PATH in _PREPARED:
+        return
     with _conn() as con:
         _ensure_table(con.cursor())
         con.commit()
+    _PREPARED.add(DB_PATH)
 
 
 def _price_table(asset):
@@ -601,6 +614,8 @@ def _ensure_level_table(cur):
             ret_net REAL
         )
     """)
+    cur.execute("CREATE INDEX IF NOT EXISTS ix_level_log_asset_date "
+                "ON level_log (asset, date)")
 
 
 def _issued_levels(asset, signal):

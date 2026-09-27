@@ -17,6 +17,35 @@ def test_ttl_cache_returns_cached_value():
     assert calls["n"] == 1
 
 
+def test_stale_ok_serves_the_old_value_and_refreshes_behind_it(monkeypatch):
+    """A heavy page must not make the visitor wait for its recompute once it
+    has been computed at least once."""
+    import threading
+    dash.cache_clear()
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(dash.time, "time", lambda: clock["t"])
+    release = threading.Event()
+    calls = {"n": 0}
+
+    @dash.ttl_cache(10, stale_ok=True)
+    def heavy():
+        calls["n"] += 1
+        if calls["n"] > 1:
+            release.wait(5)          # the refresh is slow; the reader is not
+        return calls["n"]
+
+    assert heavy() == 1
+    clock["t"] += 11                 # expired
+    assert heavy() == 1              # old value, returned at once
+    assert heavy() == 1              # still old, and no second refresh started
+    release.set()
+    for t in list(threading.enumerate()):
+        if t.name == "ttl-refresh":
+            t.join(5)
+    assert calls["n"] == 2
+    assert heavy() == 2              # the refreshed value
+
+
 def test_global_regime_fallback_on_failure(monkeypatch):
     dash.cache_clear()
     import regime_detector

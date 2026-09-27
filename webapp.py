@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import threading
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
@@ -48,7 +49,30 @@ THRESHOLDS_PATH = os.path.join(MODEL_DIR, "tuned_thresholds.json")
 # MODEL_DIR like the two paths above.
 PAYOFF_STATS_PATH = os.path.join(BASE_DIR, "payoff_stats.json")
 
-app = FastAPI(title="Atratus")
+def _warm_heavy_pages():
+    """Compute the slow accessors once at startup, off the request path, so the
+    first visitor to /levels or /news does not wait tens of seconds for them.
+    From then on dashboard.ttl_cache(stale_ok=True) keeps them fresh behind the
+    page. Failures are left to the request that needs the value."""
+    for warm in (lambda: dashboard.levels_sheet(_levels_equity()),
+                 lambda: dashboard.news_digest(lang="all", category="all"),
+                 dashboard.sector_momentum, dashboard.sector_heatmap,
+                 dashboard.correlation_stress, dashboard.correlation_heatmap,
+                 dashboard.tail_index, dashboard.top_movers,
+                 dashboard.global_regime):
+        try:
+            warm()
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    threading.Thread(target=_warm_heavy_pages, name="warm-pages", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Atratus", lifespan=_lifespan)
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 
@@ -832,15 +856,20 @@ def risk_page(request: Request):
     })
 
 
+def _levels_equity(risk=None):
+    """Money only once the real account has been declared on /risk: without it
+    the book still holds whatever the paper experiments left behind, and
+    sizing a real trade off that number is exactly the mistake to avoid."""
+    if not RISK_CONFIG["equity"]:
+        return 0.0
+    return (risk or _risk_snapshot())["state"]["current_capital"]
+
+
 @app.get("/levels", response_class=HTMLResponse)
 def levels_page(request: Request):
     risk = _risk_snapshot()
-    # Money only once the real account has been declared on /risk: without it
-    # the book still holds whatever the paper experiments left behind, and
-    # sizing a real trade off that number is exactly the mistake to avoid.
-    equity = risk["state"]["current_capital"] if RISK_CONFIG["equity"] else 0.0
     return templates.TemplateResponse(request, "levels.html", {
-        "rows": dashboard.levels_sheet(equity),
+        "rows": dashboard.levels_sheet(_levels_equity(risk)),
         "levels_policy": levels_mod.policy_evidence(),
         "config": RISK_CONFIG,
         "halted": risk["halted"],
@@ -918,6 +947,12 @@ def api_asset_scan(asset: str):
 
 @app.get("/api/levels/scan/status")
 def api_levels_scan_status():
+    global _SCAN_PROC
+    if _SCAN_PROC is not None and _SCAN_PROC.poll() is not None:
+        # The finished scan wrote new signals; the cached sheet predates them,
+        # and the page reloads on this very answer.
+        _SCAN_PROC = None
+        dashboard.cache_clear()
     return {"running": _scan_running()}
 
 
