@@ -28,7 +28,6 @@ logger = get_logger("train_hybrid")
 import time
 
 import joblib
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.callbacks import Callback, EarlyStopping
@@ -266,6 +265,7 @@ from core.backtesting import (
 from core.calibration import fit_calibrator, save_calibrator
 from core.ensemble import (  # noqa: F401 (re-exported for signal_engine.py)
     build_stacking_features,
+    combine_fold,
     ensemble_with_gating,
     tune_ensemble_weights,
 )
@@ -526,6 +526,11 @@ def _baseline_acc(y_train, y_test, y_prev, footprint):
         return best
     except Exception:
         return None
+
+
+def _combiner():
+    """GTRADE_COMBINER: "fixed" (default) or "stack"; anything else is fixed."""
+    return "stack" if (os.getenv("GTRADE_COMBINER") or "").strip().lower() == "stack" else "fixed"
 
 
 def _label_sig():
@@ -1450,19 +1455,18 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             net_auc = _mean_auc(test_target_aligned,
                                 [lstm_test_cal, tf_test_al, tcn_test_al])
 
-            # -- Stacking meta-classifier --------------------------------
-            X_meta_val = build_stacking_features(
-                cb_val_aligned, lstm_val_cal, tf_val_al, tcn_val_al,
-                val_trend)
-            X_meta_test = build_stacking_features(
-                cb_test_aligned[:n_test], lstm_test_cal,
-                tf_test_al, tcn_test_al, test_trend)
-
+            # -- Combine the members (core.ensemble.combine_fold) ----------
+            # "fixed" (default) fits nothing: the per-fold stacker fitted on
+            # the validation slice lost 1.1 pts of accuracy to the fixed mix
+            # on 20 assets / 150 folds (2026-09-28). GTRADE_COMBINER=stack
+            # brings the stacker back.
             try:
-                meta_clf = LogisticRegression(C=1.0, max_iter=300, solver='lbfgs')
-                meta_clf.fit(X_meta_val, val_target_aligned)
-                val_prob = meta_clf.predict_proba(X_meta_val)[:, 1]
-                test_prob = meta_clf.predict_proba(X_meta_test)[:, 1]
+                val_prob, test_prob, meta_clf = combine_fold(
+                    _combiner(),
+                    [cb_val_aligned, lstm_val_cal, tf_val_al, tcn_val_al],
+                    val_trend, val_target_aligned,
+                    [cb_test_aligned[:n_test], lstm_test_cal, tf_test_al, tcn_test_al],
+                    test_trend)
             except Exception:
                 # Fallback: equal-weight average. Use the calibrated LSTM arrays
                 # (lstm_*_cal) so this stays consistent with tf/tcn when calibration
@@ -1566,7 +1570,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'adv_weight': adv_weight,
                 'models': {'cb': cb, 'lstm': lstm, 'tf_enc': tf_enc,
                            'tcn': tcn_model, 'meta': meta_clf, 'scaler': scaler},
-                'ensemble_mode': 'stacking' if meta_clf is not None else 'avg',
+                'ensemble_mode': ('stacking' if meta_clf is not None
+                                  else 'fixed' if _combiner() == 'fixed' else 'avg'),
                 # Kept for probability calibration at champion-save time.
                 'val_prob': np.asarray(val_prob, dtype=float),
                 'val_target': np.asarray(val_target_aligned, dtype=int),
@@ -1753,6 +1758,9 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     'ens_acc': best_fold.get('ens_acc'),
                     'champion_basis': _champ_basis,
                     'label_sig': _label_sig(),
+                    # How predict must combine the members: the calibrator and
+                    # the BUY/SELL thresholds below were fitted on this mix.
+                    'combiner': 'fixed' if best_fold.get('ensemble_mode') == 'fixed' else 'stack',
                     'updated_at': datetime.now().isoformat(),
                     'buy_thr': best_fold['buy_thr'],
                     'sell_thr': best_fold['sell_thr'],

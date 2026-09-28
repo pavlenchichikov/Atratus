@@ -494,6 +494,13 @@ def test_the_own_record_is_clipped_to_what_it_knew_by_then(monkeypatch):
             {"asset": "SBER", "date": "2026-03-10", "direction": "down",
              "realized_ret": 0.02}]
     monkeypatch.setattr(store, "scored_rows", lambda *a, **k: rows)
+    # Its own bars: the resolved-before check reads bar dates, and CI has no
+    # market.db (a local run passed on the real file and CI did not).
+    from core.analyst import project_tools
+    days = [("2026-%02d-%02d" % (m, d), 1, 1, 1, 1) for m in (1, 2, 3) for d in range(1, 29)]
+    monkeypatch.setattr(project_tools, "_bars",
+                        lambda asset, today, n, db_path=None:
+                        [b for b in days if today is None or b[0] < today])
     assert dossier._own_record("SBER")["past_calls"] == 2
     early = dossier._own_record("SBER", before="2026-02-01")
     assert early["past_calls"] == 1 and early["past_last_call"] == "up"

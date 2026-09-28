@@ -85,6 +85,39 @@ def select_features(df, reg_entry):
     return [f for f in active_candidate_features() if f in df.columns]
 
 
+def combine_members(reg_entry, meta_path, cb_prob, lstm_prob, tf_prob, tcn_prob,
+                    trend_val, table=""):
+    """(probability, mode or None) from the member probabilities.
+
+    A champion trained with the fixed mix (registry `combiner: fixed`) is served
+    the fixed mix: its calibrator and BUY/SELL thresholds were fitted on it. Any
+    older champion keeps the path its thresholds were fitted on: the stacker
+    when its file exists, else the plain mean. None keeps the caller's mode.
+    """
+    from core.ensemble import fixed_mix
+
+    if (reg_entry or {}).get("combiner") == "fixed":
+        return fixed_mix(cb_prob, lstm_prob, tf_prob, tcn_prob), "FIXED"
+    all_probs = [cb_prob, lstm_prob, tf_prob, tcn_prob]
+    n_available = sum(1 for p in all_probs if p is not None)
+    if n_available >= 3 and os.path.exists(meta_path):
+        try:
+            meta_clf = joblib.load(meta_path)
+            X_meta = build_stacking_features(
+                np.array([cb_prob]),
+                np.array([lstm_prob if lstm_prob is not None else 0.5]),
+                np.array([tf_prob if tf_prob is not None else 0.5]),
+                np.array([tcn_prob if tcn_prob is not None else 0.5]),
+                np.array([trend_val]))
+            return float(meta_clf.predict_proba(X_meta)[:, 1][0]), "STACK"
+        except Exception as e:
+            logger.debug("Stacking fallback for %s: %s", table, e)
+            return float(np.mean([p for p in all_probs if p is not None])), None
+    if lstm_prob is not None:
+        return float(np.mean([p for p in all_probs if p is not None])), None
+    return cb_prob, None
+
+
 def score_asset(df, name, table, reg_entry, thresholds, model_dir):
     """Score one asset from an already feature-engineered df.
 
@@ -195,37 +228,13 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
                 logger.debug("TCN predict failed for %s: %s", table, e)
                 tcn_prob = None
 
-        # -- Stacking meta-classifier (or documented fallback) ------------
+        # -- Combine the members the way this champion was fitted ---------
         meta_path = os.path.join(model_dir, f"{table}_meta.pkl")
         trend_val = float(df["trend_strength"].iloc[-1]) if "trend_strength" in df.columns else 0.01
-        all_probs = [cb_prob, lstm_prob, tf_prob, tcn_prob]
-        n_available = sum(1 for p in all_probs if p is not None)
-
-        if n_available >= 3 and os.path.exists(meta_path):
-            try:
-                meta_clf = joblib.load(meta_path)
-                _cb = cb_prob
-                _lstm = lstm_prob if lstm_prob is not None else 0.5
-                _tf = tf_prob if tf_prob is not None else 0.5
-                _tcn = tcn_prob if tcn_prob is not None else 0.5
-                X_meta = build_stacking_features(
-                    np.array([_cb]), np.array([_lstm]),
-                    np.array([_tf]), np.array([_tcn]),
-                    np.array([trend_val]))
-                prob = float(meta_clf.predict_proba(X_meta)[:, 1][0])
-                mode = "STACK"
-            except Exception as e:
-                logger.debug("Stacking fallback for %s: %s", table, e)
-                prob = float(np.mean([p for p in all_probs if p is not None]))
-        elif lstm_prob is not None:
-            probs_avail = [cb_prob, lstm_prob]
-            if tf_prob is not None:
-                probs_avail.append(tf_prob)
-            if tcn_prob is not None:
-                probs_avail.append(tcn_prob)
-            prob = float(np.mean(probs_avail))
-        else:
-            prob = cb_prob
+        prob, _mode = combine_members(reg_entry, meta_path, cb_prob, lstm_prob,
+                                      tf_prob, tcn_prob, trend_val, table)
+        if _mode:
+            mode = _mode
 
         # Calibrate into an honest up-move frequency (identity when no calibrator),
         # then apply the GLOBAL live-outcome layer (identity until

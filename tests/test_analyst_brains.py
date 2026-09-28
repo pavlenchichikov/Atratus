@@ -115,3 +115,14 @@ def test_numeric_menu_settings_are_validated(monkeypatch, tmp_path):
                 "GTRADE_ANALYST_TOOL_ROUNDS=two"):
         assert analyst.main(["brains", "--set", bad]) == 1
     assert env.read_text(encoding="utf-8") == ""
+
+
+def test_the_combiner_setting_is_validated(monkeypatch, tmp_path):
+    import analyst
+    env = tmp_path / ".env"
+    env.write_text("", encoding="utf-8")
+    monkeypatch.setattr(brains, "ENV_PATH", str(env))
+    monkeypatch.delenv("GTRADE_COMBINER", raising=False)
+    assert analyst.main(["brains", "--set", "GTRADE_COMBINER=blend"]) == 1
+    assert analyst.main(["brains", "--set", "GTRADE_COMBINER=stack"]) == 0
+    assert "GTRADE_COMBINER='stack'" in env.read_text(encoding="utf-8")

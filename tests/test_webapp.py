@@ -1971,3 +1971,12 @@ def test_every_number_on_the_card_has_a_how_to_read_line(client):
     r = client.get("/asset/BTC")
     assert r.text.count('class="stat-label"') <= r.text.count('class="help"')
     assert 'id="help-toggle"' in r.text
+
+
+def test_every_block_on_the_card_can_be_folded(client):
+    r = client.get("/asset/BTC")
+    # the top-level number groups sit in <details> with a named summary
+    assert r.text.count('<details class="fold"') >= 3
+    assert "<summary>Track record</summary>" in r.text
+    # every titled panel gets a fold key for its head
+    assert r.text.count('data-fold="') >= r.text.count('class="panel-head"')

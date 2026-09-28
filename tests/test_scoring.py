@@ -58,3 +58,13 @@ def test_alert_bot_moex_targets_derived_from_config():
     with open(src_path, encoding="utf-8") as f:
         src = f.read()
     assert 'MOEX_TARGETS = set(RADAR_GROUPS["MOEX"])' in src
+
+
+def test_the_champion_decides_how_its_members_are_combined(tmp_path):
+    """A champion trained with the fixed mix has thresholds and a calibrator fitted
+    on that mix; an older one on its stacker. Each is served the way it was fitted."""
+    meta = str(tmp_path / "x_meta.pkl")          # absent for the fixed champion
+    prob, mode = scoring.combine_members({"combiner": "fixed"}, meta, 0.6, 0.4, 0.4, 0.4, 0.0)
+    assert mode == "FIXED" and abs(prob - 0.5) < 1e-12
+    prob, mode = scoring.combine_members({}, meta, 0.6, 0.4, None, None, 0.0)
+    assert mode is None and abs(prob - 0.5) < 1e-12   # legacy, no stacker file: mean

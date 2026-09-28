@@ -88,3 +88,45 @@ def build_stacking_features(
     mean_prob = np.mean(stack, axis=1, keepdims=True)
     trend_col = np.array(trend).reshape(-1, 1)
     return np.hstack([stack, disagree, mean_prob, trend_col])
+
+
+def fixed_mix(cb, lstm, tf, tcn):
+    """Half CatBoost, half the mean of the nets that produced a number.
+
+    Nothing here is fitted. On 20 assets / 150 folds (2026-09-28) every
+    combiner fitted on the validation slice (the stacker, Platt, a stronger
+    penalty) lost accuracy to unfitted mixes: the validation window's up-rate
+    differs from the test window's by 2.5 pts on average, and a fitted
+    intercept follows it. This mix beat the stacker by +1.1 pts (16 of 20) with
+    the best AUC. A net that returned NaN or nothing is left out rather than
+    poisoning the mix; with no net at all it is CatBoost alone.
+    Works on scalars and on equal-length arrays.
+    """
+    nets = [n for n in (lstm, tf, tcn) if n is not None]
+    if np.ndim(cb) == 0:
+        vals = [float(n) for n in nets if np.isfinite(n)]
+        return float(cb) if not vals else 0.5 * float(cb) + 0.5 * float(np.mean(vals))
+    cb = np.asarray(cb, dtype=float)
+    if not nets:
+        return cb
+    stack = np.vstack([np.asarray(n, dtype=float) for n in nets])
+    with np.errstate(invalid="ignore"):
+        net_mean = np.nanmean(stack, axis=0)
+    return np.where(np.isnan(net_mean), cb, 0.5 * cb + 0.5 * net_mean)
+
+
+def combine_fold(combiner, val_members, val_trend, val_target, test_members, test_trend):
+    """(val_prob, test_prob, meta_clf) for one training fold.
+
+    `*_members` are [cb, lstm, tf, tcn] arrays. "fixed" fits nothing and
+    returns meta_clf None; "stack" is the historical per-fold logistic
+    stacker fitted on the validation slice.
+    """
+    if combiner == "fixed":
+        return fixed_mix(*val_members), fixed_mix(*test_members), None
+    from sklearn.linear_model import LogisticRegression
+
+    X_val = build_stacking_features(*val_members, val_trend)
+    X_test = build_stacking_features(*test_members, test_trend)
+    meta = LogisticRegression(C=1.0, max_iter=300, solver="lbfgs").fit(X_val, val_target)
+    return meta.predict_proba(X_val)[:, 1], meta.predict_proba(X_test)[:, 1], meta

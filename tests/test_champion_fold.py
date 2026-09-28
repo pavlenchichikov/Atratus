@@ -189,3 +189,12 @@ def test_the_label_signature_moves_with_every_label_setting(monkeypatch):
     a = T._label_sig()
     monkeypatch.setenv("GTRADE_LABEL_WINDOW", "20")
     assert a == "GTRADE_LABEL_MODE=rel_median;GTRADE_LABEL_WINDOW=30" != T._label_sig()
+
+
+def test_the_combiner_defaults_to_the_fixed_mix_and_can_be_set_back(monkeypatch):
+    monkeypatch.delenv("GTRADE_COMBINER", raising=False)
+    assert T._combiner() == "fixed"
+    monkeypatch.setenv("GTRADE_COMBINER", "stack")
+    assert T._combiner() == "stack"
+    monkeypatch.setenv("GTRADE_COMBINER", "nonsense")
+    assert T._combiner() == "fixed"

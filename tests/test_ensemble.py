@@ -129,3 +129,31 @@ class TestBuildStackingFeatures:
             np.array([0.5]), np.array([0.5]), trend,
         )
         assert result[0, -1] == pytest.approx(0.042)
+
+
+def test_fixed_mix_is_half_catboost_half_the_nets_and_skips_broken_nets():
+    import math
+
+    import numpy as np
+
+    from core.ensemble import fixed_mix
+    assert fixed_mix(0.6, 0.4, 0.5, 0.3) == 0.5 * 0.6 + 0.5 * 0.4
+    assert fixed_mix(0.6, None, float("nan"), 0.4) == 0.5 * 0.6 + 0.5 * 0.4
+    assert fixed_mix(0.6, None, None, None) == 0.6          # no net: CatBoost alone
+    arr = fixed_mix(np.array([0.6, 0.6]), np.array([0.4, np.nan]),
+                    np.array([0.4, 0.2]), np.array([0.4, 0.2]))
+    assert np.allclose(arr, [0.5, 0.4]) and not any(math.isnan(x) for x in arr)
+
+
+def test_combine_fold_fixed_fits_nothing_and_stack_fits_the_stacker():
+    import numpy as np
+
+    from core.ensemble import combine_fold
+    rng = np.random.default_rng(0)
+    v = [rng.uniform(0.3, 0.7, 60) for _ in range(4)]
+    t = [rng.uniform(0.3, 0.7, 30) for _ in range(4)]
+    y = (v[0] > 0.5).astype(int)
+    _vp, tp, meta = combine_fold("fixed", v, rng.normal(size=60), y, t, rng.normal(size=30))
+    assert meta is None and np.allclose(tp, 0.5 * t[0] + 0.5 * (t[1] + t[2] + t[3]) / 3)
+    _vp, tp, meta = combine_fold("stack", v, rng.normal(size=60), y, t, rng.normal(size=30))
+    assert meta is not None and len(tp) == 30

@@ -41,6 +41,7 @@ echo.
 echo  TRAINING
 echo    [5] Train Models    [5C] Chunked            [5R] Chosen assets
 echo    [5F] Fill in / repair champions             [T] Optuna Tune
+echo    [5S] Training settings: how the ensemble combines its models
 echo.
 echo  SIGNALS
 echo    [6] Backtest        [M] Model Health        [E] Export CSV
@@ -110,6 +111,7 @@ if /i "%choice%"=="E" goto export
 if /i "%choice%"=="SG" goto push_signals
 if /i "%choice%"=="5C" goto train_chunked
 if /i "%choice%"=="5R" goto train_assets
+if /i "%choice%"=="5S" goto train_settings
 if /i "%choice%"=="5F" goto fill_champions
 if /i "%choice%"=="AG" goto adopt_genome
 if /i "%choice%"=="PA" goto per_asset_menu
@@ -475,6 +477,27 @@ echo.
 echo A gate line reading "N asset(s) dropped as unscorable" is not noise: those
 echo assets had an arm with too few trades to judge and were left out of the
 echo effect size on purpose.
+pause
+goto menu
+
+:train_settings
+cls
+echo  TRAINING SETTINGS. Saved in .env; every later training run uses them.
+echo.
+echo  How the four models' probabilities become one:
+echo    [1] fixed  half CatBoost, half the mean of the three nets. Nothing is
+echo               fitted. Measured 2026-09-28 on 20 assets: +1.1 pts of
+echo               accuracy over the stacker, and the best ranking. Default.
+echo    [2] stack  the older per-fold logistic stacker, fitted on the
+echo               validation slice.
+echo  Only NEW champions change: each asset is served the way it was trained,
+echo  so an asset switches when it is retrained.
+echo.
+findstr /b "GTRADE_COMBINER=" .env
+set "ts_c="
+set /p ts_c="Combiner, Enter = keep: "
+if "%ts_c%"=="1" python analyst.py brains --set "GTRADE_COMBINER=fixed"
+if "%ts_c%"=="2" python analyst.py brains --set "GTRADE_COMBINER=stack"
 pause
 goto menu
 

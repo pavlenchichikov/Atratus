@@ -34,7 +34,8 @@ ENV_PATH = os.path.join(BASE, ".env")
 SETTABLE = ("GTRADE_ANALYST_BRAIN", "GTRADE_OLLAMA_MIN_FREE_MB", "GTRADE_OLLAMA_NUM_GPU",
             "GTRADE_ANALYST_MAX_HOURS", "GTRADE_ANALYST_TOOL_ROUNDS",
             "GTRADE_ANALYST_TOOL_CALLS", "GTRADE_ANALYST_OLLAMA_URL", "OLLAMA_API_KEY",
-            "GTRADE_ANALYST_AUTO", "GTRADE_ANALYST_AUTO_MAX", "GTRADE_ANALYST_MODE")
+            "GTRADE_ANALYST_AUTO", "GTRADE_ANALYST_AUTO_MAX", "GTRADE_ANALYST_MODE",
+            "GTRADE_COMBINER")
 
 
 def parse(spec):
@@ -156,6 +157,7 @@ _VALID = {
     "GTRADE_ANALYST_AUTO": lambda v: v in ("0", "1"),
     "GTRADE_ANALYST_AUTO_MAX": _positive_int,
     "GTRADE_ANALYST_MODE": lambda v: v in ("solo", "team"),
+    "GTRADE_COMBINER": lambda v: v in ("fixed", "stack"),
 }
 
 
