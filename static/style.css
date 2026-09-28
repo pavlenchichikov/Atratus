@@ -450,9 +450,10 @@ th.num, td.num { text-align: right; }
    readable as a comparison and not as a second instruction beside the badge of
    the one that actually decided. */
 .watched-badge { color: var(--dim); border-style: dashed; border-color: var(--line); background: transparent; opacity: 0.85; }
-/* The US-close rule's call, beside the model's: a different source, so its own colour. */
-.lead-chip { color: var(--cyan); border-color: rgba(0, 212, 255, 0.45); background: rgba(0, 212, 255, 0.08); }
 .chip-lg { font-size: 15px; padding: 4px 14px; }
+/* The grade tables sit side by side and wrap on a narrow screen. */
+.noise-grades { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; }
+.noise-grades td.num, .noise-grades th.num { white-space: nowrap; }
 
 .chip-BUY:hover { box-shadow: 0 0 8px rgba(0, 255, 163, 0.5); }
 .chip-SELL:hover { box-shadow: 0 0 8px rgba(255, 59, 92, 0.5); }

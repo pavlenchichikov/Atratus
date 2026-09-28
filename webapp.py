@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from config import FULL_ASSET_MAP, RADAR_GROUPS, radar_category
+from config import FULL_ASSET_MAP, MOEX_ASSETS, RADAR_GROUPS, radar_category
 from core import dashboard, timing_policy, track_record
 from core import levels as levels_mod
 from core import positions as positions_mod
@@ -58,7 +58,7 @@ def _warm_heavy_pages():
                  lambda: dashboard.news_digest(lang="all", category="all"),
                  dashboard.sector_momentum, dashboard.sector_heatmap,
                  dashboard.correlation_stress, dashboard.correlation_heatmap,
-                 dashboard.tail_index, dashboard.top_movers, dashboard.lead_calls,
+                 dashboard.tail_index, dashboard.top_movers, dashboard.signal_noise,
                  dashboard.global_regime):
         try:
             warm()
@@ -567,14 +567,12 @@ def _timing_badge(row, show_timing):
 def _grouped_signals(signals):
     show_timing = timing_policy.timing_on() and timing_policy.load_policy() is not None
     sigs = {s["asset"]: s for s in signals}
-    leads = dashboard.lead_calls()
     groups = []
     for group, members in RADAR_GROUPS.items():
         rows = [sigs[a] for a in members if a in sigs]
         for r in rows:
             r["cat"] = radar_category(r["asset"])
             r["timing_badge"] = _timing_badge(r, show_timing)
-            r["lead"] = leads.get(r["asset"])
         if rows:
             groups.append({"name": group, "rows": rows})
     return groups
@@ -712,8 +710,9 @@ def asset_page(request: Request, name: str):
     # records and the fit is measured against. Showing the raw call here while
     # the badge below reports a policy that disagrees is two instructions on one
     # card; the badge is what says they differ, and that is its whole job.
+    bars60 = track_record.ohlc_series(name, days=60)
     asset_levels = levels_mod.levels(
-        track_record.ohlc_series(name, days=60),
+        bars60,
         levels_mod.acting_side((current or {}).get("signal"), name,
                                (current or {}).get("timing_action")),
         segment=open_segment, taleb_hi=taleb_hi, risky=risky)
@@ -722,6 +721,7 @@ def asset_page(request: Request, name: str):
         "asset": name,
         "ticker": FULL_ASSET_MAP[name],
         "levels": asset_levels,
+        "range": levels_mod.range_forecast(bars60, weekdays_only=name in MOEX_ASSETS),
         "levels_policy": levels_mod.policy_evidence(),
         "tail": tail,
         "tail_regime": dashboard.tail_regime(tail, soft_cap, hard_cap),
@@ -747,7 +747,7 @@ def asset_page(request: Request, name: str):
         "markers_json": json.dumps(markers),
         "guru": dashboard.guru_for_asset(name),
         "intraday": dashboard.intraday_for_asset(name),
-        "lead": dashboard.lead_calls().get(name),
+        "clean_acc": ((dashboard.signal_noise() or {}).get("per_asset") or {}).get(name),
         "payoff": _payoff_context(name, asset_levels.get("atr"),
                                   asset_levels.get("close")),
         "analyst": _analyst_for_asset(name),
@@ -1272,6 +1272,7 @@ def performance_page(request: Request):
         "version": dashboard.current_model_version(),
         "meta_shadow": meta_shadow,
         "levels": levels,
+        "noise": dashboard.signal_noise(),
     }
     context.update(_accuracy_panels())
     return templates.TemplateResponse(request, "performance.html", context)

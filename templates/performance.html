@@ -19,6 +19,42 @@
   <div id="perf-chart" style="width:100%;height:320px"></div>
 </section>
 
+{# Accuracy with noise-sized outcomes left out, and the standing check of
+   whether any property of a call separates signal from noise. #}
+{% if noise and noise.raw.n %}
+<section class="panel fade">
+  <div class="panel-head"><h2>Signal vs noise</h2>
+    <span class="dim mono">model BUY/SELL calls with an outcome, whole journal</span></div>
+  <div class="statgrid">
+    <div class="stat"><span class="stat-label">Accuracy, every outcome</span>
+      <span class="stat-value">{{ "%.1f"|format(noise.raw.acc * 100) }}<small>%</small></span>
+      <span class="stat-sub">{{ noise.raw.n }} calls, &plusmn;{{ "%.1f"|format((noise.raw.hi - noise.raw.acc) * 100) }} pts</span></div>
+    <div class="stat"><span class="stat-label">Accuracy without noise</span>
+      <span class="stat-value">{% if noise.clean.n %}{{ "%.1f"|format(noise.clean.acc * 100) }}<small>%</small>{% else %}-{% endif %}</span>
+      <span class="stat-sub">{{ noise.clean.n }} calls; {% if noise.noise_share is not none %}{{ "%.0f"|format(noise.noise_share * 100) }}% of outcomes were noise{% endif %}</span></div>
+  </div>
+  <p class="dim">An outcome is noise when the next move is smaller than half the asset's
+    median daily move over the previous 60 bars: whether a call was "right" by less than
+    that says nothing. The tables below score only the rest. A level whose band clears
+    50% is a way to tell a strong call from a weak one; a table where every band straddles
+    50% says that property carries no signal.</p>
+  <div class="noise-grades">
+  {% for g in noise.grades %}
+  <table class="grid">
+    <thead><tr><th>{{ g.title }}</th><th class="num">n</th><th class="num">Accuracy</th><th class="num">&plusmn;2 se</th></tr></thead>
+    <tbody>
+      {% for r in g.rows %}
+      <tr><td class="mono">{{ r.label }}</td><td class="num">{{ r.n }}</td>
+        <td class="num {{ 't-buy' if r.lo is not none and r.lo > 0.5 else ('t-sell' if r.hi is not none and r.hi < 0.5 else '') }}">{{ "%.1f"|format(r.acc * 100) }}<small>%</small></td>
+        <td class="num dim">{{ "%.0f"|format(r.lo * 100) }}-{{ "%.0f"|format(r.hi * 100) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <section class="panel fade">
   <div class="panel-head"><h2>Leaders (current model)</h2></div>
   {% if leaderboard %}

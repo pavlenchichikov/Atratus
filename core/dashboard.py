@@ -644,21 +644,16 @@ def _tradeable(asset):
     return not white or asset in white
 
 
-@ttl_cache(1800, stale_ok=True)
-def lead_calls():
-    """{asset: row} for the assets the US-close rule follows today (see
-    lead_baseline.current_calls); {} when the database cannot answer. Reads
-    every close table in one connection, about 13 s, hence the long ttl."""
-    try:
-        import sqlite3
-        from contextlib import closing
 
-        import lead_baseline
-        from config import FULL_ASSET_MAP
-        with closing(sqlite3.connect(lead_baseline.DB_PATH)) as con:
-            return lead_baseline.current_calls(con, list(FULL_ASSET_MAP))
+@ttl_cache(1800, stale_ok=True)
+def signal_noise():
+    """core.signal_noise.noise_report over the whole journal; None on failure.
+    Reads every journal asset's closes for its noise band, about 18 s."""
+    try:
+        from core import signal_noise as sn
+        return sn.noise_report()
     except Exception:
-        return {}
+        return None
 
 
 @ttl_cache(300, stale_ok=True)

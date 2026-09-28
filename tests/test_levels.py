@@ -169,3 +169,50 @@ def test_risk_config_carries_the_two_new_keys():
     assert RISK_CONFIG["risk_per_trade"] == 0.01
     assert "risk_per_trade" in _FRACTION_KEYS
     assert "equity" not in _FRACTION_KEYS      # money, not a fraction
+
+
+def _flat_range_bars(n, rng=0.02, close=100.0):
+    """Bars whose true range is always `rng` of the close."""
+    return [{"high": close * (1 + rng / 2), "low": close * (1 - rng / 2), "close": close}
+            for _ in range(n)]
+
+
+def test_range_forecast_of_a_steady_series_is_near_its_own_range():
+    from core.levels import range_forecast
+    f = range_forecast(_flat_range_bars(40, 0.02))
+    # a constant 2% range: the fitted weights sum to 0.94 with a negative
+    # intercept, so the typical forecast sits a little under 2%
+    assert 0.015 < f["typical"] < 0.025
+    assert f["q90"] > f["typical"]
+    assert abs(f["atr"] - 0.02) < 1e-9
+
+
+def test_range_forecast_reacts_to_a_calm_week_before_the_22_day_mean_does():
+    from core.levels import range_forecast
+    calm_end = _flat_range_bars(30, 0.04) + _flat_range_bars(6, 0.01)
+    f = range_forecast(calm_end)
+    assert f["typical"] < f["atr"]        # ATR14 still remembers the loud weeks
+
+
+def test_range_forecast_needs_22_bars():
+    from core.levels import range_forecast
+    assert range_forecast(_flat_range_bars(20)) is None
+
+
+def test_a_thin_weekend_session_is_left_out_when_asked():
+    """A Saturday MOEX session ranging 0.2% must not stand in for Friday's range."""
+    import datetime
+
+    from core.levels import range_forecast
+    start = datetime.date(2026, 8, 3)                      # a Monday
+    bars = []
+    for i in range(40):
+        day = start + datetime.timedelta(days=i)
+        rng = 0.002 if day.weekday() >= 5 else 0.02
+        bars.append({"date": day.isoformat(), "high": 100 * (1 + rng / 2),
+                     "low": 100 * (1 - rng / 2), "close": 100.0})
+    while datetime.date.fromisoformat(bars[-1]["date"]).weekday() != 5:
+        bars.pop()                                         # end on a Saturday
+    kept = range_forecast(bars, weekdays_only=True)["typical"]
+    assert kept > range_forecast(bars)["typical"]
+    assert 0.015 < kept < 0.025

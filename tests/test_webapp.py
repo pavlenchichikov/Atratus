@@ -48,13 +48,12 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(performance_tracker, "DB_PATH", path)
     monkeypatch.setattr(performance_tracker, "_ENGINE", None)
     monkeypatch.setattr(experience, "DB_PATH", path)
+    from core import signal_noise
+    monkeypatch.setattr(signal_noise, "DB_PATH", path)
     # cached pages (the levels sheet among them) must not carry one test's
     # database into the next
     from core import dashboard
     dashboard.cache_clear()
-    # the lead calls read every close table; the stub database has none
-    import lead_baseline
-    monkeypatch.setattr(lead_baseline, "DB_PATH", path)
     return TestClient(webapp.app)
 
 
@@ -934,31 +933,6 @@ def test_asset_scan_is_refused_while_the_full_radar_runs(client, monkeypatch):
 
 def test_asset_scan_rejects_an_unknown_asset(client):
     assert client.post("/api/radar/scan/NOPE123").status_code == 404
-
-
-_LEAD = {"rank": 3, "ic": 0.43, "sign": 1, "call": "BUY", "bar": "2026-06-10",
-         "us_move": 0.005}
-
-
-def test_radar_marks_an_asset_the_us_close_rule_follows(client, monkeypatch):
-    from core import dashboard
-    monkeypatch.setattr(dashboard, "lead_calls", lambda: {"BTC": _LEAD})
-    r = client.get("/")
-    assert "lead-chip" in r.text and "lead BUY" in r.text
-
-
-def test_asset_card_states_the_lead_call_and_why(client, monkeypatch):
-    from core import dashboard
-    monkeypatch.setattr(dashboard, "lead_calls", lambda: {"BTC": _LEAD})
-    r = client.get("/asset/BTC")
-    assert "US lead, next session" in r.text
-    assert "#3 of 30" in r.text
-
-
-def test_asset_card_without_a_lead_shows_no_lead_block(client, monkeypatch):
-    from core import dashboard
-    monkeypatch.setattr(dashboard, "lead_calls", dict)
-    assert "US lead, next session" not in client.get("/asset/BTC").text
 
 
 def test_asset_page_has_the_scan_button(client):
@@ -1921,3 +1895,40 @@ def test_the_asset_card_shows_the_session_call_only_when_there_is_one(
     assert "stand aside" in body and "BoJ decision inside it." in body
     monkeypatch.setattr(webapp, "_analyst_intraday_for_asset", lambda name: None)
     assert "Analyst: the next session" not in client.get("/asset/BTC").text
+
+
+_NOISE = {"raw": {"n": 10, "acc": 0.5, "lo": 0.18, "hi": 0.82},
+          "clean": {"n": 6, "acc": 0.667, "lo": 0.28, "hi": 1.0}, "noise_share": 0.4,
+          "grades": [{"key": "agree", "title": "Members on the call's side",
+                      "rows": [{"label": "4 of 4", "n": 6, "acc": 0.667, "lo": 0.28, "hi": 1.0}]}],
+          "per_asset": {"BTC": {"n": 6, "acc": 0.667, "lo": 0.28, "hi": 1.0}}}
+
+
+def test_accuracy_page_shows_accuracy_without_noise_and_the_grades(client, monkeypatch):
+    from core import dashboard
+    monkeypatch.setattr(dashboard, "signal_noise", lambda: _NOISE)
+    r = client.get("/performance")
+    assert "Accuracy without noise" in r.text
+    assert "40% of outcomes were noise" in r.text
+    assert "Members on the call&#39;s side" in r.text or "Members on the call's side" in r.text
+
+
+def test_asset_card_shows_its_own_accuracy_without_noise(client, monkeypatch):
+    from core import dashboard
+    monkeypatch.setattr(dashboard, "signal_noise", lambda: _NOISE)
+    assert "Without noise (6)" in client.get("/asset/BTC").text
+
+
+def test_pages_render_when_the_noise_report_is_unavailable(client, monkeypatch):
+    from core import dashboard
+    monkeypatch.setattr(dashboard, "signal_noise", lambda: None)
+    assert client.get("/performance").status_code == 200
+    assert "Without noise" not in client.get("/asset/BTC").text
+
+
+def test_asset_card_shows_tomorrows_range(client, monkeypatch):
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "range_forecast",
+                        lambda bars, **kw: {"typical": 0.02, "q90": 0.036, "atr": 0.022})
+    r = client.get("/asset/BTC")
+    assert "Range tomorrow" in r.text and "3.60" in r.text

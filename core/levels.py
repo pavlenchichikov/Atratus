@@ -18,6 +18,8 @@ there it is welded into a whole feature frame over a DataFrame and cannot be
 called on its own. tests/test_levels.py pins the two together on shared input.
 """
 
+import datetime
+import math
 import os
 
 ATR_PERIOD = 14
@@ -106,6 +108,47 @@ def atr_series(bars, period=ATR_PERIOD):
             window = tr[i + 1 - period:i + 1]
             out.append(sum(window) / period)
     return out
+
+
+# Tomorrow's true range as a share of the close, from the mean true range over
+# the last 1, 5 and 22 bars (a HAR model, log-linear, pooled over 830 assets).
+# Fitted on bars up to 2022, scored on 2023-2026 (806209 days): IC 0.412 against
+# 0.355 for ATR14 and QLIKE 0.135 against 0.158; on MOEX 0.505 against 0.428.
+# Calibration on the test years: the typical range was exceeded on 48.5% of
+# days and the q90 band on 9.6% (MOEX 13.4%, SBER 11.0%). Measured 2026-09-28.
+# Shown beside the stop, not used by it: the stop multipliers in
+# levels_policy.json were fitted on ATR14 and would need a refit to move.
+HAR_INTERCEPT = -0.2994
+HAR_WEIGHTS = (0.2000, 0.3209, 0.4208)    # 1-day, 5-day, 22-day mean true range
+HAR_RESID_SD = 0.4764                     # of log(true range), for the q90 band
+Z90 = 1.2816
+
+
+def range_forecast(bars, weekdays_only=False):
+    """{typical, q90, atr} as shares of the last close, or None under 22 bars.
+
+    weekdays_only drops Saturday/Sunday bars first: MOEX weekend sessions are
+    thin (SBER 2026-09-26 ranged 0.2%), the owner does not trade them, and one
+    in the 1-day term pulled the forecast for Monday to 0.94% against 1.50%.
+    Weekday-only MOEX scores IC 0.529; Friday-to-Monday still runs wider than
+    forecast (q90 exceeded on 15.2% of Mondays).
+
+    `typical` is the median forecast of tomorrow's true range (half of days
+    exceed it), `q90` the level only one day in ten should exceed, `atr` the
+    ATR14 the stops use, on the same scale for comparison.
+    """
+    if weekdays_only:
+        bars = [b for b in bars if "date" not in b
+                or datetime.date.fromisoformat(str(b["date"])[:10]).weekday() < 5]
+    if len(bars) < 22:
+        return None
+    rel = [tr / b["close"] for tr, b in zip(_true_ranges(bars), bars)]
+    means = (rel[-1], sum(rel[-5:]) / 5, sum(rel[-22:]) / 22)
+    if min(means) <= 0:
+        return None
+    mu = HAR_INTERCEPT + sum(w * math.log(m) for w, m in zip(HAR_WEIGHTS, means))
+    return {"typical": math.exp(mu), "q90": math.exp(mu + Z90 * HAR_RESID_SD),
+            "atr": sum(rel[-ATR_PERIOD:]) / ATR_PERIOD}
 
 
 def atr_abs(bars, period=ATR_PERIOD):
