@@ -149,9 +149,27 @@ def test_a_row_for_a_session_that_has_not_begun_is_dropped(monkeypatch):
     NASDAQ and NASDAQ100 hold 2026-09-16 and 09-18 with no 09-17 because of it."""
     now = dt.datetime.now().replace(microsecond=0)
     closed = (now - dt.timedelta(hours=14), now - dt.timedelta(hours=8))
+    tomorrow = dt.datetime.combine(closed[1].date() + dt.timedelta(days=1), dt.time(9, 0))
     stamps = [now - dt.timedelta(days=1), now - dt.timedelta(hours=9),
-              now + dt.timedelta(hours=10)]          # tomorrow's placeholder
+              tomorrow]                               # the next day's placeholder
     payload = _daily_payload(stamps, [1.0, 2.0, 2.0], closed)
     monkeypatch.setattr(net, "http_get", lambda url, **kw: _Resp(payload))
     got = de.fetch_yahoo_smart("AAPL", None)
     assert len(got) == 2 and got["Close"].iloc[-1] == 2.0
+
+
+def test_a_closed_day_stamped_after_its_session_end_is_kept():
+    """2026-09-28: asked from Saturday on, Yahoo returned Monday's finished DAX
+    bar as ONE row stamped 19:00, after the 18:30 session end (the closing
+    auction). A time cut at the end dropped it, and 179 European tables stopped
+    at 09-25. The cut is by DATE: the session's own day stays, the next day goes."""
+    end = dt.datetime(2026, 9, 28, 18, 30)
+    meta = {"currentTradingPeriod": {"regular": {
+        "start": int(dt.datetime(2026, 9, 28, 10, 0).timestamp()),
+        "end": int(end.timestamp())}}}
+    df = pd.DataFrame({"Date": pd.to_datetime([dt.datetime(2026, 9, 28, 19, 0),
+                                               dt.datetime(2026, 9, 29, 8, 0)]),
+                       "Close": [25374.4, 25374.4]})
+    now_ts = int(dt.datetime(2026, 9, 28, 23, 3).timestamp())
+    got = de._drop_unfinished_session(df, meta, now_ts)
+    assert list(got["Date"].dt.day) == [28]

@@ -136,7 +136,13 @@ def _drop_unfinished_session(df, meta, now_ts):
     # Measured 2026-09-19: NASDAQ and NASDAQ100 have 09-16 and 09-18 and no
     # 09-17, both written by a 08:33 MSK run, hours before the US open. A hole
     # a daily fetch cannot heal is worse than a missing row.
-    return df[df["Date"] <= pd.Timestamp(datetime.fromtimestamp(end))]
+    #
+    # By DATE, not by time: asked from a Saturday on, Yahoo returned Monday's
+    # finished DAX bar as one row stamped 19:00, after the 18:30 session end
+    # (the closing auction), and a cut at the end time dropped it - 179
+    # European tables stopped at 2026-09-25. The next day's row is still out.
+    end_day = pd.Timestamp(datetime.fromtimestamp(end)).normalize()
+    return df[df["Date"].dt.normalize() <= end_day]
 
 
 # Bars Yahoo lists with empty fields. 2026-09-26 06:31: the 09-25 bar came back
