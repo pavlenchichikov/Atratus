@@ -460,3 +460,16 @@ def test_an_unbankable_basis_says_so_instead_of_going_quiet(tmp_path, monkeypatc
     line = ab_build.projected_power(40, 0.5, base=str(tmp_path), basis="trade_t")
     assert "not checked" in line and "trade_t" in line
     assert "cannot answer" not in line, "this must not trigger the refusal"
+
+
+def test_a_candidate_below_the_no_model_baseline_is_vetoed():
+    rows = [{"Ens_Acc": 0.51, "Base_Acc": 0.53}, {"Ens_Acc": 0.52, "Base_Acc": 0.52},
+            {"Ens_Acc": 0.60}]                     # no baseline: left out
+    ens, base = ab_build.baseline_means(rows)
+    assert (round(ens, 3), round(base, 3)) == (0.515, 0.525)
+    st = {"p": 0.001, "value": 1.0, "n": 40, "ens_acc": ens, "base_acc": base}
+    assert ab_build.verdict(st, 0.5, 0.05) == "FAILED"
+    st.update(ens_acc=0.55)
+    assert ab_build.verdict(st, 0.5, 0.05) == "PASSED"      # positive control
+    # rows from before the column: unmeasured, not a veto
+    assert ab_build.baseline_means([{"Ens_Acc": 0.5}]) == (None, None)

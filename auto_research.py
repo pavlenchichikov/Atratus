@@ -40,6 +40,13 @@ try:
 except Exception:
     pass
 
+# The search trains on the GPU, so its LLM calls stay on the CPU. .env's
+# GTRADE_OLLAMA_NUM_GPU=4 is for the analyst on an idle card; forced onto a
+# card the trainers hold, the load did not fail cleanly, it hung the driver:
+# BSOD 0x116 VIDEO_TDR_FAILURE on 2026-09-27 and 09-28, both seconds after
+# llama-server started with -ngl 4.
+os.environ["GTRADE_OLLAMA_NUM_GPU"] = "0"
+
 from core import ar_memory, ar_rl, ar_wiki, llm_proposer, qd_surrogate
 from core.backtesting import UNRELIABLE_SCORE
 from core.feature_dsl import validate_spec
@@ -2527,7 +2534,18 @@ _SAMPLE_HORIZONS = [1, 2, 5]
 _SINGLE_OPS = ["zscore", "lag", "diff", "rolling"]
 _PAIR_OPS = ["ratio", "interaction"]
 _AGGS = ["mean", "std", "sum"]
-_LEAD_LEADERS = ["sp500", "vix", "btc", "gold", "dxy", "tnx"]
+# sp500 is out of the SEARCH (2026-09-28): its lead onto Asia-Pacific is an
+# async-close artifact that futures and ETFs do not reproduce (IC -0.06), so a
+# gain from it is accuracy nobody can trade. feature_dsl still accepts it, so an
+# adopted genome that carries one keeps building.
+_LEAD_LEADERS = ["vix", "btc", "gold", "dxy", "tnx"]
+
+
+def _searchable(spec, cols):
+    """validate_spec, minus the leaders the search no longer proposes."""
+    if spec.get("op") == "lead_lag" and (spec.get("inputs") or [None])[0] not in _LEAD_LEADERS:
+        return False
+    return validate_spec(spec, cols)
 
 
 def _random_spec(base_features, name, prefer):
@@ -2600,7 +2618,7 @@ def propose_evolutionary(log, base_features, avoid=None):
             spec = _mutate(random.choice(best[1]), name)
         else:
             spec = _random_spec(base_features, name, good_inputs)
-        if (validate_spec(spec, cols) and _spec_signature(spec) not in seen
+        if (_searchable(spec, cols) and _spec_signature(spec) not in seen
                 and not ar_memory.tried_seen("spec", json.dumps(_spec_signature(spec)))):
             return [spec]
     return []
@@ -3268,7 +3286,7 @@ def make_features_axis(base_features):
 
     def _validate(cand, kept):
         cols = set(base_features) | {s["name"] for s in (kept or [])}
-        return validate_spec(cand, cols)
+        return _searchable(cand, cols)
 
     return Axis(
         name="features",

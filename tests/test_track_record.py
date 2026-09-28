@@ -357,3 +357,13 @@ def test_price_series_closes_the_connection_it_opened(monkeypatch, tmp_path):
     assert len(made) == 1
     with pytest.raises(sqlite3.ProgrammingError):
         made[0].execute("SELECT 1")
+
+
+def test_next_session_skips_weekends_except_for_crypto():
+    from core.track_record import next_session
+    assert next_session("2026-09-25", "SBER") == "2026-09-28"   # Fri -> Mon
+    assert next_session("2026-09-27", "SBER") == "2026-09-28"   # a Sunday MOEX bar -> Mon
+    assert next_session("2026-09-26", "SP500") == "2026-09-28"
+    assert next_session("2026-09-24", "SP500") == "2026-09-25"
+    assert next_session("2026-09-26", "BTC") == "2026-09-27"    # crypto trades every day
+    assert next_session(None, "BTC") is None

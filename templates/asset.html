@@ -15,10 +15,25 @@
     {% if current.timing_label %}<span class="chip timing-badge" title="{{ current.timing_label }}">{{ current.timing_label }}</span>{% endif %}
     {% if current.watched_label %}<span class="chip watched-badge" title="Recorded for comparison only. This policy did not decide anything.">{{ current.watched_label }}</span>{% endif %}
     <span class="mono asset-prob">p = {{ "%.2f"|format(current.probability) }}</span>
-    <span class="dim mono">{{ current.date }}</span>
+    <span class="mono forecast-for">forecast for {{ current.for_date or '?' }}</span>
+    <span class="dim mono">from the {{ current.date }} close</span>
   </div>
   {% endif %}
 </div>
+{% if current %}
+<p class="help">How to read the header: the signal is the model's call for the
+  session of <b>{{ current.for_date or '?' }}</b>, made from the close of {{ current.date }}.
+  A forecast for the next day can only exist after today's close, so a date one
+  day behind is normal. <b>p</b> is the ensemble's probability that the session
+  closes higher: above the BUY threshold it says BUY, below the SELL threshold
+  SELL, in between WAIT. How far p sits from 0.5 has not predicted accuracy on
+  the live log, so do not read a bigger p as a surer call.
+  {% if track and track[0].noise_band %}<br><b>Signal or noise:</b> on this asset a
+  move smaller than &plusmn;{{ "%.2f"|format(track[0].noise_band * 100) }}% (half its median
+  daily move over 60 bars) is noise. If the session moves less than that, the
+  call is scored neither right nor wrong; only a bigger move tests it.{% endif %}</p>
+{% endif %}
+<p class="dim"><button class="fbtn" id="help-toggle" type="button">Hide how-to-read notes</button></p>
 <p class="dim"><button class="fbtn" id="asset-scan-btn">Scan this asset</button>
   <span id="asset-scan-msg" class="mono"></span></p>
 
@@ -30,6 +45,9 @@
     <span class="pos-detail mono">since {{ position.since }} &middot; {{ position.bars }} bar{{ 's' if position.bars != 1 else '' }}{% if position.ret is not none %} &middot; <b class="{{ 't-buy' if position.ret >= 0 else 't-sell' }}">{{ "%+.2f"|format(position.ret * 100) }}%</b>{% endif %}</span>
     {% endif %}
   </div>
+  <p class="help">The position the signals imply if every call were followed:
+    LONG, SHORT or FLAT, since when, and its return so far. The ribbon below is its
+    history, old to new.</p>
   <div class="pos-guide dim">
     {% if position.state == 'FLAT' %}Flat - no open position. Enter LONG on a BUY, SHORT on a SELL.
     {% elif position.state == 'LONG' %}Hold while the signal stays BUY. Exit when it turns WAIT or SELL.{% if position.fresh %} Entered on the latest bar.{% endif %}
@@ -54,16 +72,19 @@
     <span class="stat-label">Entry zone</span>
     <span class="stat-value">{{ "%.4g"|format(levels.entry_low) }}<span class="stat-sep">..</span>{{ "%.4g"|format(levels.entry_high) }}</span>
     <span class="stat-sub">{{ "%.2g"|format((levels.entry_high - levels.close) / levels.atr) }} ATR either side of the close</span>
+    <span class="help">Where to place the entry: a limit order inside this band. ATR is the average daily range of the last 14 days, so the band scales with how much this asset usually moves.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">{{ 'Trailing stop' if levels.trailing else 'Stop' }}</span>
     <span class="stat-value">{{ "%.4g"|format(levels.stop) }}</span>
     <span class="stat-sub">{% if levels.trailing %}trailed to the best level since entry{% else %}{{ "%.2g"|format((levels.close - levels.stop) | abs / levels.atr) }} ATR against the position{% endif %}</span>
+    <span class="help">Exit if the price reaches this level against you. Measured in ATR so it is equally far, in this asset's own terms, on a quiet and on a wild name.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Last close</span>
     <span class="stat-value">{{ "%.4g"|format(levels.close) }}</span>
     <span class="stat-sub">ATR(14) {{ "%.4g"|format(levels.atr) }}</span>
+    <span class="help">The last completed close the levels are computed from, and ATR(14): the average high-to-low range of the last 14 days, in price units.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Expected payoff (1 bar)</span>
@@ -77,9 +98,11 @@
       long / short, 80% band {{ "%+.1f"|format(payoff.long.lo * 100) }}% to {{ "%+.1f"|format(payoff.long.hi * 100) }}%
       &middot; {{ payoff.long.source }} &middot; {{ payoff.long.evidence }}
     </span>
+    <span class="help">What a long and a short position have historically earned per bar in situations like this one (the empirical payoff table). The 80% band: 8 bars in 10 landed inside it. Not a forecast of today's move.</span>
     {% else %}
     <span class="stat-value">-</span>
     <span class="stat-sub">no payoff table fitted yet</span>
+    <span class="help">Appears once the payoff table (train_payoff.py) has been fitted.</span>
     {% endif %}
   </div>
 </div>
@@ -102,6 +125,7 @@
       {%- elif levels.status == 'flat_atr' %}the ATR is zero here, every level would sit on the close
       {%- else %}unavailable ({{ levels.status }}){% endif %}
     </span>
+    <span class="help">No entry zone or stop is drawn when there is no side to take.</span>
   </div>
 </div>
 {% endif %}
@@ -116,11 +140,13 @@
     <span class="stat-label">Range tomorrow</span>
     <span class="stat-value">&plusmn;{{ "%.2f"|format(range.typical * 100 / 2) }}<small>%</small></span>
     <span class="stat-sub">typical high-to-low {{ "%.2f"|format(range.typical * 100) }}%: half of days are wider. ATR(14) says {{ "%.2f"|format(range.atr * 100) }}%.</span>
+    <span class="help">How far the price is likely to swing tomorrow, either way: a typical day covers this much. It says nothing about direction. Use it to judge whether a stop or a target is within an ordinary day's reach.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">1 day in 10 wider than</span>
     <span class="stat-value">{{ "%.2f"|format(range.q90 * 100) }}<small>%</small></span>
     <span class="stat-sub">{% if levels and levels.status == 'ok' and levels.close %}{% set stop_pct = (levels.close - levels.stop) | abs / levels.close %}the stop is {{ "%.2f"|format(stop_pct * 100) }}% away{% if stop_pct < range.typical %}, inside a typical day: noise will hit it{% elif stop_pct < range.q90 %}, inside a wide day{% else %}, beyond a 1-in-10 day{% endif %}.{% else %}a stop closer than this is within reach of an ordinary wide day.{% endif %}</span>
+    <span class="help">Only 1 day in 10 has a wider range than this. A stop beyond it survives all but the unusual days.</span>
   </div>
 </div>
 <p class="dim">Forecast from the mean range over the last 1, 5 and 22 days, fitted to 2022 and
@@ -142,6 +168,7 @@
     {% if intraday.upper %}
     <span class="stat-value">{{ "%.0f"|format(intraday.upper.probability * 100) }}%</span>
     <span class="stat-sub">to {{ "%.4g"|format(intraday.upper.level) }}, {{ "%.2g"|format(intraday.upper.k) }} sigma above the open{% if intraday.upper.reached %} &middot; already touched{% endif %}</span>
+    <span class="help">The chance that today's price touches this level above the open at some point in the session. A touch, not a close there.</span>
     {% else %}
     <span class="stat-value">-</span>
     <span class="stat-sub">no level fitted on this side yet</span>
@@ -152,6 +179,7 @@
     {% if intraday.lower %}
     <span class="stat-value">{{ "%.0f"|format(intraday.lower.probability * 100) }}%</span>
     <span class="stat-sub">to {{ "%.4g"|format(intraday.lower.level) }}, {{ "%.2g"|format(intraday.lower.k) }} sigma below the open{% if intraday.lower.reached %} &middot; already touched{% endif %}</span>
+    <span class="help">The chance that today's price touches this level below the open at some point in the session.</span>
     {% else %}
     <span class="stat-value">-</span>
     <span class="stat-sub">no level fitted on this side yet</span>
@@ -180,6 +208,7 @@
       {%- elif intraday.status == 'short_history' %}too few sessions to fit this asset's own levels
       {%- else %}unavailable ({{ intraday.status }}){% endif %}
     </span>
+    <span class="help">Hourly odds appear once hourly bars and their calibration exist for this asset.</span>
   </div>
 </div>
 {% endif %}
@@ -200,6 +229,7 @@
       <span class="stat-label">Call</span>
       <span class="stat-value">{{ {'up':'LONG','down':'SHORT','flat':'FLAT'}.get(analyst.direction, analyst.direction) }}</span>
       <span class="stat-sub">conviction {{ analyst.conviction }}/5 &middot; expects {{ analyst.vol_regime }} volatility</span>
+    <span class="help">The analyst's own direction for this horizon. Conviction 1 is barely a lean, 5 the strongest. It never sees the model's call.</span>
     </div>
     <div class="stat">
       <span class="stat-label">Historical payoff for this call</span>
@@ -207,11 +237,13 @@
       <span class="stat-sub">{% if analyst.lo_pct is not none %}80% band {{ "%+.1f"|format(analyst.lo_pct * 100) }}% to {{ "%+.1f"|format(analyst.hi_pct * 100) }}%{% else %}no band recorded{% endif %}</span>
       <span class="stat-sub">not the analyst's own number: what this direction
         has been worth historically, so it can disagree with the call above</span>
+    <span class="help">Average historical result of calls like this one (same direction and conviction), with the range 8 in 10 of them landed in.</span>
     </div>
     <div class="stat">
       <span class="stat-label">Outcome</span>
       <span class="stat-value">{% if analyst.realized_ret is not none %}<b class="{{ 't-buy' if analyst.realized_ret >= 0 else 't-sell' }}">{{ "%+.2f"|format(analyst.realized_ret * 100) }}%</b>{% else %}pending{% endif %}</span>
       <span class="stat-sub">{% if analyst.realized_ret is not none %}error {{ "%.2f"|format(analyst.abs_err_atr) }} ATR &middot; {{ 'inside' if analyst.inside_interval == 1 else 'outside' }} the band{% else %}scored once the horizon elapses{% endif %}</span>
+    <span class="help">What the price actually did over the horizon, once it has passed.</span>
     </div>
   </div>
   {% if analyst.key_risk %}<p><b>Key risk.</b> {{ analyst.key_risk }}</p>{% endif %}
@@ -237,16 +269,19 @@
       <span class="stat-label">Open to close</span>
       <span class="stat-value">{{ {'up':'LONG','down':'SHORT','flat':'FLAT'}.get(ai.direction, ai.direction) }}</span>
       <span class="stat-sub">conviction {{ ai.conviction }}/5 &middot; gap {{ ai.gap }} &middot; {{ {'calm':'narrow','normal':'normal','elevated':'wide'}.get(ai.vol_regime, ai.vol_regime) }} range</span>
+    <span class="help">The analyst's call for the next session from its open to its close, the expected opening gap, and how wide the day should be.</span>
     </div>
     <div class="stat">
       <span class="stat-label">Trade it?</span>
       <span class="stat-value">{% if ai.stand_aside %}<b class="warn">stand aside</b>{% else %}trade{% endif %}</span>
       <span class="stat-sub">{{ ai.stand_aside_reason or '' }}</span>
+    <span class="help">Stand aside means the analyst thinks this session is not worth trading, whatever the direction.</span>
     </div>
     <div class="stat">
       <span class="stat-label">Outcome</span>
       <span class="stat-value">{% if ai.session_open %}<b class="{{ 't-buy' if ai.session_close >= ai.session_open else 't-sell' }}">{{ "%+.2f"|format((ai.session_close - ai.session_open) / ai.session_open * 100) }}%</b>{% else %}pending{% endif %}</span>
       <span class="stat-sub">{% if ai.session_open %}session {{ ai.session_date }}, open to close{% else %}scored once the session has closed{% endif %}</span>
+    <span class="help">The session's actual move from open to close, filled in after it closes.</span>
     </div>
   </div>
   <p class="dim mono">session after {{ ai.date }} &middot; accuracy per question on <a href="/analyst#intraday">the analyst page</a></p>
@@ -258,12 +293,14 @@
     <span class="stat-label">Accuracy (last {{ acc.n if acc.n else 0 }})</span>
     <span class="stat-value">{% if acc.n %}{{ "%.0f"|format(acc.acc * 100) }}<small>%</small>{% else %}-{% endif %}</span>
     <span class="stat-sub">{% if acc.n %}{{ acc.correct }} correct of {{ acc.n }}{% if acc.all_versions %} (all model versions){% endif %}{% else %}no verified signals{% endif %}</span>
+    <span class="help">Share of this asset's recent calls that got the next move's direction right, noise days included. 50% is a coin flip; with a few dozen calls, anything from about 40% to 60% can still be luck.</span>
   </div>
   {% if clean_acc and clean_acc.n %}
   <div class="stat fade">
     <span class="stat-label">Without noise ({{ clean_acc.n }})</span>
     <span class="stat-value">{{ "%.0f"|format(clean_acc.acc * 100) }}<small>%</small></span>
     <span class="stat-sub">every journal call whose next move cleared this asset's noise band; &plusmn;{{ "%.0f"|format((clean_acc.hi - clean_acc.acc) * 100) }} pts</span>
+    <span class="help">The same accuracy counting only days whose move was bigger than the noise band, so tiny moves do not decide it. The &plusmn; is the uncertainty: if the range includes 50%, there is no evidence of skill yet.</span>
   </div>
   {% endif %}
   {% if watched_acc %}
@@ -271,17 +308,20 @@
     <span class="stat-label">Watched Q ({{ watched_acc.n }} decided)</span>
     <span class="stat-value">{{ "%.0f"|format(watched_acc.accuracy * 100) }}<small>%</small></span>
     <span class="stat-sub">{{ watched_acc.correct }} right of {{ watched_acc.n }}, decided nothing</span>
+    <span class="help">A challenger timing policy that is only recorded, never acted on: its record, kept for comparison.</span>
   </div>
   {% endif %}
   <div class="stat fade">
     <span class="stat-label">Correct / missed</span>
     <span class="stat-value"><em class="t-buy">{{ stats.wins }}</em><span class="stat-sep">/</span><em class="t-sell">{{ stats.losses }}</em></span>
     <span class="stat-sub">over {{ track | length }} journal entries</span>
+    <span class="help">How many journal calls were right (green) and wrong (red). Calls still waiting for their next bar are not counted.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Average actual move</span>
     <span class="stat-value">{% if stats.avg_ret is not none %}{{ "%+.2f"|format(stats.avg_ret * 100) }}<small>%</small>{% else %}-{% endif %}</span>
     <span class="stat-sub">next bar after signal</span>
+    <span class="help">Average move of the next bar after the calls in the journal, whatever the call was. It describes the asset, not the model.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Outcome streak</span>
@@ -291,6 +331,7 @@
       {% else %}<span class="dim">-</span>{% endfor %}
     </span>
     <span class="stat-sub">old - new</span>
+    <span class="help">The last 15 calls, oldest on the left: green right, red wrong, grey not yet scored.</span>
   </div>
   <div class="stat fade {% if tail_regime == 'extreme' %}stat-warn{% endif %}">
     <span class="stat-label">Taleb risk</span>
@@ -303,6 +344,7 @@
       {% elif tail_regime == 'elevated' %}above {{ "%.0f"|format(tail_soft * 100) }} - size reduced
       {% else %}normal (size cut above {{ "%.0f"|format(tail_soft * 100) }}){% endif %}
     </span>
+    <span class="help">Where today's volatility sits in this asset's own history, 0 to 100. High means unusually wild: the size is cut, and at the top no new entry is taken.</span>
   </div>
 </div>
 
@@ -402,6 +444,11 @@ fetch("/api/ohlc/{{ asset }}?days=120")
     {% else %}
     <p class="empty">No predictions in the journal.</p>
     {% endif %}
+    <p class="help">Each bar is one model's probability that the next session closes
+      higher: right of the middle (green) leans up, left (red) leans down, longer is
+      further from 0.5. The ensemble combines the four. The BUY and SELL thresholds
+      below are the p values beyond which the ensemble calls a side; between them it
+      says WAIT.</p>
     {% if thr %}
     <table class="kv">
       <tr><td>BUY threshold</td><td class="mono t-buy">>= {{ "%.3f"|format(thr.buy) }}</td></tr>
@@ -428,6 +475,11 @@ fetch("/api/ohlc/{{ asset }}?days=120")
       <tr><td>Trades in eval</td><td class="mono">{{ quality.Trades }}</td></tr>
       {% endif %}
     </table>
+    <p class="help">The model currently serving this asset. Lookback: how many past
+      bars it reads. Features: how many inputs. Training score and the train
+      accuracies are measured on historical data and have not predicted live
+      accuracy on this project, so trust the journal's record over them. Trades in
+      eval: how many trades the backtest made.</p>
   </section>
 </div>
 {% endif %}
@@ -437,6 +489,9 @@ fetch("/api/ohlc/{{ asset }}?days=120")
     <h2>Guru Council</h2>
     <button class="fbtn" id="guru-recalc-btn">Recalculate</button>
   </div>
+  <p class="help">Four classic value-investing checklists applied to this company's
+    fundamentals, each scored 0 to 2. An opinion from fixed rules, separate from
+    the model; the analyst deliberately does not see it.</p>
   <div id="guru-body">
     {% if guru %}
     <div class="guru-verdict-banner">
@@ -458,6 +513,9 @@ fetch("/api/ohlc/{{ asset }}?days=120")
 {% if trades %}
 <section class="panel fade">
   <div class="panel-head"><h2>Trades (closed positions)</h2></div>
+  <p class="help">Positions rebuilt from the journal: entered on a BUY or SELL,
+    held while the signal stayed, closed when it changed. Return is from entry to
+    exit, before costs.</p>
   <table class="grid">
     <thead>
       <tr><th>Side</th><th>Entered</th><th>Exited</th><th class="num">Bars</th><th class="num">Return</th></tr>
@@ -482,12 +540,13 @@ fetch("/api/ohlc/{{ asset }}?days=120")
   {% if track %}
   <table class="grid">
     <thead>
-      <tr><th>Date</th><th>Signal</th><th class="num">p</th><th class="num">CB</th><th class="num">LSTM</th><th class="num">TF</th><th class="num">TCN</th><th class="num">Actual (next bar)</th><th>Result</th><th>Watched Q</th></tr>
+      <tr><th>From close</th><th>For</th><th>Signal</th><th class="num">p</th><th class="num">CB</th><th class="num">LSTM</th><th class="num">TF</th><th class="num">TCN</th><th class="num">Actual (next bar)</th><th>Signal or noise</th><th>Result</th><th>Watched Q</th></tr>
     </thead>
     <tbody>
       {% for t in track %}
       <tr>
         <td class="dim mono">{{ t.date }}</td>
+        <td class="mono">{{ t.for_date or '-' }}</td>
         <td>{% set shown = t.sig_shown or t.signal %}<span class="chip chip-{{ shown }}">{{ shown }}</span>
           {% if shown != t.signal %}<span class="dim" title="the model said {{ t.signal }}, the live gate showed {{ shown }}">gated {{ t.signal }}</span>{% endif %}</td>
         <td class="num mono">{{ "%.2f"|format(t.probability) }}</td>
@@ -497,6 +556,12 @@ fetch("/api/ohlc/{{ asset }}?days=120")
         <td class="num mono dim">{% if t.tcn_prob is not none %}{{ "%.2f"|format(t.tcn_prob) }}{% else %}-{% endif %}</td>
         <td class="num mono {% if t.actual_next_ret is not none %}{{ 't-buy' if t.actual_next_ret > 0 else 't-sell' }}{% endif %}">
           {% if t.actual_next_ret is not none %}{{ "%+.2f"|format(t.actual_next_ret * 100) }}%{% else %}-{% endif %}
+        </td>
+        <td>
+          {% if t.outcome_kind == 'signal' %}<span class="acc good" title="the move beat the noise band">signal</span>
+          {% elif t.outcome_kind == 'noise' %}<span class="dim" title="the move stayed inside the noise band">noise</span>
+          {% else %}<span class="dim">-</span>{% endif %}
+          {% if t.noise_band %}<span class="dim mono">band &plusmn;{{ "%.2f"|format(t.noise_band * 100) }}%</span>{% endif %}
         </td>
         <td>
           {% if t.correct is none %}<span class="dim">awaiting check</span>
@@ -515,11 +580,39 @@ fetch("/api/ohlc/{{ asset }}?days=120")
       {% endfor %}
     </tbody>
   </table>
+  <p class="help">One row per daily call. From close: the bar it was computed from.
+    For: the session it forecasts. p and the CB / LSTM / TF / TCN columns: the
+    ensemble's and each model's probability of an up session. Actual: what that
+    session then did. Signal or noise: whether the move was bigger than this
+    asset's noise band (shown beside it). On a noise day the Result says little:
+    the move was too small to tell a right call from a lucky one.</p>
   {% else %}
   <p class="empty">No history - run <code>python predict.py</code>.</p>
   {% endif %}
 </section>
 
+<style>
+  .help { display: block; font-size: .85em; color: var(--muted, #8a93a6); margin: .35em 0 .1em; line-height: 1.35; }
+  body.hide-help .help { display: none; }
+  .forecast-for { font-weight: 600; }
+</style>
+<script>
+(function () {
+  var btn = document.getElementById('help-toggle');
+  function apply(hidden) {
+    document.body.classList.toggle('hide-help', hidden);
+    if (btn) btn.textContent = hidden ? 'Show how-to-read notes' : 'Hide how-to-read notes';
+  }
+  var hidden = false;
+  try { hidden = localStorage.getItem('atratus-hide-help') === '1'; } catch (e) {}
+  apply(hidden);
+  if (btn) btn.addEventListener('click', function () {
+    hidden = !hidden;
+    apply(hidden);
+    try { localStorage.setItem('atratus-hide-help', hidden ? '1' : '0'); } catch (e) {}
+  });
+})();
+</script>
 <script id="markers-data" type="application/json">{{ markers_json | safe }}</script>
 <script>
 const ASSET = {{ asset | tojson }};

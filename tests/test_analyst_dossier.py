@@ -114,7 +114,8 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # come from analyst_log, so they say what this agent previously called
         # and how that turned out, which is the one track record it is entitled
         # to see.
-        "past_calls", "past_hit_rate", "past_last_call", "past_last_outcome",
+        "past_calls", "past_hit_rate", "past_last_call", "lessons",  # the analyst's own lessons from resolved calls, no ensemble field
+        "past_last_outcome",
         # flow: how much actually traded, and how the day opened
         "volume_vs_20", "turnover", "gap_open", "range_atr",
         # the market the asset moved in, so a fall can be told apart from a
@@ -709,3 +710,20 @@ def test_a_headline_that_does_not_name_the_company_is_dropped():
              _item("MEXC", 1, "ETH Blockchain: How It Works")]
     out = dossier.diverse_headlines(macro, "SBER", query="Bank of Russia key rate")
     assert [h["source"] for h in out["headlines"]] == ["CBR"]
+
+
+def test_the_own_record_hides_a_call_whose_outcome_resolves_after_the_rewind(monkeypatch):
+    """Clipping on the judgment's date is not enough: a 20-day call made the
+    day before the rewind date had its outcome filled weeks later."""
+    from core.analyst import project_tools, store
+
+    rows = [{"asset": "SBER", "date": "2026-08-05", "horizon": 1, "direction": "up",
+             "realized_ret": 0.01},
+            {"asset": "SBER", "date": "2026-08-08", "horizon": 20, "direction": "down",
+             "realized_ret": 0.02}]
+    monkeypatch.setattr(store, "scored_rows", lambda *a, **k: rows)
+    days = [("2026-08-%02d" % d, 1, 1, 1, 1) for d in range(1, 10)]
+    monkeypatch.setattr(project_tools, "_bars",
+                        lambda asset, today, n, db_path=None: [b for b in days if b[0] < today])
+    got = dossier._own_record("SBER", before="2026-08-10")
+    assert got["past_calls"] == 1 and got["past_last_call"] == "up"

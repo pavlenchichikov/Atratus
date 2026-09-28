@@ -7,6 +7,7 @@ judgment that is never scored is a broken pipeline rather than a quiet habit.
 """
 
 import datetime
+import json
 import os
 import sqlite3
 
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS analyst_log (
     realized_ret REAL, realized_atr_units REAL,
     inside_interval INTEGER, abs_err_atr REAL,
     tool_calls_json TEXT,
+    mode TEXT, brain TEXT, plan TEXT, pre_critic_json TEXT,
     PRIMARY KEY (date, asset, horizon)
 )
 """
@@ -35,12 +37,14 @@ CREATE TABLE IF NOT EXISTS analyst_log (
 # unreplayable judgment is the same defect as an unscored one. ensure_table
 # adds the column to a table written before tools existed, because CREATE TABLE
 # IF NOT EXISTS does not alter one that is already there.
-_ADDED_COLUMNS = (("tool_calls_json", "TEXT"),)
+_ADDED_COLUMNS = (("tool_calls_json", "TEXT"), ("mode", "TEXT"), ("brain", "TEXT"),
+                  ("plan", "TEXT"), ("pre_critic_json", "TEXT"))
 
 _FIELDS = ["date", "asset", "horizon", "direction", "conviction", "vol_regime",
            "key_risk", "thesis", "evidence_json", "dossier_hash", "llm_model",
            "forecast_pct", "lo_pct", "hi_pct", "atr_at_signal",
-           "close_at_signal", "tool_calls_json"]
+           "close_at_signal", "tool_calls_json",
+           "mode", "brain", "plan", "pre_critic_json"]
 
 # forecast_pct/lo_pct/hi_pct are in PAYOFF space (what the POSITION earned;
 # see core/analyst/payoff.py and train_payoff.py's SIDE map). A `down`
@@ -135,7 +139,7 @@ def write_judgment(row, db_path=None):
             f'VALUES ({placeholders})', values)
 
 
-def judged_with_hash(asset, dossier_hash, db_path=None, horizon=None):
+def judged_with_hash(asset, dossier_hash, db_path=None, horizon=None, mode=None):
     """Whether this exact dossier was already judged. The LLM cache key.
 
     `horizon` scopes it, because the same dossier asked over one day and over
@@ -148,8 +152,13 @@ def judged_with_hash(asset, dossier_hash, db_path=None, horizon=None):
     if horizon is not None:
         sql += " AND horizon=?"
         args.append(int(horizon))
+    if mode is not None:
+        # A solo sweep must not hide the same dossier from a team sweep.
+        sql += " AND COALESCE(mode, 'solo')=?"
+        args.append(mode)
     with _connect(db_path) as con:
         con.execute(DDL)
+        _migrate(con)
         return con.execute(sql + " LIMIT 1", args).fetchone() is not None
 
 
@@ -266,3 +275,59 @@ def backfill_outcomes(db_path=None, today=None):
                 (realized, realized_atr, inside, err, date, asset, horizon))
             filled += 1
         return filled
+
+
+TEAM_DDL = """
+CREATE TABLE IF NOT EXISTS analyst_team_log (
+    date TEXT, asset TEXT, horizon INTEGER, role TEXT, brain TEXT,
+    lean TEXT, strength INTEGER, skipped TEXT, report_json TEXT,
+    PRIMARY KEY (date, asset, horizon, role)
+)
+"""
+
+
+def write_team_reports(date, asset, horizon, reports, db_path=None):
+    """One row per specialist, skipped ones included, so a role that never
+    produces anything is visible rather than absent."""
+    with _connect(db_path) as con:
+        con.execute(TEAM_DDL)
+        for r in reports:
+            con.execute(
+                "INSERT OR REPLACE INTO analyst_team_log VALUES (?,?,?,?,?,?,?,?,?)",
+                (date, asset, int(horizon), r["role"], r.get("brain"), r.get("lean"),
+                 r.get("strength"), r.get("skipped"),
+                 json.dumps({k: r[k] for k in ("findings", "evidence") if k in r},
+                            ensure_ascii=False)))
+
+
+def team_scored_rows(db_path=None):
+    """Team rows whose judgment has an outcome, with that outcome attached."""
+    with _connect(db_path) as con:
+        con.execute(DDL)
+        _migrate(con)
+        con.execute(TEAM_DDL)
+        con.row_factory = sqlite3.Row
+        cur = con.execute(
+            "SELECT t.*, a.realized_ret FROM analyst_team_log t JOIN analyst_log a "
+            "ON a.date=t.date AND a.asset=t.asset AND a.horizon=t.horizon "
+            "WHERE a.realized_ret IS NOT NULL ORDER BY t.date")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def latest_date(assets, db_path=None):
+    """The newest judgment date among these assets, or None."""
+    assets = list(assets)
+    if not assets:
+        return None
+    with _connect(db_path) as con:
+        con.execute(DDL)
+        return con.execute("SELECT MAX(date) FROM analyst_log WHERE asset IN (%s)"
+                           % ",".join("?" * len(assets)), assets).fetchone()[0]
+
+
+def has_row(date, asset, horizon, db_path=None):
+    """Whether any mode already judged this bar; auto must not overwrite it."""
+    with _connect(db_path) as con:
+        con.execute(DDL)
+        return con.execute("SELECT 1 FROM analyst_log WHERE date=? AND asset=? AND horizon=?",
+                           (date, asset, int(horizon))).fetchone() is not None

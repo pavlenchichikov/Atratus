@@ -504,6 +504,40 @@ def _safe_acc(y, p, thr=0.5):
         return None
 
 
+def _baseline_acc(y_train, y_test, y_prev, footprint):
+    """Best accuracy of two rules that need no model, on the fold's own label.
+
+    "Always the training majority" and, when the label resolves in one bar so
+    yesterday's label is known today, "same as yesterday". Ens_Acc is read on
+    the same y_test, so a model below this number has learned less than the
+    label's own base rate or persistence. None when the fold is too short.
+    """
+    try:
+        y = np.asarray(y_test, dtype=float)
+        if len(y) < 10:
+            return None
+        maj = 1.0 if float(np.mean(np.asarray(y_train, dtype=float))) >= 0.5 else 0.0
+        best = float(np.mean(y == maj))
+        if footprint == 1 and y_prev is not None:
+            prev = np.asarray(y_prev, dtype=float)[:len(y)]
+            ok = ~np.isnan(prev)
+            if ok.sum() >= 10:
+                best = max(best, float(np.mean(prev[ok] == y[:len(prev)][ok])))
+        return best
+    except Exception:
+        return None
+
+
+def _label_sig():
+    """The label this run trains on: every GTRADE_LABEL_* setting, sorted.
+
+    ens_acc is accuracy AGAINST the label, so two champions trained on different
+    labels have accuracies that do not compare (2026-09-26: two rel_median
+    elites differing only in threshold genes read +0.0097 apart)."""
+    return ";".join("%s=%s" % (k, v) for k, v in sorted(os.environ.items())
+                    if k.startswith("GTRADE_LABEL_"))
+
+
 def _fold_mean(folds, key):
     """Mean of `key` over EVERY fold that has one.
 
@@ -1454,6 +1488,10 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             # only fold-averaged AUCs. This is the per-fold number _fold_mean can
             # average into one, and the column an accuracy basis is keyed on.
             ens_acc = _safe_acc(test_target_aligned, test_prob)
+            from core.features import label_footprint as _footprint
+            base_acc = _baseline_acc(
+                y_train, test_target_aligned,
+                df['target'].shift(1).loc[te].values[:n_test], _footprint())
 
             # threshold tuning on validation (top-3 averaging for stability)
             comm = FOREX_COMMISSION if asset in FOREX else COMMISSION
@@ -1514,6 +1552,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'net_auc': net_auc,
                 'ens_auc': ens_auc,
                 'ens_acc': ens_acc,
+                'base_acc': base_acc,
                 'buy_thr': buy_thr,
                 'sell_thr': sell_thr,
                 'val_profit': val_profit,
@@ -1555,7 +1594,22 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                         regime_mode=str(_regime_mode), comm=float(comm),
                         slip=float(slip), adv_weight=float(adv_weight),
                         min_trades=int(_min_trades),
-                        score=float(test_score_weighted))
+                        score=float(test_score_weighted),
+                        # The stacker's own inputs and targets, so another way of
+                        # combining the SAME members can be scored without training.
+                        cb_val=np.asarray(cb_val_aligned, dtype=float),
+                        cb_test=np.asarray(cb_test_aligned[:n_test], dtype=float),
+                        lstm_val=np.asarray(lstm_val_cal, dtype=float),
+                        lstm_test=np.asarray(lstm_test_cal, dtype=float),
+                        tf_val=np.asarray(tf_val_al, dtype=float),
+                        tf_test=np.asarray(tf_test_al, dtype=float),
+                        tcn_val=np.asarray(tcn_val_al, dtype=float),
+                        tcn_test=np.asarray(tcn_test_al, dtype=float),
+                        val_trend=np.asarray(val_trend, dtype=float),
+                        test_trend=np.asarray(test_trend, dtype=float),
+                        val_target=np.asarray(val_target_aligned, dtype=float),
+                        test_target=np.asarray(test_target_aligned, dtype=float),
+                        cb_acc=float(cb_acc), ens_acc=float(ens_acc or 0))
                 except Exception as _exc:
                     logger.warning("fold dump failed for %s fold %d: %s", asset, k, _exc)
 
@@ -1637,6 +1691,16 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             # exists would freeze the old selection in place forever.
             _prev_acc = (prev_registry_entry or {}).get('ens_acc')
             _this_acc = best_fold.get('ens_acc')
+            # A different label makes the stored accuracy a different quantity,
+            # which is the same situation as having none: promote, and say so.
+            # An entry from before label_sig was recorded is compared as before;
+            # voiding every stored accuracy at once would promote the book blind.
+            _prev_sig = (prev_registry_entry or {}).get('label_sig')
+            if _prev_sig is not None and _prev_sig != _label_sig():
+                _safe_print(f"  [champion] {asset:<12} label changed "
+                            f"({_prev_sig or 'defaults'} -> {_label_sig() or 'defaults'}), "
+                            f"ens_acc not comparable: promoting")
+                _prev_acc = None
             promote = (_FORCE_PROMOTE
                        or prev_registry_entry is None
                        or _prev_acc is None
@@ -1688,6 +1752,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                     # accuracy basis, and every retrain would promote blindly.
                     'ens_acc': best_fold.get('ens_acc'),
                     'champion_basis': _champ_basis,
+                    'label_sig': _label_sig(),
                     'updated_at': datetime.now().isoformat(),
                     'buy_thr': best_fold['buy_thr'],
                     'sell_thr': best_fold['sell_thr'],
@@ -1738,6 +1803,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             'TF_Acc': float(best_fold['tf_acc']),
             'TCN_Acc': float(best_fold['tcn_acc']),
             'Ens_Acc': None if _ens_acc is None else float(_ens_acc),
+            # The no-model barrier on the same folds and label (_baseline_acc).
+            'Base_Acc': _fold_mean(fold_metrics, 'base_acc'),
             'CB_Acc_Mean': None if _cb_acc_mean is None else float(_cb_acc_mean),
             'Net_AUC': None if _net_auc is None else float(_net_auc),
             'CB_AUC': None if _cb_auc is None else float(_cb_auc),

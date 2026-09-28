@@ -1,3 +1,5 @@
+import os
+
 """Which fold becomes the champion.
 
 Two bases. Under `score` the trade-count floor says whether a fold's trading
@@ -163,3 +165,27 @@ def test_the_accuracy_champion_is_a_copy():
                                      basis="acc")
     best["ens_acc"] = 0.99
     assert folds[0]["ens_acc"] == 0.53
+
+
+def test_the_baseline_takes_the_better_of_majority_and_persistence():
+    import numpy as np
+
+    from train_hybrid import _baseline_acc
+    y = np.array([1, 1, 0, 0] * 5, dtype=float)          # runs of two
+    prev = np.concatenate([[np.nan], y[:-1]])
+    # majority of an all-ones train set scores 0.5; persistence scores 10/19
+    assert _baseline_acc(np.ones(20), y, prev, 1) == 10 / 19
+    # a multi-bar label cannot see yesterday's label, so only the majority counts
+    assert _baseline_acc(np.ones(20), y, prev, 5) == 0.5
+    assert _baseline_acc(np.ones(20), y[:5], prev[:5], 1) is None
+
+
+def test_the_label_signature_moves_with_every_label_setting(monkeypatch):
+    for k in [k for k in os.environ if k.startswith("GTRADE_LABEL_")]:
+        monkeypatch.delenv(k)
+    assert T._label_sig() == ""
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "rel_median")
+    monkeypatch.setenv("GTRADE_LABEL_WINDOW", "30")
+    a = T._label_sig()
+    monkeypatch.setenv("GTRADE_LABEL_WINDOW", "20")
+    assert a == "GTRADE_LABEL_MODE=rel_median;GTRADE_LABEL_WINDOW=30" != T._label_sig()

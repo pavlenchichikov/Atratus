@@ -637,6 +637,21 @@ def asset_page(request: Request, name: str):
     for row, verdict in zip(reversed(track), watched_hits["verdicts"]):
         row["watched_correct"] = verdict
 
+    # Signal or noise, per journal row: a move smaller than the asset's noise
+    # band (0.5 x its median daily move over 60 bars) is scored as neither a
+    # hit nor a miss on /performance, so the card says which it was.
+    from core import signal_noise as _sn
+    try:
+        _bands = _sn.band_series(name)
+    except Exception:
+        _bands = None
+    for t in track:
+        t["for_date"] = track_record.next_session(t["date"], name)
+        t["noise_band"] = _sn.band_on(_bands, t["date"])
+        t["outcome_kind"] = (None if t["actual_next_ret"] is None or t["noise_band"] is None
+                             else "signal" if abs(t["actual_next_ret"]) >= t["noise_band"]
+                             else "noise")
+
     rets = [t["actual_next_ret"] for t in track if t["actual_next_ret"] is not None]
     wins = [t for t in track if t["correct"] == 1]
     losses = [t for t in track if t["correct"] == 0]
@@ -669,6 +684,7 @@ def asset_page(request: Request, name: str):
     # value + reason from latest_gated() so the chip matches the radar page.
     current = dict(track[0]) if track else None
     if current:
+        current["for_date"] = track_record.next_session(current["date"], name)
         gated = track_record.latest_gated(name)
         if gated:
             current["signal"] = gated["signal"]

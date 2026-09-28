@@ -119,17 +119,19 @@ def register(tool):
     return tool
 
 
-def available(today=None, asset=None):
+def available(today=None, asset=None, only=None):
     """The tools this run may use. A rewound run keeps only the dated ones,
-    and with an asset named, only the ones that can answer for it."""
+    with an asset named only the ones that can answer for it, and with `only`
+    (a specialist's role) only those names."""
     return [t for t in _REGISTRY.values()
             if (t.rewinds or today is None)
-            and (asset is None or t.applies is None or t.applies(asset))]
+            and (asset is None or t.applies is None or t.applies(asset))
+            and (only is None or t.name in only)]
 
 
-def spec_lines(today=None, asset=None):
+def spec_lines(today=None, asset=None, only=None):
     """The tool menu as it appears in the prompt, or "" when there is none."""
-    tools = available(today, asset)
+    tools = available(today, asset, only)
     if not tools:
         return ""
     lines = [
@@ -141,6 +143,7 @@ def spec_lines(today=None, asset=None):
           "return this instead of a judgment, with up to %d requests at once:")
          % max_calls()),
         '{"tools": [{"tool": "<name>", "args": {...}}, ...]}',
+        'You may add "plan": "<one or two sentences on what you will check>" beside "tools".',
         ("You get every result together and are asked again. Each round "
          "costs real time, so ask for everything you need in ONE reply, and "
          "never twice for the same thing. Available:"),
@@ -591,3 +594,7 @@ def max_rounds():
         return max(0, int(os.getenv("GTRADE_ANALYST_TOOL_ROUNDS", MAX_ROUNDS)))
     except ValueError:
         return MAX_ROUNDS
+
+
+# Registers the market.db tools; imported last because it imports Tool/register.
+from core.analyst import project_tools  # noqa: F401

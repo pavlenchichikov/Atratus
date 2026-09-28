@@ -84,6 +84,26 @@ def asset_accuracy(asset: str, last_n: int = ACC_LAST_N, db_path=None) -> dict:
             return {"n": 0, "correct": 0, "acc": None}
 
 
+def next_session(bar_date, asset):
+    """The session a prediction made from `bar_date`'s close is for.
+
+    The journal keys a prediction by the bar it was scored FROM, so a card that
+    shows only that date reads as yesterday's news. Crypto trades every day;
+    everything else, MOEX included, is taken to the next weekday: the owner does
+    not trade the MOEX weekend sessions. Exchange holidays are not known here.
+    """
+    if not bar_date:
+        return None
+    from datetime import timedelta
+
+    from config import radar_category
+    d = datetime.strptime(str(bar_date)[:10], "%Y-%m-%d").date() + timedelta(days=1)
+    if radar_category(asset) != "crypto":
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+    return d.isoformat()
+
+
 def latest_signals(db_path=None, acc_last_n: int = ACC_LAST_N) -> list:
     """Latest signal per asset plus accuracy over the most recent verified ones.
 
@@ -111,6 +131,7 @@ def latest_signals(db_path=None, acc_last_n: int = ACC_LAST_N) -> list:
             out.append({
                 "asset": asset,
                 "date": date,
+                "for_date": next_session(date, asset),
                 "signal": shown or signal,
                 "signal_raw": signal,
                 "gate_reason": reason,

@@ -943,6 +943,7 @@ def test_gpu_layers_are_asked_for_and_dropped_when_the_card_is_full(monkeypatch)
     import httpx
 
     from core import llm_proposer as lp
+    monkeypatch.setattr(lp, "_vram_free_mb", lambda: 4000)
     bodies = []
 
     class _Resp:
@@ -970,3 +971,44 @@ def test_gpu_layers_are_asked_for_and_dropped_when_the_card_is_full(monkeypatch)
     assert got == "ok"
     assert bodies[0]["num_gpu"] == 4
     assert "num_gpu" not in bodies[1], "the retry runs without the GPU layers"
+
+
+def test_cloud_base_is_remote_and_sends_the_key(monkeypatch):
+    from core import llm_proposer as lp
+    monkeypatch.setenv("OLLAMA_API_KEY", "k123")
+    assert lp._is_cloud("https://ollama.com") and not lp._is_cloud("http://127.0.0.1:11434/v1")
+    assert not lp._is_cloud("http://192.168.1.5:11434")
+    assert lp._ollama_headers("https://ollama.com") == {"Authorization": "Bearer k123"}
+    assert lp._ollama_headers("http://127.0.0.1:11434/v1") == {}
+    assert lp._ollama_headers("http://192.168.1.5:11434") == {}   # a LAN Ollama needs no key
+
+
+def test_cloud_without_a_key_fails_at_once_naming_the_variable(monkeypatch):
+    import pytest
+
+    from core import llm_proposer as lp
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    with pytest.raises(lp.ProviderUnavailable, match="OLLAMA_API_KEY"):
+        lp._ollama_headers("https://ollama.com")
+
+
+def test_gpu_layers_fall_to_zero_when_the_card_is_busy_or_unknown(monkeypatch):
+    from core import llm_proposer as lp
+    monkeypatch.setattr(lp, "_vram_free_mb", lambda: 3900)
+    assert lp._gpu_layers(4, "http://127.0.0.1:11434/v1") == 4
+    monkeypatch.setattr(lp, "_vram_free_mb", lambda: 1200)
+    assert lp._gpu_layers(4, "http://127.0.0.1:11434/v1") == 0
+    monkeypatch.setattr(lp, "_vram_free_mb", lambda: None)      # nvidia-smi missing
+    assert lp._gpu_layers(4, "http://127.0.0.1:11434/v1") == 0
+    assert lp._gpu_layers(4, "https://ollama.com") == 0          # cloud has no local card
+
+
+def test_a_missing_cloud_key_stops_the_call_as_provider_unavailable(monkeypatch):
+    import pytest
+
+    from core import llm_proposer as lp
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.setenv("GTRADE_AR_LLM_BASE_URL", "https://ollama.com")
+    monkeypatch.setenv("GTRADE_AR_LLM_MODEL", "gpt-oss:120b")
+    with pytest.raises(lp.ProviderUnavailable, match="OLLAMA_API_KEY"):
+        lp._call_ollama("hi")

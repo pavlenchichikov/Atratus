@@ -1932,3 +1932,42 @@ def test_asset_card_shows_tomorrows_range(client, monkeypatch):
                         lambda bars, **kw: {"typical": 0.02, "q90": 0.036, "atr": 0.022})
     r = client.get("/asset/BTC")
     assert "Range tomorrow" in r.text and "3.60" in r.text
+
+
+def _btc_prices(path, n=80):
+    con = sqlite3.connect(path)
+    con.execute('CREATE TABLE "btc" (Date TEXT, open REAL, high REAL, low REAL, close REAL)')  # real schema
+    import datetime as _d
+    day = _d.date(2026, 3, 1)
+    for i in range(n):              # every daily move is 1%: band = 0.5 x 1% = 0.5%
+        c = 100.0 * (1.01 if i % 2 else 1.0)
+        con.execute('INSERT INTO "btc" VALUES (?,?,?,?,?)',
+                    ((day + _d.timedelta(days=i)).isoformat(), c, c, c, c))
+    con.commit()
+    con.close()
+
+
+def test_the_card_says_which_session_the_forecast_is_for(client):
+    r = client.get("/asset/BTC")
+    assert "forecast for 2026-06-11" in r.text and "from the 2026-06-10 close" in r.text
+
+
+def test_the_radar_says_which_session_each_signal_is_for(client):
+    sigs = client.get("/api/signals").json()
+    btc = next(s for s in sigs if s["asset"] == "BTC")
+    assert btc["for_date"] == "2026-06-11"
+    assert "2026-06-11" in client.get("/").text
+
+
+def test_every_journal_outcome_is_marked_signal_or_noise(client, monkeypatch):
+    from core import track_record as tr
+    _btc_prices(tr.DB_PATH)
+    r = client.get("/asset/BTC")
+    # 2026-06-09 moved +0.4%, inside the 0.5% band: noise, so not a real miss
+    assert "noise" in r.text and "band &plusmn;0.50%" in r.text
+
+
+def test_every_number_on_the_card_has_a_how_to_read_line(client):
+    r = client.get("/asset/BTC")
+    assert r.text.count('class="stat-label"') <= r.text.count('class="help"')
+    assert 'id="help-toggle"' in r.text

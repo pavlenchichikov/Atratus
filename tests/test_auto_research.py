@@ -3115,3 +3115,12 @@ def test_gate_verdict_names_what_the_genome_changes():
     assert "thr +0.020 band -0.0100" in brief
     assert "net_calibrate=1" in ar._genome_brief(ar.Genome(net_calibrate=1))
     assert ar._genome_brief(ar.Genome()) == "label direction/30 | +0 features"
+
+
+def test_the_search_no_longer_proposes_an_sp500_lead_but_still_builds_one():
+    cols = {"ret_1"}
+    sp = {"name": "lead_x", "op": "lead_lag", "inputs": ["sp500"], "params": {"horizon": 1}}
+    vix = dict(sp, inputs=["vix"])
+    assert not ar._searchable(sp, cols) and ar._searchable(vix, cols)
+    assert ar.validate_spec(sp, cols)  # an adopted genome carrying it still builds
+    assert "sp500" not in ar._LEAD_LEADERS

@@ -33,6 +33,10 @@ from core import llm_proposer
 # rounding its answer into range hides that.
 AXES = ("qd", "features", "labeling", "pruning", "hyper", "nets",
         "thresholds", "regime", "weighting")
+# Closed to the director, still open from the launcher menu. hyper spent 15
+# cycles for 0 winners (2026-08-21), and a 12-of-34 feature pick measured as a
+# coin flip (2026-09): the inputs are the ceiling, not their tuning or pruning.
+FROZEN_AXES = ("hyper", "pruning")
 LABEL_MODES = ("direction", "triple_barrier")
 PROPOSERS = ("evolutionary", "llm")
 # Kept in step with auto_research._score_basis. The list had already drifted
@@ -248,7 +252,7 @@ def _prompt(ctx):
                          if ctx["adoptions"] else
                          "  (no A/B has finished in this campaign yet)"),
            "archive_n": ctx["archive_n"], "cycles": ctx["cycles"],
-           "axes": list(AXES), "bases": list(BASES), "objs": list(OBJECTIVES),
+           "axes": [a for a in AXES if a not in FROZEN_AXES], "bases": list(BASES), "objs": list(OBJECTIVES),
            "maxax": MAX_AXES,
            "hmin": HORIZON_MIN, "hmax": HORIZON_MAX,
            "bmin": BUDGET_MIN, "bmax": BUDGET_MAX})
@@ -268,6 +272,9 @@ def _axis_list(value):
             continue
         if n not in AXES:
             problems.append("axes %r is not one of %s" % (n, ", ".join(AXES)))
+        elif n in FROZEN_AXES:
+            problems.append("axes %r is frozen: it has produced nothing the gate "
+                            "could adopt; pick an input or labeling axis" % n)
         elif n not in names:
             names.append(n)
     if not names and not problems:

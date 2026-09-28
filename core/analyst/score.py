@@ -245,3 +245,63 @@ def standings(rows, baselines):
             "conviction": conviction_calibration(rows),
             "payoff_agreement": payoff_agreement(rows),
             "control": shuffle_control(rows)}
+
+
+def by_group(rows, key):
+    """Directional hit rate per value of `key` (mode, brain). Rows written
+    before the column existed count as mode "solo" / brain "unknown"."""
+    default = "solo" if key == "mode" else "unknown"
+    groups = {}
+    for r in rows:
+        groups.setdefault(r.get(key) or default, []).append(r)
+    out = {}
+    for name, rs in groups.items():
+        hits = [h for _c, h in _directional(rs)]
+        out[name] = {"n": len(hits), "hit": (sum(hits) / len(hits)) if hits else None}
+    return out
+
+
+def clean_hit(rows, bars_of=None):
+    """Hit rate over outcomes larger than the noise band, the same rule as
+    core/signal_noise: |move| >= NOISE_K x median |daily move| of the previous
+    NOISE_WINDOW bars, scaled by sqrt(horizon) for multi-bar horizons."""
+    import math
+    import statistics
+    from itertools import pairwise
+
+    from core.signal_noise import NOISE_K, NOISE_WINDOW
+
+    if bars_of is None:
+        from core.analyst.project_tools import _bars
+
+        def bars_of(asset, date):
+            return _bars(asset, date, NOISE_WINDOW + 1)
+
+    kept, total = [], 0
+    for r in rows:
+        d, realized = r.get("direction"), r.get("realized_ret")
+        if d not in ("up", "down") or realized is None:
+            continue
+        closes = [b[4] for b in bars_of(r["asset"], r["date"])][-(NOISE_WINDOW + 1):]
+        moves = [abs(b / a - 1.0) for a, b in pairwise(closes) if a]
+        if len(moves) < 10:
+            continue
+        total += 1
+        band = NOISE_K * statistics.median(moves) * math.sqrt(r.get("horizon") or 1)
+        if abs(realized) >= band:
+            kept.append(int((d == "up") == (realized > 0)))
+    return {"n": len(kept), "hit": (sum(kept) / len(kept)) if kept else None,
+            "noise_share": (1 - len(kept) / total) if total else None}
+
+
+def by_role(rows):
+    """Hit rate of each specialist's lean; flat and skipped rows are not in n."""
+    out = {}
+    for r in rows:
+        slot = out.setdefault(r["role"], {"n": 0, "hits": 0})
+        lean, realized = r.get("lean"), r.get("realized_ret")
+        if lean in ("up", "down") and realized is not None:
+            slot["n"] += 1
+            slot["hits"] += int((lean == "up") == (realized > 0))
+    return {k: {"n": v["n"], "hit": (v["hits"] / v["n"]) if v["n"] else None}
+            for k, v in out.items()}

@@ -36,6 +36,25 @@ def _load_table():
         return json.load(f)
 
 
+def _apply_llm_flag(llm, model, team=False):
+    """--llm/--model for this run. The providers _backend knows keep the old
+    route (GTRADE_AR_LLM*, already set above, so the .env model and base URL
+    survive); only ollama-cloud needs a solo brain, with the configured model."""
+    os.environ.pop("GTRADE_ANALYST_BRAIN_SOLO", None)
+    if team:
+        # Every team role, for this process only; a role set in .env still wins.
+        os.environ["GTRADE_ANALYST_BRAIN"] = "%s:%s" % (
+            llm, model or os.getenv("GTRADE_AR_LLM_MODEL") or "auto")
+        return
+    if llm == "ollama-cloud":
+        os.environ["GTRADE_ANALYST_BRAIN_SOLO"] = "ollama-cloud:%s" % (
+            model or os.getenv("GTRADE_AR_LLM_MODEL") or "auto")
+    elif os.getenv("GTRADE_ANALYST_BRAIN"):
+        # A global brain would otherwise override the flag the user just typed.
+        os.environ["GTRADE_ANALYST_BRAIN_SOLO"] = "%s:%s" % (
+            llm, model or os.getenv("GTRADE_AR_LLM_MODEL") or "auto")
+
+
 def _provider_call():
     """An f(prompt) -> str bound to the configured provider.
 
@@ -45,8 +64,10 @@ def _provider_call():
     provider layer beside it would be a second thing to keep in sync with the
     env flags.
     """
-    from core.llm_proposer import _backend
-    return _backend("analyst")
+    # Now through core/analyst/brains.py, which falls back to exactly this
+    # _backend("analyst") when no GTRADE_ANALYST_BRAIN* is set.
+    from core.analyst import brains
+    return brains.call_for("solo")
 
 
 # A small, FIXED set judged every day. _eligible below is a moving target (the
@@ -99,7 +120,7 @@ def _eligible(today=None):
 
 def _judge_one(d, asset, h, horizon, call, depth, cells, table,
                written, refused, rejects=None, cited=None, as_of=None,
-               asked=None):
+               asked=None, mode="solo", mode_label=None):
     """One judgment, for one asset over one horizon. Returns the two counters.
 
     Split out of cmd_run when the horizon became a loop: the same dossier over
@@ -117,13 +138,31 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
     """
     on_reject = None if rejects is None else (
         lambda reason: rejects.append("%s %dd: %s" % (asset, horizon, reason)))
-    tool_calls = []
-    j = agent.judge(d, call=call, depth=depth, horizon=horizon,
-                    on_reject=on_reject, today=as_of, tool_calls=tool_calls)
+    from core.analyst import brains
+
+    brain_label = brains.label("solo")
+    tool_calls, notes = [], {}
+    reports = None
+    if mode == "team":
+        from core.analyst import team
+        j, reports = team.run_team(d, call, brains.call_for, horizon=horizon,
+                                   depth=depth, today=as_of, on_reject=on_reject,
+                                   tool_calls=tool_calls, notes=notes)
+        brain_label = brains.label("lead")
+    else:
+        j = agent.judge(d, call=call, depth=depth, horizon=horizon,
+                        on_reject=on_reject, today=as_of, tool_calls=tool_calls,
+                        notes=notes)
     if asked is not None:
         asked.extend((asset, horizon, t) for t in tool_calls)
     if j is None:
         return written, refused + 1
+    pre = None
+    if depth == "deep":
+        revised = agent.critique(d, j, brains.call_for("critic"), horizon=horizon,
+                                 on_reject=on_reject)
+        if revised is not None:
+            pre, j = j, revised
 
     fc = calibrate.forecast(j, cells, asset, radar_category(asset),
                             d["atr"], d["close"], table)
@@ -133,14 +172,16 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         "vol_regime": j["vol_regime"], "key_risk": j["key_risk"],
         "thesis": j["thesis"],
         "evidence_json": json.dumps(j["evidence"]),
-        "dossier_hash": h, "llm_model": ":".join(
-            v for v in (os.getenv("GTRADE_AR_LLM", "default"),
-                        os.getenv("GTRADE_AR_LLM_MODEL")) if v),
+        "dossier_hash": h, "llm_model": brain_label,
+        "mode": mode_label or mode, "brain": brain_label, "plan": notes.get("plan"),
+        "pre_critic_json": json.dumps(pre, ensure_ascii=False) if pre else None,
         # The sources the model asked for, beside the judgment they produced.
         "tool_calls_json": json.dumps(tool_calls, ensure_ascii=False) or None,
         "forecast_pct": fc["pct"], "lo_pct": fc["lo"], "hi_pct": fc["hi"],
         "atr_at_signal": d["atr"], "close_at_signal": d["close"],
     })
+    if reports:
+        store.write_team_reports(d["date"], asset, horizon, reports)
     _print_judgment(asset, j, fc, horizon=horizon)
     if cited is not None:
         cited.update(j["evidence"])
@@ -181,7 +222,7 @@ def cmd_run(args):
 
     # An explicit --llm/--model wins over .env for this run only, so trying a
     # different model never edits the file the next run reads.
-    if getattr(args, "llm", None):
+    if getattr(args, "llm", None) and args.llm != "ollama-cloud":
         os.environ["GTRADE_AR_LLM"] = args.llm
     if getattr(args, "model", None):
         os.environ["GTRADE_AR_LLM_MODEL"] = args.model
@@ -190,7 +231,12 @@ def cmd_run(args):
         # director uses: a bigger model is worth its time here and not there.
         os.environ["GTRADE_AR_LLM_MODEL"] = os.environ["GTRADE_ANALYST_MODEL"]
 
-    call = _provider_call()
+    from core.analyst import brains
+    mode = getattr(args, "mode", None) or os.getenv("GTRADE_ANALYST_MODE") or "solo"
+    if getattr(args, "llm", None):
+        _apply_llm_flag(args.llm, getattr(args, "model", None), team=(mode == "team"))
+    # In a team the lead writes the verdict; specialists get their own brains.
+    call = brains.call_for("lead") if mode == "team" else _provider_call()
     store.ensure_table()
     cells = calibrate.fit(store.scored_rows(), table, radar_category)
 
@@ -238,6 +284,23 @@ def cmd_run(args):
         print("[analyst] --max-calls takes a whole number.")
         return 1
     planned = len(targets) * len(horizons)
+    from core.analyst import tools as _tools
+    per = 1 + _tools.max_rounds()
+    if mode == "team":
+        from core.analyst import team as _team
+        calls = {r: planned * per for r in ("lead",) + _team.SPECIALISTS}
+    else:
+        calls = {"solo": planned * per}
+    if depth == "deep":
+        calls["critic"] = planned
+    hours = brains.estimate_hours(calls)
+    try:
+        limit = float(os.getenv("GTRADE_ANALYST_MAX_HOURS") or 8)
+    except ValueError:
+        limit = 8.0
+    if hours is not None and hours > limit:
+        print("[analyst] WARNING: about %.1f h at %s (limit %.0f h). Use --depth brief, "
+              "fewer assets, or a faster brain." % (hours, brains.label("solo"), limit))
     if max_calls and planned > max_calls:
         print("[analyst] %d asset(s) x %d horizon(s) = %d calls, over the "
               "--max-calls ceiling of %d. Nothing was asked."
@@ -265,13 +328,22 @@ def cmd_run(args):
             continue
         h = dossier.dossier_hash(d)
         for horizon in horizons:
-            if not named and store.judged_with_hash(asset, h, horizon=horizon):
+            if not named and store.judged_with_hash(
+                    asset, h, horizon=horizon,
+                    mode=getattr(args, "mode_label", None) or mode):
+                skipped += 1
+                continue
+            if getattr(args, "skip_judged", False) and store.has_row(
+                    d["date"], asset, horizon):
+                # auto: a bar some run already judged is left as it is.
                 skipped += 1
                 continue
             try:
                 written, refused = _judge_one(d, asset, h, horizon, call, depth,
                                               cells, table, written, refused,
-                                              rejects, cited, as_of, asked)
+                                              rejects, cited, as_of, asked,
+                                              mode=mode,
+                                              mode_label=getattr(args, "mode_label", None))
             except TerminalCallError as exc:
                 # Stop the sweep: every remaining asset would spend the same
                 # hour to fail the same way.
@@ -358,7 +430,7 @@ def cmd_intraday(args):
     if (os.getenv("GTRADE_ANALYST") or "1").strip() == "0":
         print("[intraday] GTRADE_ANALYST=0, nothing to do.")
         return 0
-    if getattr(args, "llm", None):
+    if getattr(args, "llm", None) and args.llm != "ollama-cloud":
         os.environ["GTRADE_AR_LLM"] = args.llm
     if getattr(args, "model", None):
         os.environ["GTRADE_AR_LLM_MODEL"] = args.model
@@ -367,6 +439,8 @@ def cmd_intraday(args):
         # director uses: a bigger model is worth its time here and not there.
         os.environ["GTRADE_AR_LLM_MODEL"] = os.environ["GTRADE_ANALYST_MODEL"]
 
+    if getattr(args, "llm", None):
+        _apply_llm_flag(args.llm, getattr(args, "model", None))
     call = _provider_call()
     named = _named_assets(getattr(args, "assets", None))
     targets = named or intraday.panel_assets()
@@ -624,6 +698,28 @@ def cmd_score(args):
         if not c["ok"]:
             print("            missing: %-16s %s" % (c["name"], c["want"]))
 
+    from core.analyst import score as _score
+    for key in ("mode", "brain"):
+        for name, g in sorted(_score.by_group(rows, key).items()):
+            hit = "-" if g["hit"] is None else "%.3f" % g["hit"]
+            print("[analyst] %-5s %-34s n=%-4d hit %s" % (key, name, g["n"], hit))
+    for role, g in sorted(_score.by_role(store.team_scored_rows()).items()):
+        print("[analyst] role  %-34s n=%-4d hit %s" % (
+            role, g["n"], "-" if g["hit"] is None else "%.3f" % g["hit"]))
+    # Does the critic help? The same rows scored on the verdict BEFORE it.
+    criticised = [r for r in rows if r.get("pre_critic_json")]
+    if criticised:
+        pre = [dict(r, direction=json.loads(r["pre_critic_json"]).get("direction"))
+               for r in criticised]
+        after, before = _score.by_group(criticised, "mode"), _score.by_group(pre, "mode")
+        for name in sorted(after):
+            print("[analyst] critic %-5s hit before %s after %s (n=%d)" % (
+                name, before[name]["hit"], after[name]["hit"], after[name]["n"]))
+    c = _score.clean_hit(rows)
+    print("[analyst] without noise: n=%d hit %s (noise share %s)" % (
+        c["n"], "-" if c["hit"] is None else "%.3f" % c["hit"],
+        "-" if c["noise_share"] is None else "%.0f%%" % (100 * c["noise_share"])))
+
     if getattr(args, "fields", False):
         fu = field_usage(rows)
         print(f"[analyst] fields: {len(fu['fields'])} ever cited over "
@@ -653,18 +749,135 @@ def _recent_dates(n, asset="SP500"):
     return dates[-n:] if n else []
 
 
+def cmd_brains(args):
+    """Which model each role uses, and optionally one short call to each."""
+    from core.analyst import brains
+
+    for pair in getattr(args, "set", None) or []:
+        name, _, value = pair.partition("=")
+        key = brains.env_key(name)
+        if key is None:
+            print("  refused: %r is not a role or a menu setting" % name)
+            return 1
+        try:
+            brains.persist(key, value)
+        except ValueError as exc:
+            print("  refused: %s" % exc)
+            return 1
+        print("  saved %s in .env" % key)
+    for name in getattr(args, "unset", None) or []:
+        key = brains.env_key(name)
+        if key is None:
+            print("  refused: %r is not a role or a menu setting" % name)
+            return 1
+        brains.forget(key)
+        print("  removed %s from .env" % key)
+    if getattr(args, "cloud_key", False):
+        import getpass
+        key = getpass.getpass("Ollama Cloud API key (input hidden): ").strip()
+        if not key:
+            print("  nothing entered, key unchanged")
+            return 1
+        brains.persist("OLLAMA_API_KEY", key)
+        print("  saved OLLAMA_API_KEY in .env")
+
+    seen = {}
+    for role in brains.ROLES:
+        lab = brains.label(role)
+        spc = brains.seconds_per_call(role)
+        print("  %-12s %-34s %s" % (role, lab, "-" if spc is None else "%.0fs/call" % spc))
+        seen.setdefault(lab, role)
+    if not getattr(args, "ping", False):
+        return 0
+    bad = 0
+    for lab, role in seen.items():
+        try:
+            out = brains.call_for(role)("Reply with the single word OK.")
+            print("  ping %-34s ok (%r)" % (lab, (out or "")[:20]))
+        except Exception as exc:
+            bad += 1
+            print("  ping %-34s FAILED: %s" % (lab, str(exc)[:160]))
+    return 1 if bad else 0
+
+
+def cmd_auto(args):
+    """The scout picks the assets, the analyst (solo or team) judges them, and
+    the day goes to reports/. Learns from newly scored calls first."""
+    import datetime
+
+    from core.analyst import brains, lessons, report, scout
+    from core.llm_proposer import ProviderUnavailable, TerminalCallError
+
+    if (os.getenv("GTRADE_ANALYST") or "1").strip() == "0":
+        print("[analyst] disabled (GTRADE_ANALYST=0); auto spends nothing.")
+        return 1
+    if not _load_table():
+        print("[analyst] no payoff_stats.json - run train_payoff.py first.")
+        return 1
+    mode = getattr(args, "mode", None) or os.getenv("GTRADE_ANALYST_MODE") or "solo"
+    try:
+        max_assets = int(getattr(args, "max_assets", 0)
+                         or os.getenv("GTRADE_ANALYST_AUTO_MAX") or 5)
+    except ValueError:
+        max_assets = 5
+    try:
+        store.backfill_outcomes()
+        print("[analyst] %d new lesson(s)" % lessons.learn(brains.call_for("memory")))
+        picks = scout.pick(brains.call_for("scout"), scout.summary(panel=panel_assets()),
+                           max_assets=max_assets)
+    except (TerminalCallError, ProviderUnavailable) as exc:
+        print("[analyst] auto stopped: %s" % exc)
+        return 1
+    if not picks:
+        print("[analyst] the scout found nothing to look at.")
+        return 0
+    scout.log_picks(datetime.date.today().isoformat(), picks, brains.label("scout"))
+    for p in picks:
+        print("[analyst] %-10s %s (%s)" % (p["asset"], p["reason"], p["by"]))
+    run_args = argparse.Namespace(
+        assets=",".join(p["asset"] for p in picks), mode=mode,
+        mode_label="auto-" + mode, skip_judged=True, depth=getattr(args, "depth", None),
+        horizons=getattr(args, "horizons", None) or os.getenv("GTRADE_ANALYST_HORIZONS", "1"),
+        llm=None, model=None, panel=False, max_calls=0, back=0, as_of=None)
+    rc = cmd_run(run_args)
+    # Named by calendar day; each pick is shown at its own last bar date.
+    path = report.write_daily(datetime.date.today().isoformat(), picks,
+                              mode_label="auto-" + mode,
+                              path_dir=getattr(args, "report_dir", None) or "reports")
+    print("[analyst] report: %s" % path)
+    return rc
+
+
+def cmd_learn(args):
+    """A lesson for every scored judgment that has none, by the memory brain."""
+    from core.analyst import brains, lessons
+    from core.llm_proposer import ProviderUnavailable, TerminalCallError
+
+    try:
+        n = lessons.learn(brains.call_for("memory"), limit=getattr(args, "limit", 20))
+    except (TerminalCallError, ProviderUnavailable) as exc:
+        print("[analyst] learn stopped: %s" % exc)
+        return 1
+    print("[analyst] wrote %d lesson(s)" % n)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="analyst agent")
     sub = p.add_subparsers(dest="cmd", required=True)
     run = sub.add_parser("run")
     run.add_argument("--assets", help="comma-separated assets to judge now, "
                                       "instead of the watchlist")
-    run.add_argument("--llm", choices=("anthropic", "openai", "ollama"),
+    run.add_argument("--llm", choices=("anthropic", "openai", "ollama", "ollama-cloud"),
                      help="provider for this run only")
     run.add_argument("--model", help="model name for this run only")
-    run.add_argument("--depth", choices=("brief", "full"),
+    run.add_argument("--mode", choices=("solo", "team"),
+                     help="solo = one analyst; team = four specialists and a lead "
+                          "(about five times the calls). Default GTRADE_ANALYST_MODE or solo")
+    run.add_argument("--depth", choices=("brief", "full", "deep"),
                      help="how much reasoning to ask for. Default: full for a "
-                          "named asset, brief for a sweep")
+                          "named asset, brief for a sweep. deep = full plus a "
+                          "critic pass that argues against the verdict")
     run.add_argument("--panel", action="store_true",
                      help="judge the fixed panel instead of the watchlist. The "
                           "watchlist is a moving set, so per-asset statistics "
@@ -705,7 +918,7 @@ def main(argv=None):
                                          "asset: direction, gap, range, stand aside")
     it.add_argument("--assets", help="comma-separated assets, instead of the "
                                      "intraday panel (GTRADE_ANALYST_INTRADAY_PANEL)")
-    it.add_argument("--llm", choices=("anthropic", "openai", "ollama"),
+    it.add_argument("--llm", choices=("anthropic", "openai", "ollama", "ollama-cloud"),
                     help="provider for this run only")
     it.add_argument("--model", help="model name for this run only")
     it.add_argument("--depth", choices=("brief", "full"),
@@ -719,6 +932,27 @@ def main(argv=None):
     sub.add_parser("intraday-score", help="fill finished sessions, then score the "
                                           "four intraday questions"
                    ).set_defaults(fn=cmd_intraday_score)
+    au = sub.add_parser("auto", help="the scout picks assets, then a run and a daily report")
+    au.add_argument("--max-assets", dest="max_assets", type=lambda v: max(1, int(v)), default=0,
+                    help="default GTRADE_ANALYST_AUTO_MAX or 5")
+    au.add_argument("--mode", choices=("solo", "team"), help="default GTRADE_ANALYST_MODE or solo")
+    au.add_argument("--depth", choices=("brief", "full", "deep"))
+    au.add_argument("--horizons", default=None)
+    au.add_argument("--report-dir", dest="report_dir", default="reports")
+    au.set_defaults(fn=cmd_auto)
+    ln = sub.add_parser("learn", help="write lessons from scored judgments")
+    ln.add_argument("--limit", type=int, default=20, help="at most this many per run")
+    ln.set_defaults(fn=cmd_learn)
+    br = sub.add_parser("brains", help="which model each analyst role uses")
+    br.add_argument("--ping", action="store_true", help="one short call per distinct brain")
+    br.add_argument("--set", action="append", metavar="ROLE=provider:model",
+                    help="save a role's brain (or default=..., or a menu setting "
+                         "such as GTRADE_OLLAMA_MIN_FREE_MB=3500) in .env")
+    br.add_argument("--unset", action="append", metavar="ROLE",
+                    help="remove a role's brain from .env")
+    br.add_argument("--cloud-key", dest="cloud_key", action="store_true",
+                    help="enter OLLAMA_API_KEY without echoing it, saved in .env")
+    br.set_defaults(fn=cmd_brains)
     args = p.parse_args(argv)
     return args.fn(args)
 

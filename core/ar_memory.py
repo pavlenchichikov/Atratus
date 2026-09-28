@@ -150,6 +150,13 @@ def replicated_sigs():
 
 
 def findings_append(record):
+    # Which proposer produced the cycle. Without it the LLM-vs-evolutionary
+    # question cannot be answered from the journal (checked 2026-09-28: 93
+    # records, none said).
+    record = dict(record)
+    record.setdefault("proposer", (os.getenv("GTRADE_AR_PROPOSER") or "evolutionary").strip().lower())
+    if os.getenv("GTRADE_AR_QD_LLM_P"):
+        record.setdefault("qd_llm_p", os.getenv("GTRADE_AR_QD_LLM_P"))
     journal = _load(FINDINGS_PATH, [])
     journal.append(record)
     _save(FINDINGS_PATH, journal)

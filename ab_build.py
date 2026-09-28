@@ -836,10 +836,33 @@ def evaluate(cand, subset, ref_full, ref_contrib, objective):
     promo = ar.promotion_stats(ref_full, var_full)
     import statistics as _st
     sd = float(_st.stdev(deltas)) if len(deltas) > 1 else 0.0
+    ens, base = baseline_means(var_full)
     return {"sig": sig, "p": p, "value": value, "n": len(deltas), "sd": sd,
             "p_neural": p_n, "value_neural": value_n,
             "promoted": promo["promoted"], "demoted": promo["demoted"],
-            "p_promotion": promo["p"]}
+            "p_promotion": promo["p"], "ens_acc": ens, "base_acc": base}
+
+
+def baseline_means(rows):
+    """(mean Ens_Acc, mean Base_Acc) over the rows that carry both, else (None, None).
+
+    Base_Acc is the no-model barrier train_hybrid scores on the same folds and
+    label. Rows trained before the column existed carry none, and then the
+    barrier is unmeasured rather than passed or failed.
+    """
+    pairs = [(r.get("Ens_Acc"), r.get("Base_Acc")) for r in rows or []
+             if isinstance(r, dict)]
+    pairs = [(e, b) for e, b in pairs
+             if isinstance(e, (int, float)) and isinstance(b, (int, float))]
+    if not pairs:
+        return None, None
+    return (sum(e for e, _ in pairs) / len(pairs),
+            sum(b for _, b in pairs) / len(pairs))
+
+
+def below_baseline(stats):
+    e, b = stats.get("ens_acc"), stats.get("base_acc")
+    return e is not None and b is not None and e <= b
 
 
 def ar_promotion_tag(stats):
@@ -922,6 +945,10 @@ def verdict(stats, floor, alpha):
     if n < holdout.MIN_N:
         return "FAILED"
     if stats.get("demoted", 0) > stats.get("promoted", 0):
+        return "FAILED"
+    # Also a veto: beating the reference while losing to "always the usual
+    # answer" means both arms learned less than the label's base rate.
+    if below_baseline(stats):
         return "FAILED"
     return "PASSED" if (p <= alpha and value >= floor) else "FAILED"
 
@@ -1058,6 +1085,10 @@ def run(cfg):
             print("  %-8s %s" % ("", tag))
         # And what the run could have seen at all. Without it a FAILED reads as
         # "no effect" when the honest reading is often "not measurable here".
+        if st.get("base_acc") is not None:
+            print("  %-8s Ens_Acc %.4f vs no-model baseline %.4f%s"
+                  % ("", st["ens_acc"], st["base_acc"],
+                     "  BELOW_BASELINE (veto)" if below_baseline(st) else ""))
         pw = power_tag(st, cfg["floor"])
         if pw:
             print("  %-8s %s" % ("", pw))

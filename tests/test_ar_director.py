@@ -14,8 +14,8 @@ CAMPAIGN = {"GTRADE_AR_AXES": "qd", "GTRADE_AR_SCORE_BASIS": "net_auc",
 
 
 def _reply(**kw):
-    out = {"axes": "hyper", "label_mode": "direction", "label_horizon": 1,
-           "budget": 20, "proposer": "llm", "reason": "hyper is unexplored"}
+    out = {"axes": "features", "label_mode": "direction", "label_horizon": 1,
+           "budget": 20, "proposer": "llm", "reason": "features is unexplored"}
     out.update(kw)
     return out
 
@@ -25,7 +25,7 @@ def test_a_well_formed_reply_is_accepted():
     # a correct reply really does come back clean.
     settings, problems = ar_director.validate(_reply(), CAMPAIGN)
     assert problems == []
-    assert settings["GTRADE_AR_AXES"] == "hyper"
+    assert settings["GTRADE_AR_AXES"] == "features"
     assert settings["AR_BUDGET"] == "20"
 
 
@@ -71,30 +71,30 @@ def test_the_weighting_axis_is_refused_under_a_next_bar_label():
 
 def test_several_axes_may_share_one_cycle():
     settings, problems = ar_director.validate(
-        _reply(axes="hyper,nets", budget=20), CAMPAIGN)
+        _reply(axes="features,nets", budget=20), CAMPAIGN)
     assert problems == []
-    assert settings["GTRADE_AR_AXES"] == "hyper,nets"   # the runner's own format
+    assert settings["GTRADE_AR_AXES"] == "features,nets"   # the runner's own format
     # a JSON list is the other shape a model reaches for
     settings, problems = ar_director.validate(
-        _reply(axes=["hyper", "nets", "thresholds"], budget=20), CAMPAIGN)
+        _reply(axes=["features", "nets", "thresholds"], budget=20), CAMPAIGN)
     assert problems == []
-    assert settings["GTRADE_AR_AXES"] == "hyper,nets,thresholds"
+    assert settings["GTRADE_AR_AXES"] == "features,nets,thresholds"
     # a repeat is one axis, not a doubled bill
     settings, problems = ar_director.validate(
-        _reply(axes="hyper, hyper", budget=60), CAMPAIGN)
+        _reply(axes="features, features", budget=60), CAMPAIGN)
     assert problems == []
-    assert settings["GTRADE_AR_AXES"] == "hyper"
+    assert settings["GTRADE_AR_AXES"] == "features"
 
 
 def test_a_mixed_cycle_is_capped_in_width_and_in_total_cost():
     # width
     settings, problems = ar_director.validate(
-        _reply(axes="hyper,nets,thresholds,regime", budget=10), CAMPAIGN)
+        _reply(axes="features,nets,thresholds,regime", budget=10), CAMPAIGN)
     assert settings is None
     assert any("at most" in p for p in problems)
     # total cost: the budget is spent per axis, so 3 x 40 is not 40
     settings, problems = ar_director.validate(
-        _reply(axes="hyper,nets,thresholds", budget=40), CAMPAIGN)
+        _reply(axes="features,nets,thresholds", budget=40), CAMPAIGN)
     assert settings is None
     assert any("per axis" in p for p in problems)
 
@@ -110,12 +110,12 @@ def test_one_bad_name_refuses_the_whole_mix():
     # Silently dropping it would run a cycle nobody chose, and the reason the
     # director gave would describe a search that never happened.
     settings, problems = ar_director.validate(
-        _reply(axes="hyper,vibes", budget=20), CAMPAIGN)
+        _reply(axes="features,vibes", budget=20), CAMPAIGN)
     assert settings is None
     assert any("vibes" in p for p in problems)
     # and the no-op rule still bites inside a mix
     settings, problems = ar_director.validate(
-        _reply(axes="hyper,weighting", label_mode="direction", budget=20), CAMPAIGN)
+        _reply(axes="features,weighting", label_mode="direction", budget=20), CAMPAIGN)
     assert settings is None
     assert any("no-op" in p for p in problems)
 
@@ -154,7 +154,7 @@ def test_a_lever_that_lands_on_nothing_is_refused_not_ignored():
     """A setting nobody reads still gets journalled as part of the run, so a later
     reader would credit the result to a knob that was never applied."""
     # qd levers on a non-qd cycle
-    settings, problems = ar_director.validate(_reply(axes="hyper", qd_llm_p=0.9), CAMPAIGN)
+    settings, problems = ar_director.validate(_reply(axes="features", qd_llm_p=0.9), CAMPAIGN)
     assert settings is None and any("qd search" in p for p in problems)
     # illum on a non-qd cycle
     settings, problems = ar_director.validate(_reply(axes="nets", illum="full"), CAMPAIGN)
@@ -303,7 +303,7 @@ def test_an_inherited_illumination_is_carried_not_refused():
     most of the recipe set on a campaign that illuminates on real nets."""
     full = dict(CAMPAIGN, GTRADE_AR_ILLUM="full")
     settings, problems = ar_director.validate(
-        {"axes": "hyper,nets", "reason": "hyper is unexplored"}, full)
+        {"axes": "features,nets", "reason": "features is unexplored"}, full)
     assert problems == []
     assert settings["GTRADE_AR_ILLUM"] == "full"
     # Asking for it on a non-qd cycle is still refused: that is the director
@@ -316,3 +316,9 @@ def test_an_inherited_illumination_does_not_trip_the_basis_rule():
     raw = dict(CAMPAIGN, GTRADE_AR_SCORE_BASIS="raw", GTRADE_AR_ILLUM="cb")
     settings, problems = ar_director.validate({"axes": "qd", "reason": "x"}, raw)
     assert problems == [] and settings["GTRADE_AR_ILLUM"] == "cb"
+
+
+def test_a_frozen_axis_is_refused_and_not_offered():
+    for ax in ar_director.FROZEN_AXES:
+        settings, problems = ar_director.validate(_reply(axes=ax), CAMPAIGN)
+        assert settings is None and any("frozen" in p for p in problems)

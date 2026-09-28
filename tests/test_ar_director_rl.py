@@ -131,11 +131,11 @@ def test_an_untraceable_outcome_is_dropped_rather_than_guessed_at():
 
 
 def test_a_cycle_that_found_nothing_is_credited_zero_immediately():
-    hist = [_hist("2026-08-19T02:00:00", "hyper_nets")]
+    hist = [_hist("2026-08-19T02:00:00", "features_deep")]
     findings = [{"ts": "2026-08-19T05:00:00", "mode": "axes", "winners": []}]
     got = rl.settle(hist, findings, [], set(), set(),
                     sig_of=lambda g: g.get("sig"))
-    assert len(got) == 1 and got[0]["arm"] == "hyper_nets"
+    assert len(got) == 1 and got[0]["arm"] == "features_deep"
     assert got[0]["reward"] == 0.0
 
 
@@ -180,7 +180,7 @@ def test_the_forced_regate_never_runs_twice_in_a_row():
              "settings": rl.settings_of("regate")}]
     assert rl.forced_arm(13, hist) is None
     assert rl.forced_arm(13, [{"action": "search", "rc": 0,
-                               "settings": rl.settings_of("pruning")}]) == "regate"
+                               "settings": rl.settings_of("features_deep")}]) == "regate"
     assert rl.forced_arm(13, []) == "regate"
 
 

@@ -145,7 +145,7 @@
   </div>
   <table class="grid">
     <thead>
-      <tr><th>Asset</th><th>Signal</th><th class="num">p</th><th>Confidence</th><th>Accuracy</th><th class="num" title="Taleb risk: where today's volatility sits in this asset's own history, 0-100 (size cut above {{ "%.0f"|format(config.tail_soft_rank * 100) }}, no new entry above {{ "%.0f"|format(config.tail_hard_rank * 100) }})">Taleb</th><th>30 days</th><th class="num">Date</th></tr>
+      <tr><th>Asset</th><th>Signal</th><th class="num">p</th><th>Confidence</th><th>Accuracy</th><th class="num" title="Taleb risk: where today's volatility sits in this asset's own history, 0-100 (size cut above {{ "%.0f"|format(config.tail_soft_rank * 100) }}, no new entry above {{ "%.0f"|format(config.tail_hard_rank * 100) }})">Taleb</th><th>30 days</th><th class="num" title="The session each signal forecasts. It is computed from the previous close, so it is normally the next trading day.">Forecast for</th></tr>
     </thead>
     <tbody>
       {% for s in g.rows %}
@@ -175,7 +175,7 @@
           <span class="spark-chg mono {{ 't-buy' if s.spark.chg >= 0 else 't-sell' }}">{{ "%+.1f"|format(s.spark.chg * 100) }}%</span>
           {% else %}<span class="dim">-</span>{% endif %}
         </td>
-        <td class="num dim mono c-date">{{ s.date }}</td>
+        <td class="num mono c-date" title="from the {{ s.date }} close">{{ s.for_date or s.date }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -257,7 +257,7 @@ async function refresh() {
       fill.className = 'probbar-fill ' + (s.signal === 'BUY' ? 'pb-buy' : (s.signal === 'SELL' ? 'pb-sell' : 'pb-wait'));
     }
     tr.querySelector('.c-acc').innerHTML = fmtAcc(s.acc);
-    tr.querySelector('.c-date').textContent = s.date;
+    tr.querySelector('.c-date').textContent = s.for_date || s.date;
     if (changed) { tr.classList.remove('flash'); void tr.offsetWidth; tr.classList.add('flash'); }
   }
   updateBreadth(sigs);

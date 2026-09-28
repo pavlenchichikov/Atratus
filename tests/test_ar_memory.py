@@ -260,3 +260,13 @@ def test_the_accuracy_basis_turns_the_catboost_screen_off():
 
     assert auto_loop.default_screen("ens_acc") == "0"
     assert auto_loop.default_illum("ens_acc") == "full"
+
+
+def test_every_finding_records_its_proposer(tmp_path, monkeypatch):
+    from core import ar_memory as m
+    monkeypatch.setattr(m, "FINDINGS_PATH", str(tmp_path / "f.json"))
+    monkeypatch.setenv("GTRADE_AR_PROPOSER", "llm")
+    m.findings_append({"ts": "t", "winners": []})
+    monkeypatch.delenv("GTRADE_AR_PROPOSER")
+    m.findings_append({"ts": "u", "winners": []})
+    assert [r["proposer"] for r in m._load(m.FINDINGS_PATH, [])] == ["llm", "evolutionary"]

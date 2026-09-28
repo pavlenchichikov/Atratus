@@ -164,3 +164,4 @@ repair_index_weekends.py
 
 # Asset list written by `model_health.py --list unservable --out FILE`
 _stranded.txt
+_analyst_brain_speed.json

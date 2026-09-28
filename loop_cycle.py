@@ -119,6 +119,19 @@ def _build_rows():
     return rows
 
 
+def analyst_auto_step():
+    """The analyst's autonomous run, or None while GTRADE_ANALYST_AUTO is not 1.
+    Off by default: it spends LLM calls. Switched in run_gtrade.bat [AN] -> [M]."""
+    if os.getenv("GTRADE_ANALYST_AUTO") != "1":
+        return None
+    # Brief and bounded: a full-depth local run is hours per asset, and this
+    # holds the cycle lock.
+    timeout = int(os.getenv("GTRADE_ANALYST_AUTO_TIMEOUT") or 3 * 3600)
+    return run_step("analyst_auto", lambda: subprocess.run(
+        [sys.executable, "analyst.py", "auto", "--depth", "brief"], cwd=BASE,
+        check=True, timeout=timeout))
+
+
 def main():
     ok, reason = runlock.acquire(LOCK_PATH, "cycle")
     if not ok:
@@ -142,6 +155,9 @@ def main():
         assets = []
         drift_step = run_step("drift", lambda: assets.extend(scan_assets(_build_rows())))
         steps.append(drift_step)
+        auto = analyst_auto_step()   # last: the slowest step, and optional
+        if auto is not None:
+            steps.append(auto)
 
         proposed = sorted(a["asset"] for a in assets if a["status"] == "propose")
         state = loop_state.load_state(STATE_PATH)

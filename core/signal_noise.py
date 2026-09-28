@@ -117,3 +117,22 @@ def noise_report(db_path=None, since=None):
     return {"raw": _score(j), "clean": _score(clean),
             "noise_share": (1 - len(clean) / len(known)) if len(known) else None,
             "grades": _grades(clean), "per_asset": per_asset}
+
+
+def band_series(asset, db_path=None):
+    """This asset's noise band by date (the same rule noise_report scores by),
+    or None when its prices cannot be read."""
+    con = sqlite3.connect(db_path or DB_PATH)
+    try:
+        return _noise_bands(con, [asset]).get(asset)
+    finally:
+        con.close()
+
+
+def band_on(series, date):
+    """The band in force on `date`: the last value on or before it, or None."""
+    if series is None or not len(series):
+        return None
+    s = series.dropna()
+    s = s[s.index <= str(date)[:10]]
+    return float(s.iloc[-1]) if len(s) else None

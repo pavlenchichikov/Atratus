@@ -586,6 +586,11 @@ echo                   call per asset, plus an earnings scan over the map)
 echo    [W] Watch      start the Web UI on the analyst page
 echo    [I] Intraday   the NEXT session: direction, gap, range, stand aside,
 echo                   and their accuracy (run it before the session opens)
+echo    [A] Auto       the scout picks the assets, then a run and a daily report
+echo                   in reports\analyst_DATE.md  (COSTS MONEY)
+echo    [L] Learn      write a lesson from every scored call
+echo    [M] Models     which LLM each role uses: local, Ollama Cloud, Anthropic,
+echo                   OpenAI; cloud key; GPU guard; limits; auto in loop
 echo.
 set "an_choice="
 set /p an_choice="Choose, Enter = back: "
@@ -595,7 +600,173 @@ if /i "%an_choice%"=="B" goto analyst_backfill
 if /i "%an_choice%"=="R" goto analyst_run
 if /i "%an_choice%"=="F" goto analyst_fit
 if /i "%an_choice%"=="W" goto analyst_watch
+if /i "%an_choice%"=="M" goto analyst_models
+if /i "%an_choice%"=="A" goto analyst_auto
+if /i "%an_choice%"=="L" goto analyst_learn
 goto menu
+
+:analyst_learn
+python analyst.py learn
+pause
+goto analyst
+
+:analyst_auto
+echo.
+echo  The scout looks at the biggest moves, your recent misses and assets not
+echo  judged lately, picks a few, and the analyst judges them.
+echo.
+set "au_flag="
+set "au_n="
+set /p au_n="How many assets, Enter = the [M] setting or 5: "
+if not "%au_n%"=="" set "au_flag=--max-assets %au_n%"
+echo    Mode: [1] solo   [2] team.  Enter = the default mode from [M]
+set "au_m="
+set /p au_m="Mode: "
+if "%au_m%"=="1" set "au_flag=%au_flag% --mode solo"
+if "%au_m%"=="2" set "au_flag=%au_flag% --mode team"
+echo    Depth: [1] brief  [2] full  [3] deep.  Enter = full for these assets
+set "au_d="
+set /p au_d="Depth: "
+if "%au_d%"=="1" set "au_flag=%au_flag% --depth brief"
+if "%au_d%"=="2" set "au_flag=%au_flag% --depth full"
+if "%au_d%"=="3" set "au_flag=%au_flag% --depth deep"
+echo.
+set "au_ok="
+set /p au_ok="Type YES to run: "
+if /i not "%au_ok%"=="YES" goto analyst
+python analyst.py auto %au_flag%
+pause
+goto analyst
+
+:analyst_models
+cls
+echo  ANALYST MODELS - which LLM thinks for which role. Saved in .env.
+echo  A role with nothing set uses the default; no default = GTRADE_AR_LLM.
+echo.
+python analyst.py brains
+echo.
+echo    [D] Default    one model for every role
+echo    [R] Role       a model for one role
+echo    [U] Unset      a role goes back to the default
+echo    [K] Cloud key  OLLAMA_API_KEY for Ollama Cloud, typed hidden
+echo    [P] Ping       one short call to each model, to check it answers
+echo    [G] GPU guard  free VRAM in MB a local model needs before it may use
+echo                   the card; below it the model runs on the CPU
+echo    [H] Hours      warn before a run longer than this many hours
+echo    [N] Mode       default mode for runs: solo or team
+echo    [X] Auto size  how many assets an auto run picks
+echo    [O] Auto loop  run [A] Auto inside the LC loop cycle: on or off
+echo.
+set "am="
+set /p am="Choose, Enter = back: "
+if /i "%am%"=="D" goto am_default
+if /i "%am%"=="R" goto am_role
+if /i "%am%"=="U" goto am_unset
+if /i "%am%"=="K" goto am_key
+if /i "%am%"=="P" goto am_ping
+if /i "%am%"=="G" goto am_gpu
+if /i "%am%"=="H" goto am_hours
+if /i "%am%"=="N" goto am_mode
+if /i "%am%"=="X" goto am_autosize
+if /i "%am%"=="O" goto am_autoloop
+goto analyst
+
+:am_pick
+REM  Sets am_spec to provider:model, or leaves it empty on a blank answer.
+set "am_spec="
+echo    [1] ollama        local model on this machine
+echo    [2] ollama-cloud  Ollama Cloud, needs the key from [K]
+echo    [3] anthropic     [4] openai
+set "am_p="
+set /p am_p="Provider: "
+set "am_prov="
+if "%am_p%"=="1" set "am_prov=ollama"
+if "%am_p%"=="2" set "am_prov=ollama-cloud"
+if "%am_p%"=="3" set "am_prov=anthropic"
+if "%am_p%"=="4" set "am_prov=openai"
+if "%am_prov%"=="" goto :eof
+if "%am_prov%"=="ollama" ollama list
+echo    Model id, e.g. gemma4:12b, gpt-oss:120b, deepseek-v3.1:671b, claude-sonnet-5
+set "am_m="
+set /p am_m="Model id, Enter = provider default: "
+if "%am_m%"=="" (set "am_spec=%am_prov%") else (set "am_spec=%am_prov%:%am_m%")
+goto :eof
+
+:am_default
+call :am_pick
+if not "%am_spec%"=="" python analyst.py brains --set "default=%am_spec%"
+pause
+goto analyst_models
+
+:am_role
+echo    Solo run: solo.  Team run: lead macro fundamental technical news.
+echo    Deep run: critic.  Also: scout memory.
+set "am_r="
+set /p am_r="Role: "
+if "%am_r%"=="" goto analyst_models
+call :am_pick
+if not "%am_spec%"=="" python analyst.py brains --set "%am_r%=%am_spec%"
+pause
+goto analyst_models
+
+:am_unset
+set "am_r="
+set /p am_r="Role to reset, or default: "
+if not "%am_r%"=="" python analyst.py brains --unset "%am_r%"
+pause
+goto analyst_models
+
+:am_key
+python analyst.py brains --cloud-key
+pause
+goto analyst_models
+
+:am_ping
+python analyst.py brains --ping
+pause
+goto analyst_models
+
+:am_gpu
+set "am_v="
+set /p am_v="Free VRAM in MB before a local model may use the GPU, Enter = 3500: "
+if "%am_v%"=="" set "am_v=3500"
+python analyst.py brains --set "GTRADE_OLLAMA_MIN_FREE_MB=%am_v%"
+pause
+goto analyst_models
+
+:am_mode
+echo    [1] solo = one analyst   [2] team = four specialists and a lead
+set "am_v="
+set /p am_v="Default mode: "
+if "%am_v%"=="1" python analyst.py brains --set "GTRADE_ANALYST_MODE=solo"
+if "%am_v%"=="2" python analyst.py brains --set "GTRADE_ANALYST_MODE=team"
+pause
+goto analyst_models
+
+:am_autosize
+set "am_v="
+set /p am_v="Assets per auto run, Enter = 5: "
+if "%am_v%"=="" set "am_v=5"
+python analyst.py brains --set "GTRADE_ANALYST_AUTO_MAX=%am_v%"
+pause
+goto analyst_models
+
+:am_autoloop
+echo    On = every LC loop cycle also runs the analyst auto step. It costs LLM calls.
+set "am_v="
+set /p am_v="Auto in loop, Y = on, N = off: "
+if /i "%am_v%"=="Y" python analyst.py brains --set "GTRADE_ANALYST_AUTO=1"
+if /i "%am_v%"=="N" python analyst.py brains --set "GTRADE_ANALYST_AUTO=0"
+pause
+goto analyst_models
+
+:am_hours
+set "am_v="
+set /p am_v="Warn when a run would take more than N hours, Enter = 8: "
+if "%am_v%"=="" set "am_v=8"
+python analyst.py brains --set "GTRADE_ANALYST_MAX_HOURS=%am_v%"
+pause
+goto analyst_models
 
 :analyst_score
 python analyst.py score
@@ -618,13 +789,15 @@ echo.
 set "in_assets="
 set /p in_assets="Assets (comma-separated), Enter = intraday panel: "
 echo.
-echo    [1] anthropic   [2] openai   [3] ollama   Enter = whatever .env says
+echo    [1] anthropic   [2] openai   [3] ollama   [4] ollama-cloud
+echo    Enter = the models set in [M] Models
 set "in_llm="
 set /p in_llm="Model provider: "
 set "in_flag="
 if "%in_llm%"=="1" set "in_flag=--llm anthropic"
 if "%in_llm%"=="2" set "in_flag=--llm openai"
 if "%in_llm%"=="3" set "in_flag=--llm ollama"
+if "%in_llm%"=="4" set "in_flag=--llm ollama-cloud"
 set "in_name="
 if not "%in_flag%"=="" set /p in_name="Model id (e.g. claude-opus-4-8), Enter = provider default: "
 if not "%in_name%"=="" set "in_flag=%in_flag% --model "%in_name%""
@@ -654,13 +827,15 @@ echo.
 set "an_assets="
 set /p an_assets="Assets (comma-separated), Enter = watchlist + earnings today: "
 echo.
-echo    [1] anthropic   [2] openai   [3] ollama   Enter = whatever .env says
+echo    [1] anthropic   [2] openai   [3] ollama   [4] ollama-cloud
+echo    Enter = the models set in [M] Models
 set "an_llm="
 set /p an_llm="Model provider: "
 set "an_flag="
 if "%an_llm%"=="1" set "an_flag=--llm anthropic"
 if "%an_llm%"=="2" set "an_flag=--llm openai"
 if "%an_llm%"=="3" set "an_flag=--llm ollama"
+if "%an_llm%"=="4" set "an_flag=--llm ollama-cloud"
 set "an_name="
 REM  An exact model id, not a nickname: it is passed through to the SDK.
 REM  Showing the shape here because "opus 5" reads like a valid answer and
@@ -677,6 +852,21 @@ echo    Several at once, e.g. 1,5,20: one LLM call per asset per horizon.
 set "an_hz="
 set /p an_hz="Horizons in trading days, Enter = 1: "
 if not "%an_hz%"=="" set "an_flag=%an_flag% --horizons "%an_hz%""
+echo.
+echo    Mode: [1] solo = one analyst   [2] team = four specialists and a lead,
+echo    about five times the calls per asset. Enter = the default mode from [M].
+set "an_m="
+set /p an_m="Mode: "
+if "%an_m%"=="2" set "an_flag=%an_flag% --mode team"
+echo.
+echo    Depth: [1] brief  [2] full  [3] deep = full plus a critic that argues
+echo    against the verdict, one more call per asset. Enter = full for named
+echo    assets, brief for a sweep.
+set "an_d="
+set /p an_d="Depth: "
+if "%an_d%"=="1" set "an_flag=%an_flag% --depth brief"
+if "%an_d%"=="2" set "an_flag=%an_flag% --depth full"
+if "%an_d%"=="3" set "an_flag=%an_flag% --depth deep"
 echo.
 set "an_ok="
 set /p an_ok="Type YES to run: "

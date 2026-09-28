@@ -42,10 +42,9 @@ RECIPES = {
         "hours": 12.0,
         "reply": {"axes": "qd", "proposer": "evolutionary", "budget": 8,
                   "illum": "full"}},
-    "hyper_nets": {
-        "hours": 5.0,
-        "reply": {"axes": "hyper,nets", "proposer": "evolutionary",
-                  "budget": 20}},
+    # hyper_nets and pruning were removed with ar_director.FROZEN_AXES
+    # (2026-09-28). Removing an arm keeps every other posterior: the Scheduler
+    # only reads the arms it is given, whereas ADDING one resets them all.
     "features_deep": {
         "hours": 7.0,
         "reply": {"axes": "features", "proposer": "llm", "budget": 40}},
@@ -69,9 +68,6 @@ RECIPES = {
         "hours": 4.0,
         "reply": {"axes": "weighting", "proposer": "evolutionary", "budget": 20,
                   "label_mode": "triple_barrier", "label_horizon": 20}},
-    "pruning": {
-        "hours": 4.0,
-        "reply": {"axes": "pruning", "proposer": "evolutionary", "budget": 20}},
     "regate": {
         # Re-tests stored winners instead of searching. The only arm that earns
         # a finding its SECOND independent clear on purpose.
@@ -81,7 +77,7 @@ RECIPES = {
         # Cheap information. Without an arm like this every exploratory draw
         # costs a full cycle.
         "hours": 1.5,
-        "reply": {"axes": "hyper", "proposer": "evolutionary", "budget": 30,
+        "reply": {"axes": "features", "proposer": "evolutionary", "budget": 30,
                   "search_assets": "fast", "hours": 3}},
 }
 

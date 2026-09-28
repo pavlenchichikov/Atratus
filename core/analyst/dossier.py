@@ -212,9 +212,15 @@ def _own_record(asset, before=None):
     """
     try:
         from core.analyst import store
+        from core.analyst.project_tools import _resolved_before
 
+        # Dated before AND resolved before: a 20-day call made the day before
+        # the rewind date had its outcome filled weeks later.
         rows = [r for r in store.scored_rows() if r.get("asset") == asset
-                and (before is None or (r.get("date") or "") < before)]
+                and (before is None or ((r.get("date") or "") < before
+                                        and _resolved_before(asset, r["date"],
+                                                             r.get("horizon") or 1,
+                                                             before)))]
     except Exception:
         return {"past_calls": 0, "past_hit_rate": None, "past_last_call": None,
                 "past_last_outcome": None}
@@ -1003,7 +1009,18 @@ def build(asset, db_path=None, today=None):
         **_flow(asset, bars, atr, db_path, today),
         **_market_context(asset, bars, db_path, today),
         **_as_of(asset, today),
+        "lessons": _lessons(asset, today),
     }
+
+
+def _lessons(asset, today):
+    """The analyst's own lessons from resolved calls; [] on any failure."""
+    try:
+        from config import radar_category
+        from core.analyst.lessons import lessons_for
+        return lessons_for(asset, radar_category(asset), today=today)
+    except Exception:
+        return []
 
 
 def dossier_hash(dossier):
@@ -1012,7 +1029,9 @@ def dossier_hash(dossier):
     Rounded before hashing: an unchanged dossier must hash the same across
     runs, and raw floats out of sqlite do not reliably do that.
     """
+    # lessons grow whenever `learn` runs; counting them would re-judge (and
+    # re-pay for) every asset in the class after each run.
     rounded = {k: (round(v, 8) if isinstance(v, float) else v)
-               for k, v in sorted(dossier.items())}
+               for k, v in sorted(dossier.items()) if k != "lessons"}
     blob = json.dumps(rounded, sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]

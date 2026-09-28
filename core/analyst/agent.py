@@ -199,7 +199,9 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
           "10. Your own record here. past_calls, past_hit_rate and "
           "past_last_call are YOUR previous judgments on this asset and how "
           "they resolved. If you were recently wrong in the direction you are "
-          "about to choose again, say so and justify repeating it.\n"
+          "about to choose again, say so and justify repeating it. lessons "
+          "are what you wrote after earlier calls here or on similar assets "
+          "resolved; say whether one applies today.\n"
           "11. What would change your mind, concretely: a level, a move, or "
           "an event, not a vague condition.\n"
           "Quote the numbers you use. Name what you are deliberately NOT "
@@ -324,7 +326,7 @@ def parse_judgment(text, allowed=None, empty=(), why=None, session=False):
 
 
 def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
-          today=None, tool_calls=None, session=False):
+          today=None, tool_calls=None, session=False, notes=None, reports_text=""):
     """One judgment for one dossier, or None when the model will not produce one.
 
     Returning None rather than a default is the point: a fabricated neutral
@@ -361,6 +363,8 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
                         tool_menu=(tools.spec_lines(today, dossier.get("asset"))
                                    if budget else ""),
                         session=session)
+    # A lead's specialist reports, appended after the dossier.
+    prompt += reports_text
     allowed = set(dossier)
     # A field the dossier carries as None or [] was shown to the model as empty,
     # so citing it is not evidence of anything.
@@ -387,7 +391,12 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
         # A request for evidence is not a failed judgment, so it is checked
         # first and does not spend a parse attempt.
         if budget > 0 and rounds > 0:
-            requests = tools.parse_requests(_first_json_object(answer))[:budget]
+            req_obj = _first_json_object(answer)
+            requests = tools.parse_requests(req_obj)[:budget]
+            if notes is not None and isinstance(req_obj, dict) and req_obj.get("plan"):
+                # The plan the model states beside its first request: kept so a
+                # reader can see what it meant to check, not only what it asked.
+                notes["plan"] = plain(str(req_obj["plan"]))[:600]
             if requests:
                 budget -= len(requests)
                 rounds -= 1
@@ -420,3 +429,40 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
         if on_reject is not None:
             on_reject(why[0] if why else "unparseable")
     return None
+
+
+CRITIC_PROMPT = (
+    "You judged this asset and returned the verdict below. Now find the "
+    "strongest objection to it using only the facts shown. If the objection "
+    "wins, change the verdict; if not, keep it. Return STRICT JSON in exactly "
+    "the same schema as the verdict, evidence naming the fields you used.\n\n"
+    "Facts:\n%s\n\nYour verdict:\n%s\n")
+
+
+def critique(dossier, judgment, call, horizon=1, on_reject=None):
+    """The verdict after arguing against itself, or None when the critic gives
+    nothing parseable (the caller then keeps the original).
+
+    Both verdicts are logged by the caller, so whether the critic helps is a
+    measured question (analyst.py score), not an assumption.
+    """
+    prompt = CRITIC_PROMPT % (json.dumps(dossier, indent=2, ensure_ascii=True),
+                              json.dumps(judgment, ensure_ascii=True))
+    allowed = set(dossier)
+    empty = {k for k, v in dossier.items() if v is None or v == []}
+    from core.llm_proposer import ProviderUnavailable, TerminalCallError
+
+    try:
+        answer = call(prompt)
+    except (TerminalCallError, ProviderUnavailable):
+        # The same hour lost on every asset otherwise, as judge() learned.
+        raise
+    except Exception as exc:
+        if on_reject is not None:
+            on_reject("critic call failed: %s" % exc)
+        return None
+    why = []
+    out = parse_judgment(answer, allowed=allowed, empty=empty, why=why)
+    if out is None and on_reject is not None:
+        on_reject("critic: " + (why[0] if why else "unparseable"))
+    return out

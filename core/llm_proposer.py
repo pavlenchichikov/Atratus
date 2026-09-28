@@ -18,7 +18,7 @@ _UNSET = object()
 DSL_MENU = (
     "ops: zscore(window 2-200), ratio(a,b), lag(k 1-20), diff(k 1-20), "
     "rolling(window,agg in mean|std|sum), interaction(a,b), lead_lag(leader in "
-    "sp500|vix|btc|gold|dxy|tnx, horizon 1-20). Each spec: "
+    "vix|btc|gold|dxy|tnx, horizon 1-20). Each spec: "
     '{"name": lower_snake, "op": ..., "inputs": [...], "params": {...}}.'
 )
 
@@ -490,6 +490,68 @@ def _ollama_stream_trace(client, url, payload):
     return "".join(content).strip(), thinking.strip()
 
 
+def _host(base):
+    return base.split("//", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+
+
+def _is_cloud(base):
+    """Ollama Cloud (https://ollama.com). A LAN Ollama is neither cloud nor local."""
+    h = _host(base)
+    return h == "ollama.com" or h.endswith(".ollama.com")
+
+
+def _is_local(base):
+    return _host(base) in ("127.0.0.1", "localhost", "::1", "")
+
+
+def _ollama_headers(base):
+    """The auth header Ollama Cloud needs; nothing for a local server.
+
+    Direct to https://ollama.com rather than a -cloud model through the local
+    server: on 2026-09-28 curl reached ollama.com while the local server could
+    not resolve it (DNS), so the local route failed where the direct one worked.
+    """
+    if not _is_cloud(base):
+        return {}
+    key = (os.getenv("OLLAMA_API_KEY") or "").strip()
+    if not key:
+        raise ProviderUnavailable(
+            "Ollama Cloud needs an API key: set OLLAMA_API_KEY (ollama.com -> "
+            "Settings -> Keys).")
+    return {"Authorization": "Bearer " + key}
+
+
+def _vram_free_mb():
+    """Free VRAM in MiB from nvidia-smi, or None when it cannot be read."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10, check=False).stdout
+        return int(out.strip().splitlines()[0])
+    except Exception:
+        return None
+
+
+def _gpu_layers(n, base):
+    """Layers to put on the local card: n only when the card is free enough.
+
+    A forced load onto a card training holds does not fail cleanly on Windows,
+    it hangs the driver: BSOD 0x116 VIDEO_TDR_FAILURE on 2026-09-27 and 09-28,
+    seconds after llama-server started with -ngl 4 beside a training run. An
+    unreadable card counts as busy.
+    """
+    if _is_cloud(base):
+        return 0
+    if n <= 0 or not _is_local(base):
+        # Another machine's card: this one's nvidia-smi says nothing about it.
+        return max(0, n)
+    need = int(os.getenv("GTRADE_OLLAMA_MIN_FREE_MB") or 3500)
+    free = _vram_free_mb()
+    return n if free is not None and free >= need else 0
+
+
 def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     """One call over Ollama's OWN /api/chat, which is the only place `think`
     is honoured.
@@ -515,7 +577,7 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     # 0 of 31 text layers there (2026-09-24) and ran the analyst on the CPU.
     num_gpu = (os.getenv("GTRADE_OLLAMA_NUM_GPU") or "").strip()
     if num_gpu.isdigit():
-        options["num_gpu"] = int(num_gpu)
+        options["num_gpu"] = _gpu_layers(int(num_gpu), base)
     payload = {"model": model, "stream": False,
                "messages": [{"role": "user", "content": prompt}]}
     if think is not None:
@@ -529,7 +591,9 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     timeout = _llm_timeout()
     if timeout is not None and max_tokens is not None:
         timeout = max(timeout, max_tokens / 3.0)
-    client = httpx.Client(trust_env=False, timeout=timeout)
+    auth = _ollama_headers(base)
+    client = httpx.Client(trust_env=False, timeout=timeout,
+                          **({"headers": auth} if auth else {}))
 
     def send(body):
         try:
@@ -576,6 +640,11 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
     lets this function say WHICH of the two happened.
     """
     base = _ollama_base_url()
+    if _is_cloud(base) and not model_override():
+        raise ProviderUnavailable(
+            "Ollama Cloud needs a model name: set GTRADE_AR_LLM_MODEL "
+            "(for example gpt-oss:120b).")
+    _ollama_headers(base)   # a missing cloud key stops here, not after three retries
     model = model_override() or _detect_ollama_model()
     # Reasoning models spend tokens on the trace BEFORE the answer, so a cap the
     # trace uses up leaves nothing for the answer. GTRADE_AR_LLM_MAX_TOKENS
@@ -606,7 +675,8 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
         except Exception as exc:
             last_err = exc
             continue
-        _ollama_unload(base, model)
+        if not _is_cloud(base):
+            _ollama_unload(base, model)
         if not out and trace:
             # Keep the tail: whether the trace was still reasoning or going in
             # circles decides whether a bigger cap could ever help.
