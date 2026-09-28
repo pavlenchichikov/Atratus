@@ -88,3 +88,67 @@ def test_a_subset_run_never_rewrites_the_whole_book_report(tmp_path, monkeypatch
 class _FakeCon:
     def close(self):
         pass
+
+
+def _db_with(tmp_path, series):
+    """market.db holding one close table per {asset: close list}, daily dates."""
+    import sqlite3
+    path = str(tmp_path / "market.db")
+    con = sqlite3.connect(path)
+    for asset, closes in series.items():
+        df = pd.DataFrame({"Date": pd.date_range("2022-01-03", periods=len(closes), freq="D")
+                           .strftime("%Y-%m-%d"), "close": closes})
+        df.to_sql(lb.table_of(asset), con, index=False)
+    return con
+
+
+def _prices(rets, start=100.0):
+    out = [start]
+    for r in rets:
+        out.append(out[-1] * (1 + r))
+    return out
+
+
+def test_current_calls_select_the_follower_and_call_its_next_bar(tmp_path):
+    """The follower is ranked on its own recent bars, the noise asset is left
+    out, and the call is the leader's LAST move, inverted for an inverse pair."""
+    import random
+    rnd = random.Random(3)
+    lead_r = [rnd.choice([0.01, -0.01]) for _ in range(400)]
+    lead_r[-1] = 0.01                                     # the US closed up today
+    follow_r = [0.0] + [0.5 * v for v in lead_r[:-1]]     # next bar follows
+    inverse_r = [0.0] + [-0.5 * v for v in lead_r[:-1]]
+    noise_r = [rnd.choice([0.01, -0.01]) for _ in range(400)]
+    con = _db_with(tmp_path, {"SP500": _prices(lead_r), "FOLLOW": _prices(follow_r),
+                              "INVERSE": _prices(inverse_r), "NOISE": _prices(noise_r)})
+    calls = lb.current_calls(con, ["FOLLOW", "INVERSE", "NOISE", "SP500"], top=2)
+    assert set(calls) == {"FOLLOW", "INVERSE"}
+    assert calls["FOLLOW"]["call"] == "BUY"
+    assert calls["INVERSE"]["call"] == "SELL"
+    assert calls["FOLLOW"]["rank"] in (1, 2)
+
+
+def test_no_call_until_the_us_session_of_that_bar_has_closed(tmp_path):
+    """Before the evening data update the asset already has today's bar and the
+    leader does not. The leader's previous move is yesterday's news."""
+    import random
+    rnd = random.Random(5)
+    lead_r = [rnd.choice([0.01, -0.01]) for _ in range(400)]
+    follow_r = [0.0] + [0.5 * v for v in lead_r[:-1]]
+    con = _db_with(tmp_path, {"SP500": _prices(lead_r[:-1]),   # one bar behind
+                              "FOLLOW": _prices(follow_r)})
+    calls = lb.current_calls(con, ["FOLLOW"], top=1)
+    assert calls["FOLLOW"]["call"] is None
+
+
+def test_no_call_for_an_asset_whose_last_bar_is_behind_the_leader(tmp_path):
+    """TAIEX missing yesterday's bar would otherwise be 'called' for a bar that
+    already traded."""
+    import random
+    rnd = random.Random(9)
+    lead_r = [rnd.choice([0.01, -0.01]) for _ in range(400)]
+    follow_r = [0.0] + [0.5 * v for v in lead_r[:-1]]
+    con = _db_with(tmp_path, {"SP500": _prices(lead_r),
+                              "FOLLOW": _prices(follow_r[:-1])})   # one bar behind
+    calls = lb.current_calls(con, ["FOLLOW"], top=1)
+    assert calls["FOLLOW"]["call"] is None

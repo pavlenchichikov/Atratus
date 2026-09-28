@@ -52,6 +52,9 @@ def client(tmp_path, monkeypatch):
     # database into the next
     from core import dashboard
     dashboard.cache_clear()
+    # the lead calls read every close table; the stub database has none
+    import lead_baseline
+    monkeypatch.setattr(lead_baseline, "DB_PATH", path)
     return TestClient(webapp.app)
 
 
@@ -931,6 +934,31 @@ def test_asset_scan_is_refused_while_the_full_radar_runs(client, monkeypatch):
 
 def test_asset_scan_rejects_an_unknown_asset(client):
     assert client.post("/api/radar/scan/NOPE123").status_code == 404
+
+
+_LEAD = {"rank": 3, "ic": 0.43, "sign": 1, "call": "BUY", "bar": "2026-06-10",
+         "us_move": 0.005}
+
+
+def test_radar_marks_an_asset_the_us_close_rule_follows(client, monkeypatch):
+    from core import dashboard
+    monkeypatch.setattr(dashboard, "lead_calls", lambda: {"BTC": _LEAD})
+    r = client.get("/")
+    assert "lead-chip" in r.text and "lead BUY" in r.text
+
+
+def test_asset_card_states_the_lead_call_and_why(client, monkeypatch):
+    from core import dashboard
+    monkeypatch.setattr(dashboard, "lead_calls", lambda: {"BTC": _LEAD})
+    r = client.get("/asset/BTC")
+    assert "US lead, next session" in r.text
+    assert "#3 of 30" in r.text
+
+
+def test_asset_card_without_a_lead_shows_no_lead_block(client, monkeypatch):
+    from core import dashboard
+    monkeypatch.setattr(dashboard, "lead_calls", dict)
+    assert "US lead, next session" not in client.get("/asset/BTC").text
 
 
 def test_asset_page_has_the_scan_button(client):

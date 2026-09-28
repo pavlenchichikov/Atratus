@@ -111,6 +111,56 @@ def rule_accuracy(lead_ret, asset_ret, sign, since):
     return float(hit.mean()), len(hit)
 
 
+TOP_N = 30   # the list size the walk-forward check validated: 0.587 vs 0.506
+
+
+def current_calls(con, assets, top=TOP_N):
+    """{asset: row} for the `top` assets the rule follows today.
+
+    Ranked by |IC| on each asset's last RANK_BARS bars only, the same causal
+    ranking the walk-forward check used, so today's list is chosen the way the
+    0.587 was earned. `call` is the side for the asset's NEXT bar, and None
+    while the leader has no bar on the asset's last date: before the US close
+    the leader's latest move is the previous session, already priced in. Most
+    of what the call earns arrives at the next OPEN (gap 0.658 against 0.526
+    open-to-close on the ten strongest), so it is a bet held overnight.
+    """
+    lead = load_closes(con, LEADER)
+    if lead is None:
+        return {}
+    lead_ret = lead.pct_change().dropna()
+    ranked = []
+    for asset in assets:
+        if asset == LEADER:
+            continue
+        s = load_closes(con, asset)
+        if s is None:
+            continue
+        r = s.pct_change().dropna()
+        if r.empty:
+            continue
+        last = r.index[-1]
+        sign, ic = lead_sign(lead_ret, r, last + pd.Timedelta(days=1))
+        if sign is not None:
+            ranked.append((abs(ic), asset, sign, ic, last))
+    ranked.sort(key=lambda t: -t[0])
+    out = {}
+    for rank, (_abs, asset, sign, ic, last) in enumerate(ranked[:top], start=1):
+        move = lead_ret.get(last)
+        call = None
+        # Only when the asset's last bar is the leader's latest session too. An
+        # asset one bar behind (a vendor gap, a holiday) would be called for a
+        # bar that has already traded.
+        if last == lead_ret.index[-1] and not pd.isna(move):
+            # the same comparison rule_accuracy scores, zero move included
+            up = (move > 0) if sign > 0 else (move <= 0)
+            call = "BUY" if up else "SELL"
+        out[asset] = {"rank": rank, "ic": round(ic, 3), "sign": sign, "call": call,
+                      "bar": last.strftime("%Y-%m-%d"),
+                      "us_move": None if call is None else float(move)}
+    return out
+
+
 def evaluate(con, registry, assets=None):
     """One row per asset: the rule's accuracy after train_end against ens_acc."""
     lead = load_closes(con, LEADER)

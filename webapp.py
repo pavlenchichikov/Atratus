@@ -58,7 +58,7 @@ def _warm_heavy_pages():
                  lambda: dashboard.news_digest(lang="all", category="all"),
                  dashboard.sector_momentum, dashboard.sector_heatmap,
                  dashboard.correlation_stress, dashboard.correlation_heatmap,
-                 dashboard.tail_index, dashboard.top_movers,
+                 dashboard.tail_index, dashboard.top_movers, dashboard.lead_calls,
                  dashboard.global_regime):
         try:
             warm()
@@ -567,12 +567,14 @@ def _timing_badge(row, show_timing):
 def _grouped_signals(signals):
     show_timing = timing_policy.timing_on() and timing_policy.load_policy() is not None
     sigs = {s["asset"]: s for s in signals}
+    leads = dashboard.lead_calls()
     groups = []
     for group, members in RADAR_GROUPS.items():
         rows = [sigs[a] for a in members if a in sigs]
         for r in rows:
             r["cat"] = radar_category(r["asset"])
             r["timing_badge"] = _timing_badge(r, show_timing)
+            r["lead"] = leads.get(r["asset"])
         if rows:
             groups.append({"name": group, "rows": rows})
     return groups
@@ -745,6 +747,7 @@ def asset_page(request: Request, name: str):
         "markers_json": json.dumps(markers),
         "guru": dashboard.guru_for_asset(name),
         "intraday": dashboard.intraday_for_asset(name),
+        "lead": dashboard.lead_calls().get(name),
         "payoff": _payoff_context(name, asset_levels.get("atr"),
                                   asset_levels.get("close")),
         "analyst": _analyst_for_asset(name),

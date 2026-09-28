@@ -106,6 +106,30 @@
 </div>
 {% endif %}
 
+{# The one-line rule this asset is known to follow: the US session that closed
+   after this market's close, followed (or inverted) into the next bar. Shown
+   only for the 30 assets ranked on their own last 750 bars, the way the
+   walk-forward check that earned 0.587 against 0.506 picked them. #}
+{% if lead %}
+<div class="statgrid">
+  <div class="stat fade">
+    <span class="stat-label">US lead, next session</span>
+    {% if lead.call %}
+    <span class="stat-value t-{{ 'buy' if lead.call == 'BUY' else 'sell' }}">{{ lead.call }}</span>
+    <span class="stat-sub">S&amp;P 500 {{ "%+.2f"|format(lead.us_move * 100) }}% on {{ lead.bar }}{% if lead.sign < 0 %}, inverted for this asset{% endif %}. Most of it lands at the next open.</span>
+    {% else %}
+    <span class="stat-value dim">waiting</span>
+    <span class="stat-sub">no call: this asset's last bar ({{ lead.bar }}) is not dated on the last stored US session. Update data after the US close.</span>
+    {% endif %}
+  </div>
+  <div class="stat fade">
+    <span class="stat-label">Why this asset</span>
+    <span class="stat-value">#{{ lead.rank }} of 30</span>
+    <span class="stat-sub">IC {{ "%+.2f"|format(lead.ic) }} over its last 750 bars. Walk-forward, the top 30 hit 58.7% against 50.6% for the whole book.</span>
+  </div>
+</div>
+{% endif %}
+
 {# Intraday levels and the odds of touching them. The odds come from one number,
    how far the level is in units of the current hourly volatility, so there is no
    model here to go stale quietly. Direction inside the session is deliberately
@@ -321,34 +345,34 @@ fetch("/api/ohlc/{{ asset }}?days=120")
       {% if current.cb_prob is not none %}
       <div class="cons-row">
         <span class="cons-name">CatBoost</span>
-        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.cb_prob >= 0.5 else 'pb-sell' }}" style="width: {{ ((current.cb_prob - 0.5) * 200) | abs | round(0) }}%"></i></span>
+        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.cb_prob >= 0.5 else 'pb-sell' }}" style="--w: {{ ((current.cb_prob - 0.5) * 2) | abs | round(3) }}"></i></span>
         <span class="mono">{{ "%.2f"|format(current.cb_prob) }}</span>
       </div>
       {% endif %}
       {% if current.lstm_prob is not none %}
       <div class="cons-row">
         <span class="cons-name">LSTM</span>
-        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.lstm_prob >= 0.5 else 'pb-sell' }}" style="width: {{ ((current.lstm_prob - 0.5) * 200) | abs | round(0) }}%"></i></span>
+        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.lstm_prob >= 0.5 else 'pb-sell' }}" style="--w: {{ ((current.lstm_prob - 0.5) * 2) | abs | round(3) }}"></i></span>
         <span class="mono">{{ "%.2f"|format(current.lstm_prob) }}</span>
       </div>
       {% endif %}
       {% if current.tf_prob is not none %}
       <div class="cons-row">
         <span class="cons-name">Transformer</span>
-        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.tf_prob >= 0.5 else 'pb-sell' }}" style="width: {{ ((current.tf_prob - 0.5) * 200) | abs | round(0) }}%"></i></span>
+        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.tf_prob >= 0.5 else 'pb-sell' }}" style="--w: {{ ((current.tf_prob - 0.5) * 2) | abs | round(3) }}"></i></span>
         <span class="mono">{{ "%.2f"|format(current.tf_prob) }}</span>
       </div>
       {% endif %}
       {% if current.tcn_prob is not none %}
       <div class="cons-row">
         <span class="cons-name">TCN</span>
-        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.tcn_prob >= 0.5 else 'pb-sell' }}" style="width: {{ ((current.tcn_prob - 0.5) * 200) | abs | round(0) }}%"></i></span>
+        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.tcn_prob >= 0.5 else 'pb-sell' }}" style="--w: {{ ((current.tcn_prob - 0.5) * 2) | abs | round(3) }}"></i></span>
         <span class="mono">{{ "%.2f"|format(current.tcn_prob) }}</span>
       </div>
       {% endif %}
       <div class="cons-row cons-total">
         <span class="cons-name">Ensemble</span>
-        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.probability >= 0.5 else 'pb-sell' }}" style="width: {{ ((current.probability - 0.5) * 200) | abs | round(0) }}%"></i></span>
+        <span class="probbar cons-bar"><i class="probbar-fill {{ 'pb-buy' if current.probability >= 0.5 else 'pb-sell' }}" style="--w: {{ ((current.probability - 0.5) * 2) | abs | round(3) }}"></i></span>
         <span class="mono"><b>{{ "%.2f"|format(current.probability) }}</b></span>
       </div>
     </div>

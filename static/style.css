@@ -450,6 +450,8 @@ th.num, td.num { text-align: right; }
    readable as a comparison and not as a second instruction beside the badge of
    the one that actually decided. */
 .watched-badge { color: var(--dim); border-style: dashed; border-color: var(--line); background: transparent; opacity: 0.85; }
+/* The US-close rule's call, beside the model's: a different source, so its own colour. */
+.lead-chip { color: var(--cyan); border-color: rgba(0, 212, 255, 0.45); background: rgba(0, 212, 255, 0.08); }
 .chip-lg { font-size: 15px; padding: 4px 14px; }
 
 .chip-BUY:hover { box-shadow: 0 0 8px rgba(0, 255, 163, 0.5); }
@@ -490,7 +492,7 @@ th.num, td.num { text-align: right; }
   min-width: 70px;
 }
 
-.probbar-fill { display: block; height: 100%; border-radius: 3px; }
+.probbar-fill { display: block; width: 100%; height: 100%; border-radius: 3px; }
 .pb-buy { background: linear-gradient(90deg, rgba(0, 255, 163, 0.5), var(--green)); }
 .pb-sell { background: linear-gradient(90deg, rgba(255, 59, 92, 0.5), var(--red)); }
 .pb-wait { background: #323d4d; }
@@ -1117,15 +1119,31 @@ body::before {
 
 /* --- Living bars and gauges --- */
 
-/* Width bars grow from the left on load; live updates glide via width transition */
-.limit-bar i, .probbar-fill, .breadth-bar i {
+/* Bars grow from the left on load. */
+.limit-bar i, .breadth-bar i {
   transform-origin: left center;
   animation: barGrow 0.95s cubic-bezier(0.22, 1, 0.36, 1) both;
-  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1), background 0.3s ease;
 }
 @keyframes barGrow {
   from { transform: scaleX(0); }
   to   { transform: scaleX(1); }
+}
+/* The breadth bar is three segments sharing one row: a live update has to
+   RESIZE them (scaling would open gaps between them), so width is animated
+   here on purpose, on three elements every 20 s. */
+.breadth-bar i { transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
+/* A probability bar is one fill, so its length is a scale (--w, 0..1) and a
+   live update glides on the compositor. The load animation names only its
+   start, runs from zero to the element's own scale, and keeps no fill after
+   it ends, or it would pin the bar and swallow every later update. */
+.probbar-fill {
+  transform-origin: left center;
+  transform: scaleX(var(--w, 0));
+  animation: probGrow 0.95s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1), background 0.3s ease;
+}
+@keyframes probGrow {
+  from { transform: scaleX(0); }
 }
 
 /* SVG gauges: smoother sweep + a soft neon glow on the arc (fx.js draws them
@@ -1157,7 +1175,7 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   #boot, .live-dot::after, .fx-scan, .fx-grain, .xhair { display: none !important; }
   body::before { transition: none; }
-  .limit-bar i, .probbar-fill, .breadth-bar i { animation: none; }
+  .limit-bar i, .probbar-fill, .breadth-bar i { animation: none; transition: none; }
 }
 
 /* ===== Ticker tape (fixed exchange-style bottom band) ===== */
