@@ -679,6 +679,7 @@ echo    [H] Hours      warn before a run longer than this many hours
 echo    [N] Mode       default mode for runs: solo or team
 echo    [X] Auto size  how many assets an auto run picks
 echo    [O] Auto loop  run [A] Auto inside the LC loop cycle: on or off
+echo    [K2] Hold      keep a long-horizon call until it resolves: on or off
 echo.
 set "am="
 set /p am="Choose, Enter = back: "
@@ -692,6 +693,7 @@ if /i "%am%"=="H" goto am_hours
 if /i "%am%"=="N" goto am_mode
 if /i "%am%"=="X" goto am_autosize
 if /i "%am%"=="O" goto am_autoloop
+if /i "%am%"=="K2" goto am_hold
 goto analyst
 
 :am_pick
@@ -771,6 +773,16 @@ set "am_v="
 set /p am_v="Assets per auto run, Enter = 5: "
 if "%am_v%"=="" set "am_v=5"
 python analyst.py brains --set "GTRADE_ANALYST_AUTO_MAX=%am_v%"
+pause
+goto analyst_models
+
+:am_hold
+echo    Off (default): every run re-judges long calls and records the revision,
+echo    so [S] Score shows whether revising helps accuracy. On: a call stays.
+set "am_v="
+set /p am_v="Hold long calls, Y = on, N = off: "
+if /i "%am_v%"=="Y" python analyst.py brains --set "GTRADE_ANALYST_HOLD_CALLS=1"
+if /i "%am_v%"=="N" python analyst.py brains --set "GTRADE_ANALYST_HOLD_CALLS=0"
 pause
 goto analyst_models
 
@@ -891,10 +903,11 @@ if "%an_d%"=="1" set "an_flag=%an_flag% --depth brief"
 if "%an_d%"=="2" set "an_flag=%an_flag% --depth full"
 if "%an_d%"=="3" set "an_flag=%an_flag% --depth deep"
 echo.
-echo    A call longer than one day stays in force until it resolves, and a run
-echo    leaves it alone. Revise = replace those calls now, marked as revisions.
+echo    Calls longer than one day are re-judged on every run and recorded as
+echo    revisions, so [S] Score can compare them. Only when [M] [K2] holds them
+echo    does this matter: y = replace held calls anyway.
 set "an_rv="
-set /p an_rv="Revise calls still in force? y/N: "
+set /p an_rv="Replace held calls? y/N: "
 if /i "%an_rv%"=="y" set "an_flag=%an_flag% --revise"
 echo.
 set "an_ok="

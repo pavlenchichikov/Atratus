@@ -330,3 +330,27 @@ def flip_rate(rows):
                 flipped += int(cur["direction"] != prev["direction"])
     return {"rejudged": rejudged, "flipped": flipped,
             "rate": (flipped / rejudged) if rejudged else None}
+
+
+def revision_scores(rows):
+    """Scored revisions against the scored calls they replaced: does re-judging
+    a long call before it resolves make it more accurate or less? Only pairs
+    where both sides have an outcome and a direction count."""
+    by = {(r["asset"], int(r.get("horizon") or 1), r["date"]): r for r in rows}
+    pairs = []
+    for r in rows:
+        if not r.get("revision_of"):
+            continue
+        o = by.get((r["asset"], int(r.get("horizon") or 1), r["revision_of"]))
+        if not o:
+            continue
+        hits = []
+        for x in (r, o):
+            if x.get("direction") not in ("up", "down") or x.get("realized_ret") is None:
+                break
+            hits.append(int((x["direction"] == "up") == (x["realized_ret"] > 0)))
+        if len(hits) == 2:
+            pairs.append(hits)
+    n = len(pairs)
+    return {"n": n, "revised_hit": (sum(p[0] for p in pairs) / n) if n else None,
+            "original_hit": (sum(p[1] for p in pairs) / n) if n else None}

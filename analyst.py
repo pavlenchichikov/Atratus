@@ -55,17 +55,22 @@ def _apply_llm_flag(llm, model, team=False):
             llm, model or os.getenv("GTRADE_AR_LLM_MODEL") or "auto")
 
 
-def _active_gate(asset, horizon, bar_date, revise=False):
+def _active_gate(asset, horizon, bar_date, revise=None):
     """(skip, revision_of) for one asset on one horizon.
 
-    A call longer than one day stays in force until it resolves: a plain run
-    leaves it alone (skip), and only --revise writes a new one, recorded as a
-    revision of the call it replaces rather than silently taking its place.
+    Accuracy first (owner, 2026-09-29): by default a run re-judges a call that
+    is still in force and records it as a revision of that call, so revisions
+    and the calls they replaced are scored against each other
+    (score.revision_scores). GTRADE_ANALYST_HOLD_CALLS=1 holds such calls
+    instead, and then only --revise replaces one.
     """
     act = store.active_call(asset, horizon, bar_date)
     if act is None:
         return False, None
-    return (False, act["date"]) if revise else (True, None)
+    hold = (os.getenv("GTRADE_ANALYST_HOLD_CALLS") or "0").strip() == "1"
+    if not hold or revise:
+        return False, act["date"]
+    return True, None
 
 
 def _provider_call():
@@ -352,7 +357,7 @@ def cmd_run(args):
                 skipped += 1
                 continue
             skip, revision_of = _active_gate(asset, horizon, d["date"],
-                                             getattr(args, "revise", False))
+                                             getattr(args, "revise", None))
             if skip:
                 act = store.active_call(asset, horizon, d["date"])
                 print("[analyst] %s %dd: the call of %s (%s) is still in force; "
@@ -726,6 +731,10 @@ def cmd_score(args):
         for name, g in sorted(_score.by_group(rows, key).items()):
             hit = "-" if g["hit"] is None else "%.3f" % g["hit"]
             print("[analyst] %-5s %-34s n=%-4d hit %s" % (key, name, g["n"], hit))
+    rv = _score.revision_scores(rows)
+    if rv["n"]:
+        print("[analyst] revisions vs the calls they replaced: n=%d, revised hit %.3f, "
+              "original hit %.3f" % (rv["n"], rv["revised_hit"], rv["original_hit"]))
     fr = _score.flip_rate(store.all_rows())
     if fr["rejudged"]:
         print("[analyst] long-horizon calls re-judged before they resolved: %d, "
@@ -899,8 +908,8 @@ def main(argv=None):
                      help="provider for this run only")
     run.add_argument("--model", help="model name for this run only")
     run.add_argument("--revise", action="store_true",
-                     help="replace long-horizon calls that are still in force; "
-                          "without it they are left until they resolve")
+                     help="with GTRADE_ANALYST_HOLD_CALLS=1, replace calls still in "
+                          "force anyway (by default every run re-judges them)")
     run.add_argument("--mode", choices=("solo", "team"),
                      help="solo = one analyst; team = four specialists and a lead "
                           "(about five times the calls). Default GTRADE_ANALYST_MODE or solo")

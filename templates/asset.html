@@ -233,9 +233,9 @@
   {% if analyst.revises %}<p class="dim"><b>Revised.</b> This replaces the call of {{ analyst.revises.date }}
     ({{ {'up':'LONG','down':'SHORT','flat':'FLAT'}.get(analyst.revises.direction, analyst.revises.direction) }})
     before it resolved.</p>{% endif %}
-  {% if analyst.horizon and analyst.horizon > 1 %}<span class="help">A call on this horizon stays in force until it
-    resolves; later runs leave it alone unless asked to revise it, so it is a view you
-    can hold, not one that changes every day.</span>{% endif %}
+  {% if analyst.horizon and analyst.horizon > 1 %}<span class="help">A call on this horizon is about the whole period to the
+    resolve date. A later run may revise it; the revision is marked and both are
+    scored, so the analyst page shows whether revising made the calls more accurate.</span>{% endif %}
   <div class="statgrid">
     <div class="stat">
       <span class="stat-label">Call</span>
