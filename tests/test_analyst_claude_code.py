@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 import pytest
@@ -89,3 +90,24 @@ def test_the_run_parser_accepts_claude_code():
 
     ns = analyst.build_parser().parse_args(["run", "--llm", "claude-code", "--model", "opus"])
     assert ns.llm == "claude-code"
+
+
+def test_a_rewound_run_gets_no_web_tools(monkeypatch):
+    """A judgment as of a past date must not read today's web: that is look-ahead."""
+    monkeypatch.setenv("GTRADE_ANALYST_REWIND", "1")
+    run = _Runner([{"result": "OK", "is_error": False}])
+    cc.run("hi", "opus", 3, 60, runner=run)
+    cmd = run.calls[0][0]
+    assert "--allowedTools" not in cmd
+    denied = cmd[cmd.index("--disallowedTools") + 1]
+    assert "WebSearch" in denied and "WebFetch" in denied
+
+
+def test_cmd_run_marks_a_rewound_run_and_clears_the_mark(monkeypatch):
+    import analyst
+
+    monkeypatch.setenv("GTRADE_ANALYST_REWIND", "x")      # recorded, so undone after
+    analyst._mark_rewind("2026-07-01")
+    assert os.environ["GTRADE_ANALYST_REWIND"] == "1"
+    analyst._mark_rewind(None)
+    assert "GTRADE_ANALYST_REWIND" not in os.environ

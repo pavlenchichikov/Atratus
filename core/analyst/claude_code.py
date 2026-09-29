@@ -68,13 +68,19 @@ def spend(today=None):
     return True
 
 
-def command(model_name, max_turns):
-    return ["claude", "-p", "--output-format", "json", "--model", model_name,
-            "--max-turns", str(max_turns),
-            "--allowedTools", "WebSearch,WebFetch",
-            "--disallowedTools", "Bash,Edit,Write,NotebookEdit,Task",
-            "--strict-mcp-config", "--no-session-persistence",
-            "--setting-sources", "project"]
+def command(model_name, max_turns, web=True):
+    """The CLI line. web=False (a rewound run, GTRADE_ANALYST_REWIND=1) takes
+    the web tools away: a judgment as of a past date that reads today's web is
+    look-ahead, and the project's own tools already refuse a past date."""
+    denied = "Bash,Edit,Write,NotebookEdit,Task"
+    tools = ["--allowedTools", "WebSearch,WebFetch"] if web else []
+    if not web:
+        denied += ",WebSearch,WebFetch"
+    return (["claude", "-p", "--output-format", "json", "--model", model_name,
+             "--max-turns", str(max_turns)] + tools
+            + ["--disallowedTools", denied,
+               "--strict-mcp-config", "--no-session-persistence",
+               "--setting-sources", "project"])
 
 
 def run(prompt, model_name, max_turns, seconds, runner=subprocess.run):
@@ -82,7 +88,9 @@ def run(prompt, model_name, max_turns, seconds, runner=subprocess.run):
     env = {k: v for k, v in os.environ.items() if k not in _API_VARS}
     with tempfile.TemporaryDirectory(prefix="analyst_cc_") as work:
         try:
-            r = runner(command(model_name, max_turns), input=prompt, capture_output=True,
+            web = (os.getenv("GTRADE_ANALYST_REWIND") or "").strip() != "1"
+            r = runner(command(model_name, max_turns, web=web), input=prompt,
+                       capture_output=True,
                        text=True, encoding="utf-8", errors="replace", timeout=seconds,
                        cwd=work, env=env)
         except FileNotFoundError as exc:

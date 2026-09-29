@@ -78,6 +78,15 @@ def _active_gate(asset, horizon, bar_date, revise=None):
     return True, None
 
 
+def _mark_rewind(as_of):
+    """GTRADE_ANALYST_REWIND=1 while a run judges a past date, so a brain with
+    its own web access (claude-code) runs without it; cleared otherwise."""
+    if as_of:
+        os.environ["GTRADE_ANALYST_REWIND"] = "1"
+    else:
+        os.environ.pop("GTRADE_ANALYST_REWIND", None)
+
+
 def _provider_call():
     """An f(prompt) -> str bound to the configured provider.
 
@@ -303,6 +312,7 @@ def cmd_run(args):
         print("[analyst] --horizons takes whole numbers of trading days.")
         return 1
     as_of = getattr(args, "as_of", None)
+    _mark_rewind(as_of)
     if as_of:
         print("[analyst] as-of %s: the dossier is rewound, so fundamentals "
               "and the market classifiers are "

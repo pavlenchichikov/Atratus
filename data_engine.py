@@ -467,6 +467,9 @@ def fetch_moex_smart(symbol, last_date):
 # single-venue volume 8-25x smaller, which would shift every volume feature.
 BINANCE_ASSETS = {"PEPE": "PEPEUSDT", "SHIB": "SHIBUSDT"}
 BINANCE_URL = "https://api.binance.com/api/v3/klines"
+# Binance's public market-data domain: the same klines, and it answers from
+# regions where api.binance.com returns 451 "restricted location".
+BINANCE_MIRROR_URL = "https://data-api.binance.vision/api/v3/klines"
 
 
 def _binance_frame(klines, now_ms):
@@ -485,6 +488,21 @@ def _binance_frame(klines, now_ms):
     return df.set_index("Date")
 
 
+def _binance_klines(url, pair, interval, start):
+    """Every kline from `start` on, 1000 per page; raises on a non-list reply."""
+    klines = []
+    while True:
+        r = net.http_get(f"{url}?symbol={pair}&interval={interval}"
+                         f"&startTime={start}&limit=1000", route="auto")
+        batch = r.json()
+        if not isinstance(batch, list):
+            raise TypeError(str(batch)[:120])
+        klines.extend(batch)
+        if len(batch) < 1000:
+            return klines
+        start = int(batch[-1][0]) + 1
+
+
 def fetch_binance(symbol, last_date, interval="1d"):
     """Daily ("1d") or weekly ("1w") bars for a BINANCE_ASSETS key."""
     pair = BINANCE_ASSETS[symbol]
@@ -492,20 +510,15 @@ def fetch_binance(symbol, last_date, interval="1d"):
     now_ms = int(time.time() * 1000)
     start = (int(pd.Timestamp(last_date).timestamp() * 1000) + 1 if last_date is not None
              else now_ms - HISTORY_DAYS * 86400 * 1000)
-    klines = []
-    try:
-        while True:
-            r = net.http_get(f"{BINANCE_URL}?symbol={pair}&interval={interval}"
-                             f"&startTime={start}&limit=1000", route="auto")
-            batch = r.json()
-            if not isinstance(batch, list):
-                raise TypeError(str(batch)[:120])
-            klines.extend(batch)
-            if len(batch) < 1000:
-                break
-            start = int(batch[-1][0]) + 1
-    except Exception as exc:
-        logger.warning("Binance fetch error for %s: %s", pair, exc)
+    klines, errors = None, []
+    for url in (BINANCE_URL, BINANCE_MIRROR_URL):
+        try:
+            klines = _binance_klines(url, pair, interval, start)
+            break
+        except Exception as exc:
+            errors.append("%s: %s" % (url.split("/")[2], exc))
+    if klines is None:
+        logger.warning("Binance fetch error for %s: %s", pair, " | ".join(errors))
         print("[ERR] (Binance)")
         return None
     df = _binance_frame(klines, now_ms)
