@@ -55,6 +55,19 @@ def _apply_llm_flag(llm, model, team=False):
             llm, model or os.getenv("GTRADE_AR_LLM_MODEL") or "auto")
 
 
+def _active_gate(asset, horizon, bar_date, revise=False):
+    """(skip, revision_of) for one asset on one horizon.
+
+    A call longer than one day stays in force until it resolves: a plain run
+    leaves it alone (skip), and only --revise writes a new one, recorded as a
+    revision of the call it replaces rather than silently taking its place.
+    """
+    act = store.active_call(asset, horizon, bar_date)
+    if act is None:
+        return False, None
+    return (False, act["date"]) if revise else (True, None)
+
+
 def _provider_call():
     """An f(prompt) -> str bound to the configured provider.
 
@@ -120,7 +133,7 @@ def _eligible(today=None):
 
 def _judge_one(d, asset, h, horizon, call, depth, cells, table,
                written, refused, rejects=None, cited=None, as_of=None,
-               asked=None, mode="solo", mode_label=None):
+               asked=None, mode="solo", mode_label=None, revision_of=None):
     """One judgment, for one asset over one horizon. Returns the two counters.
 
     Split out of cmd_run when the horizon became a loop: the same dossier over
@@ -173,7 +186,7 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         "thesis": j["thesis"],
         "evidence_json": json.dumps(j["evidence"]),
         "dossier_hash": h, "llm_model": brain_label,
-        "mode": mode_label or mode, "brain": brain_label, "plan": notes.get("plan"),
+        "mode": mode_label or mode, "brain": brain_label, "revision_of": revision_of, "plan": notes.get("plan"),
         "pre_critic_json": json.dumps(pre, ensure_ascii=False) if pre else None,
         # The sources the model asked for, beside the judgment they produced.
         "tool_calls_json": json.dumps(tool_calls, ensure_ascii=False) or None,
@@ -338,12 +351,22 @@ def cmd_run(args):
                 # auto: a bar some run already judged is left as it is.
                 skipped += 1
                 continue
+            skip, revision_of = _active_gate(asset, horizon, d["date"],
+                                             getattr(args, "revise", False))
+            if skip:
+                act = store.active_call(asset, horizon, d["date"])
+                print("[analyst] %s %dd: the call of %s (%s) is still in force; "
+                      "--revise to replace it" % (asset, horizon, act["date"],
+                                                   act["direction"]))
+                skipped += 1
+                continue
             try:
                 written, refused = _judge_one(d, asset, h, horizon, call, depth,
                                               cells, table, written, refused,
                                               rejects, cited, as_of, asked,
                                               mode=mode,
-                                              mode_label=getattr(args, "mode_label", None))
+                                              mode_label=getattr(args, "mode_label", None),
+                                              revision_of=revision_of)
             except TerminalCallError as exc:
                 # Stop the sweep: every remaining asset would spend the same
                 # hour to fail the same way.
@@ -703,6 +726,10 @@ def cmd_score(args):
         for name, g in sorted(_score.by_group(rows, key).items()):
             hit = "-" if g["hit"] is None else "%.3f" % g["hit"]
             print("[analyst] %-5s %-34s n=%-4d hit %s" % (key, name, g["n"], hit))
+    fr = _score.flip_rate(store.all_rows())
+    if fr["rejudged"]:
+        print("[analyst] long-horizon calls re-judged before they resolved: %d, "
+              "reversed %d (%.0f%%)" % (fr["rejudged"], fr["flipped"], 100 * fr["rate"]))
     for role, g in sorted(_score.by_role(store.team_scored_rows()).items()):
         print("[analyst] role  %-34s n=%-4d hit %s" % (
             role, g["n"], "-" if g["hit"] is None else "%.3f" % g["hit"]))
@@ -871,6 +898,9 @@ def main(argv=None):
     run.add_argument("--llm", choices=("anthropic", "openai", "ollama", "ollama-cloud"),
                      help="provider for this run only")
     run.add_argument("--model", help="model name for this run only")
+    run.add_argument("--revise", action="store_true",
+                     help="replace long-horizon calls that are still in force; "
+                          "without it they are left until they resolve")
     run.add_argument("--mode", choices=("solo", "team"),
                      help="solo = one analyst; team = four specialists and a lead "
                           "(about five times the calls). Default GTRADE_ANALYST_MODE or solo")

@@ -963,14 +963,16 @@ def test_gpu_layers_are_asked_for_and_dropped_when_the_card_is_full(monkeypatch)
 
         def post(self, url, json=None):
             bodies.append(dict(json.get("options") or {}))
-            return _Resp(ok=len(bodies) > 1)
+            return _Resp(ok=len(bodies) > 2)
 
     monkeypatch.setattr(httpx, "Client", _Client)
     monkeypatch.setenv("GTRADE_OLLAMA_NUM_GPU", "4")
     got, _ = lp._ollama_native_chat("http://x", "m", "hi", 0.0, 100, False)
     assert got == "ok"
     assert bodies[0]["num_gpu"] == 4
-    assert "num_gpu" not in bodies[1], "the retry runs without the GPU layers"
+    # 2026-09-29: a 500 is often a load timeout, so the first retry keeps the GPU
+    assert bodies[1]["num_gpu"] == 4, "the first retry keeps the GPU layers"
+    assert "num_gpu" not in bodies[2], "only the second retry goes to the CPU"
 
 
 def test_cloud_base_is_remote_and_sends_the_key(monkeypatch):
@@ -1012,3 +1014,25 @@ def test_a_missing_cloud_key_stops_the_call_as_provider_unavailable(monkeypatch)
     monkeypatch.setenv("GTRADE_AR_LLM_MODEL", "gpt-oss:120b")
     with pytest.raises(lp.ProviderUnavailable, match="OLLAMA_API_KEY"):
         lp._call_ollama("hi")
+
+
+def test_ollamas_own_leftover_model_is_unloaded_before_the_card_is_judged_busy(monkeypatch):
+    """A run stopped mid-call leaves llama-server holding the card; that is Ollama,
+    not training, and must not push the next call onto the CPU."""
+    from core import llm_proposer as lp
+    frees = iter([300, 3900])
+    unloaded = []
+    monkeypatch.setattr(lp, "_vram_free_mb", lambda: next(frees))
+    monkeypatch.setattr(lp, "_ollama_loaded", lambda base: ["gemma4:26b"])
+    monkeypatch.setattr(lp, "_ollama_unload", lambda base, model, post=None: unloaded.append(model))
+    monkeypatch.setattr(lp.time, "sleep", lambda s: None)
+    assert lp._gpu_layers(4, "http://127.0.0.1:11434/v1") == 4
+    assert unloaded == ["gemma4:26b"]
+
+
+def test_a_card_still_busy_after_unloading_stays_on_the_cpu(monkeypatch):
+    from core import llm_proposer as lp
+    monkeypatch.setattr(lp, "_vram_free_mb", lambda: 1200)          # training holds it
+    monkeypatch.setattr(lp, "_ollama_loaded", lambda base: [])
+    monkeypatch.setattr(lp.time, "sleep", lambda s: None)
+    assert lp._gpu_layers(4, "http://127.0.0.1:11434/v1") == 0

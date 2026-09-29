@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS analyst_log (
     realized_ret REAL, realized_atr_units REAL,
     inside_interval INTEGER, abs_err_atr REAL,
     tool_calls_json TEXT,
-    mode TEXT, brain TEXT, plan TEXT, pre_critic_json TEXT,
+    mode TEXT, brain TEXT, plan TEXT, pre_critic_json TEXT, revision_of TEXT,
     PRIMARY KEY (date, asset, horizon)
 )
 """
@@ -38,13 +38,13 @@ CREATE TABLE IF NOT EXISTS analyst_log (
 # adds the column to a table written before tools existed, because CREATE TABLE
 # IF NOT EXISTS does not alter one that is already there.
 _ADDED_COLUMNS = (("tool_calls_json", "TEXT"), ("mode", "TEXT"), ("brain", "TEXT"),
-                  ("plan", "TEXT"), ("pre_critic_json", "TEXT"))
+                  ("plan", "TEXT"), ("pre_critic_json", "TEXT"), ("revision_of", "TEXT"))
 
 _FIELDS = ["date", "asset", "horizon", "direction", "conviction", "vol_regime",
            "key_risk", "thesis", "evidence_json", "dossier_hash", "llm_model",
            "forecast_pct", "lo_pct", "hi_pct", "atr_at_signal",
            "close_at_signal", "tool_calls_json",
-           "mode", "brain", "plan", "pre_critic_json"]
+           "mode", "brain", "plan", "pre_critic_json", "revision_of"]
 
 # forecast_pct/lo_pct/hi_pct are in PAYOFF space (what the POSITION earned;
 # see core/analyst/payoff.py and train_payoff.py's SIDE map). A `down`
@@ -331,3 +331,50 @@ def has_row(date, asset, horizon, db_path=None):
         con.execute(DDL)
         return con.execute("SELECT 1 FROM analyst_log WHERE date=? AND asset=? AND horizon=?",
                            (date, asset, int(horizon))).fetchone() is not None
+
+
+def active_call(asset, horizon, today, db_path=None):
+    """The call on this horizon still waiting for its outcome on `today`, or None.
+
+    A 20-day call is a claim about 20 days, so a new run must not quietly
+    replace it every few days: the newest call whose horizon-th bar after its
+    date is not yet before `today` is the one in force. Horizon 1 is a new
+    question every day and never has an active call.
+    """
+    if int(horizon or 1) <= 1:
+        return None
+    from core.analyst.lessons import resolved_date
+
+    with _connect(db_path) as con:
+        con.execute(DDL)
+        _migrate(con)
+        con.row_factory = sqlite3.Row
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM analyst_log WHERE asset=? AND horizon=? AND date<=? "
+            "ORDER BY date DESC", (asset, int(horizon), str(today)[:10]))]
+    for r in rows:
+        rd = resolved_date(asset, r["date"], horizon)
+        if rd is None or rd >= str(today)[:10]:
+            return r
+        break                     # the newest one has resolved, so nothing is in force
+    return None
+
+
+def all_rows(db_path=None):
+    """Every judgment, scored or not."""
+    with _connect(db_path) as con:
+        con.execute(DDL)
+        _migrate(con)
+        con.row_factory = sqlite3.Row
+        return [dict(r) for r in con.execute("SELECT * FROM analyst_log ORDER BY date")]
+
+
+def judgment(asset, date, horizon, db_path=None):
+    """One stored judgment, or None."""
+    with _connect(db_path) as con:
+        con.execute(DDL)
+        _migrate(con)
+        con.row_factory = sqlite3.Row
+        r = con.execute("SELECT * FROM analyst_log WHERE asset=? AND date=? AND horizon=?",
+                        (asset, date, int(horizon))).fetchone()
+        return dict(r) if r else None

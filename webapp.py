@@ -168,6 +168,17 @@ def _decorate_judgment(row):
     breaking the page.
     """
     row["horizon_label"] = _horizon_label(row.get("horizon"))
+    # A revision replaces a long-horizon call before it resolved: name the one
+    # it replaced, so a changed view is visible as a change.
+    row["revises"] = None
+    if row.get("revision_of"):
+        try:
+            from core.analyst import store as analyst_store
+            old = analyst_store.judgment(row["asset"], row["revision_of"], row.get("horizon") or 1)
+            if old:
+                row["revises"] = {"date": old["date"], "direction": old["direction"]}
+        except Exception:
+            pass
     try:
         import pandas as pd
 

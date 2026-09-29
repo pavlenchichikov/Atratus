@@ -891,6 +891,12 @@ if "%an_d%"=="1" set "an_flag=%an_flag% --depth brief"
 if "%an_d%"=="2" set "an_flag=%an_flag% --depth full"
 if "%an_d%"=="3" set "an_flag=%an_flag% --depth deep"
 echo.
+echo    A call longer than one day stays in force until it resolves, and a run
+echo    leaves it alone. Revise = replace those calls now, marked as revisions.
+set "an_rv="
+set /p an_rv="Revise calls still in force? y/N: "
+if /i "%an_rv%"=="y" set "an_flag=%an_flag% --revise"
+echo.
 set "an_ok="
 set /p an_ok="Type YES to run: "
 if /i not "%an_ok%"=="YES" goto analyst

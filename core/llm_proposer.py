@@ -10,6 +10,7 @@ imports cleanly without them."""
 import json
 import os
 import re
+import time
 
 # "no argument given", so a caller that says nothing keeps the old behaviour and
 # None can still mean "no cap at all".
@@ -549,7 +550,32 @@ def _gpu_layers(n, base):
         return max(0, n)
     need = int(os.getenv("GTRADE_OLLAMA_MIN_FREE_MB") or 3500)
     free = _vram_free_mb()
+    if free is not None and free < need:
+        # Ollama's own model left on the card (a run stopped mid-call) is not a
+        # training run: unload it and look again. Its /api/ps size_vram cannot
+        # be added back instead - on 2026-09-29 it read 568 MB while the card
+        # held 3631 MB for it (the context cache is not counted).
+        loaded = _ollama_loaded(base)
+        for model in loaded:
+            _ollama_unload(base, model)
+        for _ in range(10 if loaded else 0):
+            time.sleep(1)
+            free = _vram_free_mb()
+            if free is not None and free >= need:
+                break
     return n if free is not None and free >= need else 0
+
+
+def _ollama_loaded(base):
+    """Names of the models this Ollama has in memory; [] when it cannot say."""
+    try:
+        import httpx
+
+        root = base.removesuffix("/v1").rstrip("/")
+        r = httpx.Client(trust_env=False, timeout=5).get(root + "/api/ps")
+        return [m.get("name") for m in (r.json().get("models") or []) if m.get("name")]
+    except Exception:
+        return []
 
 
 def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
@@ -611,12 +637,17 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     try:
         resp = send(payload)
     except httpx.HTTPStatusError:
-        # num_gpu=4 leaves ~0.5 GB of a 4 GB card, so a training run holding the
-        # GPU makes the load fail outright. Slower on the CPU beats no answer.
+        # A 500 is often a load that ran out of time (2026-09-29 13:52: the 26b
+        # model did not load within Ollama's own limit) rather than a full card,
+        # so the first retry keeps the GPU layers. Only a second failure goes to
+        # the CPU: slower beats no answer.
         if "num_gpu" not in options:
             raise
-        options.pop("num_gpu")
-        resp = send(payload)
+        try:
+            resp = send(payload)
+        except httpx.HTTPStatusError:
+            options.pop("num_gpu")
+            resp = send(payload)
     if isinstance(resp, tuple):
         return resp
     msg = (resp.json().get("message") or {})

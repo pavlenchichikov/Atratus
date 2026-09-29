@@ -305,3 +305,28 @@ def by_role(rows):
             slot["hits"] += int((lean == "up") == (realized > 0))
     return {k: {"n": v["n"], "hit": (v["hits"] / v["n"]) if v["n"] else None}
             for k, v in out.items()}
+
+
+def flip_rate(rows):
+    """How often a long-horizon call was re-judged before it resolved, and how
+    often the re-judgment reversed it. A 20-day view that flips inside its own
+    20 days was never a 20-day view. The window is counted in business days."""
+    from itertools import pairwise
+
+    import pandas as pd
+
+    by = {}
+    for r in rows:
+        h = int(r.get("horizon") or 1)
+        if h > 1 and r.get("direction") in ("up", "down", "flat"):
+            by.setdefault((r["asset"], h), []).append(r)
+    rejudged = flipped = 0
+    for (_asset, h), rs in by.items():
+        rs.sort(key=lambda r: r["date"])
+        for prev, cur in pairwise(rs):
+            ends = (pd.Timestamp(prev["date"]) + pd.offsets.BDay(h)).date().isoformat()
+            if cur["date"] < ends:
+                rejudged += 1
+                flipped += int(cur["direction"] != prev["direction"])
+    return {"rejudged": rejudged, "flipped": flipped,
+            "rate": (flipped / rejudged) if rejudged else None}

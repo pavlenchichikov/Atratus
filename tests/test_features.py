@@ -437,3 +437,26 @@ def test_tail_rank_is_high_only_while_volatility_is():
     closes = 100 * np.exp(np.cumsum(spike))
     assert tail_rank(closes) < 0.99
     assert tail_rank(closes[:300]) is None, "too little history for a year of scale"
+
+
+def test_direction_h_is_the_sign_of_the_h_bar_move_and_reaches_h_bars():
+    import os
+
+    from core.features import label_footprint, make_target
+    close = pd.Series([10.0, 11, 9, 12, 13, 8, 9])
+    t, span = make_target(close, "direction_h", horizon=2, with_span=True)
+    # 10->9 down, 11->12 up, 9->13 up, 12->8 down, 13->9 down, last two unknown
+    assert list(t.iloc[:5]) == [0, 1, 1, 0, 0] and t.iloc[5:].isna().all()
+    assert set(span.dropna()) == {2.0}
+    old = {k: os.environ.get(k) for k in ("GTRADE_LABEL_MODE", "GTRADE_LABEL_HORIZON")}
+    try:
+        os.environ["GTRADE_LABEL_MODE"], os.environ["GTRADE_LABEL_HORIZON"] = "direction_h", "5"
+        assert label_footprint() == 5          # the embargo must cover the whole reach
+        del os.environ["GTRADE_LABEL_HORIZON"]
+        assert label_footprint() == 5          # same default as the label itself
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v

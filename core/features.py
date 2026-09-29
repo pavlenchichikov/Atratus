@@ -33,9 +33,12 @@ def label_footprint():
     horizon; direction and rel_median look one bar ahead (rel_median's window sizes
     a TRAILING baseline, not a forward hold). Used to size the walk-forward embargo
     so a train row's label cannot resolve inside the validation window."""
-    if (os.getenv("GTRADE_LABEL_MODE", "direction") or "").strip() != "triple_barrier":
+    mode = (os.getenv("GTRADE_LABEL_MODE", "direction") or "").strip()
+    if mode not in ("triple_barrier", "direction_h"):
         return 1
-    return max(1, _env_int("GTRADE_LABEL_HORIZON", 1))
+    # The same default the label itself uses, or the embargo is shorter than the
+    # label's reach and a train row resolves inside validation.
+    return max(1, _env_int("GTRADE_LABEL_HORIZON", 5 if mode == "direction_h" else 1))
 
 
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -76,6 +79,15 @@ def make_target(close: pd.Series, mode: str = "direction", window: int = 30,
     if mode == "triple_barrier":
         target, span = _triple_barrier(close, high, low, horizon, barrier_k,
                                        vol_window)
+        return (target, span) if with_span else target
+    if mode == "direction_h":
+        # Up or down over `horizon` bars: the week-ahead question instead of the
+        # next day's. The last `horizon` rows have no answer yet and are NaN.
+        h = max(1, int(horizon))
+        future = close.shift(-h)
+        target = (future > close).astype(float)
+        target[future.isna()] = np.nan
+        span = pd.Series(np.where(target.isna(), np.nan, float(h)), index=target.index)
         return (target, span) if with_span else target
     raise ValueError(f"unknown GTRADE_LABEL_MODE: {mode!r}")
 
@@ -301,7 +313,11 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
             "invalid GTRADE_LABEL_WINDOW=%r, falling back to 30", _raw_window,
         )
         _label_window = 30
-    if _label_mode == "triple_barrier":
+    if _label_mode == "direction_h":
+        df['target'], df['label_span'] = make_target(
+            df['close'], _label_mode, horizon=_env_int("GTRADE_LABEL_HORIZON", 5),
+            with_span=True)
+    elif _label_mode == "triple_barrier":
         # Default 1 (a degenerate 1-bar barrier), NOT a private default of the mode:
         # GTRADE_LABEL_HORIZON is the single source of truth shared with the LdP
         # uniqueness weights (train_hybrid reads it with default 1). A private default
