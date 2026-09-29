@@ -186,6 +186,7 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
     pre = None
     if depth == "deep":
         revised = agent.critique(d, j, brains.call_for("critic"), horizon=horizon,
+                                 called={t["tool"] for t in tool_calls},
                                  on_reject=on_reject)
         if revised is not None:
             pre, j = j, revised

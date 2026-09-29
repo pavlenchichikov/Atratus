@@ -124,6 +124,12 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
           '"key_risk": "the one thing most likely to make this wrong", '
           '"thesis": "six to ten sentences", '
           '"evidence": ["names of the fields above you actually used"]}\n'
+        + "An evidence entry may also be the name of a tool you called, or an "
+          'outside item you read: {"source": "<url or tool name>", "kind": '
+          '"data|filing|statistic|price|news", "value": "<the number or fact>", '
+          '"asof": "YYYY-MM-DD"}. Ratings, price targets, forecasts and '
+          "consensus are refused by code, as are more than two stories from one "
+          "publisher.\n"
         + (BRIEF_TAIL if depth == "brief" else
           "Do NOT return a price, a target, or a percentage. Conviction 1 "
           "means barely a lean; 5 means you would stake the account on it.\n"
@@ -308,8 +314,13 @@ def parse_judgment(text, allowed=None, empty=(), why=None, session=False, called
     if not evidence and not raw:
         return _no(why, "no evidence survived the raw-data check: %s"
                    % "; ".join(d["why"] for d in dropped[:3]))
+    # A tool that was actually called in this judgment is evidence by name too
+    # ("compare", "macro_series:brent", "news_search (Sberbank)"): a model that
+    # read a result and says so is grounded, not inventing a field.
+    tool_refs = [e for e in evidence
+                 if re.split(r"[:\s(]", e.strip(), maxsplit=1)[0] in set(called or ())]
     if allowed is not None and evidence:
-        invented = sorted(set(evidence) - set(allowed) - set(empty))
+        invented = sorted(set(evidence) - set(allowed) - set(empty) - set(tool_refs))
         if invented:                         # a field name that does not exist
             return _no(why, "evidence cites fields the dossier does not "
                        "have: %s" % ", ".join(invented[:4]))
@@ -485,7 +496,7 @@ CRITIC_PROMPT = (
     "Facts:\n%s\n\nYour verdict:\n%s\n")
 
 
-def critique(dossier, judgment, call, horizon=1, on_reject=None):
+def critique(dossier, judgment, call, horizon=1, on_reject=None, called=()):
     """The verdict after arguing against itself, or None when the critic gives
     nothing parseable (the caller then keeps the original).
 
@@ -508,7 +519,7 @@ def critique(dossier, judgment, call, horizon=1, on_reject=None):
             on_reject("critic call failed: %s" % exc)
         return None
     why = []
-    out = parse_judgment(answer, allowed=allowed, empty=empty, why=why)
+    out = parse_judgment(answer, allowed=allowed, empty=empty, why=why, called=called)
     if out is None and on_reject is not None:
         on_reject("critic: " + (why[0] if why else "unparseable"))
     return out

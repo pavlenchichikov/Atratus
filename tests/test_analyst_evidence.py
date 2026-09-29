@@ -63,3 +63,33 @@ def test_label_turns_raw_items_into_hashable_text():
     assert ev.label({"source": "https://www.fred.stlouisfed.org/x", "kind": "data"}) \
         == "data:fred.stlouisfed.org"
     assert ev.label({"source": "raw_source", "kind": "statistic"}) == "statistic:raw_source"
+
+
+def _reply(evidence):
+    return json.dumps({"direction": "up", "conviction": 3, "vol_regime": "normal",
+                       "thesis": "t", "key_risk": "k", "evidence": evidence})
+
+
+def test_a_tool_that_was_called_is_valid_evidence_by_name():
+    j = agent.parse_judgment(_reply(["close", "compare", "macro_series:brent",
+                                     "news_search (Sberbank)"]),
+                             allowed={"close"},
+                             called={"compare", "macro_series", "news_search"})
+    assert j is not None
+    assert j["evidence"] == ["close", "compare", "macro_series:brent", "news_search (Sberbank)"]
+
+
+def test_a_tool_that_was_not_called_is_still_an_invented_field():
+    why = []
+    assert agent.parse_judgment(_reply(["close", "price_history"]), allowed={"close"},
+                                called={"compare"}, why=why) is None
+    assert "price_history" in why[0]
+
+
+def test_the_critic_accepts_the_tools_the_judgment_used():
+    dossier = {"asset": "SBER", "close": 1.0}
+    j = {"direction": "up", "conviction": 3, "vol_regime": "normal", "thesis": "t",
+         "key_risk": "k", "evidence": ["close"]}
+    out = agent.critique(dossier, j, lambda p: _reply(["compare", "close"]),
+                         called={"compare"})
+    assert out is not None and "compare" in out["evidence"]
