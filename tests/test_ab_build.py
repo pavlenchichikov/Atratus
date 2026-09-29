@@ -473,3 +473,16 @@ def test_a_candidate_below_the_no_model_baseline_is_vetoed():
     assert ab_build.verdict(st, 0.5, 0.05) == "PASSED"      # positive control
     # rows from before the column: unmeasured, not a veto
     assert ab_build.baseline_means([{"Ens_Acc": 0.5}]) == (None, None)
+
+
+def test_direction_bases_are_decided_on_the_precision_weighted_test(monkeypatch):
+    import auto_research as ar
+    ref = [{"Asset": "A", "Dir_Edge_Clean": 0.0, "Dir_N_Clean": 800, "Score": 1.0}]
+    var = [{"Asset": "A", "Dir_Edge_Clean": 0.02, "Dir_N_Clean": 800, "Score": 1.0}]
+    seen = []
+    monkeypatch.setattr(ar, "precision_weighted_stats",
+                        lambda r, v, clean=True: seen.append(clean) or (0.01, 0.02, [0.02], "w"))
+    p, value, deltas = ab_build._decide_stats("dir_edge_clean", ref, var, ref, var, "mean")
+    assert (p, value, deltas) == (0.01, 0.02, [0.02]) and seen == [True]
+    p, value, deltas = ab_build._decide_stats("raw", ref, var, ref, var, "mean")
+    assert seen == [True]                      # the Score bases keep their own test

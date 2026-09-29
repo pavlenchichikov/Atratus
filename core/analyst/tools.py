@@ -41,6 +41,7 @@ MAX_ROUNDS the round trips, and the operator can set either to zero.
 import datetime
 import json
 import os
+import re
 
 MAX_CALLS = 6
 MAX_ROUNDS = 2
@@ -78,7 +79,9 @@ class OpinionSource(Exception):
 
 
 class Tool:
-    def __init__(self, name, args, rewinds, describe, run, applies=None):
+    def __init__(self, name, args, rewinds, describe, run, applies=None, ready=None):
+        # () -> None when usable, else the reason it is not (a missing key).
+        self.ready = ready
         self.name = name
         self.args = args           # {arg: "what it is"}
         self.rewinds = rewinds     # honours `today`, so a backfill may use it
@@ -124,7 +127,8 @@ def available(today=None, asset=None, only=None):
     with an asset named only the ones that can answer for it, and with `only`
     (a specialist's role) only those names."""
     return [t for t in _REGISTRY.values()
-            if (t.rewinds or today is None)
+            if (t.ready is None or t.ready() is None)
+            and (t.rewinds or today is None)
             and (asset is None or t.applies is None or t.applies(asset))
             and (only is None or t.name in only)]
 
@@ -151,6 +155,12 @@ def spec_lines(today=None, asset=None, only=None):
     for t in sorted(tools, key=lambda x: x.name):
         args = ", ".join('"%s": <%s>' % (k, v) for k, v in t.args.items())
         lines.append('  %s {%s}  -  %s' % (t.name, args, t.describe))
+    # A tool that exists but cannot run is named, so the model does not wonder
+    # why search never appears and the operator sees what is missing.
+    for t in sorted(_REGISTRY.values(), key=lambda x: x.name):
+        why = t.ready() if t.ready is not None else None
+        if why and (only is None or t.name in only):
+            lines.append("  %s: unavailable, %s" % (t.name, why))
     return "\n".join(lines)
 
 
@@ -327,7 +337,7 @@ FRED_SERIES = {
     "us_10y_yield": "DGS10", "us_2y_yield": "DGS2", "us_curve_10y_2y": "T10Y2Y",
     "fed_funds": "DFF", "us_cpi": "CPIAUCSL", "us_unemployment": "UNRATE",
     "us_breakeven_10y": "T10YIE", "high_yield_spread": "BAMLH0A0HYM2",
-    "brent": "DCOILBRENTEU", "usd_broad_index": "DTWEXBGS",
+    "brent": "DCOILBRENTEU", "usd_broad_index": "DTWEXBGS", "vix": "VIXCLS",
 }
 
 
@@ -573,12 +583,91 @@ register(Tool(
     run=_attention))
 
 
-def max_calls():
-    """The per-judgment budget. 0 disables tools without touching the code."""
+# --------------------------------------------------------------------------
+# web_search / web_fetch: the same reach for every brain. Claude Code has its
+# own web tools; these give local and cloud Ollama the equivalent (search via
+# Ollama's web API with OLLAMA_API_KEY, fetch through net.http_get). Opinion
+# sites are refused here as well as in core/analyst/evidence.py.
+# --------------------------------------------------------------------------
+WEB_SEARCH_URL = "https://ollama.com/api/web_search"
+WEB_CALLS = 6
+FETCH_CAP = 2_000_000
+TEXT_CAP = 8000
+
+
+def _post(url, payload, key):
+    import httpx
+
+    r = httpx.Client(trust_env=False, timeout=30).post(
+        url, json=payload, headers={"Authorization": "Bearer " + key})
+    r.raise_for_status()
+    return r.json()
+
+
+def _search_ready():
+    return None if os.getenv("OLLAMA_API_KEY") else "no OLLAMA_API_KEY"
+
+
+def _web_search(asset, today=None, query=""):
+    from core.analyst import evidence
+
+    data = _post(WEB_SEARCH_URL, {"query": str(query)[:300], "max_results": 5},
+                 os.getenv("OLLAMA_API_KEY") or "")
+    return [{"title": r.get("title"), "url": r.get("url"),
+             "snippet": str(r.get("content") or "")[:300]}
+            for r in (data.get("results") or [])
+            if r.get("url") and not evidence.blocked(r["url"])]
+
+
+def _web_fetch(asset, today=None, url=""):
+    from core.analyst import evidence
+
+    url = str(url).strip()
+    if evidence.blocked(url):
+        return {"refused": "opinion source"}
+    text = _get(url)[:FETCH_CAP]
+    head = text.lstrip()[:1]
+    if head in ("[", "{"):
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                data = data[:40]
+            return {"json": json.dumps(data, ensure_ascii=False)[:TEXT_CAP]}
+        except ValueError:
+            pass
+    if head != "<" and "," in text.split("\n", 1)[0]:
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        return {"rows": lines[:1] + lines[1:][-40:]}
+    plain_text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    plain_text = re.sub(r"<[^>]+>", " ", plain_text)
+    return {"text": re.sub(r"\s+", " ", plain_text).strip()[:TEXT_CAP]}
+
+
+register(Tool(
+    name="web_search", args={"query": "what to look for"}, rewinds=False,
+    describe="search the web; returns titles, urls and snippets. Use it to find "
+             "PRIMARY material (statistics, filings, exchange data), then web_fetch",
+    run=_web_search, ready=_search_ready))
+register(Tool(
+    name="web_fetch", args={"url": "a page or a data file"}, rewinds=False,
+    describe="read one page or data file (JSON, CSV, HTML as text)",
+    run=_web_fetch))
+
+
+def web_budget():
     try:
-        return max(0, int(os.getenv("GTRADE_ANALYST_TOOL_CALLS", MAX_CALLS)))
+        return max(0, int(os.getenv("GTRADE_ANALYST_WEB_CALLS", WEB_CALLS)))
     except ValueError:
-        return MAX_CALLS
+        return WEB_CALLS
+
+
+def max_calls():
+    """The per-judgment budget, web calls included. 0 disables tools."""
+    try:
+        base = max(0, int(os.getenv("GTRADE_ANALYST_TOOL_CALLS", MAX_CALLS)))
+    except ValueError:
+        base = MAX_CALLS
+    return base + web_budget() if base else 0
 
 
 def require_first():
@@ -597,4 +686,4 @@ def max_rounds():
 
 
 # Registers the market.db tools; imported last because it imports Tool/register.
-from core.analyst import project_tools  # noqa: F401
+from core.analyst import hunt, project_tools  # noqa: F401

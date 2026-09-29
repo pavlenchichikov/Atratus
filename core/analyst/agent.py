@@ -256,7 +256,8 @@ def _no(why, reason):
         why.append(reason)
 
 
-def parse_judgment(text, allowed=None, empty=(), why=None, session=False):
+def parse_judgment(text, allowed=None, empty=(), why=None, session=False, called=(),
+                   today=None):
     """A validated judgment, or None. Never raises.
 
     `why`, when a list is passed, collects one short line naming the check that
@@ -295,15 +296,25 @@ def parse_judgment(text, allowed=None, empty=(), why=None, session=False):
                    % data.get("vol_regime"))
     evidence = data.get("evidence")
     if not isinstance(evidence, list) or not evidence or not all(
-            isinstance(e, str) for e in evidence):
-        return _no(why, "evidence is not a non-empty list of field names")
-    if allowed is not None:
+            isinstance(e, (str, dict)) for e in evidence):
+        return _no(why, "evidence is not a non-empty list of field names or source items")
+    # Outside items (a URL read, a tool called) go through the raw-evidence
+    # rules; field names keep the checks below.
+    from core.analyst import evidence as ev
+
+    raw, dropped = ev.check([e for e in evidence if isinstance(e, dict)],
+                            called=called, today=today)
+    evidence = [e for e in evidence if isinstance(e, str)]
+    if not evidence and not raw:
+        return _no(why, "no evidence survived the raw-data check: %s"
+                   % "; ".join(d["why"] for d in dropped[:3]))
+    if allowed is not None and evidence:
         invented = sorted(set(evidence) - set(allowed) - set(empty))
         if invented:                         # a field name that does not exist
             return _no(why, "evidence cites fields the dossier does not "
                        "have: %s" % ", ".join(invented[:4]))
         evidence = [e for e in evidence if e not in set(empty)]
-        if not evidence:                     # cited only fields that were empty
+        if not evidence and not raw:         # cited only fields that were empty
             return _no(why, "evidence cited only fields that were blank")
 
     extra = {}
@@ -322,7 +333,7 @@ def parse_judgment(text, allowed=None, empty=(), why=None, session=False):
             "vol_regime": data["vol_regime"],
             "key_risk": plain(str(data.get("key_risk") or ""))[:400],
             "thesis": plain(str(data.get("thesis") or ""))[:2500],
-            "evidence": evidence}
+            "evidence": evidence + raw, **({"dropped": dropped} if dropped else {})}
 
 
 def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
@@ -423,11 +434,46 @@ def judge(dossier, call=None, depth="full", horizon=1, on_reject=None,
 
         why = []
         parsed = parse_judgment(answer, allowed=allowed, empty=empty, why=why,
-                                session=session)
+                                session=session, today=today,
+                                called={t["tool"] for t in tool_calls or []})
         if parsed is not None:
             return parsed
         if on_reject is not None:
             on_reject(why[0] if why else "unparseable")
+    return None
+
+
+def ask_json(prompt, call, validate, asset=None, tool_calls=None, today=None):
+    """validate(obj) of the first usable JSON reply, after up to max_rounds of
+    tool requests; None when none validates. The judgment-free sibling of
+    judge(), for the source hunter and the daily macro view."""
+    from core.analyst import tools
+
+    tool_calls = [] if tool_calls is None else tool_calls
+    budget = tools.max_calls()
+    rounds = min(budget, tools.max_rounds())
+    menu = tools.spec_lines(today, asset) if budget else ""
+    extra = ""
+    for _ in range(MAX_ATTEMPTS + rounds):
+        answer = call(prompt + menu + extra)
+        obj = _first_json_object(answer)
+        requests = tools.parse_requests(obj)[:budget] if budget > 0 and rounds > 0 else []
+        if requests:
+            budget -= len(requests)
+            rounds -= 1
+            for request in requests:
+                entry = tools.call(request, asset=asset, today=today)
+                tool_calls.append(entry)
+                extra += ("\n\nYou asked for %s and received:\n%s\n"
+                          % (request["tool"],
+                             json.dumps(entry.get("result", entry.get("error")),
+                                        ensure_ascii=True)[:3000]))
+            extra += "Now return the JSON asked for.\n"
+            continue
+        out = validate(obj)
+        if out is not None:
+            return out
+        extra += "\n\nThat reply was not the JSON asked for. Return ONLY that JSON.\n"
     return None
 
 

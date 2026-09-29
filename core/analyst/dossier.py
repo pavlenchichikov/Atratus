@@ -842,6 +842,7 @@ BLOCKS = {
                  "policy_rate_days_since_change", "policy_rate_bank"),
     "own_record": ("past_calls", "past_hit_rate", "past_last_call",
                    "past_last_outcome"),
+    "macro_view": ("macro_view",),
 }
 
 
@@ -1010,7 +1011,20 @@ def build(asset, db_path=None, today=None):
         **_market_context(asset, bars, db_path, today),
         **_as_of(asset, today),
         "lessons": _lessons(asset, today),
+        # The day's top-down view (core/analyst/macro.py): regime, drivers and
+        # the line for this asset's market. None when no recent view exists.
+        "macro_view": _macro_view(asset, today),
     }
+
+
+def _macro_view(asset, today):
+    try:
+        from core.analyst import hunt, macro
+
+        day = str(today or datetime.date.today().isoformat())[:10]
+        return macro.for_date(day, hunt.market_of(asset))
+    except Exception:
+        return None
 
 
 def _lessons(asset, today):

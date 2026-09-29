@@ -198,3 +198,17 @@ def test_the_combiner_defaults_to_the_fixed_mix_and_can_be_set_back(monkeypatch)
     assert T._combiner() == "stack"
     monkeypatch.setenv("GTRADE_COMBINER", "nonsense")
     assert T._combiner() == "fixed"
+
+
+def test_dir_metrics_score_the_next_bars_direction_against_the_validation_majority():
+    import numpy as np
+    prob = np.array([0.6, 0.6, 0.4, 0.4, 0.6, 0.6, 0.4, 0.4, 0.6, 0.6])
+    ret = np.array([0.02, -0.001, -0.02, 0.001, 0.03, 0.02, -0.01, -0.02, -0.03, 0.002])
+    val = np.array([0.01, 0.02, -0.01, 0.015, 0.02, -0.005, 0.01, 0.012, -0.02, 0.01])
+    m = T._dir_metrics(prob, ret, val)
+    # calls: up up dn dn up up dn dn up up ; outcomes: up dn dn up up up dn dn dn up
+    assert m["dir_acc"] == 0.7 and m["dir_n"] == 10
+    assert m["dir_base"] == 0.5                      # validation mostly up: "always up"
+    # band = 0.5 x median |val| = 0.5 x 0.011; the +-0.001/0.002 rows are noise
+    assert m["dir_n_clean"] == 7 and abs(m["dir_acc_clean"] - 6 / 7) < 1e-12
+    assert T._dir_metrics(prob[:5], ret[:5], val[:5]) is None

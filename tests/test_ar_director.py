@@ -322,3 +322,7 @@ def test_a_frozen_axis_is_refused_and_not_offered():
     for ax in ar_director.FROZEN_AXES:
         settings, problems = ar_director.validate(_reply(axes=ax), CAMPAIGN)
         assert settings is None and any("frozen" in p for p in problems)
+
+
+def test_the_direction_bases_are_whitelisted():
+    assert {"dir_edge", "dir_edge_clean"} <= set(ar_director.BASES)

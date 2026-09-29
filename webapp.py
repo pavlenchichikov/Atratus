@@ -24,6 +24,7 @@ from config import FULL_ASSET_MAP, MOEX_ASSETS, RADAR_GROUPS, radar_category
 from core import dashboard, timing_policy, track_record
 from core import levels as levels_mod
 from core import positions as positions_mod
+from core.analyst import evidence
 from risk_manager import RISK_CONFIG, RiskManager, save_risk_config_override
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -187,7 +188,7 @@ def _decorate_judgment(row):
     except Exception:
         row["resolves"] = None
     try:
-        row["evidence"] = json.loads(row.get("evidence_json") or "[]")
+        row["evidence"] = [evidence.label(e) for e in json.loads(row.get("evidence_json") or "[]")]
     except Exception:
         row["evidence"] = []
     # The analyst runs on demand, so a judgment can sit on the card for a week

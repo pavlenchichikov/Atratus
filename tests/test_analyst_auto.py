@@ -39,6 +39,8 @@ def test_auto_picks_runs_labels_and_reports(tmp_path, monkeypatch):
         return 0
 
     monkeypatch.setattr(analyst, "cmd_run", fake_run)
+    monkeypatch.setattr(analyst, "_daily_macro", lambda: None)
+    monkeypatch.setattr(analyst, "_weekly_recheck", lambda: None)
     monkeypatch.setattr(analyst, "_load_table", lambda: {"asset": {}, "class": {}})
     monkeypatch.delenv("GTRADE_ANALYST", raising=False)
     monkeypatch.setattr("core.analyst.brains.call_for", lambda role: (lambda p: ""))

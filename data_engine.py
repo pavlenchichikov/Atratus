@@ -1280,6 +1280,18 @@ def main():
     except Exception as exc:
         print(f'  !! breadth not rebuilt: {exc} - run build_breadth.py by hand')
 
+    # FINRA short volume for the US names (finra_fetch.py). A model input only
+    # when GTRADE_EXTRA_FEATURES names short_ratio_z, but the history has to be
+    # collected every day either way, or an A/B of it has nothing to train on.
+    print()
+    print('  FINRA SHORT VOLUME')
+    print('  ' + '-' * (W - 2))
+    try:
+        import finra_fetch
+        finra_fetch.update()
+    except Exception as exc:
+        print(f'  !! FINRA not fetched: {exc} - run finra_fetch.py by hand')
+
     # -- SUMMARY ------------------------------------------------------------
     elapsed = time.time() - t_start
     print()

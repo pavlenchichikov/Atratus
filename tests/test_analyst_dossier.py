@@ -115,6 +115,7 @@ def test_the_dossier_shape_is_declared_and_any_new_field_must_be_too(db):
         # and how that turned out, which is the one track record it is entitled
         # to see.
         "past_calls", "past_hit_rate", "past_last_call", "lessons",  # the analyst's own lessons from resolved calls, no ensemble field
+        "macro_view",  # the analyst's own daily top-down view from raw data (core/analyst/macro.py), no ensemble field
         "past_last_outcome",
         # flow: how much actually traded, and how the day opened
         "volume_vs_20", "turnover", "gap_open", "range_atr",

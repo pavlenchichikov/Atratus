@@ -8,6 +8,8 @@ asset's volatility does not.
 
 import random
 
+from core.analyst import evidence
+
 SHUFFLE_MARGIN = 1.2
 # A shuffled forecaster must be at least 20 percent worse for the unshuffled
 # advantage to count as real. Below that the two are indistinguishable given
@@ -149,7 +151,7 @@ def field_usage(rows, min_n=20):
         if r.get("direction") not in ("up", "down") or r.get("realized_ret") is None:
             continue
         try:
-            cited = set(_json.loads(r.get("evidence_json") or "[]"))
+            cited = {evidence.label(e) for e in _json.loads(r.get("evidence_json") or "[]")}
         except ValueError:
             cited = set()
         d.append((cited, int((r["direction"] == "up") == (r["realized_ret"] > 0))))

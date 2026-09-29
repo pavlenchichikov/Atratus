@@ -20,7 +20,7 @@ import sys
 
 import train_payoff
 from config import radar_category
-from core.analyst import agent, calibrate, dossier, payoff, store
+from core.analyst import agent, calibrate, dossier, evidence, payoff, store
 from core.llm_proposer import ProviderUnavailable, TerminalCallError
 
 
@@ -171,6 +171,9 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         j = agent.judge(d, call=call, depth=depth, horizon=horizon,
                         on_reject=on_reject, today=as_of, tool_calls=tool_calls,
                         notes=notes)
+        # The brain that actually answered: claude-code may have handed the
+        # call to its fallback (core/analyst/brains.call_for).
+        brain_label = getattr(call, "last_label", None) or brain_label
     if asked is not None:
         asked.extend((asset, horizon, t) for t in tool_calls)
     if j is None:
@@ -190,6 +193,8 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         "vol_regime": j["vol_regime"], "key_risk": j["key_risk"],
         "thesis": j["thesis"],
         "evidence_json": json.dumps(j["evidence"]),
+        # What the raw-data check refused, and why (core/analyst/evidence.py).
+        "dropped_json": json.dumps(j.get("dropped") or [], ensure_ascii=False),
         "dossier_hash": h, "llm_model": brain_label,
         "mode": mode_label or mode, "brain": brain_label, "revision_of": revision_of, "plan": notes.get("plan"),
         "pre_critic_json": json.dumps(pre, ensure_ascii=False) if pre else None,
@@ -202,7 +207,7 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         store.write_team_reports(d["date"], asset, horizon, reports)
     _print_judgment(asset, j, fc, horizon=horizon)
     if cited is not None:
-        cited.update(j["evidence"])
+        cited.update(evidence.label(e) for e in j["evidence"])
     return written + 1, refused
 
 
@@ -620,7 +625,7 @@ def _print_judgment(asset, j, fc, horizon=1):
     for line in _wrap(j.get("thesis") or "", 68):
         print("             %s" % line)
     if j.get("evidence"):
-        print("             read:  %s" % ", ".join(j["evidence"]))
+        print("             read:  %s" % ", ".join(evidence.label(e) for e in j["evidence"]))
 
 
 def _wrap(text, width):
@@ -859,6 +864,8 @@ def cmd_auto(args):
     try:
         store.backfill_outcomes()
         print("[analyst] %d new lesson(s)" % lessons.learn(brains.call_for("memory")))
+        _daily_macro()
+        _weekly_recheck()
         picks = scout.pick(brains.call_for("scout"), scout.summary(panel=panel_assets()),
                            max_assets=max_assets)
     except (TerminalCallError, ProviderUnavailable) as exc:
@@ -884,6 +891,104 @@ def cmd_auto(args):
     return rc
 
 
+def _daily_macro():
+    """Today's top-down view, once a day. A failure is reported, never fatal:
+    the assets are still judged, just without the view."""
+    import datetime
+
+    from core.analyst import brains, macro
+
+    day = datetime.date.today().isoformat()
+    if macro.has(day):
+        return
+    print("[analyst] macro view for %s, brain %s" % (day, brains.label("macro")))
+    try:
+        ok = macro.run(brains.call_for("macro"), today=day, brain=brains.label("macro"))
+        print("[analyst] macro view %s" % ("saved" if ok else "not produced (no evidenced driver)"))
+    except Exception as exc:
+        print("[analyst] macro view failed: %s" % exc)
+
+
+def _weekly_recheck():
+    """Re-verify the source registry when any source was last checked a week ago."""
+    import datetime
+
+    from core.analyst import hunt
+
+    cut = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+    if any(r["status"] != "off" and (r["verified_at"] or "") < cut for r in hunt.listing()):
+        good, bad = hunt.recheck()
+        print("[analyst] sources re-checked: %d working, %d broken" % (good, bad))
+
+
+def cmd_macro(args):
+    """Build (or rebuild) today's macro view and print it."""
+    import datetime
+
+    from core.analyst import brains, macro
+
+    if args.brain:
+        brains.parse(args.brain)
+        os.environ["GTRADE_ANALYST_BRAIN_MACRO"] = args.brain
+    day = datetime.date.today().isoformat()
+    ok = macro.run(brains.call_for("macro"), today=day, brain=brains.label("macro"))
+    view = macro.for_date(day, "us")
+    if not ok or view is None:
+        print("[analyst] no macro view: the brain gave no driver backed by raw data")
+        return 1
+    print("[analyst] regime: %s" % view["regime"])
+    for d in view["drivers"]:
+        print("  - %s" % d)
+    return 0
+
+
+def _hunt_markets():
+    from core.analyst import hunt
+
+    return hunt.MARKETS
+
+
+def cmd_hunt(args):
+    """The hunter brain proposes raw sources for a market; code keeps the real ones."""
+    from core.analyst import brains, hunt
+    from core.llm_proposer import ProviderUnavailable, TerminalCallError
+
+    if args.brain:
+        brains.parse(args.brain)
+        os.environ["GTRADE_ANALYST_BRAIN_HUNTER"] = args.brain
+    markets = hunt.MARKETS if args.market == "all" else (args.market,)
+    for market in markets:
+        print("[analyst] hunting raw sources: %s, brain %s" % (market, brains.label("hunter")))
+        call = brains.call_for("hunter")
+        try:
+            hunt.run(market, call, brain=getattr(call, "last_label", brains.label("hunter")))
+        except (TerminalCallError, ProviderUnavailable) as exc:
+            print("[analyst] hunt stopped: %s" % exc)
+            return 1
+    return 0
+
+
+def cmd_sources(args):
+    """List the source registry; switch a source off or on; re-check them all."""
+    from core.analyst import hunt
+
+    for name, status in ((args.off, "off"), (args.on, "verified")):
+        if name:
+            n = hunt.set_status(name, status)
+            print("[analyst] %s: %s" % (name, status if n else "no such source"))
+    if args.recheck:
+        good, bad = hunt.recheck()
+        print("[analyst] re-checked: %d working, %d broken" % (good, bad))
+    rows = hunt.listing()
+    if not rows:
+        print("[analyst] no sources yet; run: python analyst.py hunt --market all")
+    for r in rows:
+        print("  %-9s %-9s %-28s %s  (%s, %s)" % (r["status"], r["market"], r["name"],
+                                                r["fields"] or "", r["found_by"],
+                                                r["verified_at"]))
+    return 0
+
+
 def cmd_learn(args):
     """A lesson for every scored judgment that has none, by the memory brain."""
     from core.analyst import brains, lessons
@@ -899,6 +1004,9 @@ def cmd_learn(args):
 
 
 def main(argv=None):
+    import urllib3  # GTRADE_SSL_VERIFY=0 behind the proxy, as in data_engine
+
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     p = argparse.ArgumentParser(description="analyst agent")
     sub = p.add_subparsers(dest="cmd", required=True)
     run = sub.add_parser("run")
@@ -992,6 +1100,18 @@ def main(argv=None):
     br.add_argument("--cloud-key", dest="cloud_key", action="store_true",
                     help="enter OLLAMA_API_KEY without echoing it, saved in .env")
     br.set_defaults(fn=cmd_brains)
+    hu = sub.add_parser("hunt", help="find new raw data sources for a market")
+    hu.add_argument("--market", default="all", choices=("all",) + _hunt_markets())
+    hu.add_argument("--brain", default="", help="provider:model for this hunt only")
+    hu.set_defaults(fn=cmd_hunt)
+    so = sub.add_parser("sources", help="the raw source registry")
+    so.add_argument("--off", default="", help="switch a source off")
+    so.add_argument("--on", default="", help="switch a source back on")
+    so.add_argument("--recheck", action="store_true", help="re-verify every source")
+    so.set_defaults(fn=cmd_sources)
+    ma = sub.add_parser("macro", help="today's top-down view from raw data")
+    ma.add_argument("--brain", default="", help="provider:model for this run only")
+    ma.set_defaults(fn=cmd_macro)
     args = p.parse_args(argv)
     return args.fn(args)
 

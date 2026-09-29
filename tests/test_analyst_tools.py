@@ -209,7 +209,7 @@ def test_the_operator_can_switch_them_off_without_touching_the_code(
     agent.judge(_dossier(), call=call, tool_calls=[])
     assert "You may ask for MORE evidence" not in seen[0]
     monkeypatch.setenv("GTRADE_ANALYST_TOOL_CALLS", "not a number")
-    assert tools.max_calls() == tools.MAX_CALLS
+    assert tools.max_calls() == tools.MAX_CALLS + tools.web_budget()
 
 
 def test_a_moscow_name_is_told_sec_does_not_cover_it_rather_than_getting_nothing():

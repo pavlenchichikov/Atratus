@@ -270,3 +270,21 @@ def test_every_finding_records_its_proposer(tmp_path, monkeypatch):
     monkeypatch.delenv("GTRADE_AR_PROPOSER")
     m.findings_append({"ts": "u", "winners": []})
     assert [r["proposer"] for r in m._load(m.FINDINGS_PATH, [])] == ["llm", "evolutionary"]
+
+
+def test_proposer_edges_compares_best_edges_only_with_ten_cycles_each():
+    from core import ar_memory as m
+
+    def rec(prop, vals, basis="dir_edge_clean"):
+        return {"proposer": prop, "basis": basis,
+                "winners": [{"value": v} for v in vals]}
+
+    journal = ([rec("llm", [0.01, 0.03])] * 10 + [rec("evolutionary", [0.02])] * 9
+               + [rec("llm", [0.9], basis="auc")])
+    got = m.proposer_edges(journal)
+    assert got["llm"] == {"cycles": 10, "mean_best": 0.03}
+    assert got["evolutionary"] == {"cycles": 9, "mean_best": None}
+    assert m.proposer_line(got) is None          # one side under 10 cycles
+    journal.append(rec("evolutionary", [0.02]))
+    line = m.proposer_line(m.proposer_edges(journal))
+    assert "llm" in line and "+0.0300" in line and "+0.0200" in line

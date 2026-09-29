@@ -341,3 +341,44 @@ def test_a_cheap_campaign_stays_cheap(monkeypatch):
     for arm in rl.legal_arms():
         assert rl.settings_of(arm)["GTRADE_AR_ILLUM"] == "cb", arm
     assert "qd_neural" not in rl.legal_arms()
+
+
+# --- dense reward on the direction yardstick ---------------------------------
+
+def _dir_finding(ts, ps, basis="dir_edge_clean"):
+    return {"ts": ts, "mode": "axes", "basis": basis, "winners": [
+        {"axis": "labels", "adoptable": False, "p": p, "genome": {"sig": "S%d" % i}}
+        for i, p in enumerate(ps)]}
+
+
+def _dense(got):
+    return [r for r in got if r["key"].startswith("dense:")]
+
+
+def test_a_dir_basis_cycle_pays_its_best_candidate_every_cycle():
+    """No adoptable winner, no A/B, still a signal: best p 0.16 is z ~ +1,
+    the top of the clip, so the reward is ~1 per hour."""
+    hist = [_hist("2026-09-29T02:00:00", "qd_cheap")]
+    got = _dense(rl.settle(hist, [_dir_finding("2026-09-29T03:00:00", [0.9, 0.1587])],
+                           [], set(), set(), sig_of=lambda g: g.get("sig")))
+    assert len(got) == 1 and got[0]["arm"] == "qd_cheap"
+    assert abs(got[0]["reward"] - 1.0) < 0.01
+
+
+def test_a_dir_basis_cycle_that_only_lost_pays_little_but_not_nothing_negative():
+    hist = [_hist("2026-09-29T02:00:00", "qd_cheap", seconds=7200.0)]
+    got = _dense(rl.settle(hist, [_dir_finding("2026-09-29T03:00:00", [0.5])],
+                           [], set(), set(), sig_of=lambda g: g.get("sig")))
+    assert abs(got[0]["reward"] - 0.25) < 0.01     # z 0 -> 0.5, over 2 hours
+
+
+def test_dense_reward_is_paid_once_and_only_on_the_dir_bases():
+    hist = [_hist("2026-09-29T02:00:00", "qd_cheap")]
+    f = _dir_finding("2026-09-29T03:00:00", [0.1])
+    first = _dense(rl.settle(hist, [f], [], set(), set(), sig_of=lambda g: g.get("sig")))
+    again = rl.settle(hist, [f], [], set(), {r["key"] for r in first},
+                      sig_of=lambda g: g.get("sig"))
+    assert len(first) == 1 and _dense(again) == []
+    other = _dir_finding("2026-09-29T03:00:00", [0.1], basis="auc")
+    assert _dense(rl.settle(hist, [other], [], set(), set(),
+                            sig_of=lambda g: g.get("sig"))) == []

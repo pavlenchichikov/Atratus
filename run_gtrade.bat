@@ -59,7 +59,7 @@ echo.
 echo  RESEARCH
 echo    [RS] Auto-research agent (own menu)         [AN] Analyst agent
 echo    [AL] Autonomous cycle: search, A/B, adopt   [ALS] Its stage / stop it
-echo    [LC] Daily loop cycle
+echo    [LC] Daily loop cycle                       [AI] A/B a new input: FINRA, HAR
 echo.
 echo  POLICIES
 echo    [TP] Timing rules   [TB] Timing: fitted-Q challenger
@@ -112,6 +112,7 @@ if /i "%choice%"=="SG" goto push_signals
 if /i "%choice%"=="5C" goto train_chunked
 if /i "%choice%"=="5R" goto train_assets
 if /i "%choice%"=="5S" goto train_settings
+if /i "%choice%"=="AI" goto ab_inputs
 if /i "%choice%"=="5F" goto fill_champions
 if /i "%choice%"=="AG" goto adopt_genome
 if /i "%choice%"=="PA" goto per_asset_menu
@@ -477,6 +478,37 @@ echo.
 echo A gate line reading "N asset(s) dropped as unscorable" is not noise: those
 echo assets had an arm with too few trades to judge and were left out of the
 echo effect size on purpose.
+pause
+goto menu
+
+:ab_inputs
+cls
+echo  A/B A NEW INPUT. The same assets are trained twice, without and with the
+echo  input, and decided on the direction edge without noise days, precision
+echo  weighted, floor 0.005, alpha 0.05, fixed before the run. Two trainings of
+echo  N assets: about N x 10 minutes. Nothing is adopted automatically.
+echo.
+if not exist "%~dp0ab_inputs.py" goto ab_inputs_missing
+echo    [1] FINRA short volume, US names   [2] HAR range forecast   [3] both
+set "ai_i="
+set /p ai_i="Input: "
+set "ai_flag="
+if "%ai_i%"=="1" set "ai_flag=--inputs finra"
+if "%ai_i%"=="2" set "ai_flag=--inputs har"
+if "%ai_i%"=="3" set "ai_flag=--inputs both"
+if "%ai_flag%"=="" goto menu
+set "ai_n="
+set /p ai_n="How many assets, Enter = 40: "
+if not "%ai_n%"=="" set "ai_flag=%ai_flag% --n %ai_n%"
+set "ai_ok="
+set /p ai_ok="Type YES to run: "
+if /i not "%ai_ok%"=="YES" goto menu
+python ab_inputs.py %ai_flag%
+pause
+goto menu
+
+:ab_inputs_missing
+echo  ab_inputs.py is a local experiment file and is not in this folder.
 pause
 goto menu
 
@@ -1077,9 +1109,14 @@ echo         0.5 floor, and on 339 of 839 assets the Score is the -999 "too few
 echo         trades" marker rather than a number. Pick it when the question
 echo         really is about money, knowing the verdict carries that noise.
 echo     3 = same as the search basis (the behaviour before this existed)
-set "DEC=1"
-set /p "DEC=    choice [1]: "
-set "GTRADE_AR_DECISION_BASIS=ens_acc"
+echo     4 = direction edge without noise days (Dir_Edge_Clean), the shared
+echo         yardstick: accuracy on the next bar's direction over "always the
+echo         validation majority". RECOMMENDED since 2026-09-29: ens_acc (1) is
+echo         accuracy on each candidate's own label and cannot compare labels.
+set "DEC=4"
+set /p "DEC=    choice [4]: "
+set "GTRADE_AR_DECISION_BASIS=dir_edge_clean"
+if "%DEC%"=="1" set "GTRADE_AR_DECISION_BASIS=ens_acc"
 if "%DEC%"=="2" set "GTRADE_AR_DECISION_BASIS=raw"
 if "%DEC%"=="3" set "GTRADE_AR_DECISION_BASIS="
 REM  Not asked, because there is one right answer. tier_neural_floor() is
@@ -1484,9 +1521,12 @@ echo         promoted on since 2026-09-12. Adoption floor 0.005.
 echo     2 = raw Score after costs. Floor 0.5, and the same genome at one seed
 echo         scored 0.45 to 1.52 apart on this GPU - wider than that floor.
 echo     3 = whatever the last campaign set (leave the environment alone).
-set "AB_BAS=1"
-set /p "AB_BAS=    choice [1]: "
-set "GTRADE_AR_DECISION_BASIS=ens_acc"
+echo     4 = direction edge without noise days (Dir_Edge_Clean), the shared
+echo         yardstick across labels. RECOMMENDED since 2026-09-29.
+set "AB_BAS=4"
+set /p "AB_BAS=    choice [4]: "
+set "GTRADE_AR_DECISION_BASIS=dir_edge_clean"
+if "%AB_BAS%"=="1" set "GTRADE_AR_DECISION_BASIS=ens_acc"
 if "%AB_BAS%"=="2" set "GTRADE_AR_DECISION_BASIS=raw"
 if "%AB_BAS%"=="3" set "GTRADE_AR_DECISION_BASIS="
 echo.
@@ -1519,7 +1559,7 @@ REM  The basis picked in [ABC] lives in this cmd session, so a --run started
 REM  from the same menu inherits it. A window opened fresh has nothing set and
 REM  would fall back to raw Score, which is how a campaign searched on accuracy
 REM  got judged in Score units, so the fallback is named here instead.
-if not defined GTRADE_AR_DECISION_BASIS set "GTRADE_AR_DECISION_BASIS=ens_acc"
+if not defined GTRADE_AR_DECISION_BASIS set "GTRADE_AR_DECISION_BASIS=dir_edge_clean"
 echo Deciding on basis: %GTRADE_AR_DECISION_BASIS%
 echo.
 cmd /c ""%~dp0run_in_env.bat" python ab_build.py --run"

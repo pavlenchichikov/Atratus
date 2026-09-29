@@ -827,7 +827,8 @@ def evaluate(cand, subset, ref_full, ref_contrib, objective):
         return {"sig": sig, "p": None, "value": None, "n": 0,
                 "p_neural": None, "value_neural": None,
                 "promoted": 0, "demoted": 0, "p_promotion": 1.0}
-    p, value, deltas, _tag = ar.holdout_stats(ref_scored, var_scored, objective)
+    p, value, deltas = _decide_stats(basis, ref_scored, var_scored, ref_full,
+                                     var_full, objective)
     p_n, value_n, _d2, _t2 = ar.holdout_stats(ref_contrib, var_contrib,
                                               objective)
     # The decision the retrain would then make, counted on the SAME rows and on
@@ -863,6 +864,20 @@ def baseline_means(rows):
 def below_baseline(stats):
     e, b = stats.get("ens_acc"), stats.get("base_acc")
     return e is not None and b is not None and e <= b
+
+
+def _decide_stats(basis, ref_scored, var_scored, ref_full, var_full, objective):
+    """(p, value, deltas) for the verdict. The direction bases carry each asset's
+    bar count, so they are tested precision-weighted (auto_research.
+    precision_weighted_stats); every other basis keeps its Wilcoxon test."""
+    import auto_research as ar
+
+    if basis in ("dir_edge", "dir_edge_clean"):
+        p, value, deltas, _tag = ar.precision_weighted_stats(
+            ref_full, var_full, clean=basis == "dir_edge_clean")
+    else:
+        p, value, deltas, _tag = ar.holdout_stats(ref_scored, var_scored, objective)
+    return p, value, deltas
 
 
 def ar_promotion_tag(stats):

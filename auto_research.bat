@@ -286,6 +286,13 @@ echo     7 = pooled trade t (Trade_T: the same trades the Score is built from,
 echo         pooled over the folds as a t statistic). The main launcher has
 echo         offered it since September and this menu did not, which is how two
 echo         menus end up disagreeing about what the system can measure.
+echo     8 = direction EDGE (Dir_Edge): accuracy on the next bar's direction
+echo         minus "always the validation majority". The one yardstick every
+echo         candidate shares whatever label it trained on; Ens_Acc is accuracy
+echo         on the model's OWN label and read +1.1 pts where direction read 0.0
+echo         (2026-09-28). Floor GTRADE_AR_ADOPT_AUC.
+echo     9 = direction edge without noise days (Dir_Edge_Clean): the same, on
+echo         bars that moved at least half the median move. Recommended.
 set "BAS=1"
 set /p "BAS=    choice [1]: "
 set "GTRADE_AR_SCORE_BASIS="
@@ -295,6 +302,8 @@ if "%BAS%"=="4" set "GTRADE_AR_SCORE_BASIS=net_gain"
 if "%BAS%"=="5" set "GTRADE_AR_SCORE_BASIS=ens_auc"
 if "%BAS%"=="6" set "GTRADE_AR_SCORE_BASIS=ens_acc"
 if "%BAS%"=="7" set "GTRADE_AR_SCORE_BASIS=trade_t"
+if "%BAS%"=="8" set "GTRADE_AR_SCORE_BASIS=dir_edge"
+if "%BAS%"=="9" set "GTRADE_AR_SCORE_BASIS=dir_edge_clean"
 
 
 echo.
@@ -429,6 +438,8 @@ echo   a re-gate silently runs on the raw Score and ranks the Score-scale winner
 echo   of every past run ahead of anything measured on the nets):
 echo     1 = raw ensemble Score (default)   2 = neural contribution
 echo     3 = neural AUC       4 = neural GAIN       5 = ensemble AUC
+echo     6 = ensemble accuracy  7 = pooled trade t
+echo     8 = direction edge     9 = direction edge without noise days
 echo   See [4b] in the search branch for what each one means.
 set "RGB=1"
 set /p "RGB=    choice [1]: "
@@ -437,6 +448,10 @@ if "%RGB%"=="2" set "GTRADE_AR_SCORE_BASIS=neural"
 if "%RGB%"=="3" set "GTRADE_AR_SCORE_BASIS=net_auc"
 if "%RGB%"=="4" set "GTRADE_AR_SCORE_BASIS=net_gain"
 if "%RGB%"=="5" set "GTRADE_AR_SCORE_BASIS=ens_auc"
+if "%RGB%"=="6" set "GTRADE_AR_SCORE_BASIS=ens_acc"
+if "%RGB%"=="7" set "GTRADE_AR_SCORE_BASIS=trade_t"
+if "%RGB%"=="8" set "GTRADE_AR_SCORE_BASIS=dir_edge"
+if "%RGB%"=="9" set "GTRADE_AR_SCORE_BASIS=dir_edge_clean"
 echo.
 set "RGK=8"
 set /p "RGK=    top-K candidates [8]: "

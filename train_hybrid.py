@@ -543,6 +543,53 @@ def _label_sig():
                     if k.startswith("GTRADE_LABEL_"))
 
 
+def _dir_metrics(test_prob, test_ret, val_ret):
+    """Accuracy on the NEXT BAR'S DIRECTION, whatever the training label was.
+
+    Ens_Acc is accuracy on the model's own label, and on 2026-09-28 a change
+    read +1.1 pts there and 0.0 on direction: candidates trained on different
+    labels cannot be compared on it. This is the one yardstick every candidate
+    shares. dir_base is "always the validation slice's majority direction";
+    the *_clean pair counts only bars that moved at least half the validation
+    slice's median move (the signal-vs-noise rule). None under 10 bars.
+    """
+    try:
+        p = np.asarray(test_prob, dtype=float)
+        r = np.asarray(test_ret, dtype=float)
+        v = np.asarray(val_ret, dtype=float)
+        n = min(len(p), len(r))
+        p, r = p[:n], r[:n]
+        ok = ~(np.isnan(p) | np.isnan(r))
+        p, r = p[ok], r[ok]
+        v = v[~np.isnan(v)]
+        if len(r) < 10 or len(v) < 10:
+            return None
+        up = r > 0
+        call = p >= 0.5
+        maj = (v > 0).mean() >= 0.5
+        clean = np.abs(r) >= 0.5 * np.median(np.abs(v))
+        out = {"dir_acc": float((call == up).mean()), "dir_base": float((up == maj).mean()),
+               "dir_n": len(r), "dir_n_clean": int(clean.sum()),
+               "dir_acc_clean": None, "dir_base_clean": None}
+        if clean.sum() >= 5:
+            out["dir_acc_clean"] = float((call[clean] == up[clean]).mean())
+            out["dir_base_clean"] = float((up[clean] == maj).mean())
+        return out
+    except Exception:
+        return None
+
+
+def _dir_fold_keys(test_prob, test_ret, val_ret):
+    """The fold-dict keys for _dir_metrics, with the per-fold edges."""
+    m = _dir_metrics(test_prob, test_ret, val_ret) or {}
+    acc, base = m.get("dir_acc"), m.get("dir_base")
+    acc_c, base_c = m.get("dir_acc_clean"), m.get("dir_base_clean")
+    return {"dir_acc": acc, "dir_base": base, "dir_n": m.get("dir_n"),
+            "dir_n_clean": m.get("dir_n_clean"),
+            "dir_edge": (acc - base) if acc is not None and base is not None else None,
+            "dir_edge_clean": (acc_c - base_c) if acc_c is not None and base_c is not None else None}
+
+
 def _fold_mean(folds, key):
     """Mean of `key` over EVERY fold that has one.
 
@@ -1557,6 +1604,7 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'ens_auc': ens_auc,
                 'ens_acc': ens_acc,
                 'base_acc': base_acc,
+                **_dir_fold_keys(test_prob, test_ret, val_ret),
                 'buy_thr': buy_thr,
                 'sell_thr': sell_thr,
                 'val_profit': val_profit,
@@ -1813,6 +1861,14 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             'Ens_Acc': None if _ens_acc is None else float(_ens_acc),
             # The no-model barrier on the same folds and label (_baseline_acc).
             'Base_Acc': _fold_mean(fold_metrics, 'base_acc'),
+            # The shared yardstick (_dir_metrics): the next bar's direction, and
+            # the edge over the validation majority, all days and noise days out.
+            'Dir_Acc': _fold_mean(fold_metrics, 'dir_acc'),
+            'Dir_Base': _fold_mean(fold_metrics, 'dir_base'),
+            'Dir_Edge': _fold_mean(fold_metrics, 'dir_edge'),
+            'Dir_Edge_Clean': _fold_mean(fold_metrics, 'dir_edge_clean'),
+            'Dir_N': int(sum(f.get('dir_n') or 0 for f in fold_metrics)),
+            'Dir_N_Clean': int(sum(f.get('dir_n_clean') or 0 for f in fold_metrics)),
             'CB_Acc_Mean': None if _cb_acc_mean is None else float(_cb_acc_mean),
             'Net_AUC': None if _net_auc is None else float(_net_auc),
             'CB_AUC': None if _cb_auc is None else float(_cb_auc),

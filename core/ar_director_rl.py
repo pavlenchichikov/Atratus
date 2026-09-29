@@ -220,6 +220,25 @@ def arm_of(settings):
     return None
 
 
+DIR_BASES = ("dir_edge", "dir_edge_clean")
+
+
+def dense_reward(ps, hours=1.0):
+    """Reward per hour from the cycle's best candidate on the direction
+    yardstick: its one-sided p as a z, clipped to [-1, 1], mapped to [0, 1].
+
+    Paid every cycle that gated anything, win or lose, so the bandit learns
+    from the 9 cycles in 10 that never reach an A/B.
+    """
+    from statistics import NormalDist
+
+    ps = [min(max(float(p), 1e-9), 1 - 1e-9) for p in ps if p is not None]
+    if not ps:
+        return None
+    z = max(-1.0, min(1.0, NormalDist().inv_cdf(1 - min(ps))))
+    return (z + 1) / 2 / max(MIN_HOURS, float(hours))
+
+
 def _cycle_findings(entry, findings, next_ts):
     """The findings records this cycle produced: written after it started and
     before the next recorded cycle did."""
@@ -236,6 +255,7 @@ def settle(history, findings, outcomes, replicated_sigs, credited, sig_of):
     by_sig = {}          # genome signature -> the cycle entry that produced it
     empty = []           # cycles that produced no winner at all
     flagged_ts = set()   # cycles that produced at least one gate flag
+    dense_due = []       # direction-yardstick cycles, paid whatever they found
     ordered = list(reversed(history))
     for i, entry in enumerate(ordered):
         if entry.get("action") != "search" or entry.get("rc") != 0:
@@ -244,8 +264,14 @@ def settle(history, findings, outcomes, replicated_sigs, credited, sig_of):
         if arm is None:
             continue                      # predates the settings field
         nxt = ordered[i + 1]["ts"] if i + 1 < len(ordered) else None
-        winners = [w for f in _cycle_findings(entry, findings, nxt)
-                   for w in (f.get("winners") or [])]
+        mine = _cycle_findings(entry, findings, nxt)
+        winners = [w for f in mine for w in (f.get("winners") or [])]
+        dense = dense_reward(
+            [w.get("p") for f in mine if f.get("basis") in DIR_BASES
+             for w in (f.get("winners") or [])],
+            hours=float(entry.get("seconds") or 3600.0) / 3600.0)
+        if dense is not None:
+            dense_due.append({"arm": arm, "reward": dense, "key": "dense:%s" % entry["ts"]})
         if not winners:
             empty.append((entry, arm))
             continue
@@ -256,7 +282,7 @@ def settle(history, findings, outcomes, replicated_sigs, credited, sig_of):
             if sig:
                 by_sig.setdefault(sig, (entry, arm))
 
-    out = []
+    out = [r for r in dense_due if r["key"] not in credited]
     for entry, arm in empty:
         key = "empty:%s" % entry["ts"]
         if key not in credited:

@@ -639,6 +639,65 @@ def add_cot_features(df: pd.DataFrame, asset: str, engine) -> pd.DataFrame:
     return df.reset_index()
 
 
+_FINRA_FEATURES = ['short_ratio_z', 'short_ratio_has']
+
+
+def add_finra_features(df: pd.DataFrame, table: str, engine) -> pd.DataFrame:
+    """FINRA short-volume ratio for US names (finra_fetch.py), 0 elsewhere.
+
+    short_ratio_z is the 60-day z of short/total volume, computed only from the
+    rows up to each date (FINRA posts day d after its close, so the row for d is
+    known before d+1). short_ratio_has marks the rows that carry real data, so a
+    model can tell "no FINRA day" from "an ordinary one". Zeros, never NaN: a
+    NaN here would shorten the frame and move the fold grid. Only a model input
+    when named in GTRADE_EXTRA_FEATURES (the search, or an A/B, decides).
+    """
+    date_col = 'Date' if 'Date' in df.columns else ('date' if 'date' in df.columns else None)
+    for c in _FINRA_FEATURES:
+        df[c] = 0.0
+    if date_col is None:
+        return df
+    try:
+        f = pd.read_sql("SELECT date, short, total FROM finra_shvol WHERE asset = '%s'"
+                        % table.replace("'", "''"), engine)
+    except Exception:
+        return df
+    if f.empty:
+        return df
+    f = f[f["total"] > 0].drop_duplicates("date").sort_values("date")
+    ratio = (f["short"] / f["total"]).to_numpy()
+    s = pd.Series(ratio, index=pd.to_datetime(f["date"]).dt.normalize())
+    mean = s.rolling(60, min_periods=30).mean()
+    sd = s.rolling(60, min_periods=30).std()
+    z = ((s - mean) / sd).replace([np.inf, -np.inf], np.nan)
+    idx = pd.to_datetime(df[date_col]).dt.normalize()
+    zz = z.reindex(idx.values)
+    df['short_ratio_z'] = np.nan_to_num(zz.to_numpy(dtype=float), nan=0.0)
+    df['short_ratio_has'] = (~zz.isna()).astype(float).to_numpy()
+    return df
+
+
+def add_har_features(df: pd.DataFrame) -> pd.DataFrame:
+    """har_range: the HAR forecast of the next bar's true range as a share of the
+    close (core.levels HAR coefficients, fitted on 830 assets: IC 0.41 against
+    ATR14's 0.36). The one quantity this data measurably predicts; 0 during the
+    22-bar warm-up. Only a model input when named in GTRADE_EXTRA_FEATURES."""
+    from core.levels import HAR_INTERCEPT, HAR_WEIGHTS
+
+    close = df['close'].astype(float)
+    high = df['high'].astype(float) if 'high' in df.columns else close
+    low = df['low'].astype(float) if 'low' in df.columns else close
+    prev = close.shift(1)
+    tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
+    rel = tr / close
+    means = [rel, rel.rolling(5).mean(), rel.rolling(22).mean()]
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mu = HAR_INTERCEPT + sum(w * np.log(m.where(m > 0)) for w, m in zip(HAR_WEIGHTS, means))
+    df['har_range'] = np.nan_to_num(np.exp(mu).to_numpy(dtype=float), nan=0.0,
+                                    posinf=0.0, neginf=0.0)
+    return df
+
+
 _CROSS_LAG_FEATURES = ['lead_sp500_ret', 'lead_vix_ret', 'lead_btc_ret']
 
 
@@ -707,6 +766,10 @@ def build_features(df_raw, table, engine):
     # the walk-forward grid, which is a silent change to fold geometry.
     df = add_breadth_features(df, engine)
     df = add_cot_features(df, table.upper(), engine)
+    # 2026-09-29, both computed for every asset and zero-filled; neither is a
+    # model input unless GTRADE_EXTRA_FEATURES names it.
+    df = add_finra_features(df, table, engine)
+    df = add_har_features(df)
     return add_dsl_features(df, engine, load_dsl_specs())
 
 

@@ -38,13 +38,14 @@ CREATE TABLE IF NOT EXISTS analyst_log (
 # adds the column to a table written before tools existed, because CREATE TABLE
 # IF NOT EXISTS does not alter one that is already there.
 _ADDED_COLUMNS = (("tool_calls_json", "TEXT"), ("mode", "TEXT"), ("brain", "TEXT"),
-                  ("plan", "TEXT"), ("pre_critic_json", "TEXT"), ("revision_of", "TEXT"))
+                  ("plan", "TEXT"), ("pre_critic_json", "TEXT"), ("revision_of", "TEXT"),
+                  ("dropped_json", "TEXT"))
 
 _FIELDS = ["date", "asset", "horizon", "direction", "conviction", "vol_regime",
            "key_risk", "thesis", "evidence_json", "dossier_hash", "llm_model",
            "forecast_pct", "lo_pct", "hi_pct", "atr_at_signal",
            "close_at_signal", "tool_calls_json",
-           "mode", "brain", "plan", "pre_critic_json", "revision_of"]
+           "mode", "brain", "plan", "pre_critic_json", "revision_of", "dropped_json"]
 
 # forecast_pct/lo_pct/hi_pct are in PAYOFF space (what the POSITION earned;
 # see core/analyst/payoff.py and train_payoff.py's SIDE map). A `down`

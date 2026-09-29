@@ -5,6 +5,11 @@ One setting per role, `provider:model`:
     GTRADE_ANALYST_BRAIN=ollama:gemma4:12b              default for every role
     GTRADE_ANALYST_BRAIN_LEAD=ollama-cloud:gpt-oss:120b
     GTRADE_ANALYST_BRAIN_CRITIC=anthropic:claude-sonnet-5
+    GTRADE_ANALYST_BRAIN_HUNTER=claude-code:opus        the source hunter
+
+`claude-code` runs the Claude Code CLI on the subscription (core/analyst/
+claude_code.py); over its daily cap or when it cannot answer, the call goes to
+GTRADE_ANALYST_FALLBACK (default ollama) and the call's `last_label` says so.
 
 Unset everywhere means the old behaviour exactly: the call goes through
 llm_proposer._backend("analyst") on GTRADE_AR_LLM / GTRADE_AR_LLM_MODEL.
@@ -20,8 +25,8 @@ import time
 from contextlib import contextmanager
 
 ROLES = ("solo", "lead", "macro", "fundamental", "technical", "news",
-         "critic", "scout", "memory")
-PROVIDERS = ("ollama", "ollama-cloud", "anthropic", "openai")
+         "critic", "scout", "memory", "hunter")
+PROVIDERS = ("ollama", "ollama-cloud", "claude-code", "anthropic", "openai")
 CLOUD_BASE = "https://ollama.com"
 LOCAL_BASE = "http://127.0.0.1:11434/v1"
 _KEYS = ("GTRADE_AR_LLM", "GTRADE_AR_LLM_MODEL", "GTRADE_AR_LLM_BASE_URL")
@@ -35,7 +40,10 @@ SETTABLE = ("GTRADE_ANALYST_BRAIN", "GTRADE_OLLAMA_MIN_FREE_MB", "GTRADE_OLLAMA_
             "GTRADE_ANALYST_MAX_HOURS", "GTRADE_ANALYST_TOOL_ROUNDS",
             "GTRADE_ANALYST_TOOL_CALLS", "GTRADE_ANALYST_OLLAMA_URL", "OLLAMA_API_KEY",
             "GTRADE_ANALYST_AUTO", "GTRADE_ANALYST_AUTO_MAX", "GTRADE_ANALYST_MODE",
-            "GTRADE_COMBINER", "GTRADE_ANALYST_HOLD_CALLS")
+            "GTRADE_COMBINER", "GTRADE_ANALYST_HOLD_CALLS",
+            "GTRADE_ANALYST_CLAUDE_MODEL", "GTRADE_ANALYST_CLAUDE_MAX_CALLS",
+            "GTRADE_ANALYST_CLAUDE_TURNS", "GTRADE_ANALYST_CLAUDE_TIMEOUT",
+            "GTRADE_ANALYST_FALLBACK", "GTRADE_ANALYST_WEB_CALLS")
 
 
 def parse(spec):
@@ -55,7 +63,10 @@ def spec_for(role):
 
 def env_for(role):
     """The variables this role's calls run under; {} means legacy."""
-    spec = spec_for(role)
+    return _env_of(spec_for(role))
+
+
+def _env_of(spec):
     if not spec:
         return {}
     provider, model = parse(spec)
@@ -69,9 +80,16 @@ def env_for(role):
 
 
 def label(role):
-    spec = spec_for(role)
+    return _label_of(spec_for(role))
+
+
+def _label_of(spec):
     if spec:
         provider, model = parse(spec)
+        if provider == "claude-code" and not model:
+            from core.analyst import claude_code
+
+            model = claude_code.model()
         return "%s:%s" % (provider, model or "auto")
     return ":".join(v for v in (os.getenv("GTRADE_AR_LLM", "anthropic"),
                                 os.getenv("GTRADE_AR_LLM_MODEL")) if v)
@@ -127,18 +145,52 @@ def estimate_hours(calls):
     return total / 3600.0
 
 
-def call_for(role):
-    """f(prompt) -> str running under this role's brain."""
+def _plain_call(role, spec):
+    """f(prompt) through llm_proposer under `spec` (None = the legacy env)."""
     from core import llm_proposer
 
     def call(prompt):
-        with _env(env_for(role)):
-            fn = llm_proposer._backend("analyst")
-            t0 = time.monotonic()
-            out = fn(prompt)
-            _record_speed(label(role), time.monotonic() - t0)
-            return out
+        with _env(_env_of(spec)):
+            return llm_proposer._backend("analyst")(prompt)
 
+    return call
+
+
+def call_for(role):
+    """f(prompt) -> str running under this role's brain.
+
+    The returned function carries `last_label`: the brain that actually
+    answered the last call, which differs from label(role) when claude-code
+    handed the call to the fallback.
+    """
+    spec = spec_for(role)
+    provider = parse(spec)[0] if spec else None
+
+    def call(prompt):
+        t0 = time.monotonic()
+        if provider == "claude-code":
+            from core.analyst import claude_code
+
+            try:
+                if not claude_code.spend():
+                    raise claude_code.ClaudeUnavailable(
+                        "daily cap of %d calls reached" % claude_code.cap())
+                out = claude_code.run(prompt, parse(spec)[1] or claude_code.model(),
+                                      claude_code.turns(), claude_code.timeout())
+                call.last_label = _label_of(spec)
+            except claude_code.ClaudeUnavailable as exc:
+                fallback = os.getenv("GTRADE_ANALYST_FALLBACK") or "ollama"
+                call.last_label = _label_of(fallback) + " (fallback)"
+                print("[analyst] claude-code did not answer (%s); %s takes the call"
+                      % (exc, call.last_label))
+                out = _plain_call(role, fallback)(prompt)
+        else:
+            out = _plain_call(role, spec)(prompt)
+            call.last_label = label(role)
+        _record_speed(call.last_label, time.monotonic() - t0)
+        return out
+
+    call.last_label = label(role)
     return call
 
 
@@ -159,7 +211,21 @@ _VALID = {
     "GTRADE_ANALYST_MODE": lambda v: v in ("solo", "team"),
     "GTRADE_COMBINER": lambda v: v in ("fixed", "stack"),
     "GTRADE_ANALYST_HOLD_CALLS": lambda v: v in ("0", "1"),
+    "GTRADE_ANALYST_CLAUDE_MODEL": lambda v: v in ("sonnet", "opus", "haiku", "fable"),
+    "GTRADE_ANALYST_CLAUDE_MAX_CALLS": _positive_int,
+    "GTRADE_ANALYST_CLAUDE_TURNS": _positive_int,
+    "GTRADE_ANALYST_CLAUDE_TIMEOUT": _positive_int,
+    "GTRADE_ANALYST_FALLBACK": lambda v: _parses(v) and not v.startswith("claude-code"),
+    "GTRADE_ANALYST_WEB_CALLS": str.isdigit,
 }
+
+
+def _parses(v):
+    try:
+        parse(v)
+        return True
+    except ValueError:
+        return False
 
 
 def env_key(name):

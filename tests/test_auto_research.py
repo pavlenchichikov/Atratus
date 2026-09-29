@@ -3124,3 +3124,44 @@ def test_the_search_no_longer_proposes_an_sp500_lead_but_still_builds_one():
     assert not ar._searchable(sp, cols) and ar._searchable(vix, cols)
     assert ar.validate_spec(sp, cols)  # an adopted genome carrying it still builds
     assert "sp500" not in ar._LEAD_LEADERS
+
+
+def test_direction_bases_rekey_on_the_edge_columns_and_drop_rows_without_them(monkeypatch):
+    rows = [{"Asset": "A", "Score": 1.0, "Dir_Edge": 0.01, "Dir_Edge_Clean": 0.02},
+            {"Asset": "B", "Score": 2.0}]
+    assert ar.rekey_rows(rows, basis="dir_edge") == [{"Asset": "A", "Score": 0.01}]
+    assert ar.rekey_rows(rows, basis="dir_edge_clean") == [{"Asset": "A", "Score": 0.02}]
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge_clean")
+    assert ar._score_basis() == "dir_edge_clean"
+    assert ar._adopt_floor("mean") == ar._adopt_floor("mean", basis="ens_acc")
+    monkeypatch.setenv("GTRADE_AR_DECISION_BASIS", "dir_edge")
+    assert ar.decision_basis() == "dir_edge"
+
+
+def test_precision_weighted_stats_weigh_assets_by_how_many_bars_they_carry():
+    ref = [{"Asset": "A", "Dir_Edge": 0.00, "Dir_N": 1000},
+           {"Asset": "B", "Dir_Edge": 0.00, "Dir_N": 100},
+           {"Asset": "C", "Dir_Edge": 0.00, "Dir_N": 1000}]
+    var = [{"Asset": "A", "Dir_Edge": 0.03, "Dir_N": 1000},
+           {"Asset": "B", "Dir_Edge": -0.10, "Dir_N": 100},      # loud and short
+           {"Asset": "C", "Dir_Edge": 0.03, "Dir_N": 1000}]
+    p, value, deltas, tag = ar.precision_weighted_stats(ref, var, clean=False)
+    assert deltas == [0.03, -0.10, 0.03]
+    # weights 1000:100:1000, so the short loud asset barely moves the mean
+    assert abs(value - (0.03 * 1000 + -0.10 * 100 + 0.03 * 1000) / 2100) < 1e-12
+    assert value > 0 and p < 0.5 and "weighted" in tag
+    # no N column (older rows): honest "no evidence", not a crash
+    assert ar.precision_weighted_stats([{"Asset": "A", "Dir_Edge": 0.0}],
+                                       [{"Asset": "A", "Dir_Edge": 0.1}])[0] == 1.0
+
+
+def test_the_search_gate_uses_the_weighted_test_when_rows_carry_bar_counts(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge")
+    full_ref = [{"Asset": "A", "Dir_Edge": 0.0, "Dir_N": 1000},
+                {"Asset": "B", "Dir_Edge": 0.0, "Dir_N": 100}]
+    full_var = [{"Asset": "A", "Dir_Edge": 0.03, "Dir_N": 1000},
+                {"Asset": "B", "Dir_Edge": -0.10, "Dir_N": 100}]
+    base, ext = ar.rekey_rows(full_ref), ar.rekey_rows(full_var)
+    assert base[0]["N"] == 1000
+    _p, value, _deltas, tag = ar.holdout_stats(base, ext)
+    assert "weighted" in tag and abs(value - (0.03 * 1000 - 0.10 * 100) / 1100) < 1e-12

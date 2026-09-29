@@ -173,6 +173,38 @@ def findings_summary():
             "replicated": replicated}
 
 
+PROPOSER_MIN_CYCLES = 10
+
+
+def proposer_edges(journal=None, min_cycles=PROPOSER_MIN_CYCLES):
+    """{proposer: {cycles, mean_best}} over the direction-yardstick cycles.
+
+    mean_best is the mean over cycles of the best candidate's edge delta, None
+    until that proposer has min_cycles of them: fewer is an anecdote.
+    """
+    best = {}
+    for rec in findings_all() if journal is None else journal:
+        if rec.get("basis") not in ("dir_edge", "dir_edge_clean"):
+            continue
+        vals = [w["value"] for w in rec.get("winners") or []
+                if isinstance(w.get("value"), (int, float))]
+        if vals:
+            best.setdefault(rec.get("proposer") or "evolutionary", []).append(max(vals))
+    return {k: {"cycles": len(v),
+                "mean_best": round(sum(v) / len(v), 6) if len(v) >= min_cycles else None}
+            for k, v in best.items()}
+
+
+def proposer_line(edges):
+    """One print line comparing the proposers, or None until two have enough cycles."""
+    ready = {k: v for k, v in edges.items() if v["mean_best"] is not None}
+    if len(ready) < 2:
+        return None
+    return "proposers (mean best direction edge per cycle): " + ", ".join(
+        "%s %+.4f over %d" % (k, v["mean_best"], v["cycles"])
+        for k, v in sorted(ready.items(), key=lambda kv: -kv[1]["mean_best"]))
+
+
 def findings_recent(n=20):
     """The last n findings-journal records, newest first (empty on unreadable file)."""
     return list(reversed(_load(FINDINGS_PATH, [])))[:n]

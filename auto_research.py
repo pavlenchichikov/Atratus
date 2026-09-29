@@ -417,7 +417,7 @@ def _adopt_floor(objective="mean", basis=None):
     # own knob - but inventing a second default before measuring one would be
     # picking a floor to fit a result, which is what the frozen basis exists to
     # stop.
-    if b in ("net_auc", "net_gain", "ens_auc", "ens_acc"):
+    if b in ("net_auc", "net_gain", "ens_auc", "ens_acc", "dir_edge", "dir_edge_clean"):
         try:
             return float(os.getenv("GTRADE_AR_ADOPT_AUC") or "0.005")
         except ValueError:
@@ -511,6 +511,12 @@ def adopt_ok(significant, value, objective, neural_lift=None):
 def holdout_stats(base_rows, ext_rows, objective="mean"):
     """Raw held-out stats for a variant: (wilcoxon p, objective value, deltas, tag).
     No adoption decision - main applies BH across the axis-winners."""
+    if base_rows and ext_rows and all("N" in r for r in list(base_rows) + list(ext_rows)):
+        # Direction-edge rows carry their bar counts: weigh by precision.
+        return precision_weighted_stats(
+            [{"Asset": r["Asset"], "Dir_Edge": r["Score"], "Dir_N": r["N"]} for r in base_rows],
+            [{"Asset": r["Asset"], "Dir_Edge": r["Score"], "Dir_N": r["N"]} for r in ext_rows],
+            clean=False)
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in base_rows}
     value, deltas = _objective_delta(ext_rows, base_score, objective)
     if not deltas:
@@ -526,6 +532,46 @@ def holdout_stats(base_rows, ext_rows, objective="mean"):
     unit = "Score" if _score_basis() in ("raw", "neural") else _score_basis()
     tag = "%s d%s %+.4f, wilcoxon p=%.3f (%d/%d up)" % (
         objective, unit, value, p, up, len(deltas))
+    return p, value, deltas, tag
+
+
+def precision_weighted_stats(ref_rows, var_rows, clean=True):
+    """(one-sided p, weighted mean delta, raw deltas, tag) for a direction-edge A/B.
+
+    The gate's spread is between-asset heterogeneity, not retraining noise
+    (2026-09-02): a short, loud asset moves an equal-weight mean as much as a
+    long, quiet one. Here every asset's delta is weighted by its precision,
+    1 / var with var = 0.5/N_cand + 0.5/N_ref (the binomial bound for a
+    difference of two accuracies over N bars), and the weighted mean is tested
+    as a z. Rows without Dir_N (older reports) give p = 1.0: no evidence, not a
+    guess.
+    """
+    import math
+
+    col, ncol = ("Dir_Edge_Clean", "Dir_N_Clean") if clean else ("Dir_Edge", "Dir_N")
+    ref = {r.get("Asset"): r for r in ref_rows or []}
+    deltas, weights = [], []
+    for v in var_rows or []:
+        r = ref.get(v.get("Asset"))
+        if not r:
+            continue
+        try:
+            d = float(v[col]) - float(r[col])
+            nv, nr = float(v.get(ncol) or 0), float(r.get(ncol) or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if nv <= 0 or nr <= 0:
+            continue
+        deltas.append(d)
+        weights.append(1.0 / (0.5 / nv + 0.5 / nr))
+    if not deltas:
+        return 1.0, 0.0, [], "no common held-out assets with %s" % ncol
+    w = sum(weights)
+    value = sum(d * x for d, x in zip(deltas, weights)) / w
+    z = value * math.sqrt(w)
+    p = 0.5 * math.erfc(z / math.sqrt(2))          # one-sided, H1: value > 0
+    tag = "weighted d%s %+.4f (z %.2f, p=%.3f), raw mean %+.4f over %d assets" % (
+        col, value, z, p, sum(deltas) / len(deltas), len(deltas))
     return p, value, deltas, tag
 
 
@@ -1090,7 +1136,7 @@ def _score_basis():
              that reason. Ens_Acc is averaged over every fold."""
     b = (os.getenv("GTRADE_AR_SCORE_BASIS") or "raw").strip().lower()
     if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc",
-                 "trade_t"):
+                 "trade_t", "dir_edge", "dir_edge_clean"):
         logger.warning("unknown GTRADE_AR_SCORE_BASIS %r, using raw", b)
         return "raw"
     return b
@@ -1115,7 +1161,8 @@ def decision_basis():
     b = (os.getenv("GTRADE_AR_DECISION_BASIS") or "").strip().lower()
     if not b:
         return _score_basis()
-    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc"):
+    if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc",
+                 "dir_edge", "dir_edge_clean"):
         logger.warning("unknown GTRADE_AR_DECISION_BASIS %r, using the search "
                        "basis", b)
         return _score_basis()
@@ -1135,6 +1182,33 @@ def ens_auc_rows(rows):
             out.append({"Asset": r["Asset"], "Score": float(v)})
         except (TypeError, ValueError):
             continue
+    return out
+
+
+def dir_edge_rows(rows, clean=False):
+    """Re-key quality rows onto the EDGE over the validation majority on the next
+    bar's direction (train_hybrid Dir_Edge / Dir_Edge_Clean).
+
+    The one yardstick every candidate shares, whatever label it trained on:
+    Ens_Acc is accuracy on the model's own label, and on 2026-09-28 a change read
+    +1.1 pts there and 0.0 on direction. An edge, not a level, so a label or a
+    period whose base rate is easy does not look like skill. Rows without the
+    column (older reports) are dropped, loudly empty rather than silently another
+    column, as ens_acc_rows does."""
+    col, ncol = ("Dir_Edge_Clean", "Dir_N_Clean") if clean else ("Dir_Edge", "Dir_N")
+    out = []
+    for r in rows:
+        v = r.get(col)
+        if v is None:
+            continue
+        try:
+            row = {"Asset": r["Asset"], "Score": float(v)}
+        except (TypeError, ValueError):
+            continue
+        if r.get(ncol):
+            # The bar count travels with the edge, so holdout_stats can weigh it.
+            row["N"] = int(r[ncol])
+        out.append(row)
     return out
 
 
@@ -1267,6 +1341,8 @@ def rekey_rows(rows, basis=None):
         return ens_auc_rows(rows)
     if basis == "ens_acc":
         return ens_acc_rows(rows)
+    if basis in ("dir_edge", "dir_edge_clean"):
+        return dir_edge_rows(rows, clean=basis == "dir_edge_clean")
     if basis == "trade_t":
         return trade_t_rows(rows)
     return rows
@@ -2300,6 +2376,9 @@ def run_qd(train_fn=None):
     mem = ar_memory.findings_summary()
     print("[auto-research] memory: %d experiments tried, %d adoptable, %d replicated so far."
           % (mem["experiments"], mem["adoptable"], mem["replicated"]))
+    line = ar_memory.proposer_line(ar_memory.proposer_edges())
+    if line:
+        print("[auto-research] " + line)
     print("[qd] %d niches illuminated; review _qd_archive.json; nothing auto-adopted." % len(archive))
     if ar_rl.rl_on():
         ctl = _rl_controller()
@@ -3926,6 +4005,9 @@ def main():
     mem = ar_memory.findings_summary()
     print("[auto-research] memory: %d experiments tried, %d adoptable, %d replicated so far."
           % (mem["experiments"], mem["adoptable"], mem["replicated"]))
+    line = ar_memory.proposer_line(ar_memory.proposer_edges())
+    if line:
+        print("[auto-research] " + line)
     print("[auto-research] nothing adopted automatically; review _auto_research_log.json.")
 
 
