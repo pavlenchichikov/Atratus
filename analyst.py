@@ -41,6 +41,11 @@ def _apply_llm_flag(llm, model, team=False):
     route (GTRADE_AR_LLM*, already set above, so the .env model and base URL
     survive); only ollama-cloud needs a solo brain, with the configured model."""
     os.environ.pop("GTRADE_ANALYST_BRAIN_SOLO", None)
+    if llm == "claude-code":
+        # Its own model names (sonnet, opus); the Ollama model in .env is not one.
+        os.environ["GTRADE_ANALYST_BRAIN" if team else "GTRADE_ANALYST_BRAIN_SOLO"] = (
+            "claude-code:%s" % (model or ""))
+        return
     if team:
         # Every team role, for this process only; a role set in .env still wins.
         os.environ["GTRADE_ANALYST_BRAIN"] = "%s:%s" % (
@@ -58,7 +63,7 @@ def _apply_llm_flag(llm, model, team=False):
 def _active_gate(asset, horizon, bar_date, revise=None):
     """(skip, revision_of) for one asset on one horizon.
 
-    Accuracy first (owner, 2026-09-29): by default a run re-judges a call that
+    Accuracy first (2026-09-29): by default a run re-judges a call that
     is still in force and records it as a revision of that call, so revisions
     and the calls they replaced are scored against each other
     (score.revision_scores). GTRADE_ANALYST_HOLD_CALLS=1 holds such calls
@@ -106,7 +111,7 @@ def panel_assets():
 def _eligible(today=None):
     """Assets worth paying for a judgment on today.
 
-    The watchlist, because that is what the owner is actually watching, plus
+    The watchlist, because that is what the user is actually watching, plus
     anything reporting earnings today, because that is when an independent
     read is worth most.
 
@@ -245,9 +250,9 @@ def cmd_run(args):
 
     # An explicit --llm/--model wins over .env for this run only, so trying a
     # different model never edits the file the next run reads.
-    if getattr(args, "llm", None) and args.llm != "ollama-cloud":
+    if getattr(args, "llm", None) and args.llm not in ("ollama-cloud", "claude-code"):
         os.environ["GTRADE_AR_LLM"] = args.llm
-    if getattr(args, "model", None):
+    if getattr(args, "model", None) and getattr(args, "llm", None) != "claude-code":
         os.environ["GTRADE_AR_LLM_MODEL"] = args.model
     elif os.getenv("GTRADE_ANALYST_MODEL"):
         # The analyst's own model, apart from the one the research loop's
@@ -284,8 +289,10 @@ def cmd_run(args):
     # brief, which turns a 28-asset watchlist pass from five hours into
     # seventeen. --depth overrides when the default guesses wrong.
     depth = getattr(args, "depth", None) or ("full" if named else "brief")
+    # The brain that will answer, not GTRADE_AR_LLM: with a claude-code or
+    # cloud brain that variable still names the legacy provider.
     print("[analyst] %d asset(s) via %s, depth %s%s" % (
-        len(targets), os.getenv("GTRADE_AR_LLM", "anthropic"), depth,
+        len(targets), brains.label("lead" if mode == "team" else "solo"), depth,
         " (named)" if named else ""))
 
     try:
@@ -463,9 +470,9 @@ def cmd_intraday(args):
     if (os.getenv("GTRADE_ANALYST") or "1").strip() == "0":
         print("[intraday] GTRADE_ANALYST=0, nothing to do.")
         return 0
-    if getattr(args, "llm", None) and args.llm != "ollama-cloud":
+    if getattr(args, "llm", None) and args.llm not in ("ollama-cloud", "claude-code"):
         os.environ["GTRADE_AR_LLM"] = args.llm
-    if getattr(args, "model", None):
+    if getattr(args, "model", None) and getattr(args, "llm", None) != "claude-code":
         os.environ["GTRADE_AR_LLM_MODEL"] = args.model
     elif os.getenv("GTRADE_ANALYST_MODEL"):
         # The analyst's own model, apart from the one the research loop's
@@ -1003,16 +1010,24 @@ def cmd_learn(args):
     return 0
 
 
+LLM_CHOICES = ("anthropic", "openai", "ollama", "ollama-cloud", "claude-code")
+
+
 def main(argv=None):
     import urllib3  # GTRADE_SSL_VERIFY=0 behind the proxy, as in data_engine
 
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    args = build_parser().parse_args(argv)
+    return args.fn(args)
+
+
+def build_parser():
     p = argparse.ArgumentParser(description="analyst agent")
     sub = p.add_subparsers(dest="cmd", required=True)
     run = sub.add_parser("run")
     run.add_argument("--assets", help="comma-separated assets to judge now, "
                                       "instead of the watchlist")
-    run.add_argument("--llm", choices=("anthropic", "openai", "ollama", "ollama-cloud"),
+    run.add_argument("--llm", choices=LLM_CHOICES,
                      help="provider for this run only")
     run.add_argument("--model", help="model name for this run only")
     run.add_argument("--revise", action="store_true",
@@ -1065,7 +1080,7 @@ def main(argv=None):
                                          "asset: direction, gap, range, stand aside")
     it.add_argument("--assets", help="comma-separated assets, instead of the "
                                      "intraday panel (GTRADE_ANALYST_INTRADAY_PANEL)")
-    it.add_argument("--llm", choices=("anthropic", "openai", "ollama", "ollama-cloud"),
+    it.add_argument("--llm", choices=LLM_CHOICES,
                     help="provider for this run only")
     it.add_argument("--model", help="model name for this run only")
     it.add_argument("--depth", choices=("brief", "full"),
@@ -1112,8 +1127,7 @@ def main(argv=None):
     ma = sub.add_parser("macro", help="today's top-down view from raw data")
     ma.add_argument("--brain", default="", help="provider:model for this run only")
     ma.set_defaults(fn=cmd_macro)
-    args = p.parse_args(argv)
-    return args.fn(args)
+    return p
 
 
 if __name__ == "__main__":

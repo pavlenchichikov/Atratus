@@ -1,4 +1,4 @@
-"""Claude Code as an analyst brain, on the owner's subscription.
+"""Claude Code as an analyst brain, on a Claude subscription.
 
 One call is one headless `claude -p` run: the prompt on stdin, the answer in
 the JSON reply's `result`. It may search and read the web with its own tools,
@@ -9,7 +9,7 @@ It must never bill the API. With ANTHROPIC_API_KEY in the environment Claude
 Code uses the key instead of the subscription login, so both API variables are
 removed from the child's environment, and `--bare` is not used because it
 forces key auth. Calls are capped per day (GTRADE_ANALYST_CLAUDE_MAX_CALLS),
-since subscription limits are finite and the operator also works in Claude Code.
+since subscription limits are finite and shared with interactive use.
 """
 
 import datetime

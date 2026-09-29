@@ -64,8 +64,8 @@
 
 ## How it works
 
-1. `data_engine.py` downloads up to 15 years of daily and weekly quotes from Yahoo Finance and MOEX into `market.db` (SQLite). PEPE and SHIB come from Binance instead: Yahoo rounds them to 1e-6 and 1e-8, so 90% and 81% of their closes repeated the previous one and a single rounding step read as a 20% move. Every run ends by rebuilding `market_breadth`, the book-wide breadth feature, which nothing else refreshes.
-2. `train_hybrid.py` builds the features (above), trains the ensemble, and saves the champion together with its scaler and probability calibrator, chosen by walk-forward accuracy on the next bar. The quality report carries `Ens_Acc` and `CB_Acc_Mean` beside the older columns: those two are averaged over every fold, while `CB_Acc` belongs to the champion fold alone.
+1. `data_engine.py` downloads up to 15 years of daily and weekly quotes from Yahoo Finance and MOEX into `market.db` (SQLite). PEPE and SHIB come from Binance instead: Yahoo rounds them to 1e-6 and 1e-8, so 90% and 81% of their closes repeated the previous one and a single rounding step read as a 20% move. Every run ends by rebuilding `market_breadth`, the book-wide breadth feature, which nothing else refreshes, and then tops up `finra_shvol`, FINRA's daily short-sale volume for the US names (`finra_fetch.py`; `python finra_fetch.py --days 2200` backfills about six years by hand).
+2. `train_hybrid.py` builds the features (above), trains the ensemble, and saves the champion together with its scaler and probability calibrator, chosen by walk-forward accuracy on the next bar. The quality report carries `Ens_Acc` and `CB_Acc_Mean` beside the older columns: those two are averaged over every fold, while `CB_Acc` belongs to the champion fold alone. It also carries the **direction yardstick**: `Dir_Acc` is accuracy on the next bar's direction whatever label the model trained on, `Dir_Base` the same for "always the validation majority", `Dir_Edge` the difference, and `Dir_Edge_Clean` the difference on bars that moved at least half the median move (noise days left out), with their row counts `Dir_N` and `Dir_N_Clean`. `Ens_Acc` is accuracy on the model's OWN label, so two genomes with different labels cannot be compared on it; `Dir_Edge_Clean` can.
 3. `predict.py` prints BUY / SELL / WAIT with confidence for all assets.
 4. `backtest.py` checks champions on held-out data: PnL, win rate, Sharpe, directional accuracy, Brier, alpha vs buy & hold.
 5. `risk_manager.py` and `portfolio.py` do position sizing, loss limits and correlation checks. Tail risk is gated by Taleb risk (where today's volatility sits in the asset's own history, 0 to 1): size shrinks above 0.70, no new entry either side above 0.85. See [Taleb risk](#taleb-risk).
@@ -191,6 +191,30 @@ of the first 29 assets. Three things came out of it:
   The list is grown rather than redrawn, so every asset already in it stays and
   earlier measurements remain comparable.
 
+### One yardstick: next-bar direction
+
+Every candidate is now also measured on the same question, whatever label it
+trained on: is the next bar's direction called right more often than "always the
+validation majority"? The bases are `dir_edge` and `dir_edge_clean` (the second
+leaves out bars that moved less than half the median move). They are search
+basis `8` and `9` in `auto_research.bat`, and `dir_edge_clean` is the default
+**decision basis** in `[AL]` and `[ABC]` (answer `4`, or Enter).
+
+On these two bases the A/B is **precision-weighted**: each held-out asset's
+delta is weighted by `1 / (0.5/N_candidate + 0.5/N_reference)`, its row counts,
+and tested one-sided. An asset scored on 40 clean days no longer counts as much
+as one scored on 400. An A/B also refuses a candidate whose mean `Ens_Acc` over
+the held-out assets is not above the mean `Base_Acc`, the no-model barrier
+`train_hybrid` scores on the same folds and label.
+
+The RL director is paid on the same yardstick. On a direction basis, every cycle
+that gated at least one candidate earns `(clip(z, -1, 1) + 1) / 2` per hour,
+where `z` is the best candidate's one-sided p-value turned into a z-score. The
+bandit therefore learns from the nine cycles in ten that never reach an A/B, not
+only from the tenth. A pass or a replication still pays on top. After each run,
+once the LLM and the evolutionary proposer have ten direction-basis cycles each,
+one line compares their mean best edge per cycle.
+
 Permanent cross-run memory: `_ar_tried.json` (no candidate is re-tested), `_ar_eval_cache.json` (base trainings reused until new data arrives) and `_ar_findings.json` (the cumulative findings journal), so the budget buys **new** experiments every run.
 
 **Research wiki (optional, `GTRADE_AR_WIKI=1`).** Distills the append-only findings journal into a compounding, self-maintained knowledge base (Karpathy's "LLM Wiki" pattern): after each run an LLM folds new findings into a few interlinked markdown topic pages under `_ar_wiki/`, tagging claims by confidence and reconciling contradictions, and the proposer reads that distilled wiki instead of only the last few findings. The pages also render read-only on `/research`. Off by default (byte-identical).
@@ -213,7 +237,7 @@ a working default, so pressing Enter through it is a valid run.
 | LLM only: reflect | `2` makes the model first write one line on why the recent experiments failed, then propose with that in front of it. One extra call per step |
 | `[3]` Budget | How many NEW candidates this run. Past candidates are never re-tested |
 | `[4]` Objective | How per-asset lifts become one number. `mean` by default; `cvar` and `min` optimize the worst assets instead of the average. Six options, table below |
-| `[4b]` Score basis | `1` raw ensemble Score, `2` the neural contribution, `3` the nets' own AUC, `4` net gain, `5` ensemble AUC, `6` ensemble ACCURACY, `7` pooled trade t. See below |
+| `[4b]` Score basis | `1` raw ensemble Score, `2` the neural contribution, `3` the nets' own AUC, `4` net gain, `5` ensemble AUC, `6` ensemble ACCURACY, `7` pooled trade t, `8` direction edge, `9` direction edge without noise days. See below and [One yardstick](#one-yardstick-next-bar-direction) |
 | `[5]` Research wiki | `2` folds this run's findings into the knowledge base under `_ar_wiki/` and lets the proposer read it. Uses the LLM backend, so it costs one call at the end. Off by default |
 | `[6]` RL scheduler | `2` lets the bandit allocate the budget across child sources instead of drawing uniformly. Off by default; it never affects what passes the gate |
 | Illumination | Not a prompt: `GTRADE_AR_ILLUM` in the launcher's knobs block. `cb` (default) illuminates the QD archive on the CatBoost-only screen, `full` on real nets. See below |
@@ -700,7 +724,10 @@ choose, gemma4:26b judged SBER from the dossier alone.
 | Tool | What comes back | Covers |
 |---|---|---|
 | `news_search` | titles on a query the model picks, from many publishers | every asset |
-| `macro_series` | FRED statistics: US 2y/10y yields and curve, fed funds, CPI, unemployment, breakevens, high-yield spread, Brent, broad dollar, with 1m/3m/1y changes | every asset |
+| `macro_series` | FRED statistics: US 2y/10y yields and curve, fed funds, CPI, unemployment, breakevens, high-yield spread, Brent, broad dollar, VIX, with 1m/3m/1y changes | every asset |
+| `web_search` | titles, links and snippets from the web, through Ollama's web search API (needs `OLLAMA_API_KEY`; without it the menu says "unavailable") | every asset |
+| `web_fetch` | one page or data file: JSON and CSV come back as rows, HTML as plain text, 8000 characters at most | every asset |
+| `raw_source` | the verified sources the hunter found for this asset's market (see [Finding new sources](#finding-new-sources)); with no name, the list | every asset |
 | `attention` | daily English Wikipedia page views, last week against the prior quarter | every asset |
 | `company_financials` | revenue, net income, operating cash flow, EPS and shares as filed with the SEC (XBRL) | US-listed names |
 | `insider_filings` | trades officers DISCLOSED to the SEC on Form 4 | US-listed names |
@@ -734,9 +761,14 @@ rebuilt from what it saw:
   (`--as-of`, `--back`) is offered only those; an RSS feed has no archive, so
   `news_search` is refused for a past date rather than answered with today's
   news.
-- **The registry is an allow-list, never a fetch-any-URL.** Everything a tool
-  returns goes straight into a prompt, so a model that could be told which page
-  to read would be steerable through a headline.
+- **What a page says is data, not an instruction.** `web_fetch` reads a page
+  the model chose, and everything it returns goes into a prompt, so a page could
+  try to steer the model. Three things bound that: rating, target and forecast
+  sites are refused by domain before anything is fetched; whatever the model
+  cites as evidence passes the raw-evidence check (see
+  [Raw evidence, checked by code](#raw-evidence-checked-by-code)); and every
+  fetch is recorded on the row, so a strange verdict can be traced to the page
+  behind it. `GTRADE_ANALYST_WEB_CALLS=0` turns the web tools off.
 
 A tool may return material. It may not return somebody's conclusion: sell-side
 consensus, price targets, broker ratings and the project's own Guru Council are
@@ -760,6 +792,14 @@ python analyst.py run --assets SBER --horizons 5,20      # a week and a month ah
 python analyst.py run --panel --back 60      # the fixed panel over the last 60 trading dates
 python analyst.py score                      # standings against the baselines, and the verdict
 python analyst.py backfill                   # fill outcomes whose horizon has elapsed
+python analyst.py run --assets SBER --llm claude-code --model claude-opus-5-5   # Claude Code, this run only
+python analyst.py run --assets SBER,AAPL --mode team --depth deep   # four specialists, a lead and a critic
+python analyst.py auto                       # macro view, source re-check, the scout's picks, a daily report
+python analyst.py learn                      # a lesson from every newly scored call
+python analyst.py brains                     # which model thinks for which role
+python analyst.py hunt --market all          # look for new raw data sources, keep the verified ones
+python analyst.py sources                    # the source registry; --off NAME, --on NAME, --recheck
+python analyst.py macro                      # today's top-down view, printed
 ```
 
 The horizon is in trading days. A run judges **1 and 20** unless told
@@ -798,6 +838,157 @@ with sixteen minutes of local inference thrown away. Now:
 
 The reason is the useful half. `conviction=2.5` is a prompt to fix; `the call
 itself failed` is a dead provider; a count alone cannot tell them apart.
+
+### Brains: which model thinks for which role
+
+Every step of the analyst is a role, and every role can run on its own model:
+
+| Role | What it does |
+|---|---|
+| `solo` | the one analyst of a solo run |
+| `lead` | writes the verdict in a team run, from the specialists' reports |
+| `macro`, `fundamental`, `technical`, `news` | the four team specialists; `macro` also builds the daily macro view |
+| `critic` | argues against the verdict in a `--depth deep` run, and may change it |
+| `scout` | picks which assets an auto run looks at |
+| `memory` | writes a lesson from each scored call |
+| `hunter` | searches for new raw data sources |
+
+A role is set as `provider:model`. A role with nothing set uses the default
+(`GTRADE_ANALYST_BRAIN`); with no default at all, the old `GTRADE_AR_LLM` route.
+
+| Provider | Where it runs | Cost |
+|---|---|---|
+| `ollama` | a local model on this machine (`ollama list`) | free, uses the GPU or the CPU |
+| `ollama-cloud` | Ollama Cloud (`https://ollama.com`) | needs `OLLAMA_API_KEY` |
+| `claude-code` | the Claude Code CLI, on a Claude subscription | no API bill; subscription limits apply |
+| `anthropic`, `openai` | their APIs | paid per token |
+
+```text
+GTRADE_ANALYST_BRAIN=claude-code:claude-opus-5-5     every role
+GTRADE_ANALYST_BRAIN_CRITIC=ollama:gemma4:26b        one role on another model
+GTRADE_ANALYST_FALLBACK=ollama:gemma4:26b            answers when claude-code cannot
+```
+
+Every setting has a menu entry: `run_gtrade.bat` -> `[AN]` -> `[M] Models`
+shows each role with its model and its measured seconds per call, and sets the
+default (`D`), one role (`R`), a role back to the default (`U`), the Ollama
+Cloud key typed hidden (`K`), and a one-call check of every model (`P`). The
+same from the command line: `python analyst.py brains --set default=...`,
+`--set critic=...`, `--unset critic`, `--cloud-key`, `--ping`. Values are
+checked before they are written to `.env`, because a bad number there would stop
+every later run at startup.
+
+**Claude Code as a brain.** Each call is one headless `claude -p` run: the
+prompt on stdin, the answer from the JSON reply. It may search and read the web
+with its own tools and do nothing else: no shell, no file edits, an empty
+temporary folder as its working directory, no MCP servers, no saved session.
+`ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from its
+environment, because with a key present the CLI bills the API instead of the
+subscription. For the same reason `--bare` is never used: it forces key
+authentication.
+
+Calls are capped per day (`GTRADE_ANALYST_CLAUDE_MAX_CALLS`, default 20,
+counted in `_analyst_claude_calls.json`). Over the cap, when the CLI is missing,
+when it times out or when it reports a usage limit, the call goes to
+`GTRADE_ANALYST_FALLBACK` (default `ollama`), the console says why, and the
+judgment row records the brain that actually answered, for example
+`ollama:gemma4:26b (fallback)`. That keeps the accuracy of each brain separable
+in `score`. A judgment usually costs 2 to 3 calls (a round asking for sources,
+then the verdict); a team run with a critic costs 10 to 12 per asset.
+
+### Claude Code as the brain, step by step
+
+1. Install Claude Code and log in once with your subscription (`claude` in a
+   terminal, then `/login`). `claude --version` must answer.
+2. `run_gtrade.bat` -> `AN` -> `M` -> `D` -> provider `5` (claude-code) ->
+   model: Enter for Sonnet, `opus` for the newest Opus, or an exact id such as
+   `claude-opus-5-5`. Every role now shows `claude-code:...`.
+3. Still in `M`: `C` sets the Claude Code limits. Calls per day `100` is a good
+   start for team runs; Enter keeps turns at 12; a timeout of `900` seconds
+   leaves room for Opus with web searches on a deep run.
+4. `F` sets the fallback. Local `ollama` is free but slow, and while a training
+   holds the GPU it runs on the CPU. `ollama-cloud` needs the key from `K`.
+5. `W` sets how many web searches and page reads one judgment may make
+   (default 6, `0` turns the web off).
+6. `P` sends one short call to each model. Claude Code should answer `OK`.
+7. Run as usual: `AN` -> `R`, Enter at the provider prompt, and the models from
+   `M` are used. Picking `5` there switches one run to Claude Code without
+   touching the settings, and asks for the model.
+
+Only one role on Claude Code, for example the source hunter:
+`M` -> `R` -> `hunter` -> `5` -> model.
+
+### Raw evidence, checked by code
+
+A judgment cites its evidence in two forms. A dossier field by name (`close`,
+`policy_rate`), checked as before: a name the dossier does not have rejects the
+judgment. Or an outside item, something the model read or a tool it called:
+
+```json
+{"source": "https://www.newyorkfed.org/...", "kind": "data", "value": "SOFR 3.90", "asof": "2026-09-28"}
+```
+
+`core/analyst/evidence.py` keeps an outside item only if its `kind` is one of
+`data`, `filing`, `statistic`, `price` or `news`; its source is a URL or a tool
+that was actually called in this judgment; the site is not a ratings, targets or
+forecast site (TipRanks, MarketBeat, Seeking Alpha, Zacks, TradingView ideas and
+the like, subdomains included); the text names no conclusion (consensus,
+rating, price target, upgrade, as whole words, so "operating income" passes);
+and, for news, it is at most the second story from that publisher and no older
+than 90 days. Dropped items and the reason for each are stored on the row
+(`analyst_log.dropped_json`). A judgment left with no evidence at all is
+rejected and asked again, and is never scored.
+
+### Finding new sources
+
+The hunter looks for free, machine-readable RAW data for one market (`us`,
+`ru`, `eu`, `crypto`, `commodity`, `fx`, `macro`, or `all`): official
+statistics, exchange data, volumes, positioning, rates, filings. It proposes a
+URL template that may carry `{ticker}`, `{secid}` (MOEX), `{pair}` (Binance) or
+`{date}`. Nothing it says is trusted. Code fetches every candidate with a real
+asset substituted and keeps it only if the reply:
+
+- parses as rows: JSON, CSV, MOEX ISS, or the World Bank's `[metadata, [rows]]`;
+- has at least three rows, a date field and a numeric field;
+- is fresh for its frequency: 10 days daily, 17 weekly, 35 monthly, 100 quarterly;
+- is not on a ratings or forecast site.
+
+An HTML error page that answers 200 has no rows and is refused. Kept sources go
+to the `analyst_sources` table with a sample, and the `raw_source` tool hands
+them to every brain, local Ollama included, sorted oldest to newest even when
+the feed lists the newest first. An auto run re-checks the registry once a week
+and marks a source `broken` when it stops answering; a source switched `off` by
+hand stays off. Only GET requests are made, and nothing fetched is executed.
+
+```bash
+python analyst.py hunt --market macro                      # the hunter role's model
+python analyst.py hunt --market ru --brain claude-code:opus  # another model, this hunt only
+python analyst.py sources --off worldbank_us_gdp_growth
+python analyst.py sources --recheck
+```
+
+A first hunt on `macro` with Claude Code (Sonnet) took a minute and kept five of
+seven candidates: the Fed balance sheet and the Treasury curve from FRED, SOFR
+from the New York Fed, CFTC positioning, and World Bank GDP (later marked broken
+on the weekly re-check as annual data); an ECB series was stale and a FRED
+series had no numeric column.
+
+### The daily macro view
+
+Before the scout picks anything, an auto run builds one top-down view of the day
+(`analyst.py macro` builds it by hand). The raw block is FRED (US 10y and 2y
+yields, the curve, the broad dollar, Brent, the high-yield spread, VIX, each with
+1m and 3m changes), the Fed and Bank of Russia key rates, the last 20 closes of
+the S&P 500, the MOEX index, BTC and gold from `market.db`, and the release
+calendar. The `macro` role may ask for more with the same tools.
+
+It returns a regime line, two to six drivers, and one line per market. A driver
+is kept only if it cites a key from the raw block (`fred.us_10y_yield`) or an
+outside item that passes the raw-evidence check; a view with no evidenced driver
+is not saved. It goes to `analyst_macro`, and every asset judged that day, or up
+to four days later, carries `macro_view` in its dossier: the regime, the drivers
+and the line for its own market. A failed macro step is reported and the run
+goes on without it.
 
 ### Reasoning on a local model
 
@@ -1122,6 +1313,7 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 | `5R` | `train_hybrid.py` on a named list | Asks which assets, and whether to force-promote. |
 | `5F` | `model_health.py --list`, then `train_chunked.py` | Asks: fill in assets with no champion, repair degraded ones, or both. |
 | `T` | `optuna_tune.py` | Per-asset hyperparameter search. |
+| `5S` | `.env` | Training settings: how the ensemble combines its models, `GTRADE_COMBINER` `fixed` (CatBoost half, the nets' mean the other half) or `stack` (a fitted combiner). The choice is stored with each champion, so serving always combines the way that champion was trained. |
 
 ### SIGNALS
 
@@ -1202,7 +1394,7 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 
 **`[RS]` auto-research.** Hands over to `auto_research.bat`, which asks, in order: the action (search for new candidates, or re-gate stored ones); the mode (`qd`, features, labeling, model levers, or a custom axes list); the label for the run; the proposer (evolutionary, or an LLM through Ollama, Anthropic or OpenAI); the budget in new genomes; the objective; the score basis; the wiki; and the RL scheduler.
 
-The answer that matters most is the score basis. On a net basis (`net_auc`, `net_gain`, `ens_auc`, `ens_acc`) the screen switches off and the illumination trains real nets, so the basis decides which genomes become elites. On `raw` or `neural` the search illuminates on the CatBoost-only screen and the basis only re-scores the final gate. `ens_acc` is the ACCURACY basis, added 2026-09-12 and now the default campaign: it scores the ensemble's fold-averaged accuracy, the same quantity the champion itself is selected by (`GTRADE_CHAMPION_BASIS=acc`), so the search, the adoption and the champion all answer one question. Note that the `CB_Acc` column is NOT that quantity: it belongs to the champion fold, which under the `score` basis is an argmax, and its top quartile measured 0.6356 offline against 0.4820 live. Load settings are not asked: they are derived from the campaign, and they are not part of the eval-cache key, so changing them between runs would compare a cached base against differently trained candidates.
+The answer that matters most is the score basis. On a net basis (`net_auc`, `net_gain`, `ens_auc`, `ens_acc`) the screen switches off and the illumination trains real nets, so the basis decides which genomes become elites. On `raw` or `neural` the search illuminates on the CatBoost-only screen and the basis only re-scores the final gate. `ens_acc` is the ACCURACY basis, added 2026-09-12 and now the default campaign: it scores the ensemble's fold-averaged accuracy, the same quantity the champion itself is selected by (`GTRADE_CHAMPION_BASIS=acc`), so the search, the adoption and the champion all answer one question. It is accuracy on each candidate's OWN label, though, so it cannot compare a candidate that changed the label with one that did not; `dir_edge_clean` (`9`) can, and is the default decision basis for an A/B, see [One yardstick](#one-yardstick-next-bar-direction). Note that the `CB_Acc` column is NOT that quantity: it belongs to the champion fold, which under the `score` basis is an argmax, and its top quartile measured 0.6356 offline against 0.4820 live. Load settings are not asked: they are derived from the campaign, and they are not part of the eval-cache key, so changing them between runs would compare a cached base against differently trained candidates.
 
 **`[AL]` autonomous cycle.** Runs search, A/B and adopt until something is adopted or you stop it, and stops before the retrain. It asks whether to continue the current campaign or start a new one; a new one then asks the score basis, the illumination, the objective, the decision basis and the gate size. Those are frozen for the campaign on purpose: choosing them after seeing a verdict is a search for a verdict that passes rather than a measurement. Then the director, the proposer, the wiki, the iterations per cycle, and a deadline in hours.
 
@@ -1215,7 +1407,7 @@ exceptions; 6 puts an asset back on the global genome. Steps 1 and 2 ship with
 the project rather than living beside it - a menu entry pointing at a file that
 is not in the repository is not an offer. See [Per-asset adoption](#per-asset-adoption).
 
-**`[AN]` analyst agent.** Score, backfill outcomes, refit the payoff table, run one judgment per eligible asset, open the web UI on the analyst page, or `[I]` intraday: judge the next session or score the intraday questions. The run options ask for assets, the LLM provider and model (the daily run also for the horizon in trading days, Enter = 1), and a typed `YES`, because each spends one model call per asset.
+**`[AN]` analyst agent.** Score, backfill outcomes, refit the payoff table, run one judgment per eligible asset, open the web UI on the analyst page, or `[I]` intraday: judge the next session or score the intraday questions. The run options ask for assets, the LLM provider (`5` is Claude Code) and model, the horizon in trading days, solo or team, the depth, and a typed `YES`, because each spends model calls. `[A]` runs the auto cycle (macro view, source re-check, the scout, a run and a daily report), `[L]` writes lessons, `[H]` hunts for new raw sources by market, `[D]` lists the source registry and switches a source off or on or re-checks them all, `[X]` builds today's macro view, and `[M]` sets the models: every role's brain, the Ollama Cloud key, the GPU guard, the default mode, the auto size, holding long calls, `[C]` the Claude Code model, daily call limit, turns and timeout, `[F]` the fallback brain, and `[W]` the web budget per judgment. See [Claude Code as the brain, step by step](#claude-code-as-the-brain-step-by-step).
 
 **`[5F]` fill in / repair champions.** Asks whether to fill in assets that never had a champion, repair the ones whose neural champion does not load here, or both. Force-promote is on for the repair half, which needs it.
 
@@ -1698,6 +1890,18 @@ The switches that change what is served, all default to off:
 | `GTRADE_ANALYST_REQUIRE_TOOL` | `1` (default): the first reply must ask for evidence before judging; `0` makes asking optional |
 | `GTRADE_ANALYST_MODEL` | the analyst's own model, apart from the research director's (for example `gemma4:26b`) |
 | `GTRADE_ANALYST_HORIZONS` | the horizons a run judges when `--horizons` is not given, in trading days (default `1,20`) |
+| `GTRADE_ANALYST_BRAIN` | the default brain for every analyst role, `provider:model` (`ollama`, `ollama-cloud`, `claude-code`, `anthropic`, `openai`) |
+| `GTRADE_ANALYST_BRAIN_<ROLE>` | one role's brain: `SOLO`, `LEAD`, `MACRO`, `FUNDAMENTAL`, `TECHNICAL`, `NEWS`, `CRITIC`, `SCOUT`, `MEMORY`, `HUNTER` |
+| `GTRADE_ANALYST_CLAUDE_MODEL` | the Claude Code model when the brain names none: `sonnet` (default), `opus`, `haiku` |
+| `GTRADE_ANALYST_CLAUDE_MAX_CALLS` | Claude Code calls per day before the fallback answers (default 20) |
+| `GTRADE_ANALYST_CLAUDE_TURNS` | turns one Claude Code call may take, its own searches and reads included (default 12) |
+| `GTRADE_ANALYST_CLAUDE_TIMEOUT` | seconds before a Claude Code call is given up (default 600) |
+| `GTRADE_ANALYST_FALLBACK` | the brain that answers when Claude Code cannot (default `ollama`) |
+| `GTRADE_ANALYST_WEB_CALLS` | web searches and page reads one judgment may make, on top of `GTRADE_ANALYST_TOOL_CALLS` (default 6, `0` = none) |
+| `OLLAMA_API_KEY` | Ollama Cloud models and the `web_search` tool |
+| `GTRADE_ANALYST_MODE` | `solo` (default) or `team` |
+| `GTRADE_ANALYST_HOLD_CALLS` | `1`: a long-horizon call stays until it resolves; `0` (default): every run re-judges it and records the revision |
+| `GTRADE_COMBINER` | `fixed` or `stack`: how the ensemble combines its members, see `[5S]` |
 | `GTRADE_OLLAMA_NUM_GPU` | how many model layers Ollama puts on the GPU; unset lets Ollama decide. Per machine, see [GPU layers](#gpu-layers-set-for-your-own-card) |
 | `GTRADE_SEC_CONTACT` | an email for the User-Agent SEC requires; without it `company_financials` and `insider_filings` return the instruction instead of a 403. Never committed: it is your address, not the project's |
 | `GTRADE_AR_WIKI_CHARS` | how much research wiki a prompt may carry (default 20000) |

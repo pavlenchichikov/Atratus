@@ -644,8 +644,12 @@ echo                   and their accuracy (run it before the session opens)
 echo    [A] Auto       the scout picks the assets, then a run and a daily report
 echo                   in reports\analyst_DATE.md  (COSTS MONEY)
 echo    [L] Learn      write a lesson from every scored call
-echo    [M] Models     which LLM each role uses: local, Ollama Cloud, Anthropic,
-echo                   OpenAI; cloud key; GPU guard; limits; auto in loop
+echo    [M] Models     which LLM each role uses: local, Ollama Cloud, Claude Code,
+echo                   Anthropic, OpenAI; cloud key; GPU guard; limits; auto in loop
+echo    [H] Hunt       find new RAW data sources on the web for a market; code
+echo                   keeps only those that return fresh dated numbers
+echo    [D] Sources    the source registry: list, switch off/on, re-check
+echo    [X] Macro      today's top-down view from raw data (auto builds it too)
 echo.
 set "an_choice="
 set /p an_choice="Choose, Enter = back: "
@@ -658,7 +662,53 @@ if /i "%an_choice%"=="W" goto analyst_watch
 if /i "%an_choice%"=="M" goto analyst_models
 if /i "%an_choice%"=="A" goto analyst_auto
 if /i "%an_choice%"=="L" goto analyst_learn
+if /i "%an_choice%"=="H" goto analyst_hunt
+if /i "%an_choice%"=="D" goto analyst_sources
+if /i "%an_choice%"=="X" goto analyst_macro
 goto menu
+
+:analyst_hunt
+echo.
+echo  The hunter brain ([M] role "hunter") searches the web for free raw data
+echo  endpoints; each one is fetched and kept only if it parses as dated numbers,
+echo  is fresh, and is not a ratings or forecast site.
+echo    [1] all markets  [2] us  [3] ru  [4] eu  [5] crypto  [6] commodity
+echo    [7] fx           [8] macro
+set "hu_m="
+set /p hu_m="Market, Enter = back: "
+set "hu_mk="
+if "%hu_m%"=="1" set "hu_mk=all"
+if "%hu_m%"=="2" set "hu_mk=us"
+if "%hu_m%"=="3" set "hu_mk=ru"
+if "%hu_m%"=="4" set "hu_mk=eu"
+if "%hu_m%"=="5" set "hu_mk=crypto"
+if "%hu_m%"=="6" set "hu_mk=commodity"
+if "%hu_m%"=="7" set "hu_mk=fx"
+if "%hu_m%"=="8" set "hu_mk=macro"
+if "%hu_mk%"=="" goto analyst
+python analyst.py hunt --market %hu_mk%
+pause
+goto analyst
+
+:analyst_sources
+python analyst.py sources
+echo.
+echo    [1] switch a source off   [2] switch it back on   [3] re-check all
+set "so_c="
+set /p so_c="Choose, Enter = back: "
+set "so_n="
+if "%so_c%"=="1" set /p so_n="Source name: "
+if "%so_c%"=="1" if not "%so_n%"=="" python analyst.py sources --off "%so_n%"
+if "%so_c%"=="2" set /p so_n="Source name: "
+if "%so_c%"=="2" if not "%so_n%"=="" python analyst.py sources --on "%so_n%"
+if "%so_c%"=="3" python analyst.py sources --recheck
+if not "%so_c%"=="" pause
+goto analyst
+
+:analyst_macro
+python analyst.py macro
+pause
+goto analyst
 
 :analyst_learn
 python analyst.py learn
@@ -712,6 +762,9 @@ echo    [N] Mode       default mode for runs: solo or team
 echo    [X] Auto size  how many assets an auto run picks
 echo    [O] Auto loop  run [A] Auto inside the LC loop cycle: on or off
 echo    [K2] Hold      keep a long-horizon call until it resolves: on or off
+echo    [C] Claude     Claude Code settings: model, calls per day, turns, timeout
+echo    [F] Fallback   the brain that answers when Claude Code cannot
+echo    [W] Web        web searches and page reads allowed per judgment
 echo.
 set "am="
 set /p am="Choose, Enter = back: "
@@ -726,14 +779,55 @@ if /i "%am%"=="N" goto am_mode
 if /i "%am%"=="X" goto am_autosize
 if /i "%am%"=="O" goto am_autoloop
 if /i "%am%"=="K2" goto am_hold
+if /i "%am%"=="C" goto am_claude
+if /i "%am%"=="F" goto am_fallback
+if /i "%am%"=="W" goto am_web
 goto analyst
+
+:am_claude
+echo    Claude Code runs on your subscription, never the paid API. Each judgment
+echo    is about 2-3 calls; over the daily limit the fallback brain answers.
+echo    Enter keeps the current value.
+set "am_v="
+set /p am_v="Model, sonnet or opus: "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_ANALYST_CLAUDE_MODEL=%am_v%"
+set "am_v="
+set /p am_v="Calls per day (default 20): "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_ANALYST_CLAUDE_MAX_CALLS=%am_v%"
+set "am_v="
+set /p am_v="Turns per call, its own searches and reads (default 12): "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_ANALYST_CLAUDE_TURNS=%am_v%"
+set "am_v="
+set /p am_v="Seconds before a call is given up (default 600): "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_ANALYST_CLAUDE_TIMEOUT=%am_v%"
+pause
+goto analyst_models
+
+:am_fallback
+echo    Answers when Claude Code is over its daily limit or unavailable.
+echo    Local ollama uses the GPU: during a training pick ollama-cloud.
+call :am_pick
+if "%am_spec%"=="" goto analyst_models
+if /i "%am_prov%"=="claude-code" echo    The fallback cannot be claude-code itself.
+if /i not "%am_prov%"=="claude-code" python analyst.py brains --set "GTRADE_ANALYST_FALLBACK=%am_spec%"
+pause
+goto analyst_models
+
+:am_web
+set "am_v="
+set /p am_v="Web searches and page reads per judgment, 0 = none, Enter = 6: "
+if "%am_v%"=="" set "am_v=6"
+python analyst.py brains --set "GTRADE_ANALYST_WEB_CALLS=%am_v%"
+pause
+goto analyst_models
 
 :am_pick
 REM  Sets am_spec to provider:model, or leaves it empty on a blank answer.
 set "am_spec="
 echo    [1] ollama        local model on this machine
 echo    [2] ollama-cloud  Ollama Cloud, needs the key from [K]
-echo    [3] anthropic     [4] openai
+echo    [3] anthropic     [4] openai      (paid API)
+echo    [5] claude-code   Claude Code on your subscription, no API bill
 set "am_p="
 set /p am_p="Provider: "
 set "am_prov="
@@ -741,12 +835,21 @@ if "%am_p%"=="1" set "am_prov=ollama"
 if "%am_p%"=="2" set "am_prov=ollama-cloud"
 if "%am_p%"=="3" set "am_prov=anthropic"
 if "%am_p%"=="4" set "am_prov=openai"
+if "%am_p%"=="5" set "am_prov=claude-code"
 if "%am_prov%"=="" goto :eof
+if "%am_prov%"=="claude-code" goto am_pick_claude
 if "%am_prov%"=="ollama" ollama list
 echo    Model id, e.g. gemma4:12b, gpt-oss:120b, deepseek-v3.1:671b, claude-sonnet-5
 set "am_m="
 set /p am_m="Model id, Enter = provider default: "
 if "%am_m%"=="" (set "am_spec=%am_prov%") else (set "am_spec=%am_prov%:%am_m%")
+goto :eof
+
+:am_pick_claude
+set "am_m="
+set /p am_m="Claude model, sonnet or opus, Enter = sonnet: "
+if "%am_m%"=="" set "am_m=sonnet"
+set "am_spec=claude-code:%am_m%"
 goto :eof
 
 :am_default
@@ -757,7 +860,7 @@ goto analyst_models
 
 :am_role
 echo    Solo run: solo.  Team run: lead macro fundamental technical news.
-echo    Deep run: critic.  Also: scout memory.
+echo    Deep run: critic.  Also: scout memory hunter.
 set "am_r="
 set /p am_r="Role: "
 if "%am_r%"=="" goto analyst_models
@@ -857,6 +960,7 @@ set "in_assets="
 set /p in_assets="Assets (comma-separated), Enter = intraday panel: "
 echo.
 echo    [1] anthropic   [2] openai   [3] ollama   [4] ollama-cloud
+echo    [5] claude-code (subscription, no API bill; model: sonnet or opus)
 echo    Enter = the models set in [M] Models
 set "in_llm="
 set /p in_llm="Model provider: "
@@ -865,6 +969,7 @@ if "%in_llm%"=="1" set "in_flag=--llm anthropic"
 if "%in_llm%"=="2" set "in_flag=--llm openai"
 if "%in_llm%"=="3" set "in_flag=--llm ollama"
 if "%in_llm%"=="4" set "in_flag=--llm ollama-cloud"
+if "%in_llm%"=="5" set "in_flag=--llm claude-code"
 set "in_name="
 if not "%in_flag%"=="" set /p in_name="Model id (e.g. claude-opus-4-8), Enter = provider default: "
 if not "%in_name%"=="" set "in_flag=%in_flag% --model "%in_name%""
@@ -895,6 +1000,7 @@ set "an_assets="
 set /p an_assets="Assets (comma-separated), Enter = watchlist + earnings today: "
 echo.
 echo    [1] anthropic   [2] openai   [3] ollama   [4] ollama-cloud
+echo    [5] claude-code (subscription, no API bill; model: sonnet or opus)
 echo    Enter = the models set in [M] Models
 set "an_llm="
 set /p an_llm="Model provider: "
@@ -903,6 +1009,7 @@ if "%an_llm%"=="1" set "an_flag=--llm anthropic"
 if "%an_llm%"=="2" set "an_flag=--llm openai"
 if "%an_llm%"=="3" set "an_flag=--llm ollama"
 if "%an_llm%"=="4" set "an_flag=--llm ollama-cloud"
+if "%an_llm%"=="5" set "an_flag=--llm claude-code"
 set "an_name="
 REM  An exact model id, not a nickname: it is passed through to the SDK.
 REM  Showing the shape here because "opus 5" reads like a valid answer and

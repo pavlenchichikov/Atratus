@@ -1129,7 +1129,7 @@ def _score_basis():
     ens_acc  the ensemble's fold-averaged ACCURACY (train_hybrid writes
              Ens_Acc). The same quantity ens_auc measures, read as "how often
              is it right" instead of "how well does it rank" - which is the
-             question the owner actually asks of this system. Same near-0.5
+             question this system is actually asked. Same near-0.5
              scale as the AUC bases, so it shares their adoption floor. Note
              what it is NOT: CB_Acc and the member _Acc columns belong to the
              champion fold, an argmax, and are unusable as a search target for
@@ -1215,7 +1215,7 @@ def dir_edge_rows(rows, clean=False):
 def ens_acc_rows(rows):
     """Re-key quality rows onto the ensemble's fold-averaged ACCURACY.
 
-    The basis to use when the question is the owner's question - is the model
+    The basis to use when the question is the system's own question - is the model
     right more often - rather than does it rank better. Ens_Acc is deliberately
     the only accuracy column here that is fold-AVERAGED: CB_Acc and the three
     member columns come from the champion fold, which is an argmax over folds,

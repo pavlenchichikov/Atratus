@@ -931,7 +931,7 @@ def champion_basis():
     score  the historical behaviour: argmax over the trading Score, among folds
            that cleared the trade floor.
 
-    The default is `acc` since 2026-09-12, by the owner's decision: accuracy of
+    The default is `acc` since 2026-09-12, by design: accuracy of
     the next-bar prediction is what this system is for, and profitability is the
     backtest's question, asked of a model that was already chosen. Set
     GTRADE_CHAMPION_BASIS=score to restore the previous selection exactly.

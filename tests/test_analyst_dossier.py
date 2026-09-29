@@ -668,7 +668,7 @@ def test_a_bar_with_no_range_reports_none_rather_than_a_calm_zero():
 
 
 def test_the_guru_verdict_never_reaches_the_dossier(db, monkeypatch):
-    """Owner's decision, 2026-09-24: a verdict is somebody's opinion however
+    """Design rule, 2026-09-24: a verdict is somebody's opinion however
     well scored. The stub is the positive control: were _context still reading
     the council, the verdict would land in the dossier."""
     monkeypatch.setattr("core.dashboard.guru_for_asset",

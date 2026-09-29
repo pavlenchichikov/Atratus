@@ -89,8 +89,8 @@ def next_session(bar_date, asset):
 
     The journal keys a prediction by the bar it was scored FROM, so a card that
     shows only that date reads as yesterday's news. Crypto trades every day;
-    everything else, MOEX included, is taken to the next weekday: the owner does
-    not trade the MOEX weekend sessions. Exchange holidays are not known here.
+    everything else, MOEX included, is taken to the next weekday: the MOEX weekend
+    sessions are not traded here. Exchange holidays are not known here.
     """
     if not bar_date:
         return None

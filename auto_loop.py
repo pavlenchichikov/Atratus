@@ -3,7 +3,7 @@
 Sequencing is a state machine, not a model pressing menu buttons. The phase is
 DERIVED from the files each cycle rather than stored: a stored cursor and the
 tree disagree the moment a phase is run by hand, and every phase here is also a
-command the owner runs directly.
+command that is also run directly.
 
 What a model IS allowed to choose is which experiment to run next - the axis,
 the label, the budget, whether to spend the LLM proposer. That is core.ar_director,
@@ -61,7 +61,7 @@ ARCHIVE_PATH = os.path.join(BASE, "_qd_archive.json")
 # auto_research, which is how a pinned 17 GB model reached a 15.7 GB machine.
 CAMPAIGN = {
     "GTRADE_AR_AXES": "qd",
-    # Accuracy, by the owner's decision of 2026-09-12: an unattended campaign
+    # Accuracy, the design decision of 2026-09-12: an unattended campaign
     # searches on the same quantity the champion is now selected by
     # (GTRADE_CHAMPION_BASIS=acc in train_hybrid), so the search, the adoption
     # and the champion all answer one question instead of three. ens_acc is in

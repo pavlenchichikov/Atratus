@@ -27,7 +27,7 @@ FORBIDDEN_KEYS = frozenset({
     # failure this set was written to catch.
     "actual_next_ret",
     # The guru council is a value-investing OPINION however well scored, and
-    # the judgment stands on raw data (owner, 2026-09-24). News stays, but only
+    # the judgment stands on raw data (2026-09-24). News stays, but only
     # as a spread of publishers: see diverse_headlines.
     "guru_verdict", "guru_pct",
 })

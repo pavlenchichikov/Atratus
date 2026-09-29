@@ -24,7 +24,7 @@ def _side(signal) -> int:
 
 
 def _bar_side(bar) -> int:
-    """The side the owner was SHOWN. A live-gated bar keeps the model's raw call
+    """The side the user was SHOWN. A live-gated bar keeps the model's raw call
     in `signal` and the WAIT the radar displayed in `sig_shown`; building
     positions from the raw call drew trades nobody could have taken (SBER,
     2026-09-17/18: BUY p=1.00 gated to WAIT, still counted inside a long).

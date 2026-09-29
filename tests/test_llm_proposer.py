@@ -740,7 +740,7 @@ def test_the_native_call_builds_ollamas_own_payload(monkeypatch):
 
     import httpx
     monkeypatch.setattr(httpx, "Client", _Client)
-    # .env on the owner's machine sets it; this test pins the bare payload
+    # a local .env may set it; this test pins the bare payload
     monkeypatch.delenv("GTRADE_OLLAMA_NUM_GPU", raising=False)
     got, trace = lp._ollama_native_chat("http://127.0.0.1:11434/v1", "m", "hi",
                                        0.0, 8000, False)

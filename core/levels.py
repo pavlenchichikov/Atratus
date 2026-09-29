@@ -128,7 +128,7 @@ def range_forecast(bars, weekdays_only=False):
     """{typical, q90, atr} as shares of the last close, or None under 22 bars.
 
     weekdays_only drops Saturday/Sunday bars first: MOEX weekend sessions are
-    thin (SBER 2026-09-26 ranged 0.2%), the owner does not trade them, and one
+    thin (SBER 2026-09-26 ranged 0.2%), they are not traded here, and one
     in the 1-day term pulled the forecast for Monday to 0.94% against 1.50%.
     Weekday-only MOEX scores IC 0.529; Friday-to-Monday still runs wider than
     forecast (q90 exceeded on 15.2% of Mondays).

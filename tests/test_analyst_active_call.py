@@ -54,7 +54,7 @@ def test_flip_rate_counts_rejudgments_made_before_the_previous_call_resolved():
 
 
 def test_by_default_a_run_rejudges_and_records_the_revision(db, monkeypatch):
-    """Accuracy first (owner, 2026-09-29): a run re-judges an in-force call and
+    """Accuracy first (2026-09-29): a run re-judges an in-force call and
     records what it replaced, so revisions and originals can be scored against
     each other. Holding the call is a setting, off by default."""
     import analyst

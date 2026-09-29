@@ -67,3 +67,25 @@ def test_over_the_cap_the_fallback_answers_and_the_label_says_so(tmp_path, monke
 
 def test_claude_code_parses_as_a_provider():
     assert brains.parse("claude-code:opus") == ("claude-code", "opus")
+
+
+def test_llm_flag_claude_code_sets_the_solo_brain_only(monkeypatch):
+    import analyst
+
+    for k in ("GTRADE_ANALYST_BRAIN_SOLO", "GTRADE_ANALYST_BRAIN", "GTRADE_ANALYST_BRAIN_CRITIC"):
+        monkeypatch.setenv(k, "x")      # recorded, so the flag's writes are undone
+        monkeypatch.delenv(k)
+    monkeypatch.setenv("GTRADE_AR_LLM_MODEL", "gemma4:26b")
+    analyst._apply_llm_flag("claude-code", "opus")
+    assert brains.spec_for("solo") == "claude-code:opus"
+    analyst._apply_llm_flag("claude-code", None)
+    assert brains.label("solo") == "claude-code:" + cc.model()
+    analyst._apply_llm_flag("claude-code", None, team=True)
+    assert brains.spec_for("critic").startswith("claude-code")
+
+
+def test_the_run_parser_accepts_claude_code():
+    import analyst
+
+    ns = analyst.build_parser().parse_args(["run", "--llm", "claude-code", "--model", "opus"])
+    assert ns.llm == "claude-code"

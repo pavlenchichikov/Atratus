@@ -113,7 +113,7 @@ def test_the_scaled_sentinel_would_have_passed_the_guard():
 # --- the accuracy basis ------------------------------------------------------
 
 def test_accuracy_is_the_default_basis(monkeypatch):
-    """The owner's decision of 2026-09-12: accuracy of the next-bar prediction
+    """The design decision of 2026-09-12: accuracy of the next-bar prediction
     decides the champion, and profitability is left to the backtest."""
     monkeypatch.delenv("GTRADE_CHAMPION_BASIS", raising=False)
     assert T.champion_basis() == "acc"

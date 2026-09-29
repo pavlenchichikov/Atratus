@@ -32,7 +32,7 @@ def probe(monkeypatch):
 
 
 def test_a_verdict_source_is_refused_but_news_is_material():
-    """Owner, 2026-09-24: raw data first, news allowed as a spread of
+    """Design rule, 2026-09-24: raw data first, news allowed as a spread of
     publishers, nobody's verdict."""
     with pytest.raises(tools.OpinionSource):
         tools.register(tools.Tool(name="council", args={}, rewinds=False,
@@ -221,8 +221,8 @@ def test_a_moscow_name_is_told_sec_does_not_cover_it_rather_than_getting_nothing
 
 
 def test_a_source_of_other_peoples_conclusions_is_refused_at_registration():
-    """The owner's rule, 2026-09-03: the analyst is for its own reading, and
-    consensus is something he can look up himself. Enforced at registration
+    """Design rule, 2026-09-03: the analyst is for its own reading, and
+    consensus is something a reader can look up elsewhere. Enforced at registration
     rather than trusted to a reader, because the tempting sources are the easy
     ones - Yahoo hands out recommendationMean in the very payload this project
     already fetches for P/E."""
@@ -254,7 +254,7 @@ def test_the_shipped_tools_return_material_rather_than_a_verdict():
 
 
 def test_the_first_reply_must_ask_for_evidence(monkeypatch, budget):
-    """Owner, 2026-09-24: an agent that goes and looks. gemma 26b left to
+    """Design rule, 2026-09-24: an agent that goes and looks. gemma 26b left to
     choose judged SBER from the dossier alone, so a judgment that arrives
     before any request is sent back once."""
     replies = [json.dumps(_judgment(direction="down")),

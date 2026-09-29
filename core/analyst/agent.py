@@ -111,7 +111,7 @@ def prompt_for(dossier, depth="full", horizon=1, tool_menu="", session=False):
     action - no channel of the model's own opinion reaches this prompt (see
     core/analyst/dossier.py's FORBIDDEN_KEYS, which is what actually
     enforces that). Nor does anyone else's verdict: no ratings, no guru
-    council (owner, 2026-09-24). News does, spread across publishers.
+    council (2026-09-24). News does, spread across publishers.
     """
     return (
         "You are an independent market analyst. Below is everything known "

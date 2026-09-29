@@ -19,8 +19,8 @@ they are done carelessly, so three rules hold everything together:
   headline, and every one of these results goes straight into a prompt.
 
   A tool returns MATERIAL, never somebody's conclusion. Sell-side consensus,
-  price targets, ratings and buy/sell calls are all off the list by decision of
-  the owner, 2026-09-03: the point of this agent is its own reading, and a
+  price targets, ratings and buy/sell calls are all off the list by design
+  (2026-09-03): the point of this agent is its own reading, and a
   second opinion assembled from other people's opinions is not one. It is the
   same rule FORBIDDEN_KEYS applies to the ensemble's own output in
   core/analyst/dossier.py. `register` enforces it rather than
@@ -673,7 +673,7 @@ def max_calls():
 def require_first():
     """Whether the first reply must ask for evidence. A 26b model left to
     choose asked for nothing on SBER (2026-09-24) and judged from the dossier
-    alone; the owner wants an agent that goes and looks."""
+    alone; the agent is meant to go and look."""
     return (os.getenv("GTRADE_ANALYST_REQUIRE_TOOL") or "1").strip() != "0"
 
 
