@@ -177,27 +177,27 @@ set /p "PROP=    choice [1]: "
 set "GTRADE_AR_PROPOSER=evolutionary"
 set "GTRADE_AR_LLM="
 
+set "gt_model="
 if "%PROP%"=="2" (
   set "GTRADE_AR_PROPOSER=llm"
   set "GTRADE_AR_LLM=ollama"
-  echo.
-  echo     Installed local models:
-  python -m core.llm_proposer --list-ollama
-  echo     Enter = auto-detect ^(first gemma, else first installed^).
-  set /p "GTRADE_AR_LLM_MODEL=    model name [auto]: "
+  echo     auto = the first gemma, else the first installed.
+  call :pick_model ollama auto
 )
 
 if "%PROP%"=="3" (
   set "GTRADE_AR_PROPOSER=llm"
   set "GTRADE_AR_LLM=anthropic"
-  set /p "GTRADE_AR_LLM_MODEL=    Anthropic model [claude-opus-4-8]: "
+  call :pick_model anthropic claude-opus-4-8
 )
 
 if "%PROP%"=="4" (
   set "GTRADE_AR_PROPOSER=llm"
   set "GTRADE_AR_LLM=openai"
-  set /p "GTRADE_AR_LLM_MODEL=    OpenAI model [gpt-4o]: "
+  call :pick_model openai gpt-4o
 )
+
+if defined gt_model set "GTRADE_AR_LLM_MODEL=%gt_model%"
 
 REM  Token budget for the LLM (proposer + wiki). Reasoning models like gemma spend
 REM  tokens on an internal trace before the answer; too small a cap returns EMPTY
@@ -469,3 +469,17 @@ echo Done. Review _ar_findings.json (mode=regate) for the new verdicts.
 pause
 
 :end
+
+goto :eof
+
+:pick_model
+REM  %1 = provider, %2 = default id ("" = the provider's own). Sets gt_model.
+python -m core.model_picker list %1
+set "gt_ans="
+set "gt_def=%~2"
+if "%gt_def%"=="" set "gt_def=provider default"
+set /p gt_ans="    Model: number or exact id, Enter = %gt_def%: "
+python -m core.model_picker pick "%gt_ans%" "%TEMP%\gt_model.txt" %2
+set "gt_model="
+set /p gt_model=<"%TEMP%\gt_model.txt"
+goto :eof

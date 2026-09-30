@@ -151,3 +151,9 @@ def test_every_fallback_is_counted(monkeypatch, tmp_path):
 def test_none_is_a_valid_fallback_setting():
     assert brains._VALID["GTRADE_ANALYST_FALLBACK"]("none")
     assert not brains._VALID["GTRADE_ANALYST_FALLBACK"]("claude-code:opus")
+
+
+def test_the_claude_model_setting_takes_an_alias_or_a_full_id():
+    ok = brains._VALID["GTRADE_ANALYST_CLAUDE_MODEL"]
+    assert ok("opus") and ok("claude-opus-5-5")
+    assert not ok("gpt-4o") and not ok("")

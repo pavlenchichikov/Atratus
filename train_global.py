@@ -29,7 +29,7 @@ from sqlalchemy import create_engine
 
 import config
 from core.features import CANDIDATE_FEATURES_EXT, build_features
-from core.panel import POOL_MIN_BARS, build_panel, date_folds
+from core.panel import EMBARGO_DAYS, POOL_MIN_BARS, build_panel, date_folds
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(BASE, "market.db")
@@ -45,6 +45,34 @@ CB = {"iterations": 400, "depth": 6, "learning_rate": 0.05, "verbose": 0,
 GATE_FLOOR = 0.005
 GATE_ALPHA = 0.05
 MIN_TEST_ROWS = 100
+
+
+def parse_horizons(text):
+    """'5,10,20' -> [5, 10, 20]; empty -> [1] (the next bar)."""
+    out = [int(h) for h in str(text or "").replace(" ", "").split(",") if h]
+    if any(h < 1 for h in out):
+        raise ValueError("a horizon is a whole number of bars, 1 or more")
+    return out or [1]
+
+
+def use_horizon(h):
+    """Point the label at `h` bars ahead: build_features reads these."""
+    if h == 1:
+        os.environ["GTRADE_LABEL_MODE"] = "direction"
+        os.environ.pop("GTRADE_LABEL_HORIZON", None)
+    else:
+        os.environ["GTRADE_LABEL_MODE"] = "direction_h"
+        os.environ["GTRADE_LABEL_HORIZON"] = str(h)
+
+
+def embargo_days(h):
+    """Dates dropped between train and test: the label's reach plus the same
+    margin the one-bar gap carries, so a train label never resolves in test."""
+    return max(EMBARGO_DAYS, h + EMBARGO_DAYS - 1)
+
+
+def report_path(h):
+    return REPORT if h == 1 else os.path.join(BASE, "models", "global_report_h%d.json" % h)
 
 
 def _table(asset):
@@ -104,8 +132,20 @@ def main():
                     help="comma-separated features to leave out of both arms")
     ap.add_argument("--no-baseline", action="store_true",
                     help="skip the per-asset arm (then there is nothing to compare to)")
+    ap.add_argument("--horizons", default="1",
+                    help="bars ahead, comma-separated, each run in turn: 1 = the "
+                         "next bar, 5,10,20 = up or down over that many bars")
     args = ap.parse_args()
+    rc = 0
+    for h in parse_horizons(args.horizons):
+        print("\n=== horizon %d bar(s) ===" % h, flush=True)
+        use_horizon(h)
+        rc = run_one(args, h) or rc
+    return rc
 
+
+def run_one(args, h):
+    """Both arms at one horizon; writes report_path(h)."""
     engine = create_engine("sqlite:///%s" % DB)
     assets = ([a.strip().upper() for a in args.assets.split(",")] if args.assets
               else sorted(config.FULL_ASSET_MAP))
@@ -132,7 +172,7 @@ def main():
           % (len(panel), panel["asset"].nunique(), len(feats),
              panel["date"].min().date(), panel["date"].max().date()), flush=True)
 
-    folds = date_folds(panel["date"], n_folds=args.folds)
+    folds = date_folds(panel["date"], n_folds=args.folds, embargo=embargo_days(h))
     if not folds:
         print("not enough dates for %d folds." % args.folds)
         return 1
@@ -169,11 +209,14 @@ def main():
     allte = pd.concat(pooled, ignore_index=True)
     y = allte["target"].astype(int).values
 
-    res = {"rows": len(allte), "assets": int(allte["asset"].nunique()),
+    res = {"horizon": h, "embargo_days": embargo_days(h),
+           "rows": len(allte), "assets": int(allte["asset"].nunique()),
            "folds": len(pooled), "features": len(feats),
            "gate_floor": GATE_FLOOR, "gate_alpha": GATE_ALPHA}
     res["pooled_auc"] = float(roc_auc_score(y, allte["p_pool"].values))
-    if "next_ret" in allte.columns:
+    # next_ret is the ONE-bar return: against an h-bar label it measures the
+    # wrong thing, so the IC is reported only for the next-bar question.
+    if h == 1 and "next_ret" in allte.columns:
         ok = allte["next_ret"].notna()
         ic, p = sps.spearmanr(allte.loc[ok, "p_pool"], allte.loc[ok, "next_ret"])
         res["pooled_ic"] = float(ic)
@@ -214,10 +257,10 @@ def main():
         print("  pooled wins on    : %d of %d assets"
               % (sum(1 for d in deltas if d > 0), len(deltas)))
 
-    with open(REPORT, "w", encoding="utf-8") as fh:
+    with open(report_path(h), "w", encoding="utf-8") as fh:
         json.dump(res, fh, indent=2)
     print()
-    print("report written to %s" % REPORT)
+    print("report written to %s" % report_path(h))
     return 0
 
 

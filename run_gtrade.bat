@@ -59,29 +59,16 @@ echo.
 echo  RESEARCH
 echo    [RS] Auto-research agent (own menu)         [AN] Analyst agent
 echo    [AL] Autonomous cycle: search, A/B, adopt   [ALS] Its stage / stop it
-echo    [LC] Daily loop cycle                       [AI] A/B a new input: FINRA, HAR
+echo    [LC] Daily loop cycle                       [GH] One model, by horizon
 echo.
-echo  POLICIES
-echo    [TP] Timing rules   [TB] Timing: fitted-Q challenger
-echo    [TL] Trade levels   [TO] Timing: one online tick
-echo    [SZ] Position sizing                        [DR] Direction rule
-echo    [RC] Recalibrate live probabilities         [OS] Refit on unscored
-echo    [PS] How the policies did on LIVE signals   [TR] Timing replay
-echo.
-echo  GENOME
-echo    [AG] Adopt          [AS] What is adopted    [AR] Revert
-echo    [PA] Per-asset adoption, step by step
-echo    [ABC] Configure an A/B                      [ABR] Run it
-echo.
-echo  SERVICES
-echo    [7] Telegram Bot    [8] Scheduler           [9] DB Audit
-echo    [F] DB Fix          [B] DB Backup           [I] Install/Repair
+echo  [MORE] Policies, genome adoption, services
 echo.
 echo    [?] What every item here is for             [0] EXIT
 echo.
 echo =======================================================
 set /p choice="Select: "
 
+:dispatch
 if "%choice%"=="1" goto full_run
 if "%choice%"=="2" goto dashboard
 if /i "%choice%"=="WU" goto webui_root
@@ -120,6 +107,8 @@ if /i "%choice%"=="AS" goto adopt_show
 if /i "%choice%"=="AR" goto adopt_revert
 if /i "%choice%"=="RS" goto auto_research
 if /i "%choice%"=="AN" goto analyst
+if /i "%choice%"=="MORE" goto more_menu
+if /i "%choice%"=="GH" goto global_horizons
 if /i "%choice%"=="ALS" goto auto_loop_status
 if /i "%choice%"=="AL" goto auto_loop
 if /i "%choice%"=="LC" goto loop_cycle
@@ -788,8 +777,8 @@ goto analyst
 echo    Claude Code runs on your subscription, never the paid API. Each judgment
 echo    is about 2-3 calls; over the daily limit the fallback brain answers.
 echo    Enter keeps the current value.
-set "am_v="
-set /p am_v="Model, sonnet or opus: "
+call :pick_model claude-code ""
+set "am_v=%gt_model%"
 if not "%am_v%"=="" python analyst.py brains --set "GTRADE_ANALYST_CLAUDE_MODEL=%am_v%"
 set "am_v="
 set /p am_v="Calls per day (default 20): "
@@ -806,7 +795,11 @@ goto analyst_models
 :am_fallback
 echo    Answers when Claude Code is over its daily limit or unavailable.
 echo    Local ollama uses the GPU: during a training pick ollama-cloud.
+echo    [0] none          no fallback: the run stops, the same command resumes (default)
 call :am_pick
+if "%am_p%"=="0" python analyst.py brains --set "GTRADE_ANALYST_FALLBACK=none"
+if "%am_p%"=="0" pause
+if "%am_p%"=="0" goto analyst_models
 if "%am_spec%"=="" goto analyst_models
 if /i "%am_prov%"=="claude-code" echo    The fallback cannot be claude-code itself.
 if /i not "%am_prov%"=="claude-code" python analyst.py brains --set "GTRADE_ANALYST_FALLBACK=%am_spec%"
@@ -820,6 +813,18 @@ if "%am_v%"=="" set "am_v=6"
 python analyst.py brains --set "GTRADE_ANALYST_WEB_CALLS=%am_v%"
 pause
 goto analyst_models
+
+:pick_model
+REM  %1 = provider, %2 = default id ("" = the provider's own). Sets gt_model.
+python -m core.model_picker list %1
+set "gt_ans="
+set "gt_def=%~2"
+if "%gt_def%"=="" set "gt_def=provider default"
+set /p gt_ans="    Model: number or exact id, Enter = %gt_def%: "
+python -m core.model_picker pick "%gt_ans%" "%TEMP%\gt_model.txt" %2
+set "gt_model="
+set /p gt_model=<"%TEMP%\gt_model.txt"
+goto :eof
 
 :am_pick
 REM  Sets am_spec to provider:model, or leaves it empty on a blank answer.
@@ -838,16 +843,14 @@ if "%am_p%"=="4" set "am_prov=openai"
 if "%am_p%"=="5" set "am_prov=claude-code"
 if "%am_prov%"=="" goto :eof
 if "%am_prov%"=="claude-code" goto am_pick_claude
-if "%am_prov%"=="ollama" ollama list
-echo    Model id, e.g. gemma4:12b, gpt-oss:120b, deepseek-v3.1:671b, claude-sonnet-5
-set "am_m="
-set /p am_m="Model id, Enter = provider default: "
+call :pick_model %am_prov% ""
+set "am_m=%gt_model%"
 if "%am_m%"=="" (set "am_spec=%am_prov%") else (set "am_spec=%am_prov%:%am_m%")
 goto :eof
 
 :am_pick_claude
-set "am_m="
-set /p am_m="Claude model, sonnet or opus, Enter = sonnet: "
+call :pick_model claude-code sonnet
+set "am_m=%gt_model%"
 if "%am_m%"=="" set "am_m=sonnet"
 set "am_spec=claude-code:%am_m%"
 goto :eof
@@ -971,7 +974,8 @@ if "%in_llm%"=="3" set "in_flag=--llm ollama"
 if "%in_llm%"=="4" set "in_flag=--llm ollama-cloud"
 if "%in_llm%"=="5" set "in_flag=--llm claude-code"
 set "in_name="
-if not "%in_flag%"=="" set /p in_name="Model id (e.g. claude-opus-4-8), Enter = provider default: "
+if not "%in_flag%"=="" call :pick_model %in_flag:~6% ""
+if not "%in_flag%"=="" set "in_name=%gt_model%"
 if not "%in_name%"=="" set "in_flag=%in_flag% --model "%in_name%""
 echo.
 set "in_ok="
@@ -1014,7 +1018,8 @@ set "an_name="
 REM  An exact model id, not a nickname: it is passed through to the SDK.
 REM  Showing the shape here because "opus 5" reads like a valid answer and
 REM  is not one, and the run only finds out after the YES.
-if not "%an_flag%"=="" set /p an_name="Model id (e.g. claude-opus-4-8), Enter = provider default: "
+if not "%an_flag%"=="" call :pick_model %an_flag:~6% ""
+if not "%an_flag%"=="" set "an_name=%gt_model%"
 REM  QUOTED. Unquoted, a model id with a space in it reached argparse as two
 REM  arguments and the run died with "unrecognized arguments" after the YES,
 REM  which is the most expensive moment to find a typo.
@@ -1356,11 +1361,9 @@ set "DLM=1"
 set /p "DLM=    choice [1]: "
 if "%DLM%"=="2" set "GTRADE_AR_LLM=anthropic"
 if "%DLM%"=="3" set "GTRADE_AR_LLM=openai"
-if "%DLM%"=="1" echo.
-if "%DLM%"=="1" echo     Installed local models:
-if "%DLM%"=="1" python -m core.llm_proposer --list-ollama
-if "%DLM%"=="1" echo     Enter = auto-detect ^(first gemma, else first installed^).
-set /p "GTRADE_AR_LLM_MODEL=    model name [auto]: "
+if "%DLM%"=="1" echo     auto = the first gemma, else the first installed.
+call :pick_model %GTRADE_AR_LLM% auto
+if not "%gt_model%"=="" set "GTRADE_AR_LLM_MODEL=%gt_model%"
 echo.
 echo     Seconds allowed for ONE call. A large local model on CPU needs far more
 echo     than the 600s SDK default, and a timeout is not retried, so a value that
@@ -2059,5 +2062,52 @@ if "%WI_CAP%"=="" set WI_CAP=10000
 echo.
 echo [What-If] Assets: %WI_ASSETS% ^| Days: %WI_DAYS% ^| Capital: $%WI_CAP%
 python whatif_simulator.py %WI_ASSETS% --days %WI_DAYS% --capital %WI_CAP%
+pause
+goto menu
+
+:more_menu
+cls
+echo =======================================================
+echo.
+echo  POLICIES
+echo    [TP] Timing rules   [TB] Timing: fitted-Q challenger
+echo    [TL] Trade levels   [TO] Timing: one online tick
+echo    [SZ] Position sizing                        [DR] Direction rule
+echo    [RC] Recalibrate live probabilities         [OS] Refit on unscored
+echo    [PS] How the policies did on LIVE signals   [TR] Timing replay
+echo.
+echo  GENOME
+echo    [AG] Adopt          [AS] What is adopted    [AR] Revert
+echo    [PA] Per-asset adoption, step by step
+echo.
+echo  SERVICES
+echo    [7] Telegram Bot    [8] Scheduler           [9] DB Audit
+echo    [F] DB Fix          [B] DB Backup           [I] Install/Repair
+echo.
+echo    Any code from the main screen works here too.
+echo.
+echo =======================================================
+set "choice="
+set /p choice="Select, Enter = back: "
+if "%choice%"=="" goto menu
+goto dispatch
+
+:global_horizons
+cls
+echo  ONE MODEL FOR EVERY ASSET, BY HORIZON. Whether a single model trained on
+echo  all assets beats one model per asset at a longer horizon: both arms on the
+echo  same rows and date folds, AUC per asset, gate = mean delta at least +0.005
+echo  with Wilcoxon p below 0.05, fixed before the run. Horizon 1 is the control:
+echo  it should repeat the 2026-09-09 result (pooled about 0.0074 behind).
+echo  CatBoost on the CPU, a few hours for four horizons; not beside a training.
+echo  Nothing it trains is served. Reports: models\global_report_h*.json
+echo.
+set "gh_h="
+set /p gh_h="Horizons in bars, Enter = 1,5,10,20: "
+if "%gh_h%"=="" set "gh_h=1,5,10,20"
+set "gh_ok="
+set /p gh_ok="Type YES to run: "
+if /i not "%gh_ok%"=="YES" goto menu
+python train_global.py --horizons %gh_h%
 pause
 goto menu

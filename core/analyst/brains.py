@@ -230,7 +230,8 @@ _VALID = {
     "GTRADE_ANALYST_MODE": lambda v: v in ("solo", "team"),
     "GTRADE_COMBINER": lambda v: v in ("fixed", "stack"),
     "GTRADE_ANALYST_HOLD_CALLS": lambda v: v in ("0", "1"),
-    "GTRADE_ANALYST_CLAUDE_MODEL": lambda v: v in ("sonnet", "opus", "haiku", "fable"),
+    "GTRADE_ANALYST_CLAUDE_MODEL": lambda v: v in ("sonnet", "opus", "haiku", "fable")
+    or (v.startswith("claude-") and " " not in v),
     "GTRADE_ANALYST_CLAUDE_MAX_CALLS": _positive_int,
     "GTRADE_ANALYST_CLAUDE_TURNS": _positive_int,
     "GTRADE_ANALYST_CLAUDE_TIMEOUT": _positive_int,

@@ -904,8 +904,9 @@ then the verdict); a team run with a critic costs 10 to 12 per asset.
 1. Install Claude Code and log in once with your subscription (`claude` in a
    terminal, then `/login`). `claude --version` must answer.
 2. `run_gtrade.bat` -> `AN` -> `M` -> `D` -> provider `5` (claude-code) ->
-   model: Enter for Sonnet, `opus` for the newest Opus, or an exact id such as
-   `claude-opus-5-5`. Every role now shows `claude-code:...`.
+   model: a number from the list shown (`opus`, `claude-opus-5-5`, ...), an exact
+   id, or Enter for Sonnet. Every prompt that asks for a model shows such a
+   list: installed Ollama models, Ollama Cloud's catalogue, Claude and API ids. Every role now shows `claude-code:...`.
 3. Still in `M`: `C` sets the Claude Code limits. Calls per day `100` is a good
    start for team runs; Enter keeps turns at 12; a timeout of `900` seconds
    leaves room for Opus with web searches on a deep run.
@@ -1356,8 +1357,10 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 | `AL` | `auto_loop.py` | The unattended search, A/B and adopt cycle. Its own questions. See below. |
 | `ALS` | `auto_loop.py --status` | Asks whether to also stop the loop. |
 | `LC` | `loop_cycle.py` | One daily maintenance pass. |
+| `GH` | `train_global.py --horizons` | One model over every asset against one model per asset, at the horizons you name (Enter = 1,5,10,20; 1 is the control). CatBoost only, trains nothing that is served, writes `models/global_report_h*.json`. |
+| `MORE` | submenu | POLICIES, GENOME and SERVICES. Their codes also work typed on the main screen, as do `ABC`, `ABR` and `AI`, which are no longer listed. |
 
-### POLICIES
+### POLICIES (under `[MORE]`)
 
 | Key | Runs | Notes |
 | --- | --- | --- |
@@ -1372,7 +1375,7 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 | `PS` | `policy_status.py` | How the fitted policies did on LIVE signals. Asks how many days. |
 | `TR` | `train_timing.py --replay` | How often each layer's decision was right. Asks which assets. |
 
-### GENOME
+### GENOME (under `[MORE]`)
 
 | Key | Runs | Notes |
 | --- | --- | --- |
@@ -1383,7 +1386,7 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 | `ABC` | `ab_build.py` | Configures an A/B. |
 | `ABR` | `ab_build.py --run` | Runs the configured one. |
 
-### SERVICES
+### SERVICES (under `[MORE]`)
 
 | Key | Runs | Notes |
 | --- | --- | --- |
