@@ -889,11 +889,14 @@ authentication.
 
 Calls are capped per day (`GTRADE_ANALYST_CLAUDE_MAX_CALLS`, default 20,
 counted in `_analyst_claude_calls.json`). Over the cap, when the CLI is missing,
-when it times out or when it reports a usage limit, the call goes to
-`GTRADE_ANALYST_FALLBACK` (default `ollama`), the console says why, and the
-judgment row records the brain that actually answered, for example
-`ollama:gemma4:26b (fallback)`. That keeps the accuracy of each brain separable
-in `score`. A judgment usually costs 2 to 3 calls (a round asking for sources,
+when it times out or when it reports a usage limit, the run **stops** with the
+reason, and the same command later continues where it stopped. With
+`GTRADE_ANALYST_FALLBACK` set to a brain, that brain answers instead, and the
+row says so: `ollama:gemma4:26b (fallback)` when it gave the verdict,
+`claude-code:opus +2 fallback` when it answered two of the calls behind it (a
+specialist, the critic). That keeps the accuracy of each brain separable in
+`score`. Stopping is the default because a local model started as a fallback
+beside a training on the same machine ran it out of memory and crashed it. A judgment usually costs 2 to 3 calls (a round asking for sources,
 then the verdict); a team run with a critic costs 10 to 12 per asset.
 
 ### Claude Code as the brain, step by step
@@ -906,8 +909,10 @@ then the verdict); a team run with a critic costs 10 to 12 per asset.
 3. Still in `M`: `C` sets the Claude Code limits. Calls per day `100` is a good
    start for team runs; Enter keeps turns at 12; a timeout of `900` seconds
    leaves room for Opus with web searches on a deep run.
-4. `F` sets the fallback. Local `ollama` is free but slow, and while a training
-   holds the GPU it runs on the CPU. `ollama-cloud` needs the key from `K`.
+4. `F` sets the fallback, or none (the default: the run stops when Claude Code
+   cannot answer). Local `ollama` is free but slow, and never a good fallback
+   while a training runs on the same machine. `ollama-cloud` needs the key
+   from `K`.
 5. `W` sets how many web searches and page reads one judgment may make
    (default 6, `0` turns the web off).
 6. `P` sends one short call to each model. Claude Code should answer `OK`.
@@ -1896,7 +1901,7 @@ The switches that change what is served, all default to off:
 | `GTRADE_ANALYST_CLAUDE_MAX_CALLS` | Claude Code calls per day before the fallback answers (default 20) |
 | `GTRADE_ANALYST_CLAUDE_TURNS` | turns one Claude Code call may take, its own searches and reads included (default 12) |
 | `GTRADE_ANALYST_CLAUDE_TIMEOUT` | seconds before a Claude Code call is given up (default 600) |
-| `GTRADE_ANALYST_FALLBACK` | the brain that answers when Claude Code cannot (default `ollama`) |
+| `GTRADE_ANALYST_FALLBACK` | the brain that answers when Claude Code cannot; unset or `none` (default) stops the run instead |
 | `GTRADE_ANALYST_WEB_CALLS` | web searches and page reads one judgment may make, on top of `GTRADE_ANALYST_TOOL_CALLS` (default 6, `0` = none) |
 | `OLLAMA_API_KEY` | Ollama Cloud models and the `web_search` tool |
 | `GTRADE_ANALYST_MODE` | `solo` (default) or `team` |

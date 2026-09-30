@@ -145,6 +145,14 @@ def estimate_hours(calls):
     return total / 3600.0
 
 
+_FALLBACKS = 0
+
+
+def fallback_count():
+    """Calls answered by the fallback brain so far in this process."""
+    return _FALLBACKS
+
+
 def _plain_call(role, spec):
     """f(prompt) through llm_proposer under `spec` (None = the legacy env)."""
     from core import llm_proposer
@@ -179,7 +187,18 @@ def call_for(role):
                                       claude_code.turns(), claude_code.timeout())
                 call.last_label = _label_of(spec)
             except claude_code.ClaudeUnavailable as exc:
-                fallback = os.getenv("GTRADE_ANALYST_FALLBACK") or "ollama"
+                # Unset or "none" stops the run. A silent local fallback started
+                # a 26b model beside a training and crashed it (2026-09-30), and
+                # it mixes two brains into one sample either way.
+                fallback = (os.getenv("GTRADE_ANALYST_FALLBACK") or "none").strip()
+                if fallback.lower() == "none":
+                    from core.llm_proposer import ProviderUnavailable
+
+                    raise ProviderUnavailable(
+                        "claude-code did not answer (%s) and no fallback is set "
+                        "(GTRADE_ANALYST_FALLBACK); run again when it answers" % exc) from exc
+                global _FALLBACKS
+                _FALLBACKS += 1
                 call.last_label = _label_of(fallback) + " (fallback)"
                 print("[analyst] claude-code did not answer (%s); %s takes the call"
                       % (exc, call.last_label))
@@ -215,7 +234,8 @@ _VALID = {
     "GTRADE_ANALYST_CLAUDE_MAX_CALLS": _positive_int,
     "GTRADE_ANALYST_CLAUDE_TURNS": _positive_int,
     "GTRADE_ANALYST_CLAUDE_TIMEOUT": _positive_int,
-    "GTRADE_ANALYST_FALLBACK": lambda v: _parses(v) and not v.startswith("claude-code"),
+    "GTRADE_ANALYST_FALLBACK": lambda v: v == "none" or (
+        _parses(v) and not v.startswith("claude-code")),
     "GTRADE_ANALYST_WEB_CALLS": str.isdigit,
 }
 

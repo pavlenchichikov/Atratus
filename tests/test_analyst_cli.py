@@ -452,7 +452,7 @@ def test_a_missing_provider_stops_the_sweep_instead_of_refusing_every_asset(
     assert analyst.cmd_run(A()) == 1
     assert len(calls) == 1, "it kept asking after the provider was gone"
     out = capsys.readouterr().out
-    assert "pip install anthropic" in out and "nothing was asked" in out
+    assert "pip install anthropic" in out and "stopped at SBER" in out
 
 
 def test_the_panel_is_the_same_names_every_day(monkeypatch):

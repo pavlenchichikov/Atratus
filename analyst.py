@@ -173,6 +173,7 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
     from core.analyst import brains
 
     brain_label = brains.label("solo")
+    fallbacks_before = brains.fallback_count()
     tool_calls, notes = [], {}
     reports = None
     if mode == "team":
@@ -200,6 +201,11 @@ def _judge_one(d, asset, h, horizon, call, depth, cells, table,
         if revised is not None:
             pre, j = j, revised
 
+    # Any call of this judgment answered by the fallback (a specialist, the
+    # lead, the critic) is named on the row, so two brains never mix unseen.
+    n_fallback = brains.fallback_count() - fallbacks_before
+    if n_fallback and "(fallback)" not in brain_label:
+        brain_label = "%s +%d fallback" % (brain_label, n_fallback)
     fc = calibrate.forecast(j, cells, asset, radar_category(asset),
                             d["atr"], d["close"], table)
     store.write_judgment({
@@ -408,8 +414,8 @@ def cmd_run(args):
                 # print the same missing-package error 28 times and finish
                 # claiming 28 refusals.
                 print("[analyst] %s" % exc)
-                print("[analyst] nothing was asked, so nothing was judged. "
-                      "Provider ollama needs no key and no Anthropic package.")
+                print("[analyst] stopped at %s. Judgments written before it are "
+                      "kept; the same command continues from here." % asset)
                 return 1
     print(f"[analyst] written={written} skipped={skipped} refused={refused} "
           f"retried={len(rejects)}")

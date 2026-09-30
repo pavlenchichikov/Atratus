@@ -111,3 +111,31 @@ def test_llm_flag_keeps_the_configured_model_and_base(monkeypatch):
     assert brains.label("solo") == "ollama:gemma4:26b"
     analyst._apply_llm_flag("ollama-cloud", None)
     assert brains.env_for("solo")["GTRADE_AR_LLM_MODEL"] == "gemma4:26b"
+
+
+def test_a_judgment_with_a_fallback_call_says_so_in_its_brain(tmp_path, monkeypatch):
+    """The brain column must show when any call of the judgment (a specialist,
+    the lead, the critic) was answered by the fallback, or two brains mix
+    unseen in one sample."""
+    import analyst
+    from core.analyst import brains
+
+    path = str(tmp_path / "m.db")
+    monkeypatch.setattr(store, "DB_PATH", path)
+    monkeypatch.setenv("GTRADE_ANALYST_TOOL_CALLS", "0")
+    monkeypatch.setenv("GTRADE_ANALYST_BRAIN", "claude-code:opus")
+
+    def critic_on_fallback(role):
+        def call(p):
+            brains._FALLBACKS += 1              # what call_for does on a fallback
+            return _judgment("down")
+        return call
+
+    monkeypatch.setattr(brains, "call_for", critic_on_fallback)
+    monkeypatch.setattr(analyst.calibrate, "forecast",
+                        lambda *a, **k: {"pct": None, "lo": None, "hi": None})
+    monkeypatch.setattr(analyst, "_print_judgment", lambda *a, **k: None)
+    analyst._judge_one(dict(DOSSIER, asset="SP500"), "SP500", "h", 1,
+                       lambda p: _judgment("up"), "deep", {}, {}, 0, 0)
+    brain = sqlite3.connect(path).execute("SELECT brain FROM analyst_log").fetchone()[0]
+    assert brain == "claude-code:opus +1 fallback"

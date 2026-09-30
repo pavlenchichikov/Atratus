@@ -111,3 +111,43 @@ def test_cmd_run_marks_a_rewound_run_and_clears_the_mark(monkeypatch):
     assert os.environ["GTRADE_ANALYST_REWIND"] == "1"
     analyst._mark_rewind(None)
     assert "GTRADE_ANALYST_REWIND" not in os.environ
+
+
+def _claude_down(monkeypatch, tmp_path):
+    monkeypatch.setattr(cc, "CAP_PATH", str(tmp_path / "calls.json"))
+    monkeypatch.setattr(brains, "SPEED_PATH", str(tmp_path / "speed.json"))
+    monkeypatch.setenv("GTRADE_ANALYST_BRAIN", "claude-code:opus")
+
+    def down(*a, **k):
+        raise cc.ClaudeUnavailable("usage limit reached")
+
+    monkeypatch.setattr(cc, "run", down)
+
+
+def test_with_no_fallback_set_a_dead_claude_stops_the_run(monkeypatch, tmp_path):
+    """A local model started beside a training crashed it (2026-09-30), and
+    a silent swap mixes two brains in one sample. Unset means: stop."""
+    from core.llm_proposer import ProviderUnavailable
+
+    _claude_down(monkeypatch, tmp_path)
+    monkeypatch.delenv("GTRADE_ANALYST_FALLBACK", raising=False)
+    with pytest.raises(ProviderUnavailable, match="usage limit"):
+        brains.call_for("solo")("x")
+    monkeypatch.setenv("GTRADE_ANALYST_FALLBACK", "none")
+    with pytest.raises(ProviderUnavailable):
+        brains.call_for("solo")("x")
+
+
+def test_every_fallback_is_counted(monkeypatch, tmp_path):
+    _claude_down(monkeypatch, tmp_path)
+    monkeypatch.setenv("GTRADE_ANALYST_FALLBACK", "ollama:gemma")
+    monkeypatch.setattr(brains, "_plain_call", lambda role, spec: (lambda p: "ok"))
+    before = brains.fallback_count()
+    brains.call_for("critic")("x")
+    brains.call_for("lead")("x")
+    assert brains.fallback_count() - before == 2
+
+
+def test_none_is_a_valid_fallback_setting():
+    assert brains._VALID["GTRADE_ANALYST_FALLBACK"]("none")
+    assert not brains._VALID["GTRADE_ANALYST_FALLBACK"]("claude-code:opus")
