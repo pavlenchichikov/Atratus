@@ -172,32 +172,17 @@ echo     1 = evolutionary (no LLM, fully autonomous)
 echo     2 = local LLM (Ollama; any installed model - you pick below)
 echo     3 = Anthropic API (needs ANTHROPIC_API_KEY)
 echo     4 = OpenAI API (needs OPENAI_API_KEY)
+echo     5 = Ollama Cloud (needs OLLAMA_API_KEY; no load on this machine)
 set "PROP=1"
 set /p "PROP=    choice [1]: "
 set "GTRADE_AR_PROPOSER=evolutionary"
 set "GTRADE_AR_LLM="
 
 set "gt_model="
-if "%PROP%"=="2" (
-  set "GTRADE_AR_PROPOSER=llm"
-  set "GTRADE_AR_LLM=ollama"
-  echo     auto = the first gemma, else the first installed.
-  call :pick_model ollama auto
-)
-
-if "%PROP%"=="3" (
-  set "GTRADE_AR_PROPOSER=llm"
-  set "GTRADE_AR_LLM=anthropic"
-  call :pick_model anthropic claude-opus-4-8
-)
-
-if "%PROP%"=="4" (
-  set "GTRADE_AR_PROPOSER=llm"
-  set "GTRADE_AR_LLM=openai"
-  call :pick_model openai gpt-4o
-)
-
-if defined gt_model set "GTRADE_AR_LLM_MODEL=%gt_model%"
+if "%PROP%"=="2" set "GTRADE_AR_PROPOSER=llm" & call :set_llm ollama
+if "%PROP%"=="3" set "GTRADE_AR_PROPOSER=llm" & call :set_llm anthropic
+if "%PROP%"=="4" set "GTRADE_AR_PROPOSER=llm" & call :set_llm openai
+if "%PROP%"=="5" set "GTRADE_AR_PROPOSER=llm" & call :set_llm ollama-cloud
 
 REM  Token budget for the LLM (proposer + wiki). Reasoning models like gemma spend
 REM  tokens on an internal trace before the answer; too small a cap returns EMPTY
@@ -376,6 +361,18 @@ REM  higher than the proposer's 8000: the local model costs only wall-clock, and
 REM  GTRADE_AR_LLM_TIMEOUT still bounds one call.
 if not "%GTRADE_AR_WIKI%"=="1" goto :nowikitoks
 if "%GTRADE_AR_PROPOSER%"=="llm" goto :nowikitoks
+REM  The wiki's model was never asked here: GTRADE_AR_LLM is blank on an
+REM  evolutionary run, so load_dotenv filled it from .env (local ollama).
+echo.
+echo     Which model writes the wiki?
+echo     1 = local Ollama (default)   2 = Ollama Cloud   3 = Anthropic   4 = OpenAI
+set "WLM=1"
+set /p "WLM=    choice [1]: "
+set "gt_model="
+if "%WLM%"=="1" call :set_llm ollama
+if "%WLM%"=="2" call :set_llm ollama-cloud
+if "%WLM%"=="3" call :set_llm anthropic
+if "%WLM%"=="4" call :set_llm openai
 echo.
 echo     The wiki calls the LLM. Its cap (0 = no cap; a reasoning model that
 echo     runs out mid-thought returns an empty reply and the wiki stays as it was).
@@ -399,7 +396,7 @@ if "%RL%"=="2" set "GTRADE_AR_RL=1"
 echo.
 echo ------------------------------------------------------------
 echo   axes=%GTRADE_AR_AXES%  label=%GTRADE_LABEL_MODE%/%GTRADE_LABEL_HORIZON%
-echo   proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM%
+echo   proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM% %GTRADE_AR_LLM_BASE_URL%
 echo   model=%GTRADE_AR_LLM_MODEL%  maxtok=%GTRADE_AR_LLM_MAX_TOKENS%  timeout=%GTRADE_AR_LLM_TIMEOUT%
 echo   wiki=%GTRADE_AR_WIKI%  reflect=%GTRADE_AR_REFLECT%
 echo   budget=%AR_BUDGET%  objective=%GTRADE_AR_OBJECTIVE%  basis=%GTRADE_AR_SCORE_BASIS%  rl=%GTRADE_AR_RL%
@@ -470,6 +467,21 @@ pause
 
 :end
 
+goto :eof
+
+:set_llm
+REM  %1 = ollama, ollama-cloud, anthropic or openai. Sets GTRADE_AR_LLM, the base
+REM  URL and GTRADE_AR_LLM_MODEL. Ollama Cloud is the ollama provider pointed at
+REM  https://ollama.com (llm_proposer adds the OLLAMA_API_KEY header there).
+set "GTRADE_AR_LLM=%~1"
+set "gt_def="
+if "%~1"=="ollama" set "gt_def=auto"
+if "%~1"=="ollama" echo     auto = the first gemma, else the first installed.
+if "%~1"=="anthropic" set "gt_def=claude-opus-4-8"
+if "%~1"=="openai" set "gt_def=gpt-4o"
+if "%~1"=="ollama-cloud" set "GTRADE_AR_LLM=ollama" & set "GTRADE_AR_LLM_BASE_URL=https://ollama.com" & set "gt_def=gpt-oss:120b"
+call :pick_model %~1 %gt_def%
+if defined gt_model set "GTRADE_AR_LLM_MODEL=%gt_model%"
 goto :eof
 
 :pick_model

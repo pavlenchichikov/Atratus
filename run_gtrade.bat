@@ -743,8 +743,8 @@ echo    [R] Role       a model for one role
 echo    [U] Unset      a role goes back to the default
 echo    [K] Cloud key  OLLAMA_API_KEY for Ollama Cloud, typed hidden
 echo    [P] Ping       one short call to each model, to check it answers
-echo    [G] GPU guard  free VRAM in MB a local model needs before it may use
-echo                   the card; below it the model runs on the CPU
+echo    [G] Guards     local model: keep loaded in RAM, GPU layers (only while
+echo                   nothing trains), free VRAM, RAM margin and wait
 echo    [H] Hours      warn before a run longer than this many hours
 echo    [N] Mode       default mode for runs: solo or team
 echo    [X] Auto size  how many assets an auto run picks
@@ -753,6 +753,8 @@ echo    [K2] Hold      keep a long-horizon call until it resolves: on or off
 echo    [C] Claude     Claude Code settings: model, calls per day, turns, timeout
 echo    [F] Fallback   the brain that answers when Claude Code cannot
 echo    [W] Web        web searches and page reads allowed per judgment
+echo    [Q] Ollama RAM KV cache q8_0 + flash attention, prompt cache off;
+echo                   restarts Ollama. Same answers, about half the KV memory
 echo.
 set "am="
 set /p am="Choose, Enter = back: "
@@ -762,6 +764,7 @@ if /i "%am%"=="U" goto am_unset
 if /i "%am%"=="K" goto am_key
 if /i "%am%"=="P" goto am_ping
 if /i "%am%"=="G" goto am_gpu
+if /i "%am%"=="Q" goto am_ollama_ram
 if /i "%am%"=="H" goto am_hours
 if /i "%am%"=="N" goto am_mode
 if /i "%am%"=="X" goto am_autosize
@@ -890,9 +893,70 @@ goto analyst_models
 
 :am_gpu
 set "am_v="
-set /p am_v="Free VRAM in MB before a local model may use the GPU, Enter = 3500: "
-if "%am_v%"=="" set "am_v=3500"
-python analyst.py brains --set "GTRADE_OLLAMA_MIN_FREE_MB=%am_v%"
+echo    Enter keeps the current value. Applies to [RS], [AN] and the loop.
+echo    Layers go on the card only while no trainer computes on it, and a
+echo    trainer that starts unloads them first. 0 = always the CPU.
+echo    Keep loaded (default 1): the model stays in RAM on the CPU between
+echo    calls, never on the card; a trainer unloads it only when RAM is short.
+echo    0 = load for each call and unload after it (GPU layers below apply).
+set /p am_v="Keep the local model loaded, 1 or 0: "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_KEEP_LOADED=%am_v%"
+set "am_v="
+set /p am_v="Free RAM in MB a trainer needs, below it the model is unloaded (default 4000): "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_TRAIN_RAM_MB=%am_v%"
+set "am_v="
+set /p am_v="GPU layers when keep loaded is 0 (0 = CPU only): "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_NUM_GPU=%am_v%"
+set "am_v="
+set /p am_v="Free VRAM in MB before a local model may use the GPU (default 3500): "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_MIN_FREE_MB=%am_v%"
+echo    A local load waits until free RAM covers the model file + 2 GB plus
+echo    this margin; gemma4:26b needs ~19.7 GB + margin (never fits 15.7 GB),
+echo    gemma4:12b ~9.2 GB + margin.
+set "am_v="
+set /p am_v="RAM margin in MB (default 2048): "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_RAM_MARGIN_MB=%am_v%"
+set "am_v="
+set /p am_v="Seconds to wait for that RAM before refusing (default 600): "
+if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_RAM_WAIT=%am_v%"
+pause
+goto analyst_models
+
+:am_ollama_ram
+REM  Server settings, not .env: Ollama and the llama-server it starts read them
+REM  from the user environment. LLAMA_ARG_CACHE_RAM=0 turns off llama-server's
+REM  prompt cache (up to 8 GB of RAM on a resident model); the KV cache in q8_0
+REM  needs flash attention. setx alone does not reach a process started from
+REM  this window, so the values are also set here before Ollama restarts.
+echo    1 = apply: KV cache q8_0, flash attention on, prompt cache off
+echo    0 = back to Ollama defaults
+set "am_v="
+set /p am_v="Choice, Enter = back: "
+if "%am_v%"=="1" goto am_oram_on
+if "%am_v%"=="0" goto am_oram_off
+goto analyst_models
+:am_oram_on
+setx LLAMA_ARG_CACHE_RAM 0 >nul
+setx OLLAMA_KV_CACHE_TYPE q8_0 >nul
+setx OLLAMA_FLASH_ATTENTION 1 >nul
+set "LLAMA_ARG_CACHE_RAM=0"
+set "OLLAMA_KV_CACHE_TYPE=q8_0"
+set "OLLAMA_FLASH_ATTENTION=1"
+goto am_oram_restart
+:am_oram_off
+reg delete HKCU\Environment /v LLAMA_ARG_CACHE_RAM /f >nul 2>&1
+reg delete HKCU\Environment /v OLLAMA_KV_CACHE_TYPE /f >nul 2>&1
+reg delete HKCU\Environment /v OLLAMA_FLASH_ATTENTION /f >nul 2>&1
+set "LLAMA_ARG_CACHE_RAM="
+set "OLLAMA_KV_CACHE_TYPE="
+set "OLLAMA_FLASH_ATTENTION="
+:am_oram_restart
+echo    Restarting Ollama (a call in flight fails and is retried)...
+taskkill /im "ollama app.exe" /f >nul 2>&1
+taskkill /im ollama.exe /f >nul 2>&1
+taskkill /im llama-server.exe /f >nul 2>&1
+start "" "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"
+echo    Done. Ollama restarted with the new settings.
 pause
 goto analyst_models
 
@@ -1347,6 +1411,7 @@ REM  variable, and the agent's load_dotenv then refills a MISSING key from .env,
 REM  which is how a 17 GB model once got pinned on a 15.7 GB machine.
 set "GTRADE_AR_LLM=ollama"
 set "GTRADE_AR_LLM_MODEL=auto"
+set "GTRADE_AR_LLM_BASE_URL=http://127.0.0.1:11434/v1"
 set "GTRADE_AR_LLM_MAX_TOKENS=8000"
 set "GTRADE_AR_LLM_TIMEOUT=3600"
 if "%NEEDLLM%"=="0" goto :al_budget
@@ -1356,12 +1421,16 @@ echo [4] Which model serves them?
 echo     1 = local Ollama (default, free, nothing leaves the machine)
 echo     2 = Anthropic API (needs ANTHROPIC_API_KEY)
 echo     3 = OpenAI API (needs OPENAI_API_KEY)
+echo     4 = Ollama Cloud (needs OLLAMA_API_KEY from [AN] Models [K]; no load here)
 set "DLM=1"
 set /p "DLM=    choice [1]: "
-if "%DLM%"=="2" set "GTRADE_AR_LLM=anthropic"
-if "%DLM%"=="3" set "GTRADE_AR_LLM=openai"
+set "dlm_p=%GTRADE_AR_LLM%"
+set "dlm_d=auto"
+if "%DLM%"=="2" set "GTRADE_AR_LLM=anthropic" & set "dlm_p=anthropic"
+if "%DLM%"=="3" set "GTRADE_AR_LLM=openai" & set "dlm_p=openai"
+if "%DLM%"=="4" set "GTRADE_AR_LLM_BASE_URL=https://ollama.com" & set "dlm_p=ollama-cloud" & set "dlm_d=gpt-oss:120b"
 if "%DLM%"=="1" echo     auto = the first gemma, else the first installed.
-call :pick_model %GTRADE_AR_LLM% auto
+call :pick_model %dlm_p% %dlm_d%
 if not "%gt_model%"=="" set "GTRADE_AR_LLM_MODEL=%gt_model%"
 echo.
 echo     Seconds allowed for ONE call. A large local model on CPU needs far more
@@ -1387,7 +1456,7 @@ echo.
 echo ------------------------------------------------------------
 if "%GTRADE_AR_DIRECTOR%"=="1" echo   director=%GTRADE_AR_DIRECTOR_MODE%   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
 if not "%GTRADE_AR_DIRECTOR%"=="1" echo   director=off   proposer=%GTRADE_AR_PROPOSER%   wiki=%GTRADE_AR_WIKI%
-if "%NEEDLLM%"=="1" echo   llm=%GTRADE_AR_LLM%   model=%GTRADE_AR_LLM_MODEL%   timeout=%GTRADE_AR_LLM_TIMEOUT%s
+if "%NEEDLLM%"=="1" echo   llm=%GTRADE_AR_LLM% @ %GTRADE_AR_LLM_BASE_URL%   model=%GTRADE_AR_LLM_MODEL%   timeout=%GTRADE_AR_LLM_TIMEOUT%s
 if "%NEEDLLM%"=="0" echo   llm=not used by this configuration
 if "%NEWC%"=="2" echo   NEW campaign: search=%GTRADE_AR_SCORE_BASIS%  decision=%GTRADE_AR_DECISION_BASIS%  objective=%GTRADE_AR_OBJECTIVE%
 if not "%NEWC%"=="2" echo   campaign=continuing the frozen one (see [ALS] for what it is)

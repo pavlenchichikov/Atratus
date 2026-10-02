@@ -39,7 +39,7 @@ def _ollama_cloud():
     r = net.http_get(CLOUD_TAGS, headers={"Authorization": "Bearer " + key} if key else None,
                      retries=1)
     r.raise_for_status()
-    return [m["name"] for m in r.json().get("models", []) if m.get("name")]
+    return sorted(m["name"] for m in r.json().get("models", []) if m.get("name"))
 
 
 def models_for(provider):

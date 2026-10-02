@@ -1036,3 +1036,108 @@ def test_a_card_still_busy_after_unloading_stays_on_the_cpu(monkeypatch):
     monkeypatch.setattr(lp, "_ollama_loaded", lambda base: [])
     monkeypatch.setattr(lp.time, "sleep", lambda s: None)
     assert lp._gpu_layers(4, "http://127.0.0.1:11434/v1") == 0
+
+
+def test_card_in_training_means_anyone_but_ollama(monkeypatch):
+    monkeypatch.setattr(lp, "_gpu_compute_apps", lambda: [])
+    assert lp._card_in_training() is False
+    monkeypatch.setattr(lp, "_gpu_compute_apps", lambda: [
+        r"C:\Users\User\AppData\Local\Programs\Ollama\lib\ollama\llama-server.exe"])
+    assert lp._card_in_training() is False
+    monkeypatch.setattr(lp, "_gpu_compute_apps", lambda: [
+        r"C:\Users\User\anaconda3\envs\jackpot_gpu\python.exe"])
+    assert lp._card_in_training() is True
+    monkeypatch.setattr(lp, "_gpu_compute_apps", lambda: None)     # unreadable
+    assert lp._card_in_training() is True
+
+
+def test_gpu_layers_stay_off_while_anything_trains_even_with_free_vram(monkeypatch):
+    monkeypatch.setattr(lp, "_vram_free_mb", lambda: 3900)
+    assert lp._gpu_layers(4, "http://127.0.0.1:11434/v1") == 4
+    monkeypatch.setattr(lp, "_gpu_compute_apps", lambda: [r"C:\env\python.exe"])
+    assert lp._gpu_layers(4, "http://127.0.0.1:11434/v1") == 0
+
+
+def test_release_card_unloads_only_models_on_the_card(monkeypatch):
+    rows = [[{"name": "a", "size_vram": 900}, {"name": "b", "size_vram": 0}], []]
+    monkeypatch.setattr(lp, "_ollama_ps", lambda base: rows.pop(0) if rows else [])
+    gone = []
+    monkeypatch.setattr(lp, "_ollama_unload", lambda base, m: gone.append(m))
+    assert lp.release_card(sleep=lambda s: None) == ["a"]
+    assert gone == ["a"]
+
+
+def test_wait_for_ram_waits_then_refuses_a_model_that_does_not_fit(monkeypatch):
+    base = "http://127.0.0.1:11434/v1"
+    monkeypatch.setattr(lp, "_ollama_loaded", lambda b: [])
+    monkeypatch.setattr(lp, "_ollama_size_mb", lambda b, m: 17742)   # gemma4:26b
+    monkeypatch.setenv("GTRADE_OLLAMA_RAM_WAIT", "60")
+    t = [0.0]
+    sleeps = []
+
+    def sleep(s):
+        sleeps.append(s)
+        t[0] += s
+    monkeypatch.setattr(lp, "_ram_free_mb", lambda: 12100)            # 10-02 crash
+    with pytest.raises(lp.ProviderUnavailable, match="gemma4:26b"):
+        lp.wait_for_ram(base, "gemma4:26b", sleep=sleep, clock=lambda: t[0])
+    assert sleeps                                                     # it waited first
+    monkeypatch.setattr(lp, "_ollama_size_mb", lambda b, m: 7206)     # gemma4:12b
+    frees = iter([9000, 12000])                      # needs 11254; trainers exit
+    monkeypatch.setattr(lp, "_ram_free_mb", lambda: next(frees))
+    t[0] = 0.0
+    lp.wait_for_ram(base, "gemma4:12b", sleep=sleep, clock=lambda: t[0])
+    monkeypatch.setattr(lp, "_ram_free_mb", lambda: 100)
+    lp.wait_for_ram("https://ollama.com", "gemma4:26b")              # cloud: no guard
+    monkeypatch.setattr(lp, "_ollama_loaded", lambda b: ["gemma4:26b"])
+    lp.wait_for_ram(base, "gemma4:26b")                               # already loaded
+
+
+def test_keep_loaded_stays_resident_on_the_cpu_and_skips_the_unload(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("GTRADE_AR_LLM_MODEL", "gemma4:12b")
+    monkeypatch.setenv("GTRADE_OLLAMA_NUM_GPU", "4")
+    monkeypatch.setenv("GTRADE_OLLAMA_KEEP_LOADED", "1")
+    monkeypatch.setattr(lp, "_vram_free_mb", lambda: 3900)            # idle card
+    bodies, gone = [], []
+
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "ok"}}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def post(self, url, json=None, **k):
+            bodies.append(json)
+            return Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "Client", Client)
+    monkeypatch.setattr(lp, "_ollama_unload", lambda base, m, post=None: gone.append(m))
+    assert lp._call_ollama("hi") == "ok"
+    assert bodies[0]["keep_alive"] == -1
+    assert bodies[0]["options"]["num_gpu"] == 0, "resident = never on the card"
+    assert gone == []
+    monkeypatch.setenv("GTRADE_OLLAMA_KEEP_LOADED", "0")
+    lp._call_ollama("hi")
+    assert "keep_alive" not in bodies[1] and bodies[1]["options"]["num_gpu"] == 4
+    assert gone == ["gemma4:12b"]
+    assert not lp.keep_loaded("https://ollama.com")
+
+
+def test_release_card_drops_a_resident_cpu_model_only_when_ram_is_short(monkeypatch):
+    resident = [{"name": "gemma4:26b", "size_vram": 0}]
+    gone = []
+    monkeypatch.setattr(lp, "_ollama_ps", lambda base: [] if gone else resident)
+    monkeypatch.setattr(lp, "_ollama_unload", lambda base, m: gone.append(m))
+    monkeypatch.setattr(lp, "_ram_free_mb", lambda: 8000)
+    assert lp.release_card(sleep=lambda s: None) == []
+    monkeypatch.setattr(lp, "_ram_free_mb", lambda: 2500)
+    assert lp.release_card(sleep=lambda s: None) == ["gemma4:26b"]

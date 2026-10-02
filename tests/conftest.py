@@ -139,3 +139,18 @@ def _no_campaign_load_profile(monkeypatch):
     deletes every load key itself first, so it still sees a clean environment.
     """
     monkeypatch.setenv("GTRADE_AR_TRAIN_CHUNK", "0")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_card_or_ram(monkeypatch):
+    """The LLM guards read nvidia-smi, free RAM and the local Ollama. CI has
+    none of them (an unreadable card counts as in training) and a developer's
+    machine has whatever is running, so both see an idle card and a guard that
+    cannot read RAM. Tests of the guards patch these back themselves."""
+    from core import llm_proposer as lp
+    monkeypatch.setattr(lp, "_gpu_compute_apps", lambda: [])
+    monkeypatch.setattr(lp, "_ram_free_mb", lambda: None)
+    monkeypatch.setattr(lp, "_ollama_size_mb", lambda base, model: None)
+    # The resident mode changes the payload and skips the unload; the tests
+    # written before it pin the per-call unload, the new ones set it on.
+    monkeypatch.setenv("GTRADE_OLLAMA_KEEP_LOADED", "0")

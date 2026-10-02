@@ -8,6 +8,19 @@ if os.path.isdir(_env_lib_bin) and _env_lib_bin not in os.environ.get("PATH", ""
     os.environ["PATH"] = _env_lib_bin + os.pathsep + os.environ.get("PATH", "")
 # -----------------------------------------------------------------------------
 
+# -- GPU: a local LLM leaves the card before TF takes it ----------------------
+# An LLM loaded onto the card while it was idle must not be there when training
+# starts: a card shared that way hung the driver (BSOD 0x116, 2026-09-27/28).
+# A model resident on the CPU stays, unless free RAM is short (0x10E, 10-02).
+try:
+    from core.llm_proposer import release_card
+
+    if release_card():
+        print("  [GPU] unloaded the local LLM before training (card, or RAM short)")
+except Exception:
+    pass
+# -----------------------------------------------------------------------------
+
 import json
 import shutil
 import signal

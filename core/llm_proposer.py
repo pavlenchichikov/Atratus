@@ -548,6 +548,10 @@ def _gpu_layers(n, base):
     if n <= 0 or not _is_local(base):
         # Another machine's card: this one's nvidia-smi says nothing about it.
         return max(0, n)
+    if _card_in_training():
+        # Free VRAM is not enough: a trainer between two folds holds little and
+        # takes it all back seconds later. Anyone else computing = the CPU.
+        return 0
     need = int(os.getenv("GTRADE_OLLAMA_MIN_FREE_MB") or 3500)
     free = _vram_free_mb()
     if free is not None and free < need:
@@ -566,16 +570,146 @@ def _gpu_layers(n, base):
     return n if free is not None and free >= need else 0
 
 
-def _ollama_loaded(base):
-    """Names of the models this Ollama has in memory; [] when it cannot say."""
+def _gpu_compute_apps():
+    """Image paths of the processes computing on the card, or None when
+    nvidia-smi cannot say. On this WDDM laptop it lists a TF trainer by pid
+    and path, used memory [N/A] (checked 2026-10-02)."""
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=process_name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10, check=False)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def _card_in_training():
+    """True when anything other than Ollama computes on the card: a trainer,
+    an A/B arm, or this very process if it holds a TF context. An unreadable
+    card counts as in training."""
+    apps = _gpu_compute_apps()
+    if apps is None:
+        return True
+    return any(not os.path.basename(a.replace("\\", "/")).lower().startswith(
+        ("ollama", "llama-server")) for a in apps)
+
+
+def _ollama_ps(base):
+    """The /api/ps rows of this Ollama; [] when it cannot say."""
     try:
         import httpx
 
         root = base.removesuffix("/v1").rstrip("/")
         r = httpx.Client(trust_env=False, timeout=5).get(root + "/api/ps")
-        return [m.get("name") for m in (r.json().get("models") or []) if m.get("name")]
+        return [m for m in (r.json().get("models") or []) if m.get("name")]
     except Exception:
         return []
+
+
+def _ollama_loaded(base):
+    """Names of the models this Ollama has in memory; [] when it cannot say."""
+    return [m["name"] for m in _ollama_ps(base)]
+
+
+LOCAL_OLLAMA = "http://127.0.0.1:11434"
+
+
+def keep_loaded(base):
+    """GTRADE_OLLAMA_KEEP_LOADED (default on): a local model stays resident on
+    the CPU between calls instead of a 20-50 s reload each time, and the card
+    stays whole for training. Off = the old unload after every call."""
+    return _is_local(base) and (os.getenv("GTRADE_OLLAMA_KEEP_LOADED") or "1").strip() != "0"
+
+
+def release_card(base=LOCAL_OLLAMA, sleep=time.sleep):
+    """Training is about to start: unload every local model that holds part of
+    the card, and a resident CPU model too when free RAM is below
+    GTRADE_TRAIN_RAM_MB (default 4000) - the 10-02 bugcheck 0x10E was RAM.
+    Waits until they are gone. A call in flight fails; its retry reloads under
+    the guards (_gpu_layers, wait_for_ram). Returns the names unloaded."""
+    rows = _ollama_ps(base)
+    free = _ram_free_mb()
+    # ponytail: one figure for every trainer, not measured per asset; raise it
+    # if a run with a resident model still runs short of RAM.
+    low = free is not None and free < int(os.getenv("GTRADE_TRAIN_RAM_MB") or 4000)
+    held = [m["name"] for m in rows if m.get("size_vram") or low]
+    for model in held:
+        _ollama_unload(base, model)
+    for _ in range(15 if held else 0):
+        if not any(m["name"] in held for m in _ollama_ps(base)):
+            break
+        sleep(1)
+    return held
+
+
+def _ram_free_mb():
+    try:
+        import psutil
+
+        return psutil.virtual_memory().available >> 20
+    except Exception:
+        return None
+
+
+def _ollama_size_mb(base, model):
+    """The model's size on disk from /api/tags, or None."""
+    try:
+        import httpx
+
+        root = base.removesuffix("/v1").rstrip("/")
+        r = httpx.Client(trust_env=False, timeout=5).get(root + "/api/tags")
+        for m in r.json().get("models") or []:
+            if m.get("name") == model:
+                return int(m.get("size") or 0) >> 20 or None
+    except Exception:
+        pass
+    return None
+
+
+# Measured 2026-10-02 on Ollama's llama-server engine, CPU load, 32k context:
+# the weights take about the file size (CPU + CPU_REPACK buffers together:
+# 26b 8728 + 8167 MB for a 17742 MB file, 12b 2808 + 5003 for 7206), plus
+# KV 1040-1150, compute and projector: 26b ~19.4 GB, 12b ~9.7 GB in all.
+# ponytail: one overhead for every model at 32k; raise it for a longer context.
+_RAM_OVERHEAD_MB = 2000
+
+
+def wait_for_ram(base, model, sleep=time.sleep, clock=time.monotonic):
+    """Hold a local load until the machine has the RAM for it.
+
+    The 2026-10-02 08:36 bugcheck 0x10E VIDEO_MEMORY_MANAGEMENT_INTERNAL came
+    during a CPU-only gemma4:26b load with 12.1 GB free for a ~19.4 GB model.
+    Waits GTRADE_OLLAMA_RAM_WAIT seconds (default 600) for the model file plus
+    _RAM_OVERHEAD_MB plus GTRADE_OLLAMA_RAM_MARGIN_MB (default 2048), then refuses with
+    ProviderUnavailable: the search turns its LLM off for the run instead of
+    taking the machine down. A loaded model costs nothing new.
+    """
+    if not _is_local(base) or model in _ollama_loaded(base):
+        return
+    size = _ollama_size_mb(base, model)
+    if size is None:
+        return
+    need = size + _RAM_OVERHEAD_MB + int(os.getenv("GTRADE_OLLAMA_RAM_MARGIN_MB") or 2048)
+    deadline = clock() + float(os.getenv("GTRADE_OLLAMA_RAM_WAIT") or 600)
+    said = False
+    while True:
+        free = _ram_free_mb()
+        if free is None or free >= need:
+            return
+        if clock() >= deadline:
+            raise ProviderUnavailable(
+                "%s needs ~%d MB of free RAM, only %d MB free: close something, "
+                "pick a smaller model or Ollama Cloud, or lower the RAM margin "
+                "in [AN] Models [G]." % (model, need, free))
+        if not said:
+            print("[llm] %s needs ~%d MB of free RAM, %d MB free; waiting."
+                  % (model, need, free), flush=True)
+            said = True
+        sleep(15)
 
 
 def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
@@ -602,10 +736,17 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     # plus 1.3 GB for gemma4's vision projector, so on a 4 GB card it placed
     # 0 of 31 text layers there (2026-09-24) and ran the analyst on the CPU.
     num_gpu = (os.getenv("GTRADE_OLLAMA_NUM_GPU") or "").strip()
-    if num_gpu.isdigit():
+    keep = keep_loaded(base)
+    if keep:
+        # Resident on the CPU only: layers on the card would hold it for good,
+        # and Ollama cannot move them off without reloading the model.
+        options["num_gpu"] = 0
+    elif num_gpu.isdigit():
         options["num_gpu"] = _gpu_layers(int(num_gpu), base)
     payload = {"model": model, "stream": False,
                "messages": [{"role": "user", "content": prompt}]}
+    if keep:
+        payload["keep_alive"] = -1
     if think is not None:
         payload["think"] = bool(think)
     if options:
@@ -677,6 +818,7 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
             "(for example gpt-oss:120b).")
     _ollama_headers(base)   # a missing cloud key stops here, not after three retries
     model = model_override() or _detect_ollama_model()
+    wait_for_ram(base, model)
     # Reasoning models spend tokens on the trace BEFORE the answer, so a cap the
     # trace uses up leaves nothing for the answer. GTRADE_AR_LLM_MAX_TOKENS
     # overrides; 0 means no cap, which is fine for a one-shot call and risky for
@@ -706,7 +848,7 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
         except Exception as exc:
             last_err = exc
             continue
-        if not _is_cloud(base):
+        if not _is_cloud(base) and not keep_loaded(base):
             _ollama_unload(base, model)
         if not out and trace:
             # Keep the tail: whether the trace was still reasoning or going in

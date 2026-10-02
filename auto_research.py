@@ -40,12 +40,11 @@ try:
 except Exception:
     pass
 
-# The search trains on the GPU, so its LLM calls stay on the CPU. .env's
-# GTRADE_OLLAMA_NUM_GPU=4 is for the analyst on an idle card; forced onto a
-# card the trainers hold, the load did not fail cleanly, it hung the driver:
-# BSOD 0x116 VIDEO_TDR_FAILURE on 2026-09-27 and 09-28, both seconds after
-# llama-server started with -ngl 4.
-os.environ["GTRADE_OLLAMA_NUM_GPU"] = "0"
+# GTRADE_OLLAMA_NUM_GPU used to be forced to 0 here (BSOD 0x116 on 09-27/28:
+# -ngl 4 onto a card the trainers held). Since 10-02 llm_proposer._gpu_layers
+# puts layers on the card only when nothing but Ollama computes on it, and
+# train_hybrid unloads them before TF starts, so the search's calls between
+# training phases may use the GPU again.
 
 from core import ar_memory, ar_rl, ar_wiki, llm_proposer, qd_surrogate
 from core.backtesting import UNRELIABLE_SCORE
