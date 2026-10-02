@@ -1039,7 +1039,7 @@ def test_a_card_still_busy_after_unloading_stays_on_the_cpu(monkeypatch):
 
 
 def test_card_in_training_means_anyone_but_ollama(monkeypatch):
-    monkeypatch.setattr(lp, "_gpu_compute_apps", lambda: [])
+    monkeypatch.setattr(lp, "_gpu_compute_apps", list)
     assert lp._card_in_training() is False
     monkeypatch.setattr(lp, "_gpu_compute_apps", lambda: [
         r"C:\Users\User\AppData\Local\Programs\Ollama\lib\ollama\llama-server.exe"])

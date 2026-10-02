@@ -743,8 +743,8 @@ echo    [R] Role       a model for one role
 echo    [U] Unset      a role goes back to the default
 echo    [K] Cloud key  OLLAMA_API_KEY for Ollama Cloud, typed hidden
 echo    [P] Ping       one short call to each model, to check it answers
-echo    [G] Guards     local model: keep loaded in RAM, GPU layers (only while
-echo                   nothing trains), free VRAM, RAM margin and wait
+echo    [G] Local      every setting of local Ollama models: RAM, GPU, context,
+echo                   mmap, KV cache, prompt cache, guards; numbered list
 echo    [H] Hours      warn before a run longer than this many hours
 echo    [N] Mode       default mode for runs: solo or team
 echo    [X] Auto size  how many assets an auto run picks
@@ -753,8 +753,6 @@ echo    [K2] Hold      keep a long-horizon call until it resolves: on or off
 echo    [C] Claude     Claude Code settings: model, calls per day, turns, timeout
 echo    [F] Fallback   the brain that answers when Claude Code cannot
 echo    [W] Web        web searches and page reads allowed per judgment
-echo    [Q] Ollama RAM KV cache q8_0 + flash attention, prompt cache off;
-echo                   restarts Ollama. Same answers, about half the KV memory
 echo.
 set "am="
 set /p am="Choose, Enter = back: "
@@ -764,7 +762,6 @@ if /i "%am%"=="U" goto am_unset
 if /i "%am%"=="K" goto am_key
 if /i "%am%"=="P" goto am_ping
 if /i "%am%"=="G" goto am_gpu
-if /i "%am%"=="Q" goto am_ollama_ram
 if /i "%am%"=="H" goto am_hours
 if /i "%am%"=="N" goto am_mode
 if /i "%am%"=="X" goto am_autosize
@@ -892,73 +889,21 @@ pause
 goto analyst_models
 
 :am_gpu
+REM  One table for every local model (core/ollama_settings.py): the code reads
+REM  it, this screen writes it. No per-model cases.
+cls
+echo  LOCAL MODELS - applies to [RS], [AN] and the loop. "-" = default in force.
+echo.
+python -m core.ollama_settings show
+echo.
+set "am_k="
+set /p am_k="Number to change, Enter = back: "
+if "%am_k%"=="" goto analyst_models
 set "am_v="
-echo    Enter keeps the current value. Applies to [RS], [AN] and the loop.
-echo    Layers go on the card only while no trainer computes on it, and a
-echo    trainer that starts unloads them first. 0 = always the CPU.
-echo    Keep loaded (default 1): the model stays in RAM on the CPU between
-echo    calls, never on the card; a trainer unloads it only when RAM is short.
-echo    0 = load for each call and unload after it (GPU layers below apply).
-set /p am_v="Keep the local model loaded, 1 or 0: "
-if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_KEEP_LOADED=%am_v%"
-set "am_v="
-set /p am_v="Free RAM in MB a trainer needs, below it the model is unloaded (default 4000): "
-if not "%am_v%"=="" python analyst.py brains --set "GTRADE_TRAIN_RAM_MB=%am_v%"
-set "am_v="
-set /p am_v="GPU layers when keep loaded is 0 (0 = CPU only): "
-if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_NUM_GPU=%am_v%"
-set "am_v="
-set /p am_v="Free VRAM in MB before a local model may use the GPU (default 3500): "
-if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_MIN_FREE_MB=%am_v%"
-echo    A local load waits until free RAM covers the model file + 2 GB plus
-echo    this margin; gemma4:26b needs ~19.7 GB + margin (never fits 15.7 GB),
-echo    gemma4:12b ~9.2 GB + margin.
-set "am_v="
-set /p am_v="RAM margin in MB (default 2048): "
-if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_RAM_MARGIN_MB=%am_v%"
-set "am_v="
-set /p am_v="Seconds to wait for that RAM before refusing (default 600): "
-if not "%am_v%"=="" python analyst.py brains --set "GTRADE_OLLAMA_RAM_WAIT=%am_v%"
+set /p am_v="New value, Enter = back to the default: "
+python -m core.ollama_settings set "%am_k%" "%am_v%"
 pause
-goto analyst_models
-
-:am_ollama_ram
-REM  Server settings, not .env: Ollama and the llama-server it starts read them
-REM  from the user environment. LLAMA_ARG_CACHE_RAM=0 turns off llama-server's
-REM  prompt cache (up to 8 GB of RAM on a resident model); the KV cache in q8_0
-REM  needs flash attention. setx alone does not reach a process started from
-REM  this window, so the values are also set here before Ollama restarts.
-echo    1 = apply: KV cache q8_0, flash attention on, prompt cache off
-echo    0 = back to Ollama defaults
-set "am_v="
-set /p am_v="Choice, Enter = back: "
-if "%am_v%"=="1" goto am_oram_on
-if "%am_v%"=="0" goto am_oram_off
-goto analyst_models
-:am_oram_on
-setx LLAMA_ARG_CACHE_RAM 0 >nul
-setx OLLAMA_KV_CACHE_TYPE q8_0 >nul
-setx OLLAMA_FLASH_ATTENTION 1 >nul
-set "LLAMA_ARG_CACHE_RAM=0"
-set "OLLAMA_KV_CACHE_TYPE=q8_0"
-set "OLLAMA_FLASH_ATTENTION=1"
-goto am_oram_restart
-:am_oram_off
-reg delete HKCU\Environment /v LLAMA_ARG_CACHE_RAM /f >nul 2>&1
-reg delete HKCU\Environment /v OLLAMA_KV_CACHE_TYPE /f >nul 2>&1
-reg delete HKCU\Environment /v OLLAMA_FLASH_ATTENTION /f >nul 2>&1
-set "LLAMA_ARG_CACHE_RAM="
-set "OLLAMA_KV_CACHE_TYPE="
-set "OLLAMA_FLASH_ATTENTION="
-:am_oram_restart
-echo    Restarting Ollama (a call in flight fails and is retried)...
-taskkill /im "ollama app.exe" /f >nul 2>&1
-taskkill /im ollama.exe /f >nul 2>&1
-taskkill /im llama-server.exe /f >nul 2>&1
-start "" "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"
-echo    Done. Ollama restarted with the new settings.
-pause
-goto analyst_models
+goto am_gpu
 
 :am_mode
 echo    [1] solo = one analyst   [2] team = four specialists and a lead

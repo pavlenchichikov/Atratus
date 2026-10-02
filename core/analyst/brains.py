@@ -37,8 +37,6 @@ ENV_PATH = os.path.join(BASE, ".env")
 # What the menu may write into .env, and nothing else: the .bat passes free
 # text, so an unlisted key is refused rather than written.
 SETTABLE = ("GTRADE_ANALYST_BRAIN", "GTRADE_OLLAMA_MIN_FREE_MB", "GTRADE_OLLAMA_NUM_GPU",
-            "GTRADE_OLLAMA_RAM_MARGIN_MB", "GTRADE_OLLAMA_RAM_WAIT",
-            "GTRADE_OLLAMA_KEEP_LOADED", "GTRADE_TRAIN_RAM_MB",
             "GTRADE_ANALYST_MAX_HOURS", "GTRADE_ANALYST_TOOL_ROUNDS",
             "GTRADE_ANALYST_TOOL_CALLS", "GTRADE_ANALYST_OLLAMA_URL", "OLLAMA_API_KEY",
             "GTRADE_ANALYST_AUTO", "GTRADE_ANALYST_AUTO_MAX", "GTRADE_ANALYST_MODE",
@@ -224,10 +222,6 @@ def _positive_int(v):
 _VALID = {
     "GTRADE_OLLAMA_MIN_FREE_MB": _positive_int,
     "GTRADE_OLLAMA_NUM_GPU": str.isdigit,
-    "GTRADE_OLLAMA_RAM_MARGIN_MB": str.isdigit,
-    "GTRADE_OLLAMA_RAM_WAIT": str.isdigit,
-    "GTRADE_OLLAMA_KEEP_LOADED": lambda v: v in ("0", "1"),
-    "GTRADE_TRAIN_RAM_MB": str.isdigit,
     "GTRADE_ANALYST_MAX_HOURS": _positive_int,
     "GTRADE_ANALYST_TOOL_ROUNDS": str.isdigit,
     "GTRADE_ANALYST_TOOL_CALLS": str.isdigit,

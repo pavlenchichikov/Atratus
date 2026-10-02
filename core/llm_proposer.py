@@ -552,7 +552,7 @@ def _gpu_layers(n, base):
         # Free VRAM is not enough: a trainer between two folds holds little and
         # takes it all back seconds later. Anyone else computing = the CPU.
         return 0
-    need = int(os.getenv("GTRADE_OLLAMA_MIN_FREE_MB") or 3500)
+    need = int(_setting("GTRADE_OLLAMA_MIN_FREE_MB"))
     free = _vram_free_mb()
     if free is not None and free < need:
         # Ollama's own model left on the card (a run stopped mid-call) is not a
@@ -618,11 +618,18 @@ def _ollama_loaded(base):
 LOCAL_OLLAMA = "http://127.0.0.1:11434"
 
 
+def _setting(key):
+    """A local-model knob: the environment, else core.ollama_settings' default."""
+    from core import ollama_settings
+
+    return ollama_settings.get(key)
+
+
 def keep_loaded(base):
     """GTRADE_OLLAMA_KEEP_LOADED (default on): a local model stays resident on
     the CPU between calls instead of a 20-50 s reload each time, and the card
     stays whole for training. Off = the old unload after every call."""
-    return _is_local(base) and (os.getenv("GTRADE_OLLAMA_KEEP_LOADED") or "1").strip() != "0"
+    return _is_local(base) and _setting("GTRADE_OLLAMA_KEEP_LOADED") != "0"
 
 
 def release_card(base=LOCAL_OLLAMA, sleep=time.sleep):
@@ -635,7 +642,7 @@ def release_card(base=LOCAL_OLLAMA, sleep=time.sleep):
     free = _ram_free_mb()
     # ponytail: one figure for every trainer, not measured per asset; raise it
     # if a run with a resident model still runs short of RAM.
-    low = free is not None and free < int(os.getenv("GTRADE_TRAIN_RAM_MB") or 4000)
+    low = free is not None and free < int(_setting("GTRADE_TRAIN_RAM_MB"))
     held = [m["name"] for m in rows if m.get("size_vram") or low]
     for model in held:
         _ollama_unload(base, model)
@@ -684,7 +691,8 @@ def wait_for_ram(base, model, sleep=time.sleep, clock=time.monotonic):
     The 2026-10-02 08:36 bugcheck 0x10E VIDEO_MEMORY_MANAGEMENT_INTERNAL came
     during a CPU-only gemma4:26b load with 12.1 GB free for a ~19.4 GB model.
     Waits GTRADE_OLLAMA_RAM_WAIT seconds (default 600) for the model file plus
-    _RAM_OVERHEAD_MB plus GTRADE_OLLAMA_RAM_MARGIN_MB (default 2048), then refuses with
+    _RAM_OVERHEAD_MB plus GTRADE_OLLAMA_RAM_MARGIN_MB (default 2048), the file
+    scaled by GTRADE_OLLAMA_RAM_SHARE (1.0; lower lets a mapped model page), then refuses with
     ProviderUnavailable: the search turns its LLM off for the run instead of
     taking the machine down. A loaded model costs nothing new.
     """
@@ -693,8 +701,9 @@ def wait_for_ram(base, model, sleep=time.sleep, clock=time.monotonic):
     size = _ollama_size_mb(base, model)
     if size is None:
         return
-    need = size + _RAM_OVERHEAD_MB + int(os.getenv("GTRADE_OLLAMA_RAM_MARGIN_MB") or 2048)
-    deadline = clock() + float(os.getenv("GTRADE_OLLAMA_RAM_WAIT") or 600)
+    need = (int(size * float(_setting("GTRADE_OLLAMA_RAM_SHARE"))) + _RAM_OVERHEAD_MB
+            + int(_setting("GTRADE_OLLAMA_RAM_MARGIN_MB")))
+    deadline = clock() + float(_setting("GTRADE_OLLAMA_RAM_WAIT"))
     said = False
     while True:
         free = _ram_free_mb()
@@ -735,8 +744,14 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     # Layers to put on the GPU. Ollama's own fit keeps a 2.2 GB free margin
     # plus 1.3 GB for gemma4's vision projector, so on a 4 GB card it placed
     # 0 of 31 text layers there (2026-09-24) and ran the analyst on the CPU.
-    num_gpu = (os.getenv("GTRADE_OLLAMA_NUM_GPU") or "").strip()
+    num_gpu = _setting("GTRADE_OLLAMA_NUM_GPU")
     keep = keep_loaded(base)
+    if _is_local(base):
+        # The same for every local model: context and how the weights load.
+        if _setting("GTRADE_OLLAMA_NUM_CTX"):
+            options["num_ctx"] = int(_setting("GTRADE_OLLAMA_NUM_CTX"))
+        if _setting("GTRADE_OLLAMA_MMAP") in ("0", "1"):
+            options["use_mmap"] = _setting("GTRADE_OLLAMA_MMAP") == "1"
     if keep:
         # Resident on the CPU only: layers on the card would hold it for good,
         # and Ollama cannot move them off without reloading the model.
