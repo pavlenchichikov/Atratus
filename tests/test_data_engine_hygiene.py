@@ -93,3 +93,17 @@ def test_flat_bar_report_names_the_assets_whose_bars_record_no_range(tmp_path, m
 
     monkeypatch.setattr(config, "FULL_ASSET_MAP", {"ARKVX": "x", "BTC": "y"})
     assert de.flat_bar_report(path) == [("ARKVX", 100, 30)]
+
+
+def test_a_recent_bar_with_zero_open_high_low_is_held_not_flattened():
+    """Yahoo sent 0 for open/high/low on two London sessions (2026-09-30/10-01)
+    and filled them in a day later. Filled from the close and stored, the bar
+    stayed flat for good, because a stored date is never fetched again. A
+    recent one is left out instead, so the next run asks for it again."""
+    df = pd.DataFrame({"open": [10.0, 0.0, 0.0], "high": [11.0, 0.0, 0.0],
+                       "low": [9.0, 0.0, 0.0], "close": [10.5, 10.2, 10.1]},
+                      index=["2026-08-03", "2026-08-04", "2026-10-01"])
+    out, fixed, dropped = scrub_ohlc(df, hold_after="2026-09-24")
+    assert list(out.index) == ["2026-08-03", "2026-08-04"]
+    assert fixed == 1 and dropped == 1
+    assert out.loc["2026-08-04", "high"] == 10.2          # an old one is still repaired

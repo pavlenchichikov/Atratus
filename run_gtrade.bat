@@ -59,7 +59,7 @@ echo.
 echo  RESEARCH
 echo    [RS] Auto-research agent (own menu)         [AN] Analyst agent
 echo    [AL] Autonomous cycle: search, A/B, adopt   [ALS] Its stage / stop it
-echo    [LC] Daily loop cycle                       [GH] One model, by horizon
+echo    [LC] Daily loop cycle
 echo.
 echo  [MORE] Policies, genome adoption, services
 echo.
@@ -108,7 +108,6 @@ if /i "%choice%"=="AR" goto adopt_revert
 if /i "%choice%"=="RS" goto auto_research
 if /i "%choice%"=="AN" goto analyst
 if /i "%choice%"=="MORE" goto more_menu
-if /i "%choice%"=="GH" goto global_horizons
 if /i "%choice%"=="ALS" goto auto_loop_status
 if /i "%choice%"=="AL" goto auto_loop
 if /i "%choice%"=="LC" goto loop_cycle
@@ -2091,23 +2090,3 @@ set "choice="
 set /p choice="Select, Enter = back: "
 if "%choice%"=="" goto menu
 goto dispatch
-
-:global_horizons
-cls
-echo  ONE MODEL FOR EVERY ASSET, BY HORIZON. Whether a single model trained on
-echo  all assets beats one model per asset at a longer horizon: both arms on the
-echo  same rows and date folds, AUC per asset, gate = mean delta at least +0.005
-echo  with Wilcoxon p below 0.05, fixed before the run. Horizon 1 is the control:
-echo  it should repeat the 2026-09-09 result (pooled about 0.0074 behind).
-echo  CatBoost on the CPU, a few hours for four horizons; not beside a training.
-echo  Nothing it trains is served. Reports: models\global_report_h*.json
-echo.
-set "gh_h="
-set /p gh_h="Horizons in bars, Enter = 1,5,10,20: "
-if "%gh_h%"=="" set "gh_h=1,5,10,20"
-set "gh_ok="
-set /p gh_ok="Type YES to run: "
-if /i not "%gh_ok%"=="YES" goto menu
-python train_global.py --horizons %gh_h%
-pause
-goto menu

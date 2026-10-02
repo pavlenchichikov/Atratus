@@ -686,7 +686,7 @@ def fetch_yahoo_weekly(symbol, last_date):
     return df.set_index('Date')
 
 
-def scrub_ohlc(df):
+def scrub_ohlc(df, hold_after=None):
     """Repair or drop bars whose prices are not positive, before they are stored.
 
     A provider that returns a zero is not reporting a price of nothing, it is
@@ -703,6 +703,12 @@ def scrub_ohlc(df):
     itself is not positive there is no price at all, so the bar goes. A gap is
     honest, a zero is not.
 
+    `hold_after` (a 'YYYY-MM-DD' date) turns the repair off for bars on or
+    after it: those are left out, so the next run asks for them again. A fresh
+    bar with zeros is usually one the vendor has not filled yet (London,
+    2026-09-30 and 10-01, filled a day later), and repaired and stored it stays
+    flat for good, because a stored date is never fetched again.
+
     Returns (clean_df, n_repaired, n_dropped).
     """
     cols = [c for c in ("open", "high", "low", "close") if c in df.columns]
@@ -715,7 +721,10 @@ def scrub_ohlc(df):
         return df, 0, 0
 
     no_price = bad & (~(price["close"] > 0))
-    fixable = bad & (price["close"] > 0)
+    if hold_after is not None:
+        recent = pd.Series([str(i)[:10] >= hold_after for i in df.index], index=df.index)
+        no_price = no_price | (bad & recent)
+    fixable = bad & ~no_price
 
     if fixable.any():
         close = price.loc[fixable, "close"]
@@ -743,7 +752,8 @@ def _save_df(df, table_name):
     df.index = pd.to_datetime(df.index).normalize()
     df.index = df.index.strftime('%Y-%m-%d')
     df = df[~df.index.duplicated(keep='last')]
-    df, _fixed, _dropped = scrub_ohlc(df)
+    hold = (datetime.now() - timedelta(days=VENDOR_GAP_HOLD_DAYS)).strftime("%Y-%m-%d")
+    df, _fixed, _dropped = scrub_ohlc(df, hold_after=hold)
     if _fixed or _dropped:
         # Never silent: a repaired bar is a provider fault worth seeing, and a
         # dropped one is a gap somebody may have to explain later.
@@ -1293,9 +1303,9 @@ def main():
     except Exception as exc:
         print(f'  !! breadth not rebuilt: {exc} - run build_breadth.py by hand')
 
-    # FINRA short volume for the US names (finra_fetch.py). A model input only
-    # when GTRADE_EXTRA_FEATURES names short_ratio_z, but the history has to be
-    # collected every day either way, or an A/B of it has nothing to train on.
+    # FINRA short volume for the US names (finra_fetch.py). Not a model input
+    # (its A/B held on 2026-10-01), but raw material the analyst reads through
+    # its short_volume tool, so it is collected every day.
     print()
     print('  FINRA SHORT VOLUME')
     print('  ' + '-' * (W - 2))

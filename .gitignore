@@ -110,6 +110,12 @@ ab_objective_v2.py
 # companion test of the local ab_labeling.py: keep it out of Git too, else CI
 # checks out the test without the module and the unguarded import fails collection.
 tests/test_ab_labeling.py
+# one model over every asset against one per asset (2026-10-01: it lost at
+# 1, 5 and 10 bars); kept as a local measurement, with its tests
+train_global.py
+core/panel.py
+tests/test_panel.py
+tests/test_train_global.py
 tests/test_ab_objective.py
 tests/test_ab_noise.py
 # Fitted levels policy and its run report: the policy is the edge, same

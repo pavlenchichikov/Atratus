@@ -213,7 +213,7 @@ where `z` is the best candidate's one-sided p-value turned into a z-score. The
 bandit therefore learns from the nine cycles in ten that never reach an A/B, not
 only from the tenth. A pass or a replication still pays on top. After each run,
 once the LLM and the evolutionary proposer have ten direction-basis cycles each,
-one line compares their mean best edge per cycle.
+one line compares their mean best edge per cycle. One model over every asset was also measured against one model per asset at 1, 5 and 10 bars (2026-10-01, the same rows and date folds, 792 paired assets): it lost at each, by 0.004 to 0.006 AUC at p below 0.002, so the per-asset system stays and the measurement is no longer part of the project.
 
 Permanent cross-run memory: `_ar_tried.json` (no candidate is re-tested), `_ar_eval_cache.json` (base trainings reused until new data arrives) and `_ar_findings.json` (the cumulative findings journal), so the budget buys **new** experiments every run.
 
@@ -731,6 +731,7 @@ choose, gemma4:26b judged SBER from the dossier alone.
 | `attention` | daily English Wikipedia page views, last week against the prior quarter | every asset |
 | `company_financials` | revenue, net income, operating cash flow, EPS and shares as filed with the SEC (XBRL) | US-listed names |
 | `insider_filings` | trades officers DISCLOSED to the SEC on Form 4 | US-listed names |
+| `short_volume` | FINRA daily short-sale volume: the share sold short, its 60-day mean and z-score, the recent days (not a model input; its A/B held on 2026-10-01) | US-listed names |
 | `options_positioning` | put/call open interest and volume for the next two expiries | US-listed names |
 | `crypto_derivatives` | Binance perpetuals: funding, open interest and its 7d/30d change, long/short account ratio | crypto |
 
@@ -1357,7 +1358,6 @@ Keys are case-insensitive. Enter on its own at a sub-prompt takes the default sh
 | `AL` | `auto_loop.py` | The unattended search, A/B and adopt cycle. Its own questions. See below. |
 | `ALS` | `auto_loop.py --status` | Asks whether to also stop the loop. |
 | `LC` | `loop_cycle.py` | One daily maintenance pass. |
-| `GH` | `train_global.py --horizons` | One model over every asset against one model per asset, at the horizons you name (Enter = 1,5,10,20; 1 is the control). CatBoost only, trains nothing that is served, writes `models/global_report_h*.json`. |
 | `MORE` | submenu | POLICIES, GENOME and SERVICES. Their codes also work typed on the main screen, as do `ABC`, `ABR` and `AI`, which are no longer listed. |
 
 ### POLICIES (under `[MORE]`)

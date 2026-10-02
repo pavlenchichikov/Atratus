@@ -584,6 +584,53 @@ register(Tool(
 
 
 # --------------------------------------------------------------------------
+# short_volume: the share of the day's volume that was sold short, from FINRA's
+# daily RegSHO files (finra_fetch.py fills finra_shvol). Raw material: no model
+# uses it (its A/B held, 2026-10-01), but crowding and its change are facts
+# about the stock an analyst can weigh. FINRA posts day d after its close, and
+# a rewound judgment for day T reads only days before T.
+# --------------------------------------------------------------------------
+def _short_volume(asset, today=None, days=10):
+    import sqlite3
+
+    from core.analyst import store
+
+    table = asset.lower().replace("^", "").replace(".", "").replace("-", "")
+    sql = "SELECT date, short, total FROM finra_shvol WHERE asset = ? AND total > 0"
+    args = [table]
+    if today:
+        sql += " AND date < ?"
+        args.append(str(today)[:10])
+    con = sqlite3.connect(store.DB_PATH)
+    try:
+        rows = con.execute(sql + " ORDER BY date", args).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        con.close()
+    if not rows:
+        return {"note": "no FINRA short-volume rows for %s" % asset}
+    share = [100.0 * s / t for _, s, t in rows]
+    last60 = share[-60:]
+    mean = sum(last60) / len(last60)
+    sd = (sum((x - mean) ** 2 for x in last60) / max(1, len(last60) - 1)) ** 0.5
+    n = max(1, min(int(days or 10), 30))
+    return {"last": {"date": rows[-1][0], "short_share_pct": round(share[-1], 2)},
+            "mean_60d_pct": round(mean, 2),
+            "z_60d": round((share[-1] - mean) / sd, 2) if sd > 0 else None,
+            "recent": [{"date": d, "short_share_pct": round(x, 2)}
+                       for (d, _, _), x in zip(rows[-n:], share[-n:], strict=True)]}
+
+
+register(Tool(
+    name="short_volume", args={"days": "recent days to list, 1-30 (default 10)"},
+    rewinds=True,
+    describe="FINRA daily short-sale volume: the share of the day's volume sold short, "
+             "its 60-day mean and z-score, and the recent days",
+    run=_short_volume, applies=us_listed))
+
+
+# --------------------------------------------------------------------------
 # web_search / web_fetch: the same reach for every brain. Claude Code has its
 # own web tools; these give local and cloud Ollama the equivalent (search via
 # Ollama's web API with OLLAMA_API_KEY, fetch through net.http_get). Opinion
