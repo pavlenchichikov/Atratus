@@ -75,16 +75,24 @@ SESSION_TAIL = (
     "\n\nThis is an INTRADAY question about the next session only.\n"
     "- direction is the move from the session's OPEN to its CLOSE. The overnight "
     "gap before it opens is NOT part of it.\n"
-    "- gap is up|down|flat: where the session OPENS against the last close. "
-    "us_last_session_ret is SP500's close-to-close move on the same date as this "
-    "dossier; Asia-Pacific markets open after it and tend to follow it.\n"
-    "- vol_regime here means the size of the session's high-low range against "
-    "this asset's usual session: calm = narrow, normal, elevated = wide.\n"
+    "- gap is up|down|flat: where the session OPENS against the last close. It "
+    "is recorded for the reader, not scored: nobody can trade at the last close "
+    "once the gap has happened. us_last_session_ret is SP500's close-to-close "
+    "move on the same date as this dossier.\n"
+    "- vol_regime here is the session's high-low range, classed by "
+    "session_range: calm below calm_below_pct, elevated above "
+    "elevated_above_pct, normal between. har_class and har_typical_pct are what "
+    "a volatility model (HAR) expects from the bars alone, and your call is "
+    "scored AGAINST it. Differ from har_class only for a reason the bars do not "
+    "carry (an event, news, a regime change) and name that reason in the thesis.\n"
     "- stand_aside is true|false: true when the session should not be traded at "
     "all, for example an event inside it (macro_events, next_earnings) or news "
     "that makes the range unpredictable. stand_aside_reason is one sentence.\n"
+    "- session_plan is one or two sentences for someone trading this session: "
+    "what to wait for, what to avoid, when to step aside. No prices.\n"
     'Add these keys to the JSON: "gap": "up|down|flat", "stand_aside": '
-    'true|false, "stand_aside_reason": "one sentence".'
+    'true|false, "stand_aside_reason": "one sentence", "session_plan": '
+    '"one or two sentences".'
 )
 
 
@@ -337,7 +345,8 @@ def parse_judgment(text, allowed=None, empty=(), why=None, session=False, called
                        % data.get("stand_aside"))
         extra = {"gap": data["gap"], "stand_aside": data["stand_aside"],
                  "stand_aside_reason":
-                     plain(str(data.get("stand_aside_reason") or ""))[:400]}
+                     plain(str(data.get("stand_aside_reason") or ""))[:400],
+                 "session_plan": plain(str(data.get("session_plan") or ""))[:600]}
 
     return {**extra, "direction": data["direction"],
             "conviction": int(data["conviction"]),

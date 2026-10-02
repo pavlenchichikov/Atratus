@@ -136,8 +136,11 @@ def test_score_counts_each_question_and_holds_under_the_floor(monkeypatch, tmp_p
     assert a["surprise_on"] > a["surprise_off"]
     assert a["calendar"]["n_on"] == 1, "the event is matched on the SESSION date"
 
+    assert s["range"]["har_hit_rate"] is not None, "range is paired with HAR"
+
     v = intraday.verdicts(s)
-    assert all(e["verdict"] == "HOLD" for e in v.values())
+    assert v["gap"]["verdict"] == "INFO", "the gap is not a scored claim"
+    assert all(e["verdict"] == "HOLD" for k, e in v.items() if k != "gap")
     assert "100 scored sessions" in v["direction"]["missing"]
 
 
@@ -155,6 +158,91 @@ def test_a_ship_needs_every_condition(monkeypatch):
                          "calendar": {"surprise_on": 1.2, "surprise_off": 1.0}}}
     v = intraday.verdicts(s)
     assert v["direction"]["verdict"] == "SHIP"
-    assert v["gap"]["verdict"] == "HOLD"
+    assert v["gap"]["verdict"] == "INFO"
     assert v["range"]["missing"] == ["100 scored sessions"]
+    s["range"] = {"n": 150, "p": 0.3}
+    assert intraday.verdicts(s)["range"]["missing"] == ["better than HAR, p < 0.05"]
     assert v["stand_aside"]["verdict"] == "SHIP"
+
+
+def test_session_range_view_classes_har_on_the_same_cut_offs(tmp_path):
+    db = _db(tmp_path, n=80)
+    bars = intraday.ohlc_series("SBER", days=400, db_path=db)
+    assert intraday.session_range_view(bars[:59]) is None, "needs 60 sessions"
+    v = intraday.session_range_view(bars)
+    assert v["calm_below_pct"] < v["usual_pct"] < v["elevated_above_pct"]
+    assert v["har_typical_pct"] < v["har_wide_pct"]
+    assert v["har_class"] in ("calm", "normal", "elevated")
+    last = bars[-1]
+    assert v["last_session_pct"] == round(100 * (last["high"] - last["low"]) / last["open"], 3)
+
+
+def test_the_dossier_carries_session_range(monkeypatch, tmp_path):
+    db = _db(tmp_path, n=80)
+    _offline(monkeypatch, db)
+    d = intraday.build("SBER", db_path=db)
+    assert d["session_range"]["har_class"] in ("calm", "normal", "elevated")
+    prompt = agent.prompt_for(d, session=True)
+    assert "har_class" in prompt and "session_plan" in prompt
+    assert "tend to follow it" not in prompt, "no nudge toward the closed lead"
+
+
+def test_a_session_plan_is_kept_and_shown(monkeypatch, tmp_path, capsys):
+    db = _db(tmp_path, n=80)
+    _offline(monkeypatch, db)
+    reply = {**SESSION_REPLY, "session_plan": "Wait out the first hour."}
+    monkeypatch.setattr(analyst, "_provider_call",
+                        lambda: (lambda prompt: json.dumps(reply)))
+    assert analyst.main(["intraday", "--assets", "SBER"]) == 0
+    out = capsys.readouterr().out
+    assert "plan:  Wait out the first hour." in out
+    assert "range call: analyst wide, HAR" in out and "last close" in out
+    assert intraday.recent(1, db)[0]["session_plan"] == "Wait out the first hour."
+
+
+def test_rewinds_stop_at_the_knowledge_cutoff(monkeypatch, tmp_path, capsys):
+    db = _db(tmp_path, n=80)
+    _offline(monkeypatch, db)
+    monkeypatch.setenv("GTRADE_ANALYST_REWIND_FROM", "2026-04-01")
+    assert analyst.main(["intraday", "--assets", "SBER", "--as-of", "2026-03-02"]) == 1
+    assert "before 2026-04-01" in capsys.readouterr().out
+    monkeypatch.setattr(analyst, "_recent_dates",
+                        lambda n: ["2026-03-30", "2026-03-31", "2026-04-01"])
+    seen = []
+    real = analyst.cmd_intraday
+
+    def one(args):
+        if not args.back:
+            seen.append(args.as_of)
+            return 0
+        return real(args)
+    monkeypatch.setattr(analyst, "cmd_intraday", one)
+    args = analyst.build_parser().parse_args(["intraday", "--back", "3"])
+    assert real(args) == 0
+    assert seen == ["2026-04-01"]
+
+
+def test_the_panel_is_the_watchlist_unless_set(monkeypatch, tmp_path):
+    wl = tmp_path / "watchlist.json"
+    wl.write_text(json.dumps({"default": ["sber", "BTC"]}))
+    monkeypatch.setattr(intraday, "WATCHLIST", str(wl))
+    monkeypatch.delenv("GTRADE_ANALYST_INTRADAY_PANEL", raising=False)
+    assert intraday.panel_assets() == ["SBER", "BTC"]
+    monkeypatch.setenv("GTRADE_ANALYST_INTRADAY_PANEL", "gold")
+    assert intraday.panel_assets() == ["GOLD"]
+    monkeypatch.delenv("GTRADE_ANALYST_INTRADAY_PANEL")
+    monkeypatch.setattr(intraday, "WATCHLIST", str(tmp_path / "none.json"))
+    assert intraday.panel_assets() == list(intraday.PANEL)
+
+
+def test_the_range_is_paired_with_har_not_with_always_normal(monkeypatch, tmp_path):
+    db = _db(tmp_path, n=120, start="2025-12-01")
+    _offline(monkeypatch, db)
+    monkeypatch.setattr(intraday, "_lead_rule", lambda rows, db_path: {})
+    _judged(db, "2026-03-10", "2026-03-11", vol="normal")
+    _judged(db, "2026-03-11", "2026-03-12", vol="elevated", h=104.0, low=96.0)
+    # A HAR that is never right: every row the analyst got right is a win.
+    monkeypatch.setattr(intraday, "session_range_view", lambda bars: {"har_class": "never"})
+    r = intraday.score(db)["range"]
+    assert r["har_hit_rate"] == 0.0
+    assert (r["wins"], r["losses"]) == (round(r["hit_rate"] * r["n"]), 0)

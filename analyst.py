@@ -468,8 +468,14 @@ def cmd_intraday(args):
     from core.analyst import intraday
 
     back = int(getattr(args, "back", 0) or 0)
+    floor = intraday.rewind_from()
     if back:
         dates = _recent_dates(back)
+        early = [d for d in dates if d < floor]
+        dates = [d for d in dates if d >= floor]
+        if early:
+            print("[intraday] skipping %d date(s) before %s: the model may have read "
+                  "what happened then (GTRADE_ANALYST_REWIND_FROM)" % (len(early), floor))
         if not dates:
             print("[intraday] no bar dates to judge; run data_engine.py first.")
             return 1
@@ -503,6 +509,11 @@ def cmd_intraday(args):
     targets = named or intraday.panel_assets()
     depth = getattr(args, "depth", None) or ("full" if named else "brief")
     as_of = getattr(args, "as_of", None)
+    if as_of and as_of < floor:
+        print("[intraday] %s is before %s: the model may have read what happened "
+              "that day. Lower GTRADE_ANALYST_REWIND_FROM to judge it anyway."
+              % (as_of, floor))
+        return 1
     print("[intraday] %d asset(s) via %s, depth %s%s" % (
         len(targets), os.getenv("GTRADE_AR_LLM", "anthropic"), depth,
         " as of %s (news, fundamentals and the calendar are blank)" % as_of
@@ -546,18 +557,54 @@ def cmd_intraday(args):
 
 def _print_session(asset, d, j):
     arrow = {"up": "LONG", "down": "SHORT", "flat": "FLAT"}
+    word = {"calm": "narrow", "normal": "normal", "elevated": "wide"}
+    pad = " " * 13
+    close = d.get("close")
+    sr = d.get("session_range") or {}
     print()
     print("  %-10s session after %s   conviction %d/5" % (asset, d["date"],
                                                           j["conviction"]))
-    print("             open->close %-5s   gap %-5s   range %s" % (
-        arrow[j["direction"]], j["gap"],
-        {"calm": "narrow", "normal": "normal", "elevated": "wide"}[j["vol_regime"]]))
+    # What the session starts from: the numbers, before the opinion.
+    if close:
+        line = "last close %s" % _num(close)
+        if sr.get("last_session_pct") is not None:
+            line += "   last session range %.2f%% (usual %.2f%%)" % (
+                sr["last_session_pct"], sr["usual_pct"])
+        if d.get("gap_open") is not None:
+            line += "   last gap %+.2f%%" % (100 * d["gap_open"])
+        print(pad + line)
+    if sr and close:
+        typ, wide = sr["har_typical_pct"], sr["har_wide_pct"]
+        print(pad + "range: typical %.2f%% (~%s), 1 day in 10 wider than %.2f%% (~%s)"
+              % (typ, _num(close * typ / 100, close), wide, _num(close * wide / 100, close)))
+        mark = "" if j["vol_regime"] == sr["har_class"] else "   <- the analyst differs"
+        print(pad + "range call: analyst %s, HAR %s%s"
+              % (word[j["vol_regime"]], word[sr["har_class"]], mark))
+    else:
+        print(pad + "range call: %s" % word[j["vol_regime"]])
+    print(pad + "open->close %-5s   gap %s (information only)"
+          % (arrow[j["direction"]], j["gap"]))
     if j["stand_aside"]:
-        print("             STAND ASIDE: %s" % (j.get("stand_aside_reason") or "-"))
+        print(pad + "STAND ASIDE: %s" % (j.get("stand_aside_reason") or "-"))
+    if j.get("session_plan"):
+        for k, line in enumerate(_wrap(j["session_plan"], 62)):
+            print(pad + ("plan:  " if k == 0 else "       ") + line)
     if j.get("key_risk"):
-        print("             risk:  %s" % j["key_risk"])
+        for k, line in enumerate(_wrap(j["key_risk"], 62)):
+            print(pad + ("risk:  " if k == 0 else "       ") + line)
     for line in _wrap(j.get("thesis") or "", 68):
-        print("             %s" % line)
+        print(pad + line)
+    used = [e if isinstance(e, str) else e.get("source", "?") for e in j.get("evidence") or []]
+    if used:
+        for k, line in enumerate(_wrap(", ".join(used), 58)):
+            print(pad + ("based on: " if k == 0 else "          ") + line)
+
+
+def _num(x, ref=None):
+    """A price, or a move in the units of price `ref`, at a precision that
+    reads: 2 decimals for prices from 10 up, more below."""
+    ref = abs(x if ref is None else ref)
+    return "%.2f" % x if ref >= 10 else "%.4f" % x if ref >= 0.01 else "%.6g" % x
 
 
 def cmd_intraday_score(args):
@@ -581,13 +628,12 @@ def cmd_intraday_score(args):
     if conv:
         print("                by conviction: " + ", ".join(
             "%d/5 %s of %d" % (k, pct(e["rate"]), e["n"]) for k, e in conv.items()))
-    print("  B gap         hit %s vs US-close rule %s on %d lead sessions "
-          "(won %d, lost %d, p %s)" % (pct(g["hit_rate"]), pct(g["rule_hit_rate"]),
-                                       g["n"], g["wins"], g["losses"], g["p"]))
-    print("  C range       hit %s vs always-normal %s on %d sessions "
-          "(won %d, lost %d, p %s)" % (pct(r["hit_rate"]),
-                                       pct(r["always_normal_hit_rate"]), r["n"],
-                                       r["wins"], r["losses"], r["p"]))
+    print("  C range       hit %s vs HAR %s on %d sessions (won %d, lost %d, p %s);"
+          " always-normal %s" % (pct(r["hit_rate"]), pct(r["har_hit_rate"]), r["n"],
+                                 r["wins"], r["losses"], r["p"],
+                                 pct(r["always_normal_hit_rate"])))
+    print("  B gap         hit %s, US-close rule %s on %d sessions (information "
+          "only, not scored)" % (pct(g["hit_rate"]), pct(g["rule_hit_rate"]), g["n"]))
     c = a["calendar"]
     print("  A stand aside range vs usual: %s on %d stand-aside, %s on %d traded "
           "(p %s)" % (a["surprise_on"], a["n_on"], a["surprise_off"], a["n_off"],

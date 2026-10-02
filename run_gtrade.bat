@@ -958,6 +958,9 @@ goto analyst
 echo.
 echo    [R] Run        one judgment of the next session per asset (COSTS MONEY)
 echo    [S] Score      fill finished sessions, then accuracy per question
+echo    [H] History    judge past sessions to get a verdict now, then [S].
+echo                   Only dates after the model's knowledge cutoff; no
+echo                   news or calendar on past dates, so stand-aside is not tested
 echo.
 echo    Run it BEFORE the session opens: Asia-Pacific after the US close
 echo    (about 23:00-00:00 MSK), MOEX before 10:00 MSK.
@@ -965,7 +968,10 @@ echo.
 set "in_choice="
 set /p in_choice="Choose, Enter = back: "
 if /i "%in_choice%"=="S" goto analyst_intraday_score
+set "in_back="
+if /i "%in_choice%"=="H" goto analyst_intraday_history
 if /i not "%in_choice%"=="R" goto analyst
+:analyst_intraday_ask
 echo.
 set "in_assets="
 set /p in_assets="Assets (comma-separated), Enter = intraday panel: "
@@ -989,9 +995,21 @@ echo.
 set "in_ok="
 set /p in_ok="Type YES to run: "
 if /i not "%in_ok%"=="YES" goto analyst
-if "%in_assets%"=="" (python analyst.py intraday %in_flag%) else (python analyst.py intraday --assets "%in_assets%" %in_flag%)
+if "%in_assets%"=="" (python analyst.py intraday %in_flag% %in_back%) else (python analyst.py intraday --assets "%in_assets%" %in_flag% %in_back%)
 pause
 goto analyst
+
+:analyst_intraday_history
+REM  The date floor stays set in this window; only a rewound run reads it.
+echo.
+set "in_n=65"
+set /p in_n="Past sessions to judge, Enter = 65: "
+set "GTRADE_ANALYST_REWIND_FROM=2026-07-01"
+echo    Start from the day after the model's knowledge cutoff, or it may
+echo    already know what happened. Claude Opus 5.5: June 2026.
+set /p GTRADE_ANALYST_REWIND_FROM="Judge dates from (YYYY-MM-DD), Enter = 2026-07-01: "
+set "in_back=--back %in_n%"
+goto analyst_intraday_ask
 
 :analyst_intraday_score
 python analyst.py intraday-score
