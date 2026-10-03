@@ -77,3 +77,18 @@ def test_the_report_says_which_dates_which_assets_and_what_to_run():
     assert "2 held BEFORE the gap" in text and "run data_engine again later" in text
     assert "1 stored past an older gap" in text and "GTRADE_BACKFILL=1" in text
     assert de.vendor_gap_report({}, NOW) == []
+
+
+def test_an_empty_weekend_row_does_not_hold_a_weekday_table():
+    """DXY 2026-10-03: an empty Saturday 09-27 froze the table at 09-25 while
+    Yahoo had every weekday since. A table with weekend sessions still holds."""
+    now = datetime(2026, 10, 3, 8, 0)
+    df = _bars([("2026-09-26", 1.0), ("2026-09-27", None), ("2026-09-29", 3.0)])
+    out, gaps = de._hold_at_vendor_gap(df, now, trades_weekends=lambda: False)
+    assert gaps == [] and len(out) == 2
+    out, gaps = de._hold_at_vendor_gap(df, now, trades_weekends=lambda: True)
+    assert gaps == [pd.Timestamp("2026-09-27")] and len(out) == 1
+    asked = []
+    clean = _bars([("2026-09-29", 1.0), ("2026-09-30", None)])
+    de._hold_at_vendor_gap(clean, now, trades_weekends=lambda: asked.append(1) or False)
+    assert asked == [], "the table is read only for a weekend row"

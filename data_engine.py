@@ -102,6 +102,19 @@ def _drop_existing_dates(df, table_name):
     except Exception:
         return df  # on error - write as-is
 
+def _has_weekend_bars(table_name, last=60):
+    """Whether the table's last `last` bars include a Saturday or Sunday:
+    crypto, MOEX's weekend sessions, EGX30's Sunday. A table that cannot be
+    read counts as trading weekends, which keeps the old, holding behaviour."""
+    try:
+        with engine.connect() as conn:
+            dates = [r[0] for r in conn.execute(text(
+                f'SELECT Date FROM "{table_name}" ORDER BY Date DESC LIMIT {int(last)}'))]
+    except Exception:
+        return True
+    return not dates or any(pd.Timestamp(x).weekday() >= 5 for x in dates)
+
+
 def _daily_table(name):
     """The daily table an asset key is stored in."""
     return name.lower().replace("^", "").replace(".", "").replace("-", "")
@@ -159,14 +172,21 @@ _VENDOR_GAPS_LOCK = threading.Lock()
 VENDOR_GAP_HOLD_DAYS = _env_int("GTRADE_VENDOR_GAP_HOLD_DAYS", 7)
 
 
-def _hold_at_vendor_gap(df, now):
+def _hold_at_vendor_gap(df, now, trades_weekends=lambda: True):
     """(bars to store, dates Yahoo left empty) for one asset's new bars.
 
     A recent empty bar stops the table BEFORE it, so the newest stored row stays
     in front of the hole and the next plain run asks for that date again. What
-    is stored is otherwise exactly what dropna() used to keep."""
+    is stored is otherwise exactly what dropna() used to keep.
+
+    An empty Saturday or Sunday on a table that has no weekend sessions is not
+    a hole: it is a row Yahoo lists and will never fill. 2026-10-03: DXY and
+    COTTON sat at 09-25 for a week behind an empty 09-27 while Yahoo had every
+    weekday since. `trades_weekends` is asked only when such a row turns up."""
     empty = df[["Open", "Close", "High", "Low", "Volume"]].isna().any(axis=1)
     gaps = list(df.loc[empty, "Date"])
+    if any(d.weekday() >= 5 for d in gaps) and not trades_weekends():
+        gaps = [d for d in gaps if d.weekday() < 5]
     recent = [d for d in gaps if (now - d).days <= VENDOR_GAP_HOLD_DAYS]
     if recent:
         df = df[df["Date"] < min(recent)]
@@ -366,7 +386,8 @@ def fetch_yahoo_smart(symbol, last_date):
             df = df[df['Date'] > _orig_last_date]
         # After the session and date filters, so a bar still being written or
         # one already stored is never reported as missing.
-        df, gaps = _hold_at_vendor_gap(df, datetime.fromtimestamp(now_ts))
+        df, gaps = _hold_at_vendor_gap(df, datetime.fromtimestamp(now_ts),
+                                       lambda: _has_weekend_bars(_daily_table(symbol)))
         if gaps:
             with _VENDOR_GAPS_LOCK:
                 VENDOR_GAPS[symbol] = gaps
