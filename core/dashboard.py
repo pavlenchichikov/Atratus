@@ -657,6 +657,57 @@ def signal_noise():
 
 
 @ttl_cache(300, stale_ok=True)
+def my_positions(equity=0.0, today=None):
+    """What the account holds (the fills journal) and what each holding risks.
+
+    The sheet below answers "where would a NEW trade go"; this answers the
+    trader's own question about a trade already placed: entry, result so far,
+    the stop measured from the real fill, the money that stop would cost from
+    here, how many ordinary days of movement it sits away (HAR), and whether
+    the size fits risk_per_trade. One row per open fill, signal or no signal.
+    """
+    from config import MOEX_ASSETS
+    from core import fills as fills_mod
+    from core import levels as levels_mod
+    from core import track_record
+    from risk_manager import RISK_CONFIG
+
+    out = []
+    for asset, fill in sorted(fills_mod.open_fills().items()):
+        seg = fills_mod.segment_of(fill, today=today)
+        side = seg["side"]
+        entry, qty = float(fill["price"]), float(fill["qty"])
+        bars = track_record.ohlc_series(asset, days=120)
+        taleb_hi, risky = regime_flags(asset)
+        lv = levels_mod.levels(bars, "BUY" if side > 0 else "SELL", segment=seg,
+                               taleb_hi=taleb_hi, risky=risky)
+        row = {"asset": asset, "side": side, "qty": qty, "entry": entry,
+               "entry_date": fill["entry_date"], "held_days": seg["bars"],
+               "close": lv["close"], "stop": lv["stop"], "trailing": lv["trailing"],
+               "status": lv["status"], "vol_unit": lv.get("vol_unit", "atr"),
+               "pnl": None, "pnl_pct": None, "risk_to_stop": None,
+               "risk_pct_equity": None, "stop_in_days": None, "typical": None,
+               "fit_qty": None}
+        close, stop = lv["close"], lv["stop"]
+        if close:
+            row["pnl"] = side * (close - entry) * qty
+            row["pnl_pct"] = side * (close / entry - 1.0)
+        if close and stop is not None:
+            # From HERE to the stop, not from the entry: what is still at stake.
+            gap = max(0.0, side * (close - stop))
+            row["risk_to_stop"] = gap * qty
+            if equity:
+                row["risk_pct_equity"] = row["risk_to_stop"] / equity
+                if gap > 0:
+                    row["fit_qty"] = equity * RISK_CONFIG["risk_per_trade"] / gap
+            f = levels_mod.range_forecast(bars, weekdays_only=asset in MOEX_ASSETS)
+            if f and gap > 0:
+                row["typical"] = f["typical"] * close
+                row["stop_in_days"] = gap / row["typical"]
+        out.append(row)
+    return out
+
+
 def levels_sheet(equity=0.0):
     """The trade-level sheet: one row per asset carrying an active signal.
 

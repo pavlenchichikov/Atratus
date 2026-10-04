@@ -154,3 +154,12 @@ def _no_real_card_or_ram(monkeypatch):
     # The resident mode changes the payload and skips the unload; the tests
     # written before it pin the per-call unload, the new ones set it on.
     monkeypatch.setenv("GTRADE_OLLAMA_KEEP_LOADED", "0")
+
+
+@pytest.fixture(autouse=True)
+def _rs_extras_off(monkeypatch):
+    """The per-run noise training and the positive control (auto_research) are
+    tested where they are meant; elsewhere they would add trainings to every
+    fake run_qd."""
+    monkeypatch.setenv("GTRADE_AR_NOISE", "0")
+    monkeypatch.setenv("GTRADE_AR_CONTROL", "0")

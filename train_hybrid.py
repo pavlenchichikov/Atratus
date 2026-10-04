@@ -541,6 +541,41 @@ def _baseline_acc(y_train, y_test, y_prev, footprint):
         return None
 
 
+def _print_quality_table(rep_sorted):
+    """The QUALITY REPORT rows, with the honest pair beside the members."""
+    # Ens_Acc and Base_Acc are the honest pair: both averaged over every
+    # fold on the same label, Base_Acc being the no-model rule
+    # (_baseline_acc). The member accuracies are the best fold's, a
+    # selected maximum, so 0.60 there can sit below "always the majority"
+    # (2026-10-03: SP500 at CB_Acc 0.55-0.67 on a label up ~70% of the time).
+    cols = ['Asset', 'Score', 'CB_Acc', 'LSTM_Acc', 'TF_Acc', 'TCN_Acc',
+            'Ens_Acc', 'Base_Acc', 'Net_AUC', 'Status']
+    cols_present = [c for c in cols if c in rep_sorted.columns]
+    if cols_present:
+        def _w(c):
+            return 12 if c == 'Asset' else 9
+        header = "  " + " ".join(f"{c:<{_w(c)}}" for c in cols_present)
+        print(header)
+        print("  " + "-" * (len(header) - 2))
+        for _, row in rep_sorted.iterrows():
+            # Rounded, not str(): a float prints all 17 digits, which was
+            # merely ugly with two accuracy columns and unreadable with six
+            # - every cell overran the column and the table lost its
+            # alignment entirely.
+            line = "  " + " ".join(
+                f"{(f'{v:.4f}' if isinstance(v, float) and not np.isnan(v) else '-' if isinstance(v, float) or v is None else str(v)):<{_w(c)}}"
+                for c in cols_present for v in [row.get(c, '')])
+            beat = row.get('Ens_Acc'), row.get('Base_Acc')
+            if all(isinstance(x, float) and not np.isnan(x) for x in beat):
+                line += "  %+.1f pts vs base" % (100 * (beat[0] - beat[1]))
+            print(line)
+        print("  Member _Acc: the best fold (a selected maximum). Ens_Acc, Base_Acc:")
+        print("  every fold, same label; Base_Acc = always the majority (or same as")
+        print("  yesterday on a one-bar label). Below Base_Acc, the model adds nothing.")
+    else:
+        print(rep_sorted.to_string(index=False))
+
+
 def _combiner():
     """GTRADE_COMBINER: "fixed" (default) or "stack"; anything else is fixed."""
     return "stack" if (os.getenv("GTRADE_COMBINER") or "").strip().lower() == "stack" else "fixed"
@@ -556,7 +591,7 @@ def _label_sig():
                     if k.startswith("GTRADE_LABEL_"))
 
 
-def _dir_metrics(test_prob, test_ret, val_ret):
+def _dir_metrics(test_prob, test_ret, val_ret, vol_ratio=None):
     """Accuracy on the NEXT BAR'S DIRECTION, whatever the training label was.
 
     Ens_Acc is accuracy on the model's own label, and on 2026-09-28 a change
@@ -583,24 +618,63 @@ def _dir_metrics(test_prob, test_ret, val_ret):
         clean = np.abs(r) >= 0.5 * np.median(np.abs(v))
         out = {"dir_acc": float((call == up).mean()), "dir_base": float((up == maj).mean()),
                "dir_n": len(r), "dir_n_clean": int(clean.sum()),
-               "dir_acc_clean": None, "dir_base_clean": None}
+               "dir_acc_clean": None, "dir_base_clean": None,
+               "dir_acc_vol": None, "dir_base_vol": None, "dir_n_vol": None}
         if clean.sum() >= 5:
             out["dir_acc_clean"] = float((call[clean] == up[clean]).mean())
             out["dir_base_clean"] = float((up[clean] == maj).mean())
+        if vol_ratio is not None:
+            # Bars where HAR, at the previous close, expected a bigger than
+            # usual day (ratio > 1): known in advance, so tradeable. Its own
+            # try: a bad ratio must not blank the direction edges above.
+            try:
+                q = np.asarray(vol_ratio, dtype=float)[:n][ok]
+                big = q > 1.0
+                if big.sum() >= 5:
+                    out["dir_acc_vol"] = float((call[big] == up[big]).mean())
+                    out["dir_base_vol"] = float((up[big] == maj).mean())
+                    out["dir_n_vol"] = int(big.sum())
+            except Exception:
+                pass
         return out
     except Exception:
         return None
 
 
-def _dir_fold_keys(test_prob, test_ret, val_ret):
+def _dir_fold_keys(test_prob, test_ret, val_ret, vol_ratio=None):
     """The fold-dict keys for _dir_metrics, with the per-fold edges."""
-    m = _dir_metrics(test_prob, test_ret, val_ret) or {}
+    m = _dir_metrics(test_prob, test_ret, val_ret, vol_ratio=vol_ratio) or {}
     acc, base = m.get("dir_acc"), m.get("dir_base")
     acc_c, base_c = m.get("dir_acc_clean"), m.get("dir_base_clean")
+    acc_v, base_v = m.get("dir_acc_vol"), m.get("dir_base_vol")
     return {"dir_acc": acc, "dir_base": base, "dir_n": m.get("dir_n"),
             "dir_n_clean": m.get("dir_n_clean"),
             "dir_edge": (acc - base) if acc is not None and base is not None else None,
-            "dir_edge_clean": (acc_c - base_c) if acc_c is not None and base_c is not None else None}
+            "dir_edge_clean": (acc_c - base_c) if acc_c is not None and base_c is not None else None,
+            "dir_n_vol": m.get("dir_n_vol"),
+            "dir_edge_vol": (acc_v - base_v) if acc_v is not None and base_v is not None else None}
+
+
+def _vol_fold_keys(test_prob, y_test, vol_ratio):
+    """On a big_move run: the ensemble's AUC on "tomorrow wider than usual",
+    HAR's own AUC on the same bars (the forecast ratio HAR / usual day), and the
+    difference. HAR needs no training, so the model has to beat it."""
+    none = {"vol_auc": None, "har_auc": None, "vol_edge": None}
+    try:
+        from sklearn.metrics import roc_auc_score
+        p = np.asarray(test_prob, dtype=float)
+        y = np.asarray(y_test, dtype=float)
+        q = np.asarray(vol_ratio, dtype=float)
+        n = min(len(p), len(y), len(q))
+        p, y, q = p[:n], y[:n], q[:n]
+        ok = ~(np.isnan(p) | np.isnan(y) | np.isnan(q))
+        p, y, q = p[ok], y[ok], q[ok]
+        if len(y) < 10 or len(set(y.tolist())) < 2:
+            return none
+        va, ha = float(roc_auc_score(y, p)), float(roc_auc_score(y, q))
+        return {"vol_auc": va, "har_auc": ha, "vol_edge": va - ha}
+    except Exception:
+        return none
 
 
 def _fold_mean(folds, key):
@@ -1456,6 +1530,8 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             test_taleb = df.loc[te, 'taleb_risk'].values
             test_ret = df.loc[te, 'next_ret'].values
             test_trend = df.loc[te, 'trend_strength'].values
+            test_har = df.loc[te, 'har_range'].values if 'har_range' in df.columns else None
+            test_med = df.loc[te, 'tr_rel_med60'].values if 'tr_rel_med60' in df.columns else None
             cb_test_aligned = cb_test
 
             n_val = min(len(cb_val_aligned), len(lstm_val_prob), len(val_trend), len(val_close), len(val_sma200), len(val_taleb), len(val_ret))
@@ -1475,6 +1551,13 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             test_sma200 = test_sma200[:n_test]
             test_taleb = test_taleb[:n_test]
             test_ret = test_ret[:n_test]
+            # HAR's forecast over the asset's usual day, per test bar (Dir_Edge_Vol,
+            # Vol_Edge). NaN where the usual day is not known yet.
+            test_vol_ratio = None
+            if test_har is not None and test_med is not None:
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    test_vol_ratio = np.where(test_med[:n_test] > 0,
+                                              test_har[:n_test] / test_med[:n_test], np.nan)
 
             # -- Adversarial validation: detect distribution shift ------
             adv_weight = adversarial_fold_weight(X_train, X_test)
@@ -1617,7 +1700,11 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
                 'ens_auc': ens_auc,
                 'ens_acc': ens_acc,
                 'base_acc': base_acc,
-                **_dir_fold_keys(test_prob, test_ret, val_ret),
+                **_dir_fold_keys(test_prob, test_ret, val_ret, vol_ratio=test_vol_ratio),
+                **(_vol_fold_keys(test_prob, df.loc[te, 'target'].values[:n_test],
+                                  test_vol_ratio)
+                   if os.getenv("GTRADE_LABEL_MODE") == "big_move"
+                   and test_vol_ratio is not None else {}),
                 'buy_thr': buy_thr,
                 'sell_thr': sell_thr,
                 'val_profit': val_profit,
@@ -1880,6 +1967,13 @@ def _train_one_asset(asset, candidate_features, prev_registry_entry):
             'Dir_Base': _fold_mean(fold_metrics, 'dir_base'),
             'Dir_Edge': _fold_mean(fold_metrics, 'dir_edge'),
             'Dir_Edge_Clean': _fold_mean(fold_metrics, 'dir_edge_clean'),
+            # The same edge on the days HAR expected a bigger than usual move.
+            'Dir_Edge_Vol': _fold_mean(fold_metrics, 'dir_edge_vol'),
+            'Dir_N_Vol': int(sum(f.get('dir_n_vol') or 0 for f in fold_metrics)),
+            # big_move runs only: the volatility model against HAR.
+            'Vol_AUC': _fold_mean(fold_metrics, 'vol_auc'),
+            'Har_AUC': _fold_mean(fold_metrics, 'har_auc'),
+            'Vol_Edge': _fold_mean(fold_metrics, 'vol_edge'),
             'Dir_N': int(sum(f.get('dir_n') or 0 for f in fold_metrics)),
             'Dir_N_Clean': int(sum(f.get('dir_n_clean') or 0 for f in fold_metrics)),
             'CB_Acc_Mean': None if _cb_acc_mean is None else float(_cb_acc_mean),
@@ -2335,24 +2429,7 @@ def train_system():
         # CHAMPION fold's, Net_AUC is averaged over every fold (see _fold_mean),
         # so a wide gap between them is the champion's argmax noise rather than
         # a disagreement between the members.
-        cols = ['Asset', 'Score', 'CB_Acc', 'LSTM_Acc', 'TF_Acc', 'TCN_Acc',
-                'Net_AUC', 'Status']
-        cols_present = [c for c in cols if c in rep_sorted.columns]
-        if cols_present:
-            header = "  " + "  ".join(f"{c:<12}" for c in cols_present)
-            print(header)
-            print("  " + "-" * (len(header) - 2))
-            for _, row in rep_sorted.iterrows():
-                # Rounded, not str(): a float prints all 17 digits, which was
-                # merely ugly with two accuracy columns and unreadable with six
-                # - every cell overran the 12-wide column and the table lost
-                # its alignment entirely.
-                line = "  " + "  ".join(
-                    f"{(f'{v:.4f}' if isinstance(v, float) else str(v)):<12}"
-                    for c in cols_present for v in [row.get(c, '')])
-                print(line)
-        else:
-            print(rep_sorted.to_string(index=False))
+        _print_quality_table(rep_sorted)
         print("=" * W2)
 
     # Both are already on disk, written per asset as each champion was promoted.

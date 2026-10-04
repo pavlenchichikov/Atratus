@@ -1980,3 +1980,45 @@ def test_every_block_on_the_card_can_be_folded(client):
     assert "<summary>Track record</summary>" in r.text
     # every titled panel gets a fold key for its head
     assert r.text.count('data-fold="') >= r.text.count('class="panel-head"')
+
+
+def test_positions_are_recorded_closed_and_shown_on_the_levels_page(client, monkeypatch, tmp_path):
+    from core import dashboard, fills
+    monkeypatch.setattr(fills, "DB_PATH", str(tmp_path / "market.db"))
+    assert client.post("/api/fills", json={"asset": "NOPE1", "side": "BUY", "qty": 1,
+                                           "price": 1}).status_code == 404
+    assert client.post("/api/fills", json={"asset": "SBER", "side": "HOLD", "qty": 1,
+                                           "price": 1}).status_code == 400
+    r = client.post("/api/fills", json={"asset": "sber", "side": "BUY", "qty": 100,
+                                        "price": 275.5, "date": "2026-10-01"})
+    assert r.status_code == 200 and r.json()["asset"] == "SBER"
+    assert client.post("/api/fills", json={"asset": "SBER", "side": "BUY", "qty": 1,
+                                           "price": 1}).status_code == 400, "one open per asset"
+    monkeypatch.setattr(dashboard, "my_positions", lambda equity=0.0, today=None: [{
+        "asset": "SBER", "side": 1, "qty": 100.0, "entry": 275.5, "entry_date": "2026-10-01",
+        "held_days": 2, "close": 280.0, "stop": 270.0, "trailing": False, "status": "ok",
+        "vol_unit": "atr", "pnl": 450.0, "pnl_pct": 0.0163, "risk_to_stop": 1000.0,
+        "risk_pct_equity": 0.02, "stop_in_days": 2.2, "typical": 4.5, "fit_qty": 50.0}])
+    page = client.get("/levels").text
+    assert "My positions" in page and "+450.00" in page and "2.2 typical days" in page
+    assert "over by 50" in page and "2.00% of equity" in page
+    assert client.post("/api/fills/SBER/close", json={"price": "x"}).status_code == 400
+    assert client.post("/api/fills/SBER/close", json={"price": 281}).status_code == 200
+    assert client.post("/api/fills/SBER/close", json={"price": 281}).status_code == 404
+    assert fills.open_fills() == {}
+
+
+def test_a_har_policy_card_names_its_unit(client, monkeypatch):
+    """Levels drawn in HAR must not say ATR: the multiples would read wrong."""
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
+        "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
+        "stop": 96.0, "trailing": False, "status": "ok", "vol_unit": "har"})
+    monkeypatch.setattr(webapp.levels_mod, "policy_evidence", lambda path=None: {
+        "adopted": "2026-10-04T10:00:00", "p": 0.001, "n": 200, "mean_d": 0.2,
+        "vol_unit": "har"})
+    r = client.get("/asset/BTC")
+    assert r.status_code == 200
+    assert "2 HAR against the position" in r.text and "HAR range 2" in r.text
+    assert "measured in HAR" in r.text
+    assert "ATR against the position" not in r.text

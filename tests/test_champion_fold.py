@@ -14,6 +14,9 @@ Either way the rule must not leave an asset on a champion fitted on features
 that no longer exist, which is what force-promote is for.
 """
 
+import numpy as np
+import pytest
+
 import train_hybrid as T
 
 
@@ -212,3 +215,82 @@ def test_dir_metrics_score_the_next_bars_direction_against_the_validation_majori
     # band = 0.5 x median |val| = 0.5 x 0.011; the +-0.001/0.002 rows are noise
     assert m["dir_n_clean"] == 7 and abs(m["dir_acc_clean"] - 6 / 7) < 1e-12
     assert T._dir_metrics(prob[:5], ret[:5], val[:5]) is None
+
+
+def test_quality_table_shows_the_no_model_base_beside_the_members(capsys):
+    import pandas as pd
+
+    from train_hybrid import _print_quality_table
+
+    df = pd.DataFrame([
+        {"Asset": "SP500", "Score": -1.0, "CB_Acc": 0.6083, "LSTM_Acc": 0.55,
+         "TF_Acc": 0.5, "TCN_Acc": 0.5, "Ens_Acc": 0.58, "Base_Acc": 0.70,
+         "Net_AUC": 0.55, "Status": "UNSTABLE"},
+        {"Asset": "OLD", "Score": 0.1, "CB_Acc": 0.5, "LSTM_Acc": 0.5,
+         "TF_Acc": 0.5, "TCN_Acc": 0.5, "Ens_Acc": float("nan"),
+         "Base_Acc": float("nan"), "Net_AUC": 0.5, "Status": "TRUSTED"}])
+    _print_quality_table(df)
+    out = capsys.readouterr().out
+    assert "Base_Acc" in out.splitlines()[0]
+    sp = next(line for line in out.splitlines() if "SP500" in line)
+    assert "0.7000" in sp and "-12.0 pts vs base" in sp
+    old = next(line for line in out.splitlines() if "OLD" in line)
+    assert "pts vs base" not in old and " - " in old, "a missing base reads as -"
+
+
+def test_dir_edge_vol_counts_only_expected_big_move_bars():
+    from train_hybrid import _dir_fold_keys
+    prob = np.array([0.9, 0.9, 0.1, 0.1] * 10)
+    ret = np.array([0.01, -0.01, -0.01, 0.01] * 10)     # right on bars 0 and 2 only
+    val = np.array([0.01, -0.02] * 20)                    # majority tie -> up
+    ratio = np.array([2.0, 0.5, 2.0, 0.5] * 10)          # HAR expects a big day on 0 and 2
+    k = _dir_fold_keys(prob, ret, val, vol_ratio=ratio)
+    assert k["dir_n_vol"] == 20
+    # the model is right on every big-move bar; "always up" on half of them
+    assert k["dir_edge_vol"] == pytest.approx(1.0 - 0.5)
+    assert _dir_fold_keys(prob, ret, val)["dir_edge_vol"] is None, "no ratio, no column"
+
+
+def test_the_usual_day_column_uses_past_bars_only():
+    import pandas as pd
+
+    from core.features import add_har_features
+    n = 80
+    df = pd.DataFrame({"close": np.full(n, 100.0), "high": np.full(n, 101.0),
+                       "low": np.full(n, 99.0)})
+    df.loc[79, "high"] = 120.0                            # a wide LAST bar
+    out = add_har_features(df.copy())
+    assert out["tr_rel_med60"].iloc[78] == pytest.approx(0.02)
+    assert out["tr_rel_med60"].iloc[10] == 0.0, "warm-up reads 0"
+
+
+def test_vol_edge_is_the_model_auc_minus_har_auc_on_the_same_bars():
+    from train_hybrid import _vol_fold_keys
+    y = np.array([0, 0, 1, 1] * 10)
+    prob = np.array([0.1, 0.2, 0.8, 0.9] * 10)       # perfect ranking
+    har = np.array([1.0, 2.0, 1.5, 1.5] * 10)        # wins 1.5>1.0, loses 1.5<2.0: chance
+    k = _vol_fold_keys(prob, y, har)
+    assert k["vol_auc"] == pytest.approx(1.0)
+    assert k["har_auc"] == pytest.approx(0.5)
+    assert k["vol_edge"] == pytest.approx(0.5)
+    assert _vol_fold_keys(prob, np.ones(40), har)["vol_edge"] is None, "one class"
+
+
+def test_a_broken_vol_ratio_leaves_the_direction_edge_alone():
+    from train_hybrid import _dir_fold_keys
+    prob = np.array([0.9, 0.1] * 20)
+    ret = np.array([0.01, -0.01] * 20)
+    val = np.array([0.01, -0.02] * 20)
+    k = _dir_fold_keys(prob, ret, val, vol_ratio=np.array([2.0, 0.5]))   # too short
+    assert k["dir_edge"] is not None and k["dir_edge_clean"] is not None
+    assert k["dir_edge_vol"] is None
+
+
+def test_dir_n_vol_counts_only_bars_behind_an_edge():
+    from train_hybrid import _dir_fold_keys
+    prob = np.array([0.9, 0.1] * 20)
+    ret = np.array([0.01, -0.01] * 20)
+    val = np.array([0.01, -0.02] * 20)
+    ratio = np.array([2.0] * 3 + [0.5] * 37)            # 3 big bars: under 5, no edge
+    k = _dir_fold_keys(prob, ret, val, vol_ratio=ratio)
+    assert k["dir_edge_vol"] is None and k["dir_n_vol"] is None

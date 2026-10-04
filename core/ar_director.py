@@ -45,7 +45,7 @@ PROPOSERS = ("evolutionary", "llm")
 # both - it is the accuracy basis, and refusing it here would leave the director
 # unable to ask for the one quantity the system is now selected on.
 BASES = ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc", "trade_t",
-         "dir_edge", "dir_edge_clean")
+         "dir_edge", "dir_edge_clean", "dir_edge_vol", "vol_edge")
 OBJECTIVES = ("mean", "min", "median", "cvar", "sharpe", "trimmed_mean")
 MODES = ("search", "regate")
 ILLUM = ("cb", "full")

@@ -18,11 +18,90 @@
 <p class="dim">
   {% if levels_policy and levels_policy.adopted %}These come from a fitted
   levels policy adopted {{ levels_policy.adopted[:10] }}, accepted on a held-out
-  slice at p={{ "%.4f"|format(levels_policy.p) }} over {{ levels_policy.n }} assets.
+  slice at p={{ "%.4f"|format(levels_policy.p) }} over {{ levels_policy.n }} assets,
+  measured in {{ 'HAR' if levels_policy.vol_unit == 'har' else 'ATR' }}.
   {% else %}These come from the shipped constants, half an ATR for the zone and
   two ATR for the stop. No fitted policy has been adopted.{% endif %}
 </p>
 
+
+{# What the account holds, from the fills journal (core.fills). The sheet below
+   answers where a NEW trade would go; this answers the trade already placed. #}
+<section class="panel fade">
+  <div class="panel-head">
+    <h2>My positions</h2>
+    <span class="count mono">{{ positions | length }} open</span>
+  </div>
+  {% if positions %}
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Asset</th><th>Side</th><th class="num">Qty</th><th class="num">Entry</th>
+        <th class="num">Last close</th><th class="num">Result</th><th class="num">Stop</th>
+        <th class="num">At risk to stop</th><th class="num">Stop away</th>
+        <th class="num">Size for {{ "%.1f"|format(config.risk_per_trade * 100) }}% risk</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in positions %}
+      <tr>
+        <td><a class="asset-link" href="/asset/{{ p.asset }}">{{ p.asset }}</a>
+          <div class="dim">since {{ p.entry_date }}, {{ p.held_days }} d</div></td>
+        <td><span class="chip chip-{{ 'BUY' if p.side == 1 else 'SELL' }}">{{ 'LONG' if p.side == 1 else 'SHORT' }}</span></td>
+        <td class="num mono">{{ "%g"|format(p.qty) }}</td>
+        <td class="num mono">{{ "%.4g"|format(p.entry) }}</td>
+        <td class="num mono">{{ "%.4g"|format(p.close) if p.close else "-" }}</td>
+        <td class="num mono">
+          {%- if p.pnl is not none -%}
+          <b class="{{ 't-buy' if p.pnl >= 0 else 't-sell' }}">{{ "%+.2f"|format(p.pnl) }}</b>
+          <div class="dim">{{ "%+.2f"|format(p.pnl_pct * 100) }}%</div>
+          {%- else -%}-{%- endif -%}
+        </td>
+        <td class="num mono">
+          {%- if p.stop is not none -%}{{ "%.4g"|format(p.stop) }}{% if p.trailing %} <span class="dim">trailing</span>{% endif %}
+          {%- if p.status == 'stop_breached' %}<div><span class="chip chip-SELL">past its stop</span></div>{% endif -%}
+          {%- else -%}<span class="dim">{{ p.status }}</span>{%- endif -%}
+        </td>
+        <td class="num mono">
+          {%- if p.risk_to_stop is not none -%}{{ "%.2f"|format(p.risk_to_stop) }}
+          {%- if p.risk_pct_equity is not none %}<div class="{{ 't-sell' if p.risk_pct_equity > config.risk_per_trade else 'dim' }}">{{ "%.2f"|format(p.risk_pct_equity * 100) }}% of equity</div>{% endif -%}
+          {%- else -%}-{%- endif -%}
+        </td>
+        <td class="num mono">
+          {%- if p.stop_in_days is not none -%}
+          <span class="{{ 't-sell' if p.stop_in_days < 1 else '' }}">{{ "%.1f"|format(p.stop_in_days) }} typical days</span>
+          <div class="dim">a typical day ~{{ "%.4g"|format(p.typical) }}{% if p.stop_in_days < 1 %}, noise can take it{% endif %}</div>
+          {%- else -%}-{%- endif -%}
+        </td>
+        <td class="num mono">
+          {%- if p.fit_qty is not none -%}{{ "%g"|format(p.fit_qty | round(0, 'floor')) }}
+          {%- if p.qty > p.fit_qty %}<div class="t-sell">over by {{ "%g"|format((p.qty - p.fit_qty) | round(0, 'ceil')) }}</div>{% endif -%}
+          {%- else -%}<span class="dim">set equity on <a href="/risk">/risk</a></span>{%- endif -%}
+        </td>
+        <td><button class="fbtn pos-close" data-asset="{{ p.asset }}">Closed</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="dim">At risk to stop: what the position loses from the last close if the
+    stop is hit. Stop away: that distance in ordinary days of this asset's movement
+    (HAR forecast); under 1, ordinary noise can reach it. Size: the quantity that
+    risks {{ "%.1f"|format(config.risk_per_trade * 100) }}% of equity at this stop
+    (risk_per_trade on <a href="/risk">/risk</a>).</p>
+  {% else %}
+  <p class="dim">No open positions recorded. Record a trade you placed at the broker
+    below, and its stop, result and risk will be measured from your entry.</p>
+  {% endif %}
+  <form id="fill-form" class="toolbar">
+    <input name="asset" class="search mono" placeholder="asset, e.g. SBER" required>
+    <select name="side" class="search"><option>BUY</option><option>SELL</option></select>
+    <input name="qty" class="search mono" type="number" step="any" min="0" placeholder="qty" required>
+    <input name="price" class="search mono" type="number" step="any" min="0" placeholder="entry price" required>
+    <input name="date" class="search mono" type="date" value="{{ today }}">
+    <button class="fbtn" type="submit">Record opened position</button>
+    <span class="sync mono" id="fill-msg"></span>
+  </form>
+</section>
 
 <div class="toolbar fade">
   <input id="q" class="search mono" type="text" placeholder="search ticker...">
@@ -85,6 +164,35 @@
 </section>
 
 <script>
+// My positions: record a fill and close one, then reload so every number on
+// the page is measured from the new state.
+const fillForm = document.getElementById('fill-form');
+const fillMsg = document.getElementById('fill-msg');
+function postJson(url, body) {
+  return fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                     body: JSON.stringify(body)})
+    .then(function (r) { return r.json().then(function (j) { return [r.ok, j]; }); });
+}
+fillForm.addEventListener('submit', function (e) {
+  e.preventDefault();
+  const f = new FormData(fillForm);
+  postJson('/api/fills', {asset: f.get('asset'), side: f.get('side'), qty: f.get('qty'),
+                          price: f.get('price'), date: f.get('date')})
+    .then(function (res) {
+      if (res[0]) { location.reload(); } else { fillMsg.textContent = res[1].detail || 'refused'; }
+    });
+});
+document.querySelectorAll('.pos-close').forEach(function (b) {
+  b.addEventListener('click', function () {
+    const price = window.prompt('Exit price for ' + b.dataset.asset + ':');
+    if (!price) return;
+    postJson('/api/fills/' + encodeURIComponent(b.dataset.asset) + '/close', {price: price})
+      .then(function (res) {
+        if (res[0]) { location.reload(); } else { window.alert(res[1].detail || 'refused'); }
+      });
+  });
+});
+
 const q = document.getElementById('q');
 const count = document.getElementById('setup-count');
 const rows = document.querySelectorAll('tr[data-asset]');

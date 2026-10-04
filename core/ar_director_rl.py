@@ -220,7 +220,7 @@ def arm_of(settings):
     return None
 
 
-DIR_BASES = ("dir_edge", "dir_edge_clean")
+DIR_BASES = ("dir_edge", "dir_edge_clean", "dir_edge_vol")
 
 
 def dense_reward(ps, hours=1.0):

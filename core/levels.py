@@ -124,6 +124,38 @@ HAR_RESID_SD = 0.4764                     # of log(true range), for the q90 band
 Z90 = 1.2816
 
 
+def har_series(bars):
+    """HAR's typical next-day true range in PRICE units, aligned one-to-one with
+    `bars` like atr_series, None until 22 bars exist. The unit a policy with
+    vol_unit "har" draws its levels in: same formula as range_forecast, read at
+    every bar so a trailing stop and the fitter see the same number serving does.
+    """
+    rel = [tr / b["close"] if b["close"] else 0.0
+           for tr, b in zip(_true_ranges(bars), bars)]
+    out = []
+    for i in range(len(rel)):
+        if i < 21:
+            out.append(None)
+            continue
+        means = (rel[i], sum(rel[i - 4:i + 1]) / 5, sum(rel[i - 21:i + 1]) / 22)
+        if min(means) <= 0:
+            out.append(None)
+            continue
+        mu = HAR_INTERCEPT + sum(w * math.log(m) for w, m in zip(HAR_WEIGHTS, means))
+        out.append(math.exp(mu) * bars[i]["close"])
+    return out
+
+
+VOL_UNITS = ("atr", "har")
+
+
+def vol_series(bars, unit="atr"):
+    """The volatility unit a levels policy measures in: ATR14 (what every policy
+    before 2026-10-03 was fitted on) or HAR (IC 0.41 against 0.36 for tomorrow's
+    range). One function, so serving, trailing and train_levels agree."""
+    return har_series(bars) if unit == "har" else atr_series(bars)
+
+
 def range_forecast(bars, weekdays_only=False):
     """{typical, q90, atr} as shares of the last close, or None under 22 bars.
 
@@ -200,10 +232,12 @@ def load_policy(path=None):
             stored = (json.load(fh) or {}).get("params") or {}
         params = dict(POLICY_DEFAULTS)
         params.update({k: float(stored[k]) for k in POLICY_DEFAULTS if k in stored})
-    except (OSError, ValueError, TypeError, KeyError):
+        unit = stored.get("vol_unit", "atr")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
-    if params["k_entry"] <= 0 or params["k_stop"] <= 0:
+    if params["k_entry"] <= 0 or params["k_stop"] <= 0 or unit not in VOL_UNITS:
         return None
+    params["vol_unit"] = unit
     return params
 
 
@@ -223,7 +257,8 @@ def policy_evidence(path=None):
             body = json.load(fh) or {}
         gate = body.get("gate") or {}
         return {"adopted": body.get("adopted"), "p": gate.get("p"),
-                "n": gate.get("n"), "mean_d": gate.get("mean_d")}
+                "n": gate.get("n"), "mean_d": gate.get("mean_d"),
+                "vol_unit": (body.get("params") or {}).get("vol_unit", "atr")}
     except (OSError, ValueError, TypeError, AttributeError):
         return None
 
@@ -301,11 +336,15 @@ def levels(bars, signal, segment=None, k_entry=None, k_stop=None,
     """
     # An explicit multiplier is an experiment and always wins; otherwise the
     # adopted policy decides, resolved for THIS bar's regime.
-    fit_entry, fit_stop = effective_multipliers(load_policy(), taleb_hi, risky)
+    policy = load_policy()
+    fit_entry, fit_stop = effective_multipliers(policy, taleb_hi, risky)
+    unit = (policy or {}).get("vol_unit", "atr")
     k_entry = fit_entry if k_entry is None else k_entry
     k_stop = fit_stop if k_stop is None else k_stop
+    # "atr" holds the policy's unit (ATR14 or HAR), whichever the levels use.
     row = {"side": 0, "close": None, "atr": None, "entry_low": None,
-           "entry_high": None, "stop": None, "trailing": False, "status": "ok"}
+           "entry_high": None, "stop": None, "trailing": False, "status": "ok",
+           "vol_unit": unit}
     side = _side(signal)
     row["side"] = side
     if side == 0:
@@ -318,8 +357,11 @@ def levels(bars, signal, segment=None, k_entry=None, k_stop=None,
     if len(bars) < ATR_PERIOD:
         row["status"] = "short_history"
         return row
-    atrs = atr_series(bars)
+    atrs = vol_series(bars, unit)
     atr = atrs[-1]
+    if atr is None and unit == "har" and len(bars) < 22:
+        row["status"] = "short_history"
+        return row
     if atr is None or atr <= 0:
         row["status"] = "flat_atr"
         return row

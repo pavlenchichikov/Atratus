@@ -72,9 +72,14 @@ def selection_assets():
     """
     v = (os.getenv("GTRADE_AR_SELECTION") or "full").strip()
     if v.lower() == "full":
-        return SELECTION_ASSETS
-    if v.lower() == "fast":
-        return FAST_SELECTION
+        v = SELECTION_ASSETS
+    elif v.lower() == "fast":
+        v = FAST_SELECTION
+    if (os.getenv("GTRADE_AR_HELDOUT") or "").strip().lower() == "neural":
+        # the diagnostic neural gate is drawn from the default screen; the
+        # screen gives those assets up rather than stop every run on overlap
+        gate = set(NEURAL_HELDOUT.split(","))
+        v = ",".join(a for a in v.split(",") if a.strip() not in gate)
     return v
 
 # The production holdout: a deliberately mixed set, so an adoption decision is
@@ -416,7 +421,8 @@ def _adopt_floor(objective="mean", basis=None):
     # own knob - but inventing a second default before measuring one would be
     # picking a floor to fit a result, which is what the frozen basis exists to
     # stop.
-    if b in ("net_auc", "net_gain", "ens_auc", "ens_acc", "dir_edge", "dir_edge_clean"):
+    if b in ("net_auc", "net_gain", "ens_auc", "ens_acc", "dir_edge", "dir_edge_clean",
+             "dir_edge_vol", "vol_edge"):
         try:
             return float(os.getenv("GTRADE_AR_ADOPT_AUC") or "0.005")
         except ValueError:
@@ -507,6 +513,32 @@ def adopt_ok(significant, value, objective, neural_lift=None):
                 and (neural_lift is None or neural_lift > neural_floor()))
 
 
+def seed_spread(rows_a, rows_b):
+    """Per-asset seed spread of the active basis from two trainings of the same
+    base: 1.4826 x median|a - b|, a robust sd of the paired difference. None
+    when the two share no scorable asset."""
+    a = {r["Asset"]: r.get("Score") for r in rows_a or []}
+    diffs = [abs(a[r["Asset"]] - r["Score"]) for r in rows_b or []
+             if r["Asset"] in a and isinstance(a[r["Asset"]], (int, float))
+             and isinstance(r.get("Score"), (int, float))
+             and a[r["Asset"]] > UNRELIABLE_SCORE and r["Score"] > UNRELIABLE_SCORE]
+    return 1.4826 * statistics.median(diffs) if diffs else None
+
+
+def noise_ok(value, spread, n):
+    """(passes, effect / noise of the mean). A gate mean over n assets carries
+    seed noise spread / sqrt(n); a verdict needs GTRADE_AR_NOISE_X (2) of it."""
+    if not spread or not n:
+        return True, None
+    noise = spread / math.sqrt(n)
+    try:
+        x = float(os.getenv("GTRADE_AR_NOISE_X") or "2.0")
+    except ValueError:
+        x = 2.0
+    ratio = value / noise if noise > 0 else None
+    return (ratio is None or ratio >= x), ratio
+
+
 def holdout_stats(base_rows, ext_rows, objective="mean"):
     """Raw held-out stats for a variant: (wilcoxon p, objective value, deltas, tag).
     No adoption decision - main applies BH across the axis-winners."""
@@ -534,7 +566,7 @@ def holdout_stats(base_rows, ext_rows, objective="mean"):
     return p, value, deltas, tag
 
 
-def precision_weighted_stats(ref_rows, var_rows, clean=True):
+def precision_weighted_stats(ref_rows, var_rows, clean=True, vol=False):
     """(one-sided p, weighted mean delta, raw deltas, tag) for a direction-edge A/B.
 
     The gate's spread is between-asset heterogeneity, not retraining noise
@@ -547,7 +579,8 @@ def precision_weighted_stats(ref_rows, var_rows, clean=True):
     """
     import math
 
-    col, ncol = ("Dir_Edge_Clean", "Dir_N_Clean") if clean else ("Dir_Edge", "Dir_N")
+    col, ncol = (("Dir_Edge_Vol", "Dir_N_Vol") if vol else
+                 ("Dir_Edge_Clean", "Dir_N_Clean") if clean else ("Dir_Edge", "Dir_N"))
     ref = {r.get("Asset"): r for r in ref_rows or []}
     deltas, weights = [], []
     for v in var_rows or []:
@@ -816,6 +849,10 @@ def refuse_contradictory_campaign():
     Refuses rather than warns on purpose: a warning at 06:12 scrolls off the
     console behind the first training unit, which is exactly how this was missed.
     """
+    _label = label_basis_problem()
+    if _label:
+        print("[ar] stopped: " + _label)
+        return True
     try:
         from auto_loop import campaign_problems
 
@@ -1132,10 +1169,17 @@ def _score_basis():
              scale as the AUC bases, so it shares their adoption floor. Note
              what it is NOT: CB_Acc and the member _Acc columns belong to the
              champion fold, an argmax, and are unusable as a search target for
-             that reason. Ens_Acc is averaged over every fold."""
+             that reason. Ens_Acc is averaged over every fold.
+    dir_edge_vol the direction edge over "always the majority" counted only on
+             bars where HAR, at the previous close, expected a bigger than
+             usual day (train_hybrid Dir_Edge_Vol). Known in advance, so
+             tradeable, unlike dir_edge_clean's realised filter.
+    vol_edge the volatility model against HAR on a big_move run: the
+             ensemble's AUC on "tomorrow wider than usual" minus HAR's AUC on
+             the same bars (train_hybrid Vol_Edge)."""
     b = (os.getenv("GTRADE_AR_SCORE_BASIS") or "raw").strip().lower()
     if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc",
-                 "trade_t", "dir_edge", "dir_edge_clean"):
+                 "trade_t", "dir_edge", "dir_edge_clean", "dir_edge_vol", "vol_edge"):
         logger.warning("unknown GTRADE_AR_SCORE_BASIS %r, using raw", b)
         return "raw"
     return b
@@ -1161,11 +1205,57 @@ def decision_basis():
     if not b:
         return _score_basis()
     if b not in ("raw", "neural", "net_auc", "net_gain", "ens_auc", "ens_acc",
-                 "dir_edge", "dir_edge_clean"):
+                 "dir_edge", "dir_edge_clean", "dir_edge_vol", "vol_edge"):
         logger.warning("unknown GTRADE_AR_DECISION_BASIS %r, using the search "
                        "basis", b)
         return _score_basis()
     return b
+
+
+# Bases the CatBoost illumination can measure: with every net stubbed to 0.5 the
+# ensemble probability is CatBoost's, so a direction, volatility or ensemble
+# column still means something. Two bases read ONLY the nets and would score
+# every genome identically there.
+CB_REKEY = ("dir_edge", "dir_edge_clean", "dir_edge_vol", "vol_edge", "ens_acc", "ens_auc")
+CB_REFUSED = ("net_auc", "net_gain")
+
+
+def cb_basis_problem(basis=None):
+    """A message when the CatBoost illumination cannot measure `basis`, else None."""
+    b = basis or _score_basis()
+    if illum_full() or b not in CB_REFUSED:
+        return None
+    return ("basis %s reads only the nets, and the CatBoost mode replaces every "
+            "net with a constant 0.5: every genome would score the same. Pick a "
+            "direction or volatility basis, or the full mode." % b)
+
+
+def vol_edge_rows(rows):
+    """Re-key onto Vol_Edge: the ensemble's AUC on big_move minus HAR's AUC on
+    the same bars. Rows without it (other labels, older reports) drop out."""
+    out = []
+    for r in rows:
+        v = r.get("Vol_Edge")
+        if v is None:
+            continue
+        try:
+            out.append({"Asset": r["Asset"], "Score": float(v)})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def label_basis_problem():
+    """big_move and the bases that read direction do not mix: the label is
+    'a big day', not 'up', so a direction edge on it measures nothing."""
+    lab = (os.getenv("GTRADE_LABEL_MODE") or "direction").strip()
+    for b in dict.fromkeys((_score_basis(), decision_basis())):
+        if lab == "big_move" and b != "vol_edge":
+            return ("label big_move needs basis vol_edge (got %s): a direction "
+                    "basis on a big-move label measures nothing." % b)
+        if lab != "big_move" and b == "vol_edge":
+            return "basis vol_edge needs label big_move (got %s)." % lab
+    return None
 
 
 def ens_auc_rows(rows):
@@ -1184,7 +1274,7 @@ def ens_auc_rows(rows):
     return out
 
 
-def dir_edge_rows(rows, clean=False):
+def dir_edge_rows(rows, clean=False, vol=False):
     """Re-key quality rows onto the EDGE over the validation majority on the next
     bar's direction (train_hybrid Dir_Edge / Dir_Edge_Clean).
 
@@ -1194,7 +1284,8 @@ def dir_edge_rows(rows, clean=False):
     period whose base rate is easy does not look like skill. Rows without the
     column (older reports) are dropped, loudly empty rather than silently another
     column, as ens_acc_rows does."""
-    col, ncol = ("Dir_Edge_Clean", "Dir_N_Clean") if clean else ("Dir_Edge", "Dir_N")
+    col, ncol = (("Dir_Edge_Vol", "Dir_N_Vol") if vol else
+                 ("Dir_Edge_Clean", "Dir_N_Clean") if clean else ("Dir_Edge", "Dir_N"))
     out = []
     for r in rows:
         v = r.get(col)
@@ -1340,8 +1431,11 @@ def rekey_rows(rows, basis=None):
         return ens_auc_rows(rows)
     if basis == "ens_acc":
         return ens_acc_rows(rows)
-    if basis in ("dir_edge", "dir_edge_clean"):
-        return dir_edge_rows(rows, clean=basis == "dir_edge_clean")
+    if basis == "vol_edge":
+        return vol_edge_rows(rows)
+    if basis in ("dir_edge", "dir_edge_clean", "dir_edge_vol"):
+        return dir_edge_rows(rows, clean=basis == "dir_edge_clean",
+                             vol=basis == "dir_edge_vol")
     if basis == "trade_t":
         return trade_t_rows(rows)
     return rows
@@ -1483,6 +1577,12 @@ def genome_sig(g):
     return json.dumps(d, sort_keys=True)
 
 
+def _label_frozen():
+    """big_move runs keep the label gene at its default: a label gene overrides
+    GTRADE_LABEL_MODE, so the genome would train direction and carry no Vol_Edge."""
+    return (os.getenv("GTRADE_LABEL_MODE") or "").strip() == "big_move"
+
+
 def valid(g, active, prune_min, continuous=False):
     """Well-formedness against the active feature set and the prune floor."""
     aset = set(active)
@@ -1495,6 +1595,8 @@ def valid(g, active, prune_min, continuous=False):
     if any(not validate_spec(s, cols) for s in g.extra):
         return False
     if g.label_mode not in LABEL_MODES:
+        return False
+    if g.label_mode != "direction" and _label_frozen():
         return False
     if g.label_window <= 0:
         return False
@@ -1536,7 +1638,7 @@ def random_genome(active, base_features):
         spec = _random_spec(base_features, "g%d_%d" % (random.randint(0, 99999), i), None)
         if spec and spec["name"] not in g.drops:
             g.extra.append(spec)
-    r = random.random()
+    r = 1.0 if _label_frozen() else random.random()
     if r < 0.35:
         g.label_mode = "rel_median"
         g.label_window = random.choice([20, 30, 60])
@@ -1666,7 +1768,14 @@ def crossover(g1, g2, active):
     return child
 
 
-_FLOOR_EDGES = (-1.0, -0.25, 0.25, 1.0)
+_FLOOR_EDGES = (-1.0, -0.25, 0.25, 1.0)     # Score units; the bin count only
+
+
+def _floor_edges():
+    """Worst-asset delta bins in the ACTIVE basis's units: the adopt floor times
+    (-2, -0.5, 0.5, 2), which is exactly _FLOOR_EDGES on Score (floor 0.5)."""
+    f = _adopt_floor("mean")
+    return tuple(f * k for k in (-2.0, -0.5, 0.5, 2.0))
 _COUNT_EDGES = (12, 18, 24, 30)
 
 
@@ -1723,15 +1832,46 @@ def behavior(genome, rows, base_score, active):
     lever-group bin) - the v2 descriptor."""
     min_delta = _objective_delta(rows, base_score, "min")[0]
     count = len(active) - len(set(genome.drops)) + len(genome.extra)
-    return _bin(min_delta, _FLOOR_EDGES), _bin(count, _COUNT_EDGES), _gene_group(genome)
+    return _bin(min_delta, _floor_edges()), _bin(count, _COUNT_EDGES), _gene_group(genome)
 
 
 _QD_ARCHIVE_PATH = os.path.join(BASE, "_qd_archive.json")
 
 
+def screen_sign_ok(rows, base_score):
+    """Whether a genome beat the base on a MAJORITY of the screen assets.
+
+    The mean alone let one asset carry a genome into the archive (2026-10-03:
+    single-step swings of 5 to 10 points per asset). One-sided sign test at
+    GTRADE_AR_SCREEN_SIGN_P (0.25, loose: the gate stays strict). Under 8
+    decided assets no sign test reaches a useful p, so a strict majority
+    decides. A genome that moved no asset is stored as before."""
+    _v, deltas = _objective_delta(rows, base_score, "mean")
+    wins = sum(1 for d in deltas if d > 0)
+    losses = sum(1 for d in deltas if d < 0)
+    n = wins + losses
+    if n == 0:
+        return True
+    try:
+        limit = float(os.getenv("GTRADE_AR_SCREEN_SIGN_P") or "0.25")
+    except ValueError:
+        limit = 0.25
+    if limit >= 1.0:
+        return True
+    if n < 8:
+        return wins > losses
+    from scipy.stats import binomtest
+    return float(binomtest(wins, n, 0.5, alternative="greater").pvalue) <= limit
+
+
 def archive_put(archive, genome, rows, base_score, active):
     """Place a genome in its (floor, complexity) niche if it beats the niche's mean
-    fitness (or the niche is empty). Returns True when stored."""
+    fitness (or the niche is empty), and only when it beat the base on most screen
+    assets (screen_sign_ok). Returns True when stored."""
+    if not _objective_delta(rows, base_score, "mean")[1]:
+        return False        # measured nothing, unlike "moved no asset"
+    if not screen_sign_ok(rows, base_score):
+        return False
     bd = behavior(genome, rows, base_score, active)
     key = "%d_%d_%d" % bd
     f = fitness(rows, base_score)
@@ -1747,6 +1887,46 @@ def _qd_save(archive):
            for k, v in archive.items()}
     with open(_QD_ARCHIVE_PATH, "w", encoding="utf-8") as fh:
         json.dump(out, fh)
+    # Beside the archive, not inside it: adopt_genome and auto_loop read the
+    # cell dict as it has always been.
+    with open(_qd_meta_path(), "w", encoding="utf-8") as fh:
+        json.dump(_archive_meta(), fh)
+
+
+def _qd_meta_path():
+    return _QD_ARCHIVE_PATH[:-len(".json")] + ".meta.json"
+
+
+def _archive_meta():
+    """How this run's fitness is measured. Two archives measured differently
+    hold numbers in different units (raw Score 1.5 to 8.9 against edges near
+    0.01), and mixing them leaves the old elites undisplaceable."""
+    return {"basis": _score_basis(), "illum": "full" if illum_full() else "cb",
+            "label": (os.getenv("GTRADE_LABEL_MODE") or "direction").strip()}
+
+
+def _qd_load_matching():
+    """The stored archive when it was measured the way this run measures, else
+    {} with the old file kept as a dated backup. An archive with no tag predates
+    the tag and counts as measured another way."""
+    archive = _qd_load()
+    if not archive:
+        return archive
+    try:
+        with open(_qd_meta_path(), encoding="utf-8") as fh:
+            meta = json.load(fh)
+    except (OSError, ValueError):
+        meta = None
+    want = _archive_meta()
+    if meta == want:
+        return archive
+    backup = "%s.pre-%s.bak" % (_QD_ARCHIVE_PATH, datetime.now().strftime("%Y%m%d-%H%M%S"))
+    if os.path.exists(_QD_ARCHIVE_PATH):
+        shutil.copyfile(_QD_ARCHIVE_PATH, backup)
+    print("[qd] the stored archive was measured as %s, this run measures as %s: "
+          "starting a fresh archive; the old one is kept in %s"
+          % (meta or "untagged (older)", want, os.path.basename(backup)))
+    return {}
 
 
 def _qd_load():
@@ -2121,6 +2301,39 @@ def _rl_controller_reset_for_tests():
     _RL_CTL = None
 
 
+_CONTROL_PATH = os.path.join(BASE, "_ar_control.json")
+_CONTROL_ENV = {"GTRADE_PLANTED_LEAK": "0.4", "GTRADE_EXTRA_FEATURES": "planted_leak"}
+
+
+def positive_control(train_fn, assets, env_fn, rekey, base_score, key_env):
+    """Whether this measurement can see an effect we KNOW is there.
+
+    A feature that agrees with the next label 60% of the time is planted and
+    trained like a candidate; it must clear the same screen a real genome must.
+    If it does not, the run is measuring nothing (the ATR-units lesson,
+    2026-08-18). Cached per assets + env + data snapshot (ar_memory.base_key),
+    so a passed control costs one training a day."""
+    key = ar_memory.base_key(assets, {**key_env, **_CONTROL_ENV,
+                                      "basis": _score_basis(),
+                                      "illum": "full" if illum_full() else "cb"})
+    try:
+        with open(_CONTROL_PATH, encoding="utf-8") as fh:
+            book = json.load(fh)
+    except (OSError, ValueError):
+        book = {}
+    if book.get(key) is True:
+        return True
+    rows = rekey(train_fn(assets, env_fn(dict(_CONTROL_ENV))))
+    if not rows:
+        return None         # it did not train: an infra failure, not a blind measurement
+    seen = screen_sign_ok(rows, base_score) and fitness(rows, base_score) > 0
+    if seen:
+        book[key] = True
+        with open(_CONTROL_PATH, "w", encoding="utf-8") as fh:
+            json.dump(book, fh)
+    return seen
+
+
 def run_qd(train_fn=None):
     """MAP-Elites: illuminate an archive of diverse genomes via the cheap CB screen,
     then full-evaluate + honest-gate the top elites. Returns the archive."""
@@ -2152,20 +2365,65 @@ def run_qd(train_fn=None):
             "reproduce on this GPU (same seed, same config, 0.45-1.52 Score apart), "
             "so the archive would rank noise. Use GTRADE_AR_SCORE_BASIS=net_auc.")
 
+    _overlap = screen_overlap()
+    if _overlap:
+        print("[qd] stopped: screen and gate share %s; rebuild the lists from the "
+              "menu so they are disjoint." % ", ".join(_overlap))
+        return {}
+    _problem = label_basis_problem() or cb_basis_problem()
+    if _problem:
+        print("[qd] stopped: " + _problem)
+        return {}
+    if not illum_full() and _score_basis() == "neural":
+        print("[qd] note: basis neural illuminates on CatBoost only; the nets "
+              "are judged at the gate.")
+
     def _illum_rows(rows):
-        # Only the full illumination has real nets to re-key onto; under the CB
-        # screen every net column is the 0.5 stub, so re-keying there would score
-        # every genome identically instead of measuring anything.
-        return rekey_rows(rows) if illum_full() else rows
+        # Full illumination has real nets; the CatBoost one re-keys only onto a
+        # column it can measure (CB_REKEY). It used to return the raw Score here
+        # whatever basis was chosen (2026-10-03), ranking elites on the noisiest
+        # number the system has.
+        return rekey_rows(rows) if (illum_full() or _score_basis() in CB_REKEY) else rows
 
     screen_kind = ("illum_%d" if illum_full() else "screen_%d") % len(
         _illum_assets.split(","))
 
     _t0 = time.time()
     _mark = _progress_unit_marker()
-    screen_base = _illum_rows(base_fn(_illum_assets, _illum_env({})))
+    def _base_for(assets, env, rekey=_illum_rows):
+        """Base rows on the active basis. A cached set from before the basis
+        column existed re-keys to nothing: retrain it, the way _tier_base does,
+        instead of scoring every genome against nothing (2026-10-03)."""
+        rows = base_fn(assets, env)
+        out = rekey(rows)
+        if not out and rows:
+            out = rekey(train_fn(assets, env))
+        return out
+
+    screen_base = _base_for(_illum_assets, _illum_env({}))
     _progress_fold_unit(screen_kind, time.time() - _t0, since=_mark)
     base_score = {r["Asset"]: r.get("Score", 0.0) for r in screen_base}
+    if not base_score:
+        print("[qd] stopped: the base rows carry no column for basis %s, even "
+              "retrained; nothing can be measured on it." % _score_basis())
+        return {}
+
+    if (os.getenv("GTRADE_AR_CONTROL") or "1").strip() != "0":
+        _seen = positive_control(train_fn, _illum_assets, _illum_env, _illum_rows,
+                                 base_score, _illum_env({}))
+        if _seen is None:
+            print("[control] could not train the planted control; the run goes on "
+                  "unchecked.")
+        elif not _seen:
+            print("[control] the measurement cannot see an effect of this size "
+                  "(a planted feature with 60%% agreement did not clear the "
+                  "screen); nothing searched. %s"
+                  % ("Widen the screen list or pick a basis counted on more bars."
+                     if fast_mode() else
+                     "Use the fast mode: its screen has 24 assets instead of 4."))
+            return {}
+        else:
+            print("[control] passed: a planted 60% feature clears the screen.")
 
     try:
         from core import ar_progress as _prog
@@ -2177,7 +2435,7 @@ def run_qd(train_fn=None):
     def _screen_eval(g):
         return _illum_rows(train_fn(_illum_assets, _illum_env(genome_to_env(g))))
 
-    archive = _qd_load()
+    archive = _qd_load_matching()
     if not archive:
         for _ in range(init):
             g = _canon_genome(random_genome(active, base_features))
@@ -2278,12 +2536,21 @@ def run_qd(train_fn=None):
         _progress_fold_unit("holdout_14", time.time() - _t0, since=_mark,
                             done_pairs=(_snap[0] if _snap else None))
         qd_tier_base = _tier_base(base_fn) if tier_on() else None
+        ho_cb_base = (_base_for(heldout_assets(), screen_env({}), rekey_rows)
+                      if fast_mode() else None)
         qd_tier_neural = _tier_neural_base(base_fn) if tier_on() else None
         base_contrib = {r["Asset"]: r["Score"] for r in ho_base_contrib}
         results = []
         for _i, e in enumerate(elites, 1):
             g = e["genome"]
             cell = cell_of.get(id(e), "?")
+            # CatBoost first in fast mode: the tier below trains real nets
+            if fast_mode():
+                cb_ok, cb_val = _cb_gate_pass(g, ho_cb_base, obj, train_fn)
+                if not cb_ok:
+                    print("[qd] elite %s held at the CatBoost gate (%+.4f) | %s"
+                          % (cell, cb_val, _genome_brief(g)))
+                    continue
             if qd_tier_base is not None:
                 _progress_publish("gate", step={"i": _i, "n": len(elites), "kind": "elite_tier",
                                                 "unit_kind": "tier_4"},
@@ -2324,12 +2591,17 @@ def run_qd(train_fn=None):
                           "column for basis %s" % basis)
                     continue
                 p, value, _d, tag = _st
-            results.append((g, p, value, tag, nl, var_contrib, cell))
+            results.append((g, p, value, tag, nl, var_contrib, cell, len(_d or ())))
+        run_spread = _gate_noise(results, obj, basis, ho_base_full, base_fn)
         flags = benjamini_hochberg([r[1] for r in results])
         ts_qd = datetime.utcnow().isoformat()
         finding_winners = []
-        for (g, p, value, tag, nl, var_rows, cell), s in zip(results, flags):
+        for (g, p, value, tag, nl, var_rows, cell, n_pair), s in zip(results, flags):
             ok = adopt_ok(s, value, obj, nl)
+            n_ok, n_ratio = noise_ok(value, run_spread, n_pair)
+            if n_ratio is not None:
+                tag += " | effect/noise %.1f" % n_ratio
+            ok = ok and n_ok
             replicated = clears = None
             if ok:
                 gsig = genome_sig(g)
@@ -2936,6 +3208,29 @@ def out_of_time():
     return bool(budget) and (time.time() - _RUN_STARTED) >= budget
 
 
+def fast_mode():
+    """GTRADE_AR_SPEED=fast: CatBoost illumination on the wide screen list and a
+    CatBoost-first gate; the four members train only for a CatBoost pass."""
+    return (os.getenv("GTRADE_AR_SPEED") or "full").strip().lower() == "fast"
+
+
+def screen_overlap():
+    """Assets both screened and gated. Must be empty: a gate that scores an
+    asset the search selected on measures the selection, not the genome."""
+    sel = {a.strip() for a in selection_assets().split(",") if a.strip()}
+    return sorted(sel & {a.strip() for a in heldout_assets().split(",") if a.strip()})
+
+
+def _cb_gate_pass(g, cb_base_rows, obj, train_fn):
+    """The CatBoost half of the fast gate: the same held-out assets, basis,
+    test and floor, nets stubbed. (passes, value)."""
+    var = rekey_rows(train_fn(heldout_assets(), screen_env(genome_to_env(g))))
+    if not var or not cb_base_rows:
+        return True, 0.0          # an infra failure falls through to the full gate
+    p, value, _d, _tag = holdout_stats(cb_base_rows, var, obj)
+    return bool(p < 0.05 and value > _adopt_floor(obj)), value
+
+
 def illum_full():
     """Whether the QD search illuminates on REAL nets (GTRADE_AR_ILLUM=full).
 
@@ -2954,6 +3249,8 @@ def illum_full():
     searched on CatBoost and let the basis re-score only the final gate."""
     from auto_loop import default_illum
 
+    if fast_mode():
+        return False
     return (os.getenv("GTRADE_AR_ILLUM")
             or default_illum(_score_basis())).strip().lower() == "full"
 
@@ -2995,6 +3292,29 @@ def _rekeyed(rows, basis_name="the active basis", basis=None):
     """
     out = rekey_rows(rows, basis)
     return out if out or not rows else None
+
+
+def _gate_noise(results, obj, basis, ho_base_full, base_fn):
+    """Seed spread of the gate's own value: the held-out base trained again on
+    the next seed, re-keyed onto the basis the verdict reads. The screen's
+    CatBoost rows are other assets and, in full mode, another model, so a
+    spread taken there understated the gate's noise (2026-10-03).
+    Only for objectives that are a mean of per-asset deltas; None otherwise."""
+    if (not results or obj not in ("mean", "trimmed_mean", "median")
+            or basis == "neural"
+            or (os.getenv("GTRADE_AR_NOISE") or "1").strip() == "0"):
+        return None
+    from core.net_hygiene import seed_base
+    seed = seed_base()
+    alt = base_fn(heldout_assets(), {"GTRADE_SEED": str(seed + 1)})
+    spread = seed_spread(_rekeyed(ho_base_full) or [], _rekeyed(alt) or [])
+    if spread is not None:
+        print("[noise] one training differs from another by about %.4f per "
+              "asset on %s (held-out base, seed %d vs %d); a verdict over n "
+              "assets must clear %s x %.4f / sqrt(n)."
+              % (spread, basis, seed, seed + 1,
+                 os.getenv("GTRADE_AR_NOISE_X") or "2.0", spread))
+    return spread
 
 
 def _gate_stats(base_full, var_full, obj):

@@ -110,3 +110,56 @@ def test_a_database_without_the_journal_is_not_an_error(tmp_path):
     sqlite3.connect(other).execute("CREATE TABLE bars (x INT)")
     assert fills.open_fills(db_path=other) == {}
     assert fills.open_segment("SBER", db_path=other) is None
+
+
+def _rising_bars(n=60, start=300.0, step=0.5, width=4.0):
+    return [{"date": "2026-08-%02d" % (i % 28 + 1), "open": start + i * step,
+             "high": start + i * step + width / 2, "low": start + i * step - width / 2,
+             "close": start + i * step} for i in range(n)]
+
+
+def test_my_positions_measures_a_held_trade_from_its_own_entry(db, monkeypatch):
+    """The trader's question about a trade already placed: result, the money the
+    stop would cost from here, how far that stop is in ordinary days, and
+    whether the size fits risk_per_trade."""
+    from core import dashboard, track_record
+    from risk_manager import RISK_CONFIG
+
+    monkeypatch.setattr(fills, "DB_PATH", db)
+    bars = _rising_bars()
+    monkeypatch.setattr(track_record, "ohlc_series", lambda asset, days=60: bars)
+    monkeypatch.setattr(dashboard, "regime_flags", lambda asset, taleb=None: (False, False))
+    monkeypatch.setattr(lv, "load_policy", lambda path=None: None)
+    monkeypatch.setitem(RISK_CONFIG, "risk_per_trade", 0.01)
+    fills.record("SBER", "BUY", 1000, 310.0, entry_date="2026-08-20", db_path=db)
+
+    (p,) = dashboard.my_positions(equity=1_000_000, today="2026-08-25")
+    close = bars[-1]["close"]
+    assert p["asset"] == "SBER" and p["side"] == 1 and p["entry"] == 310.0
+    assert p["pnl"] == pytest.approx((close - 310.0) * 1000)
+    assert p["pnl_pct"] == pytest.approx(close / 310.0 - 1)
+    gap = close - p["stop"]
+    assert gap > 0
+    assert p["risk_to_stop"] == pytest.approx(gap * 1000)
+    assert p["risk_pct_equity"] == pytest.approx(gap * 1000 / 1_000_000)
+    assert p["fit_qty"] == pytest.approx(1_000_000 * 0.01 / gap)
+    assert p["stop_in_days"] == pytest.approx(gap / p["typical"])
+
+    (p0,) = dashboard.my_positions(equity=0.0, today="2026-08-25")
+    assert p0["risk_pct_equity"] is None and p0["fit_qty"] is None, "no equity, no money size"
+    fills.close("SBER", 330.0, db_path=db)
+    assert dashboard.my_positions(equity=1_000_000) == []
+
+
+def test_a_short_that_went_against_it_risks_from_the_close(db, monkeypatch):
+    from core import dashboard, track_record
+
+    monkeypatch.setattr(fills, "DB_PATH", db)
+    bars = _rising_bars()
+    monkeypatch.setattr(track_record, "ohlc_series", lambda asset, days=60: bars)
+    monkeypatch.setattr(dashboard, "regime_flags", lambda asset, taleb=None: (False, False))
+    monkeypatch.setattr(lv, "load_policy", lambda path=None: None)
+    fills.record("GAZP", "SELL", 10, 310.0, entry_date="2026-08-20", db_path=db)
+    (p,) = dashboard.my_positions(equity=100_000, today="2026-08-25")
+    assert p["pnl"] < 0, "price rose after the short"
+    assert p["stop"] > p["close"] or p["status"] == "stop_breached"

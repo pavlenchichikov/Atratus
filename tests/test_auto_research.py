@@ -2,6 +2,8 @@ import json
 import math
 import os
 
+import pytest
+
 import auto_research as ar
 
 
@@ -3024,7 +3026,7 @@ def test_run_qd_actually_filters_the_incumbent_out_of_the_gate(monkeypatch, tmp_
     monkeypatch.setattr(_adopted, "PATH", str(path))
 
     # the incumbent ranks FIRST, so an unfiltered gate would spend a slot on it
-    monkeypatch.setattr(ar, "_qd_load", lambda: {
+    monkeypatch.setattr(ar, "_qd_load_matching", lambda: {
         "hi": {"genome": adopted, "fitness": 9.0, "rows": []},
         "lo": {"genome": rival, "fitness": 1.0, "rows": []}})
 
@@ -3165,3 +3167,468 @@ def test_the_search_gate_uses_the_weighted_test_when_rows_carry_bar_counts(monke
     assert base[0]["N"] == 1000
     _p, value, _deltas, tag = ar.holdout_stats(base, ext)
     assert "weighted" in tag and abs(value - (0.03 * 1000 - 0.10 * 100) / 1100) < 1e-12
+
+
+# --- 2026-10-03: select on quality, not on noise (plan rs-quality) ----------
+
+def test_cb_illumination_ranks_on_the_basis_not_score(monkeypatch):
+    """On the CatBoost illumination the archive used to rank on the raw Score
+    whatever basis was chosen (2026-10-03). The basis column must decide."""
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge_clean")
+    rows = [{"Asset": "X", "Score": 9.0, "Dir_Edge_Clean": 0.01, "Dir_N_Clean": 100}]
+    assert ar.rekey_rows(rows)[0]["Score"] == 0.01
+    assert ar.cb_basis_problem() is None
+    assert "dir_edge_clean" in ar.CB_REKEY
+
+
+def test_net_only_bases_are_refused_on_catboost(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    for b in ("net_auc", "net_gain"):
+        monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", b)
+        msg = ar.cb_basis_problem()
+        assert msg and "0.5" in msg
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "neural")
+    assert ar.cb_basis_problem() is None, "neural keeps today's behaviour"
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "full")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    assert ar.cb_basis_problem() is None, "real nets can be measured"
+
+
+def test_run_qd_stops_on_a_refused_basis(monkeypatch, capsys):
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "net_auc")
+    trained = []
+    ar.run_qd(train_fn=lambda s, e: trained.append(s) or [])
+    assert not trained and "0.5" in capsys.readouterr().out
+
+
+def test_cb_illumination_archive_is_ranked_on_the_basis(monkeypatch):
+    """End to end: Score prefers one genome, the basis the other; the CatBoost
+    archive must follow the basis."""
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    saved = {}
+    monkeypatch.setattr(ar, "_qd_save", lambda a: saved.update(a))
+    monkeypatch.setattr(ar, "BUDGET", 0, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "1")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "0")
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge")
+
+    def fake(subset, env):
+        cand = bool(env.get("GTRADE_DROP_FEATURES") or env.get("GTRADE_EXTRA_FEATURES")
+                    or env.get("GTRADE_LABEL_MODE"))
+        # the candidate is WORSE on Score and BETTER on the basis
+        return [{"Asset": a, "Score": 0.0 if cand else 5.0,
+                 "Dir_Edge": 0.03 if cand else 0.01, "Dir_N": 400}
+                for a in subset.split(",")]
+    ar.run_qd(train_fn=fake)
+    assert saved, "the candidate was not stored"
+    (cell,) = saved.values()
+    assert cell["fitness"] == pytest.approx(0.02), "fitness is in basis units, not Score"
+
+
+def test_one_lucky_asset_does_not_enter_the_archive():
+    base = {a: 0.0 for a in "ABCDEFGHIJ"}
+    lucky = _rows2({**{a: -0.01 for a in "ABCDEFGHI"}, "J": 0.5})   # mean > 0
+    assert ar.fitness(lucky, base) > 0
+    assert ar.screen_sign_ok(lucky, base) is False
+    assert ar.archive_put({}, ar.Genome(drops=["rsi"]), lucky, base, _QD_ACTIVE) is False
+
+
+def test_a_broad_gain_enters():
+    base = {a: 0.0 for a in "ABCDEFGHIJ"}
+    broad = _rows2({**{a: 0.01 for a in "ABCDEFGH"}, "I": -0.01, "J": -0.01})
+    assert ar.screen_sign_ok(broad, base) is True        # 8 of 10, p 0.055
+
+
+def test_small_screens_use_a_strict_majority_and_ties_are_stored():
+    base = {"A": 0.0, "B": 0.0, "C": 0.0, "D": 0.0}
+    assert ar.screen_sign_ok(_rows2({"A": 1, "B": 1, "C": 1, "D": -1}), base)
+    assert not ar.screen_sign_ok(_rows2({"A": 1, "B": 1, "C": -1, "D": -1}), base)
+    assert ar.screen_sign_ok(_rows2({"A": 0, "B": 0, "C": 0, "D": 0}), base), \
+        "no asset moved: no evidence against it, stored as before"
+
+
+def test_the_sign_screen_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCREEN_SIGN_P", "1")
+    base = {a: 0.0 for a in "ABCDEFGHIJ"}
+    lucky = _rows2({**{a: -0.01 for a in "ABCDEFGHI"}, "J": 0.5})
+    assert ar.screen_sign_ok(lucky, base)
+
+
+def test_seed_spread_is_a_robust_sd_of_the_paired_difference():
+    a = [{"Asset": x, "Score": v} for x, v in zip("ABCD", (0.50, 0.52, 0.48, 0.55))]
+    b = [{"Asset": x, "Score": v} for x, v in zip("ABCD", (0.52, 0.50, 0.49, 0.50))]
+    # |diffs| 0.02 0.02 0.01 0.05 -> median 0.02 -> 1.4826 * 0.02
+    assert ar.seed_spread(a, b) == pytest.approx(0.029652)
+    assert ar.seed_spread(a, []) is None
+
+
+def test_noise_ok_compares_with_the_noise_of_the_mean(monkeypatch):
+    ok, ratio = ar.noise_ok(0.010, 0.03, 36)        # noise of the mean 0.005
+    assert ok and ratio == pytest.approx(2.0)
+    ok, _r = ar.noise_ok(0.009, 0.03, 36)
+    assert not ok
+    assert ar.noise_ok(0.001, None, 36) == (True, None), "unmeasured never blocks"
+    monkeypatch.setenv("GTRADE_AR_NOISE_X", "1")
+    assert ar.noise_ok(0.006, 0.03, 36)[0]
+
+
+def _noise_run(monkeypatch, objective="mean"):
+    monkeypatch.setenv("GTRADE_AR_NOISE", "1")
+    monkeypatch.delenv("GTRADE_SEED", raising=False)
+    monkeypatch.setenv("GTRADE_AR_OBJECTIVE", objective)
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setattr(ar, "BUDGET", 1, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "2")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "1")
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge")
+    seen = []
+
+    def fake(subset, env):
+        seen.append((subset, env.get("GTRADE_SEED")))
+        bump = 0.01 if env.get("GTRADE_SEED") else 0.0
+        gen = 0.005 if len(env) > 1 else 0.0
+        return [{"Asset": a, "Score": 1.0, "Dir_Edge": 0.01 * (i % 3) + bump * (i % 2) + gen,
+                 "Dir_N": 400} for i, a in enumerate(subset.split(","))]
+    ar.run_qd(train_fn=fake)
+    return seen
+
+
+def test_noise_is_measured_on_the_gate_base_in_the_verdict_units(monkeypatch, capsys):
+    """The spread comes from the HELD-OUT base trained a second time, the same
+    assets and config the verdict's value comes from (2026-10-03: the
+    screen's CatBoost spread understated the four-member gate's noise)."""
+    from core.net_hygiene import seed_base
+    seen = _noise_run(monkeypatch)
+    alt = str(seed_base() + 1)
+    assert (ar.heldout_assets(), alt) in seen, "held-out base retrained on the next seed"
+    assert not any(s == alt for sub, s in seen if sub != ar.heldout_assets()),         "no second training on the screen assets"
+    out = capsys.readouterr().out
+    assert "[noise]" in out and "effect/noise" in out
+
+
+def test_noise_is_not_applied_to_a_unitless_objective(monkeypatch, capsys):
+    from core.net_hygiene import seed_base
+    seen = _noise_run(monkeypatch, objective="sharpe")
+    assert not any(s == str(seed_base() + 1) for _sub, s in seen)
+    assert "effect/noise" not in capsys.readouterr().out
+
+
+def test_a_control_the_screen_cannot_see_stops_the_run(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("GTRADE_AR_CONTROL", "1")
+    monkeypatch.setattr(ar, "_CONTROL_PATH", str(tmp_path / "c.json"))
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    calls = []
+
+    def flat(subset, env):          # the leak changes nothing: a blind measurement
+        calls.append(dict(env))
+        return [{"Asset": a, "Score": 1.0} for a in subset.split(",")]
+    ar.run_qd(train_fn=flat)
+    out = capsys.readouterr().out
+    assert "cannot see" in out
+    assert any(e.get("GTRADE_PLANTED_LEAK") == "0.4" for e in calls)
+    assert not any("GTRADE_DROP_FEATURES" in e for e in calls), "nothing searched"
+
+
+def test_a_seen_control_lets_the_run_go_and_is_cached(monkeypatch, tmp_path):
+    monkeypatch.setattr(ar, "_CONTROL_PATH", str(tmp_path / "c.json"))
+    base = {a: 1.0 for a in "ABCD"}
+    rows = [{"Asset": a, "Score": 2.0} for a in "ABCD"]
+    n = []
+
+    def fn(subset, env):
+        n.append(1)
+        return rows
+
+    def ident(x):
+        return x
+    assert ar.positive_control(fn, "A,B,C,D", ident, ident, base, {})
+    assert ar.positive_control(fn, "A,B,C,D", ident, ident, base, {})
+    assert len(n) == 1, "second call read the cache"
+
+
+def test_dir_edge_vol_is_a_basis_with_the_auc_floor(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge_vol")
+    assert ar._score_basis() == "dir_edge_vol"
+    rows = [{"Asset": "A", "Score": 3.0, "Dir_Edge_Vol": 0.02, "Dir_N_Vol": 300},
+            {"Asset": "B", "Score": 3.0}]                       # older row, no column
+    assert ar.rekey_rows(rows) == [{"Asset": "A", "Score": 0.02, "N": 300}]
+    assert ar._adopt_floor("mean") == pytest.approx(0.005)
+    monkeypatch.setenv("GTRADE_AR_DECISION_BASIS", "dir_edge_vol")
+    assert ar.decision_basis() == "dir_edge_vol"
+
+
+def test_fast_mode_illuminates_on_catboost_and_checks_overlap(monkeypatch, capsys):
+    monkeypatch.setenv("GTRADE_AR_SPEED", "fast")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "ens_acc")      # a net basis
+    monkeypatch.delenv("GTRADE_AR_ILLUM", raising=False)
+    assert ar.illum_full() is False, "fast means CatBoost illumination"
+    monkeypatch.setenv("GTRADE_AR_SELECTION", "SP500,MSFT")
+    monkeypatch.setenv("GTRADE_AR_HELDOUT", "MSFT,GOLD")
+    assert ar.screen_overlap() == ["MSFT"]
+    trained = []
+    ar.run_qd(train_fn=lambda s, e: trained.append(s) or [])
+    assert not trained and "MSFT" in capsys.readouterr().out
+
+
+def _fast_gate_run(monkeypatch, cb_verdict):
+    """One fast-mode run_qd; returns [(cb_only, has_genome_env)] for every
+    held-out training it did."""
+    import random as _random
+    monkeypatch.setenv("GTRADE_AR_SPEED", "fast")
+    monkeypatch.setenv("GTRADE_AR_SELECTION", "SP500,BTC,EURUSD,GAS")
+    monkeypatch.setenv("GTRADE_AR_HELDOUT", "MSFT,GOLD,USDJPY,ADA,XOM,SOL,TNX,DXY")
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setattr(ar, "BUDGET", 2, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "2")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "1")
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge")
+    monkeypatch.setattr(ar, "_cb_gate_pass", lambda g, *a, **k: cb_verdict)
+    _random.seed(0)
+    held = []
+
+    def fake(subset, env):
+        genome = {k for k in env if k != "GTRADE_SCREEN_ONLY"}
+        if subset == ar.heldout_assets():
+            held.append(("GTRADE_SCREEN_ONLY" in env, bool(genome)))
+        k = 1 if genome else 0
+        return [{"Asset": a, "Score": 1.0, "Dir_Edge": 0.01 * (i + k), "Dir_N": 500}
+                for i, a in enumerate(subset.split(","))]
+    ar.run_qd(train_fn=fake)
+    return held
+
+
+def test_fast_gate_trains_the_nets_only_for_a_catboost_pass(monkeypatch):
+    """CatBoost holdout first; the four-member holdout only when it passes."""
+    held_out = _fast_gate_run(monkeypatch, (False, 0.0))
+    assert not any(cb_only is False and genome for cb_only, genome in held_out), \
+        "a CatBoost refusal must not reach the four-member gate"
+    held_in = _fast_gate_run(monkeypatch, (True, 0.01))
+    assert any(cb_only is False and genome for cb_only, genome in held_in), \
+        "a CatBoost pass goes on to the four-member gate"
+
+
+def test_vol_edge_basis_and_the_label_guard(monkeypatch):
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "vol_edge")
+    assert ar._score_basis() == "vol_edge"
+    assert ar.rekey_rows([{"Asset": "A", "Score": 1.0, "Vol_Edge": 0.03}]) == \
+        [{"Asset": "A", "Score": 0.03}]
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "big_move")
+    assert ar.label_basis_problem() is None
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge_clean")
+    assert "big_move" in ar.label_basis_problem()
+    trained = []
+    ar.run_qd(train_fn=lambda s, e: trained.append(s) or [])
+    assert not trained
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "direction")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "vol_edge")
+    assert "needs label big_move" in ar.label_basis_problem()
+
+
+def _qd_env(monkeypatch, basis="dir_edge"):
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setattr(ar, "BUDGET", 1, raising=False)
+    monkeypatch.setenv("GTRADE_AR_QD_INIT", "1")
+    monkeypatch.setenv("GTRADE_AR_QD_FINAL", "0")
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", basis)
+
+
+def test_a_stale_cached_base_is_retrained_not_scored_as_zero(monkeypatch):
+    """Rows cached before the basis column existed re-key to nothing; the base
+    must be retrained, or every genome scores 0 and the noise test switches off
+    (2026-10-03)."""
+    _qd_env(monkeypatch)
+    calls = []
+
+    def fake(subset, env):
+        calls.append(dict(env))
+        stale = len(calls) == 1                     # the first base answer is stale
+        edge = 0.03 if len(env) > 1 else 0.01        # a genome env beats the base
+        return [dict({"Asset": a, "Score": 1.0},
+                     **({} if stale else {"Dir_Edge": edge, "Dir_N": 300}))
+                for a in subset.split(",")]
+    saved = {}
+    monkeypatch.setattr(ar, "_qd_save", lambda a: saved.update(a))
+    ar.run_qd(train_fn=fake)
+    assert saved, "a genome was stored"
+    # a random genome may equal the base (fitness 0); against an EMPTY base
+    # every fitness would be 0, so the best one tells the two apart
+    assert max(v["fitness"] for v in saved.values()) == pytest.approx(0.02),         "fitness measured against the retrained base, not against nothing"
+
+
+def test_a_base_with_no_measurable_rows_stops_the_run(monkeypatch, capsys):
+    _qd_env(monkeypatch)
+    calls = []
+    ar.run_qd(train_fn=lambda s, e: calls.append(1) or
+              [{"Asset": a, "Score": 1.0} for a in s.split(",")])
+    out = capsys.readouterr().out
+    assert "no column for basis dir_edge" in out
+    assert len(calls) == 2, "the base and its retrain, then a stop, no genome"
+
+
+def test_an_archive_measured_another_way_is_set_aside_not_mixed(monkeypatch, tmp_path, capsys):
+    """Raw-Score elites (1.5 to 8.9) can never be displaced by edge-unit genomes
+    (~0.01): an archive from another basis, mode or label starts fresh, and the
+    old file is kept (2026-10-03)."""
+    path = tmp_path / "_qd_archive.json"
+    monkeypatch.setattr(ar, "_QD_ARCHIVE_PATH", str(path))
+    monkeypatch.setenv("GTRADE_AR_ILLUM", "cb")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    arch = {}
+    ar.archive_put(arch, ar.Genome(drops=["rsi"]), _rows2({"A": 9.0}), {"A": 1.0}, _QD_ACTIVE)
+    ar._qd_save(arch)
+    assert ar._qd_load_matching(), "same basis, same archive"
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge")
+    assert ar._qd_load_matching() == {}
+    assert "fresh archive" in capsys.readouterr().out
+    assert list(tmp_path.glob("_qd_archive.json.pre-*.bak")), "the old one is kept"
+
+
+def test_an_untagged_archive_counts_as_measured_another_way(monkeypatch, tmp_path):
+    path = tmp_path / "_qd_archive.json"
+    monkeypatch.setattr(ar, "_QD_ARCHIVE_PATH", str(path))
+    path.write_text('{"2_4_0": {"genome": {"drops": ["rsi"]}, "fitness": 5.0}}', encoding="utf-8")
+    assert ar._qd_load(), "readable"
+    assert ar._qd_load_matching() == {}, "no tag: from before this change"
+
+
+def test_the_neural_gate_takes_its_assets_out_of_the_screen(monkeypatch, capsys):
+    """[4c]=5 (GTRADE_AR_HELDOUT=neural) shares five assets with the default
+    screen; that used to stop every QD run. The screen gives them up instead."""
+    monkeypatch.setenv("GTRADE_AR_HELDOUT", "neural")
+    monkeypatch.delenv("GTRADE_AR_SELECTION", raising=False)
+    gate = set(ar.NEURAL_HELDOUT.split(","))
+    assert gate & set(ar.SELECTION_ASSETS.split(",")), "the premise: they overlap"
+    assert ar.screen_overlap() == []
+    sel = ar.selection_assets().split(",")
+    assert sel and not gate & set(sel)
+
+
+def test_the_label_guard_reads_the_decision_basis_too(monkeypatch):
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "big_move")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "vol_edge")
+    monkeypatch.delenv("GTRADE_AR_DECISION_BASIS", raising=False)
+    assert ar.label_basis_problem() is None
+    monkeypatch.setenv("GTRADE_AR_DECISION_BASIS", "dir_edge_vol")
+    assert "dir_edge_vol" in (ar.label_basis_problem() or "")
+
+
+def test_axis_and_regate_runs_refuse_a_label_basis_mismatch(monkeypatch, capsys):
+    """main() calls this before both the regate and the axis branch."""
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "direction")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge")
+    assert ar.refuse_contradictory_campaign() is False
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "vol_edge")
+    assert ar.refuse_contradictory_campaign() is True
+    assert "vol_edge" in capsys.readouterr().out
+
+
+def test_fast_mode_runs_the_catboost_gate_before_the_tier_nets(monkeypatch):
+    """The tier check trains real nets on four assets (about an hour an elite);
+    in fast mode a CatBoost refusal must come first and skip it."""
+    tiered = []
+    monkeypatch.setattr(ar, "tier_on", lambda: True)
+    monkeypatch.setattr(ar, "_tier_base", lambda fn: [])
+    monkeypatch.setattr(ar, "_tier_neural_base", lambda fn: [])
+    monkeypatch.setattr(ar, "_passes_tier",
+                        lambda *a, **k: tiered.append(1) or (True, 0.0))
+    monkeypatch.setattr(ar, "_tier_neural_ok", lambda *a, **k: (True, 0.0))
+    _fast_gate_run(monkeypatch, (False, 0.0))
+    assert not tiered, "the tier nets trained for a genome the CatBoost gate refused"
+    _fast_gate_run(monkeypatch, (True, 0.01))
+    assert tiered, "a CatBoost pass still goes through the tier"
+
+
+def test_a_genome_that_measured_nothing_is_not_stored():
+    """Rows that re-key to nothing (no column for the basis) are not 'moved no
+    asset': nothing was measured, and fitness 0 would sit in the archive."""
+    base = {"A": 0.0, "B": 0.0}
+    assert ar.archive_put({}, ar.Genome(drops=["rsi"]), [], base, _QD_ACTIVE) is False
+    assert ar.archive_put({}, ar.Genome(drops=["rsi"]), _rows2({"A": 0, "B": 0}),
+                          base, _QD_ACTIVE) is True, "moved no asset is still stored"
+
+
+def test_a_big_move_run_freezes_the_label_gene(monkeypatch):
+    """A label gene would override GTRADE_LABEL_MODE and the run would train a
+    direction model whose rows carry no Vol_Edge."""
+    import random as _random
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "big_move")
+    _random.seed(1)
+    feats = ["ret_1", "ret_5", "rsi"]
+    for _ in range(60):
+        g = ar.random_genome(_QD_ACTIVE, feats)
+        assert g.label_mode == "direction"
+        assert ar.mutate(g, _QD_ACTIVE, feats, ops=["flip_label"]).label_mode == "direction"
+    assert not ar.valid(ar.Genome(label_mode="rel_median"), _QD_ACTIVE, 8)
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "direction")
+    assert ar.valid(ar.Genome(label_mode="rel_median"), _QD_ACTIVE, 8)
+
+
+def test_a_director_cycle_keeps_the_fast_mode(monkeypatch):
+    """The director writes GTRADE_AR_MODE=search every cycle; fast/full lives in
+    its own variable so that cannot switch fast mode off."""
+    monkeypatch.setenv("GTRADE_AR_SPEED", "fast")
+    monkeypatch.setenv("GTRADE_AR_MODE", "search")
+    assert ar.fast_mode()
+    monkeypatch.setenv("GTRADE_AR_SPEED", "full")
+    assert not ar.fast_mode()
+
+
+def test_archive_floor_bins_follow_the_basis_units(monkeypatch):
+    """Edges were Score units (+-0.25, +-1): on an edge basis every genome's worst
+    delta fell between them and one descriptor separated nothing."""
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    assert ar._floor_edges() == pytest.approx((-1.0, -0.25, 0.25, 1.0)), "Score unchanged"
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "dir_edge")
+    base = {"A": 0.0, "B": 0.0}
+    g = ar.Genome(drops=["rsi"])
+    bins = {ar.behavior(g, _rows2({"A": d, "B": 0.05}), base, _QD_ACTIVE)[0]
+            for d in (-0.05, -0.005, 0.0, 0.005, 0.05)}
+    assert len(bins) >= 4, "edge-sized deltas must spread over the floor bins"
+
+
+def test_a_control_that_could_not_train_does_not_stop_the_run(monkeypatch, capsys, tmp_path):
+    """Empty rows are an infra failure, not a blind measurement."""
+    monkeypatch.setattr(ar, "_CONTROL_PATH", str(tmp_path / "c.json"))
+    assert ar.positive_control(lambda s, e: [], "A,B", dict, lambda x: x,
+                               {"A": 1.0, "B": 1.0}, {}) is None
+    monkeypatch.setenv("GTRADE_AR_CONTROL", "1")
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    monkeypatch.setattr(ar, "_qd_save", lambda a: None)
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    monkeypatch.setattr(ar, "positive_control", lambda *a, **k: None)
+    calls = []
+    ar.run_qd(train_fn=lambda s, e: calls.append(dict(e)) or
+              [{"Asset": a, "Score": 1.0} for a in s.split(",")])
+    out = capsys.readouterr().out
+    assert "could not train" in out and "cannot see" not in out
+    assert any("GTRADE_DROP_FEATURES" in e or len(e) > 1 for e in calls), "the search ran"
+
+
+def test_the_blind_control_advice_fits_the_mode(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("GTRADE_AR_CONTROL", "1")
+    monkeypatch.setenv("GTRADE_AR_SPEED", "fast")
+    monkeypatch.setenv("GTRADE_AR_SELECTION", "SP500,BTC,EURUSD,GAS")
+    monkeypatch.setattr(ar, "_qd_load", dict)
+    monkeypatch.setenv("GTRADE_AR_TIER", "0")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "raw")
+    monkeypatch.setattr(ar, "positive_control", lambda *a, **k: False)
+    ar.run_qd(train_fn=lambda s, e: [{"Asset": a, "Score": 1.0} for a in s.split(",")])
+    out = capsys.readouterr().out
+    assert "cannot see" in out and "use the fast mode" not in out
+

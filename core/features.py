@@ -89,6 +89,19 @@ def make_target(close: pd.Series, mode: str = "direction", window: int = 30,
         target[future.isna()] = np.nan
         span = pd.Series(np.where(target.isna(), np.nan, float(h)), index=target.index)
         return (target, span) if with_span else target
+    if mode == "big_move":
+        # Will tomorrow's range be wider than this asset's usual day? Usual =
+        # median true range / close over the 60 bars up to today (past only).
+        hi = high if high is not None else close
+        lo = low if low is not None else close
+        prev = close.shift(1)
+        tr = pd.concat([hi - lo, (hi - prev).abs(), (lo - prev).abs()], axis=1).max(axis=1)
+        rel = tr / close
+        usual = rel.rolling(60).median()
+        nxt = rel.shift(-1)
+        target = (nxt > usual).astype(float)
+        target[usual.isna() | nxt.isna()] = np.nan
+        return (target, _unit_span(target)) if with_span else target
     raise ValueError(f"unknown GTRADE_LABEL_MODE: {mode!r}")
 
 
@@ -331,6 +344,10 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         df['target'], df['label_span'] = make_target(
             df['close'], _label_mode, _label_window, high=_hi, low=_lo,
             horizon=_horizon, barrier_k=_barrier_k, vol_window=_vol_window,
+            with_span=True)
+    elif _label_mode == "big_move":
+        df['target'], df['label_span'] = make_target(
+            df['close'], _label_mode, high=df.get('high'), low=df.get('low'),
             with_span=True)
     else:
         df['target'], df['label_span'] = make_target(
@@ -695,10 +712,25 @@ def add_har_features(df: pd.DataFrame) -> pd.DataFrame:
         mu = HAR_INTERCEPT + sum(w * np.log(m.where(m > 0)) for w, m in zip(HAR_WEIGHTS, means))
     df['har_range'] = np.nan_to_num(np.exp(mu).to_numpy(dtype=float), nan=0.0,
                                     posinf=0.0, neginf=0.0)
+    # The asset's usual day, the denominator of "expected bigger than usual"
+    # (Dir_Edge_Vol, big_move). Past bars only.
+    df['tr_rel_med60'] = rel.rolling(60).median().fillna(0.0).to_numpy(dtype=float)
     return df
 
 
 _CROSS_LAG_FEATURES = ['lead_sp500_ret', 'lead_vix_ret', 'lead_btc_ret']
+
+
+def add_planted_leak(df: pd.DataFrame, flip: float, seed: int) -> pd.DataFrame:
+    """planted_leak: the run's own label with `flip` of the rows inverted, for the
+    RS positive control ONLY (a leak by construction). build_features adds it
+    only while GTRADE_PLANTED_LEAK is set, which only the control's env does."""
+    rng = np.random.default_rng(seed)
+    t = df["target"].to_numpy(dtype=float)
+    flips = rng.random(len(t)) < float(flip)
+    leak = np.where(flips, 1.0 - t, t)
+    df["planted_leak"] = np.nan_to_num(leak, nan=0.5)
+    return df
 
 
 def add_cross_lag_features(df: pd.DataFrame, engine) -> pd.DataFrame:
@@ -770,6 +802,10 @@ def build_features(df_raw, table, engine):
     # model input unless GTRADE_EXTRA_FEATURES names it.
     df = add_finra_features(df, table, engine)
     df = add_har_features(df)
+    _leak = os.getenv("GTRADE_PLANTED_LEAK")
+    if _leak:
+        import zlib
+        df = add_planted_leak(df, float(_leak), seed=zlib.crc32(str(table).encode()))
     return add_dsl_features(df, engine, load_dsl_specs())
 
 

@@ -156,7 +156,8 @@ def test_an_adopted_verdict_writes_the_params_and_its_evidence(tmp_path):
     # a policy file that omits a delta would load as a different policy.
     assert body["params"]["k_entry"] == 0.4
     assert body["params"]["k_stop"] == 3.0
-    assert set(body["params"]) == {n for n, _l, _h, _i in tl.PARAM_SPECS}
+    assert set(body["params"]) == {n for n, _l, _h, _i in tl.PARAM_SPECS} | {"vol_unit"}
+    assert body["params"]["vol_unit"] == "atr"
     assert body["gate"]["p"] == 0.01
     assert body["baseline"] == tl.baseline_params()
 
@@ -473,3 +474,75 @@ def test_the_stop_still_changes_the_score_it_is_only_the_stake_that_cannot():
     s_cut = tl._equity_score(len(truncated),
                              tl._equity_stats(truncated, list(truncated))[4])
     assert s_cut > s_raw, "cutting the left tail improves Sharpe"
+
+
+# --- the volatility unit: ATR14 or HAR ---------------------------------------
+
+def _wavy_bars(n=60):
+    out, price = [], 100.0
+    for i in range(n):
+        price *= 1 + (0.01 if i % 3 else -0.015)
+        width = 0.5 + (i % 7) * 0.3
+        out.append({"date": "2026-01-%02d" % (i % 28 + 1), "open": price,
+                    "high": price + width, "low": price - width, "close": price})
+    return out
+
+
+def test_har_series_is_range_forecast_in_price_units_at_every_bar():
+    bars = _wavy_bars()
+    har = levels_mod.har_series(bars)
+    assert har[20] is None and har[21] is not None
+    for i in (21, 40, 59):
+        f = levels_mod.range_forecast(bars[:i + 1])
+        assert har[i] == pytest.approx(f["typical"] * bars[i]["close"])
+
+
+def test_a_har_policy_draws_its_levels_in_har_and_says_so(monkeypatch):
+    bars = _wavy_bars()
+    monkeypatch.setattr(levels_mod, "load_policy",
+                        lambda path=None: {"k_entry": 0.5, "k_stop": 2.0, "vol_unit": "har"})
+    row = levels_mod.levels(bars, "BUY")
+    har = levels_mod.har_series(bars)[-1]
+    assert row["vol_unit"] == "har" and row["atr"] == pytest.approx(har)
+    assert row["stop"] == pytest.approx(row["close"] - 2.0 * har)
+    monkeypatch.setattr(levels_mod, "load_policy",
+                        lambda path=None: {"k_entry": 0.5, "k_stop": 2.0})
+    atr_row = levels_mod.levels(bars, "BUY")
+    assert atr_row["vol_unit"] == "atr"
+    assert atr_row["atr"] == pytest.approx(levels_mod.atr_series(bars)[-1])
+    assert atr_row["stop"] != pytest.approx(row["stop"])
+    monkeypatch.setattr(levels_mod, "load_policy",
+                        lambda path=None: {"k_entry": 0.5, "k_stop": 2.0, "vol_unit": "har"})
+    assert levels_mod.levels(bars[:18], "BUY")["status"] == "short_history"
+
+
+def test_the_unit_round_trips_through_the_policy_file_and_junk_is_refused(tmp_path):
+    path = str(tmp_path / "levels_policy.json")
+    gate = {"verdict": "ADOPT", "p": 0.01, "mean_d": 0.2, "n": 12}
+    tl.save_policy({"k_entry": 0.4, "k_stop": 2.5, "vol_unit": "har"}, gate, path=path)
+    assert levels_mod.load_policy(path)["vol_unit"] == "har"
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps({"params": {"k_entry": 0.5, "k_stop": 2.0}}), encoding="utf-8")
+    assert levels_mod.load_policy(str(old))["vol_unit"] == "atr", "every policy before 10-03"
+    bad = tmp_path / "bad_unit.json"
+    bad.write_text(json.dumps({"params": {"k_entry": 0.5, "k_stop": 2.0, "vol_unit": "vix"}}),
+                   encoding="utf-8")
+    assert levels_mod.load_policy(str(bad)) is None
+
+
+def test_the_replay_measures_in_the_unit_it_is_given():
+    """The ATR-units lesson: a sweep that must change the answer. The same
+    multipliers in ATR and in HAR are different stops, so the replay differs."""
+    bars = _wavy_bars(120)
+    s = {k: np.asarray([b[k] for b in bars], dtype=float) for k in ("open", "high", "low", "close")}
+    s["is_forex"] = False
+    sides = np.ones(len(bars), dtype=int)
+    sides[-2:] = 0
+    a = tl.eval_levels(dict(s), {"k_entry": 0.5, "k_stop": 1.0, "vol_unit": "atr"},
+                       sides=sides, objective="rate")
+    h = tl.eval_levels(dict(s), {"k_entry": 0.5, "k_stop": 1.0, "vol_unit": "har"},
+                       sides=sides, objective="rate")
+    assert a["n"] > 0 and h["n"] > 0
+    assert a["total_ret"] != pytest.approx(h["total_ret"])
+    assert np.allclose(tl.price_vol(dict(s), "har")[21:],
+                       [x for x in levels_mod.har_series(bars)[21:]])

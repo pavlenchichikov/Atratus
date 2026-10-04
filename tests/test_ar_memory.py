@@ -288,3 +288,16 @@ def test_proposer_edges_compares_best_edges_only_with_ten_cycles_each():
     journal.append(rec("evolutionary", [0.02]))
     line = m.proposer_line(m.proposer_edges(journal))
     assert "llm" in line and "+0.0300" in line and "+0.0200" in line
+
+
+def test_cache_keys_separate_labels(monkeypatch):
+    """A base trained on one label must not be served to a run on another
+    (2026-10-03: a direction base answered a big_move run the same day)."""
+    monkeypatch.setattr(am, "data_fingerprint", lambda subset: "fp")
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "direction")
+    b1, g1 = am.base_key("A,B", {}), am.genome_key("A,B", "sig", "cb")
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "big_move")
+    assert am.base_key("A,B", {}) != b1
+    assert am.genome_key("A,B", "sig", "cb") != g1
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "direction")
+    assert am.base_key("A,B", {}) == b1, "same label, same key"

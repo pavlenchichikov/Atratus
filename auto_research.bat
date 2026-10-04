@@ -156,6 +156,10 @@ echo     3 = triple_barrier, custom horizon
 echo         The weighting axis is a no-op under 1: a next-bar label spans one
 echo         bar, the uniqueness weights come out all-ones, and every candidate
 echo         equals the base. Pick 2 or 3 when running that axis.
+echo     4 = big_move: will TOMORROW move more than usual for this asset?
+echo         Trains the volatility model instead of direction. It is scored
+echo         against HAR, the range forecast the system already uses, so it
+echo         only counts if it beats HAR. Sets the basis to vol_edge by itself.
 set "LBL=1"
 set /p "LBL=    choice [1]: "
 set "GTRADE_LABEL_MODE=direction"
@@ -165,6 +169,37 @@ if "%LBL%"=="2" set "GTRADE_LABEL_HORIZON=20"
 if "%LBL%"=="3" set "GTRADE_LABEL_MODE=triple_barrier"
 if "%LBL%"=="3" set "GTRADE_LABEL_HORIZON=20"
 if "%LBL%"=="3" set /p "GTRADE_LABEL_HORIZON=    horizon in bars [20]: "
+if "%LBL%"=="4" set "GTRADE_LABEL_MODE=big_move"
+
+REM  [1b] Mode. fast = CatBoost illumination on a 24-asset screen list that never
+REM  overlaps the gate; the four models train only for genomes that pass the
+REM  CatBoost gate. Built BEFORE [4c], whose gate list excludes this screen list.
+echo.
+echo [1b] Mode (how candidates are first checked):
+echo     1 = fast (recommended for features and labels): only CatBoost, on 24
+echo         screen assets, about 3 minutes a step instead of 11. The neural
+echo         networks are trained only for candidates that pass the gate.
+echo         Many assets instead of 4, so one lucky asset cannot win.
+echo     2 = full: all four models on 4 assets, about 11 minutes a step. Pick
+echo         it when the change is meant to help the neural networks.
+set "ARM=1"
+set /p "ARM=    choice [1]: "
+set "GTRADE_AR_SPEED=fast"
+if "%ARM%"=="2" set "GTRADE_AR_SPEED=full"
+if not "%GTRADE_AR_SPEED%"=="fast" goto :modedone
+set "PREV_ILLUM=%GTRADE_AR_ILLUM%"
+set "GTRADE_AR_ILLUM=cb"
+echo     building the 24-asset screen list...
+python ab_build.py --screen-list 24 --out _screen_assets.txt
+if errorlevel 1 goto :screenfail
+set /p GTRADE_AR_SELECTION=<_screen_assets.txt
+goto :modedone
+:screenfail
+echo     could not build the screen list, and fast mode is not honest without
+echo     it (an old list could overlap today's gate). Switching to full mode.
+set "GTRADE_AR_SPEED=full"
+set "GTRADE_AR_ILLUM=%PREV_ILLUM%"
+:modedone
 
 echo.
 echo [2] Proposer:
@@ -277,7 +312,16 @@ echo         candidate shares whatever label it trained on; Ens_Acc is accuracy
 echo         on the model's OWN label and read +1.1 pts where direction read 0.0
 echo         (2026-09-28). Floor GTRADE_AR_ADOPT_AUC.
 echo     9 = direction edge without noise days (Dir_Edge_Clean): the same, on
-echo         bars that moved at least half the median move. Recommended.
+echo         bars that moved at least half the median move.
+echo    10 = direction on expected big days (Dir_Edge_Vol): the same edge over
+echo         "always the majority", counted only on days when HAR, the evening
+echo         before, expected a bigger than usual move. Those days are known in
+echo         advance, so you could really trade them. Recommended for direction.
+echo    11 = vol_edge: how much better than HAR the volatility model picks the
+echo         big days. Only with label 4 (big_move); chosen for you there.
+echo     Every verdict also prints effect/noise: how many times the effect is
+echo     bigger than what retraining the same model moves. Under 2 is refused.
+:basisask
 set "BAS=1"
 set /p "BAS=    choice [1]: "
 set "GTRADE_AR_SCORE_BASIS="
@@ -289,6 +333,21 @@ if "%BAS%"=="6" set "GTRADE_AR_SCORE_BASIS=ens_acc"
 if "%BAS%"=="7" set "GTRADE_AR_SCORE_BASIS=trade_t"
 if "%BAS%"=="8" set "GTRADE_AR_SCORE_BASIS=dir_edge"
 if "%BAS%"=="9" set "GTRADE_AR_SCORE_BASIS=dir_edge_clean"
+if "%BAS%"=="10" set "GTRADE_AR_SCORE_BASIS=dir_edge_vol"
+if "%BAS%"=="11" set "GTRADE_AR_SCORE_BASIS=vol_edge"
+if "%GTRADE_LABEL_MODE%"=="big_move" set "GTRADE_AR_SCORE_BASIS=vol_edge"
+if "%GTRADE_LABEL_MODE%"=="big_move" echo     label big_move: basis set to vol_edge.
+if not "%GTRADE_AR_SPEED%"=="fast" goto :basisok
+if "%GTRADE_AR_SCORE_BASIS%"=="net_auc" goto :basisrefuse
+if "%GTRADE_AR_SCORE_BASIS%"=="net_gain" goto :basisrefuse
+goto :basisok
+:basisrefuse
+echo     %GTRADE_AR_SCORE_BASIS% reads only the neural networks, and fast mode
+echo     searches with CatBoost alone, so every candidate would score the same.
+echo     Pick another basis (10 is recommended for direction), or restart the
+echo     menu and choose full mode in [1b].
+goto :basisask
+:basisok
 
 
 echo.
@@ -305,11 +364,15 @@ echo     3.74, so the smallest effect a gate can resolve is 2.8 * 3.74 / sqrt(n)
 echo     against an adoption floor of 0.5. That is 2.80 at n=14, 1.66 at 40,
 echo     1.17 at 80, and only n=440 reaches the floor itself. Every verdict
 echo     prints its own power line: take the n it says was needed.
-echo     1 = 14, leave the gate alone (default)   2 = 40   3 = 80   4 = other
+echo     1 = 14, leave the gate alone (default in full mode)
+echo     2 = 40 (default in fast mode: its CatBoost half is cheap, and the
+echo         wider gate is what lets a small real effect show)
+echo     3 = 80   4 = other
 echo     5 = neural: the 14 assets whose stacker leans on the nets. A
 echo         diagnostic, biased by construction, not an adoption gate.
 set "GS=1"
-set /p "GS=    choice [1]: "
+if "%GTRADE_AR_SPEED%"=="fast" set "GS=2"
+set /p "GS=    choice [%GS%]: "
 if "%GS%"=="5" set "GTRADE_AR_HELDOUT=neural"
 if "%GS%"=="5" goto :gatewidthdone
 if "%GS%"=="1" goto :gatewidthdone
@@ -395,7 +458,8 @@ if "%RL%"=="2" set "GTRADE_AR_RL=1"
 
 echo.
 echo ------------------------------------------------------------
-echo   axes=%GTRADE_AR_AXES%  label=%GTRADE_LABEL_MODE%/%GTRADE_LABEL_HORIZON%
+echo   axes=%GTRADE_AR_AXES%  label=%GTRADE_LABEL_MODE%/%GTRADE_LABEL_HORIZON%  speed=%GTRADE_AR_SPEED%
+echo   screen=%GTRADE_AR_SELECTION%
 echo   proposer=%GTRADE_AR_PROPOSER%  llm=%GTRADE_AR_LLM% %GTRADE_AR_LLM_BASE_URL%
 echo   model=%GTRADE_AR_LLM_MODEL%  maxtok=%GTRADE_AR_LLM_MAX_TOKENS%  timeout=%GTRADE_AR_LLM_TIMEOUT%
 echo   wiki=%GTRADE_AR_WIKI%  reflect=%GTRADE_AR_REFLECT%

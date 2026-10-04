@@ -5,6 +5,8 @@ import json
 import operator
 import os
 
+import pytest
+
 import ab_build
 
 ADOPTED = {
@@ -486,3 +488,74 @@ def test_direction_bases_are_decided_on_the_precision_weighted_test(monkeypatch)
     assert (p, value, deltas) == (0.01, 0.02, [0.02]) and seen == [True]
     p, value, deltas = ab_build._decide_stats("raw", ref, var, ref, var, "mean")
     assert seen == [True]                      # the Score bases keep their own test
+
+
+def test_dir_edge_vol_is_decided_on_its_own_columns():
+    import auto_research as ar
+    ref = [{"Asset": a, "Dir_Edge_Vol": 0.0, "Dir_N_Vol": 800} for a in "ABCDEFGH"]
+    var = [{"Asset": a, "Dir_Edge_Vol": 0.03, "Dir_N_Vol": 800} for a in "ABCDEFGH"]
+    p, value, _d = ab_build._decide_stats("dir_edge_vol", ref, var, ref, var, "mean")
+    assert value == pytest.approx(0.03) and p < 0.05
+    assert ar.precision_weighted_stats(ref, var, clean=False, vol=True)[1] == pytest.approx(0.03)
+
+
+def _all_eligible(monkeypatch):
+    """Every asset long and finely priced: the lists then depend only on the
+    exclusion rules under test, not on a local market.db (absent in CI)."""
+    import core.backtesting as bt
+    from config import FULL_ASSET_MAP
+    monkeypatch.setattr(ab_build, "bar_counts", lambda: {a: 6000 for a in FULL_ASSET_MAP})
+    monkeypatch.setattr(ab_build, "_closes", lambda a: [100.0 + i * 0.37 for i in range(300)])
+    monkeypatch.setattr(bt, "price_resolution_ok", lambda closes: (True, ""))
+
+
+def test_the_screen_list_never_touches_the_gate(monkeypatch):
+    import auto_research as ar
+    _all_eligible(monkeypatch)
+    monkeypatch.setenv("GTRADE_AR_HELDOUT", "MSFT,GOLD,USDJPY")
+    names = ab_build.screen_list(24)
+    assert len(names) == 24
+    assert not set(names) & {"MSFT", "GOLD", "USDJPY"}
+    assert set(ar.SELECTION_ASSETS.split(",")) <= set(names), "grows, keeps the old ten"
+
+
+def test_the_gate_list_excludes_the_live_screen_list(monkeypatch):
+    """An asset the gate would grow into must stay out once the fast mode screens
+    it (the screen list is built first and exported in GTRADE_AR_SELECTION)."""
+    import auto_research as ar
+    _all_eligible(monkeypatch)
+    current = set(ar.heldout_assets().split(","))
+    grown = [a for a in ab_build.search_gate(40) if a not in current]
+    assert grown, "the gate grew"
+    x = grown[0]
+    monkeypatch.setenv("GTRADE_AR_SELECTION", ar.SELECTION_ASSETS + "," + x)
+    assert x not in ab_build.search_gate(40)
+
+
+def test_an_ab_run_refuses_a_direction_basis_on_big_move(monkeypatch, capsys):
+    import sys
+
+    import ab_build
+    monkeypatch.setenv("GTRADE_LABEL_MODE", "big_move")
+    monkeypatch.setenv("GTRADE_AR_SCORE_BASIS", "vol_edge")
+    monkeypatch.setenv("GTRADE_AR_DECISION_BASIS", "dir_edge")
+
+    def boom():
+        raise AssertionError("an A/B started on a basis that measures nothing")
+    monkeypatch.setattr(ab_build, "read_config", boom)
+    monkeypatch.setattr(sys, "argv", ["ab_build.py", "--run"])
+    assert ab_build.main() == 1
+    assert "big_move" in capsys.readouterr().out
+
+
+
+def test_an_empty_screen_list_is_an_error_for_the_menu(monkeypatch, tmp_path):
+    """The menu checks errorlevel; an empty file would leave the old selection."""
+    import sys
+
+    import ab_build
+    monkeypatch.setattr(ab_build, "screen_list", lambda n: [])
+    out = tmp_path / "s.txt"
+    monkeypatch.setattr(sys, "argv", ["ab_build.py", "--screen-list", "24", "--out", str(out)])
+    assert ab_build.main() == 1
+    assert not out.exists()

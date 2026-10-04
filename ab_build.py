@@ -454,11 +454,28 @@ def search_gate(n):
     from core.backtesting import price_resolution_ok
 
     current = [a.strip() for a in ar.heldout_assets().split(",") if a.strip()]
-    ex = holdout.excluded([ar.SELECTION_ASSETS, ar.tier_assets()], [])
+    # selection_assets(), not the constant: the fast mode exports its wider
+    # screen list in GTRADE_AR_SELECTION, and the gate must not grow into it.
+    ex = holdout.excluded([ar.selection_assets(), ar.tier_assets()], [])
     counts = bar_counts()
     elig = holdout.eligible(list(FULL_ASSET_MAP), counts, ex)
     # A gate is only as honest as its series: an asset whose price is quoted too
     # coarsely to carry a one-bar sign contributes a label that is mostly ties.
+    elig = [a for a in elig if price_resolution_ok(_closes(a))[0]]
+    return holdout.grow(current, elig, ASSET_TYPES, n)
+
+
+def screen_list(n):
+    """The fast mode's screen: SELECTION_ASSETS grown to n over the asset
+    classes, never touching the gate list (checked again by auto_research)."""
+    import auto_research as ar
+    from config import ASSET_TYPES, FULL_ASSET_MAP
+    from core import holdout
+    from core.backtesting import price_resolution_ok
+
+    current = [a for a in ar.SELECTION_ASSETS.split(",") if a]
+    ex = holdout.excluded([ar.heldout_assets()], [])
+    elig = holdout.eligible(list(FULL_ASSET_MAP), bar_counts(), ex)
     elig = [a for a in elig if price_resolution_ok(_closes(a))[0]]
     return holdout.grow(current, elig, ASSET_TYPES, n)
 
@@ -872,9 +889,11 @@ def _decide_stats(basis, ref_scored, var_scored, ref_full, var_full, objective):
     precision_weighted_stats); every other basis keeps its Wilcoxon test."""
     import auto_research as ar
 
-    if basis in ("dir_edge", "dir_edge_clean"):
+    if basis in ("dir_edge", "dir_edge_clean", "dir_edge_vol"):
+        # vol only when asked: the call for the two older bases stays as it was.
+        extra = {"vol": True} if basis == "dir_edge_vol" else {}
         p, value, deltas, _tag = ar.precision_weighted_stats(
-            ref_full, var_full, clean=basis == "dir_edge_clean")
+            ref_full, var_full, clean=basis == "dir_edge_clean", **extra)
     else:
         p, value, deltas, _tag = ar.holdout_stats(ref_scored, var_scored, objective)
     return p, value, deltas
@@ -1168,6 +1187,9 @@ def main():
                          "GTRADE_AR_HELDOUT. Use --out: this module prints a "
                          "campaign banner at import, so stdout is not clean "
                          "enough for a launcher to read a variable from.")
+    ap.add_argument("--screen-list", type=int, default=None, metavar="N",
+                    help="the fast mode's screen list grown to N assets, for "
+                         "GTRADE_AR_SELECTION; disjoint from the gate list. Use --out.")
     ap.add_argument("--out", default=None, metavar="FILE",
                     help="with --search-gate, write the list here instead of "
                          "to stdout")
@@ -1189,6 +1211,18 @@ def main():
                          "holdout without asking; for auto_loop.py")
     args = ap.parse_args()
 
+    if args.screen_list:
+        names = screen_list(args.screen_list)
+        if not names:
+            print("no asset qualifies for the screen list")
+            return 1
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                fh.write(",".join(names))
+            print("%d asset(s) written to %s" % (len(names), args.out))
+        else:
+            print(",".join(names))
+        return
     if args.search_gate:
         names = search_gate(args.search_gate)
         if args.out:
@@ -1198,6 +1232,12 @@ def main():
         else:
             print(",".join(names))
         return
+    import auto_research as ar
+
+    _label = ar.label_basis_problem()
+    if _label:
+        print("[ab] stopped: " + _label)
+        return 1
     if args.show:
         cfg = read_config()
         if not cfg:
@@ -1241,4 +1281,4 @@ def _apply_process_defaults():
 
 if __name__ == "__main__":
     _apply_process_defaults()
-    main()
+    sys.exit(main())

@@ -184,7 +184,7 @@ def proposer_edges(journal=None, min_cycles=PROPOSER_MIN_CYCLES):
     """
     best = {}
     for rec in findings_all() if journal is None else journal:
-        if rec.get("basis") not in ("dir_edge", "dir_edge_clean"):
+        if rec.get("basis") not in ("dir_edge", "dir_edge_clean", "dir_edge_vol"):
             continue
         vals = [w["value"] for w in rec.get("winners") or []
                 if isinstance(w.get("value"), (int, float))]
@@ -257,13 +257,23 @@ def data_fingerprint(subset):
         return "err-" + uuid.uuid4().hex
 
 
+def _label_suffix():
+    """Cache-key marker for the run's LABEL. The label comes from the process env
+    (GTRADE_LABEL_*), not the env dict a base is trained with, so it was not in
+    the key: a direction base answered a big_move run trained the same day
+    (2026-10-03), and the rows re-keyed to nothing or to another label's
+    model."""
+    return ["label-" + ";".join("%s=%s" % kv for kv in sorted(
+        (k, v) for k, v in os.environ.items() if k.startswith("GTRADE_LABEL_")))]
+
+
 def base_key(subset, env):
     """Cache key for a BASE training: same subset + env + feature space +
     data snapshot means the same quality rows."""
     from core.features import feature_version
     payload = json.dumps(
         [subset, env, feature_version(), data_fingerprint(subset)]
-        + _objective_suffix() + _seed_suffix(),
+        + _objective_suffix() + _seed_suffix() + _label_suffix(),
         sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
@@ -276,7 +286,7 @@ def genome_key(subset, gsig, kind=""):
     from core.features import feature_version
     payload = json.dumps(
         [subset, gsig, kind, feature_version(), data_fingerprint(subset)]
-        + _objective_suffix() + _seed_suffix(),
+        + _objective_suffix() + _seed_suffix() + _label_suffix(),
         sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 

@@ -150,6 +150,22 @@ def price_atr(series):
     return out
 
 
+def price_vol(series, unit="atr"):
+    """The policy's volatility unit in PRICE units: ATR14 (price_atr) or HAR,
+    via core.levels.vol_series, the function serving draws levels with."""
+    if unit != "har":
+        return price_atr(series)
+    cached = series.get("_har_price")
+    if cached is not None:
+        return cached
+    bars = [{"high": h, "low": lo, "close": c}
+            for h, lo, c in zip(series["high"], series["low"], series["close"])]
+    out = np.asarray([np.nan if a is None else a
+                      for a in levels_mod.vol_series(bars, "har")], dtype=float)
+    series["_har_price"] = out
+    return out
+
+
 def _costs(series):
     if series.get("is_forex"):
         return FOREX_COMMISSION, FOREX_SLIPPAGE
@@ -307,7 +323,7 @@ def eval_levels(series, params, sides=None, actions=None, objective=None):
     if sides is None or (actions is None and objective == "equity"):
         sides, actions = walk_for(series)
     o, h, lo_, c = (series["open"], series["high"], series["low"], series["close"])
-    atr = price_atr(series)
+    atr = price_vol(series, (params or {}).get("vol_unit", "atr"))
     taleb = series.get("taleb_hi")
     risky = bool(series.get("risky"))
     n_bars = len(sides)
@@ -377,7 +393,8 @@ def _params_of(obj):
     return {name: getattr(obj, name) for name, _lo, _hi, _i in PARAM_SPECS}
 
 
-def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
+def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None,
+               vol_unit="atr"):
     """Separable ES over the multipliers, the same loop train_timing runs.
 
     Scored on TRAIN, SELECTED on VAL: the returned parameters are the best
@@ -397,10 +414,12 @@ def fit_policy(train_by_asset, budget=300, seed=42, val_by_asset=None):
     tr_walk = {a: walk_for(s) for a, s in train_by_asset.items()}
     va_walk = {a: walk_for(s) for a, s in val_by_asset.items()}
 
-    best_params, best_val = dict(DEFAULT_PARAMS), float("-inf")
+    # The unit is a structural choice, held fixed through the search: the
+    # multipliers mean different distances in ATR and in HAR.
+    best_params, best_val = dict(DEFAULT_PARAMS, vol_unit=vol_unit), float("-inf")
     for it in range(budget):
         cand = es.ask(_P(dict(DEFAULT_PARAMS)))
-        params = _params_of(cand)
+        params = dict(_params_of(cand), vol_unit=vol_unit)
         train_fit = fitness([eval_levels(s, params, *tr_walk[a])["score"]
                              for a, s in train_by_asset.items()])
         es.tell(es.vector_of(cand), train_fit)
@@ -491,6 +510,8 @@ def report_lines(params, gate, meta=None):
         out.append("  %-18s %+9.3f   %+9.3f"
                    % (name, base.get(name, DEFAULT_PARAMS[name]),
                       params.get(name, DEFAULT_PARAMS[name])))
+    out.append("  %-18s %9s   %9s" % ("vol_unit", base.get("vol_unit", "atr"),
+                                      params.get("vol_unit", "atr")))
     out += ["", "GATE (held-out slice, against the policy that is live)",
             "  verdict    %s" % gate["verdict"],
             "  mean_d     %+.6f   (floor %+.6f)" % (gate["mean_d"], gate["floor"]),
@@ -558,8 +579,9 @@ def save_policy(params, gate, path=None):
     """Write the policy only when the gate says ADOPT, with its evidence."""
     if gate["verdict"] != "ADOPT":
         return None
-    body = {"params": {n: params.get(n, DEFAULT_PARAMS[n])
-                       for n, _l, _h, _i in PARAM_SPECS},
+    body = {"params": {**{n: params.get(n, DEFAULT_PARAMS[n])
+                          for n, _l, _h, _i in PARAM_SPECS},
+                       "vol_unit": params.get("vol_unit", "atr")},
             "adopted": datetime.now().isoformat(timespec="seconds"),
             "gate": gate, "baseline": baseline_params()}
     with open(path or POLICY_PATH, "w", encoding="utf-8") as fh:
@@ -578,6 +600,11 @@ def main():
                          "makes (default). rate: a level every bar, scored as "
                          "return per bar, which is what every measurement "
                          "before 2026-08-22 used")
+    ap.add_argument("--vol-unit", choices=levels_mod.VOL_UNITS, default="atr",
+                    help="the unit the multipliers are fitted in: atr (ATR14, "
+                         "every policy so far) or har (HAR forecast of "
+                         "tomorrow's range). The gate still compares against "
+                         "the LIVE policy in its own unit")
     args = ap.parse_args()
     OBJECTIVE = args.objective
 
@@ -596,15 +623,16 @@ def main():
               "8. Nothing fitted." % len(train))
         return 1
 
-    print("Fitting on %d assets, budget %d, objective %s."
-          % (len(train), args.budget, OBJECTIVE))
+    print("Fitting on %d assets, budget %d, objective %s, unit %s."
+          % (len(train), args.budget, OBJECTIVE, args.vol_unit))
     params = fit_policy(train, budget=args.budget, seed=args.seed,
-                        val_by_asset=val)
+                        val_by_asset=val, vol_unit=args.vol_unit)
     gate = gate_policy(test, params)
-    print("\n  baseline   k_entry %.3f  k_stop %.3f"
-          % (DEFAULT_PARAMS["k_entry"], DEFAULT_PARAMS["k_stop"]))
-    print("  fitted     k_entry %.3f  k_stop %.3f"
-          % (params["k_entry"], params["k_stop"]))
+    live = baseline_params()
+    print("\n  baseline   k_entry %.3f  k_stop %.3f  unit %s  (the live policy)"
+          % (live["k_entry"], live["k_stop"], live.get("vol_unit", "atr")))
+    print("  fitted     k_entry %.3f  k_stop %.3f  unit %s"
+          % (params["k_entry"], params["k_stop"], params.get("vol_unit", "atr")))
     print("  gate       %s  mean_d %+.5f (floor %+.5f)  p %.4f  n %d"
           % (gate["verdict"], gate["mean_d"], gate["floor"], gate["p"], gate["n"]))
     report = save_report(params, gate,

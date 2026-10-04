@@ -899,14 +899,55 @@ def _levels_equity(risk=None):
 @app.get("/levels", response_class=HTMLResponse)
 def levels_page(request: Request):
     risk = _risk_snapshot()
+    equity = _levels_equity(risk)
     return templates.TemplateResponse(request, "levels.html", {
-        "rows": dashboard.levels_sheet(_levels_equity(risk)),
+        "rows": dashboard.levels_sheet(equity),
+        "positions": dashboard.my_positions(equity),
+        "today": datetime.now().strftime("%Y-%m-%d"),
         "levels_policy": levels_mod.policy_evidence(),
         "config": RISK_CONFIG,
         "halted": risk["halted"],
         "halt_reason": risk["halt_reason"],
         "now": datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
+
+
+@app.post("/api/fills")
+async def api_fills_open(request: Request):
+    """Record a position opened at the broker (core.fills): the levels and the
+    My positions block then measure from this entry, not from the signal bar."""
+    from core import fills as fills_mod
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    asset = str(body.get("asset", "")).strip().upper()
+    if asset not in FULL_ASSET_MAP:
+        raise HTTPException(404, f"Unknown asset: {asset}")
+    try:
+        fills_mod.record(asset, body.get("side"), float(body.get("qty")),
+                         float(body.get("price")), entry_date=body.get("date") or None)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "asset": asset}
+
+
+@app.post("/api/fills/{asset}/close")
+async def api_fills_close(asset: str, request: Request):
+    from core import fills as fills_mod
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        price = float(body.get("price"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "price must be a number")
+    if price <= 0:
+        raise HTTPException(400, "price must be positive")
+    if fills_mod.close(asset.upper(), price, exit_date=body.get("date") or None) is None:
+        raise HTTPException(404, f"No open position for {asset.upper()}")
+    return {"ok": True}
 
 
 # One scan at a time, the same shape and the same reason as _ANALYST_PROC below.

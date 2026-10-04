@@ -214,7 +214,7 @@ echo   [TB] Timing Q        a fitted-Q challenger to those rules, gated
 echo                        against them rather than against the baseline.
 echo   [TO] One online tick refits that Q on the newest data and keeps it only
 echo                        if it stays near the rules and wins in shadow.
-echo   [TL] Trade levels    fits the entry zone and stop, in ATR.
+echo   [TL] Trade levels    fits the entry zone and stop, in ATR or HAR.
 echo   [SZ] Position sizing how big, given a side something else chose.
 echo   [DR] Direction rule  should the direction be followed at all. Fitted on
 echo                        LIVE outcomes. Nothing serves it.
@@ -1593,17 +1593,30 @@ goto menu
 
 :levels_policy
 cls
-echo Fits the levels multipliers (entry zone and stop, in ATR) over the history
+echo Fits the levels multipliers (entry zone and stop) over the history
 echo of every asset at once, and writes levels_policy.json ONLY if a held-out
 echo slice agrees. Otherwise production keeps the levels it has.
 echo.
 echo The timing policy is frozen while this runs: it already passed its own
 echo gate, and fitting both at once would hide which half earned the result.
 echo.
+echo Unit the zone and the stop are measured in:
+echo   1 = ATR (default): the average range of the last 14 days, what the
+echo       levels have always used.
+echo   2 = HAR: the forecast of tomorrow's range from the last day, week and
+echo       month. It predicts the next range better (IC 0.41 against 0.36),
+echo       so the stop follows the range expected tomorrow: tighter on calm
+echo       days, wider on wild ones. The fit compares itself with the ATR levels in
+echo       production and is written only if the held-out slice agrees.
+set "TL_UNIT=atr"
+set /p TL_U="Choice (Enter = 1): "
+if "%TL_U%"=="2" set "TL_UNIT=har"
 set /p TL_BUDGET="Search iterations (Enter = 300): "
 if "%TL_BUDGET%"=="" set TL_BUDGET=300
-python train_levels.py --budget %TL_BUDGET%
+python train_levels.py --budget %TL_BUDGET% --vol-unit %TL_UNIT%
 set "TL_BUDGET="
+set "TL_U="
+set "TL_UNIT="
 pause
 goto menu
 
