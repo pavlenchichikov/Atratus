@@ -66,6 +66,12 @@ def _migrate(cur):
     for _member in ('tf_prob', 'tcn_prob'):
         if cols and _member not in cols:
             cur.execute('ALTER TABLE prediction_log ADD COLUMN %s REAL' % _member)
+    # The ensemble output BEFORE the per-asset calibrator. The thresholds are
+    # tuned on this scale in training but served against the calibrated one;
+    # the isotonic map has plateaus, so it cannot be recovered from
+    # `probability` afterwards. Rows before 2026-10-06 keep NULL.
+    if cols and "model_prob" not in cols:
+        cur.execute("ALTER TABLE prediction_log ADD COLUMN model_prob REAL")
 
 
 def _ensure_table(cur):
@@ -88,7 +94,8 @@ def _ensure_table(cur):
             timing_stage TEXT,
             shadow_action TEXT,
             tf_prob REAL,
-            tcn_prob REAL
+            tcn_prob REAL,
+            model_prob REAL
         )
     """)
     _migrate(cur)
@@ -149,7 +156,7 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                    sig_shown=None, gate_reason=None,
                    timing_action=None, timing_reason=None,
                    timing_stage=None, shadow_action=None,
-                   tf_prob=None, tcn_prob=None):
+                   tf_prob=None, tcn_prob=None, model_prob=None):
     # Date the prediction by the wall clock (one row per asset per day). Non-trading
     # days for an asset (a stock predicted on a weekend/holiday) are not stamped onto
     # a neighbouring bar here; update_actuals() reconciles only exact trading-bar dates
@@ -179,12 +186,12 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                (date, asset, signal, probability, actual_next_ret, correct,
                 cb_prob, lstm_prob, model_version, meta_prob, sig_shown, gate_reason,
                 timing_action, timing_reason, timing_stage, shadow_action,
-                tf_prob, tcn_prob)
-               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                tf_prob, tcn_prob, model_prob)
+               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (today, asset, signal, probability, cb_prob, lstm_prob,
              model_version, meta_prob, sig_shown, gate_reason,
              timing_action, timing_reason, timing_stage, shadow_action,
-             tf_prob, tcn_prob),
+             tf_prob, tcn_prob, model_prob),
         )
         con.commit()
 

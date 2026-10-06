@@ -131,6 +131,8 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
             "mode":        str,     # STACK / CB / LSTM (+ " low-q" if suppressed)
             "sig_raw":     "BUY" | "SELL" | "WAIT",   # pre live-gate
             "prob_raw":    float,   # pre live-global-layer probability
+            "prob_model":  float,   # the combined members BEFORE any calibration:
+                                    # the scale the thresholds were tuned on
             "gate_reason": str | None,   # why sig_raw was gated, None if not gated
             "cb_prob":     float,
             "lstm_prob":   float | None,
@@ -241,6 +243,10 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
         # recalibrate_live.py has produced models/live_calib_global.pkl).
         # prob_raw (pre-live-layer) is what performance_tracker logs, so refits
         # always train on a homogeneous raw -> P(up) history.
+        # The thresholds below were tuned in train_hybrid on THIS uncalibrated
+        # value, not on the calibrated one they are compared with. Kept so the
+        # journal can measure both scales on the same bars.
+        prob_model = prob
         prob = float(apply_calibrator(load_calibrator(model_dir, table), np.array([prob]))[0])
         prob_raw = prob
         prob = apply_live_global(prob, model_dir)
@@ -375,7 +381,8 @@ def score_asset(df, name, table, reg_entry, thresholds, model_dir):
 
         return {
             "sig": sig, "prob": prob, "price": curr_price, "mode": mode,
-            "sig_raw": sig_raw, "prob_raw": prob_raw, "gate_reason": gate_reason,
+            "sig_raw": sig_raw, "prob_raw": prob_raw, "prob_model": prob_model,
+            "gate_reason": gate_reason,
             "cb_prob": cb_prob, "lstm_prob": lstm_prob,
             "tf_prob": tf_prob, "tcn_prob": tcn_prob, "meta_prob": meta_p,
             "timing_action": timing_action, "timing_reason": timing_reason,

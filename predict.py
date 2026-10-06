@@ -214,6 +214,7 @@ def run_radar(names=None):
                                    meta_prob=res["meta_prob"],
                                    tf_prob=res.get("tf_prob"),
                                    tcn_prob=res.get("tcn_prob"),
+                                   model_prob=res.get("prob_model"),
                                    sig_shown=res["sig"], gate_reason=res["gate_reason"],
                                    timing_action=res.get("timing_action"),
                                    timing_stage=res.get("timing_stage"),

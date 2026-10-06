@@ -110,3 +110,19 @@ def test_no_gate_no_reason(fake_asset, monkeypatch):
                               {"AAPL": {"buy": 0.55, "sell": 0.45}}, model_dir)
     assert res["sig"] == res["sig_raw"] == "BUY"
     assert res["gate_reason"] is None
+
+
+def test_prob_model_is_the_value_before_the_calibrator(fake_asset, monkeypatch):
+    """prob_model is what the thresholds were tuned on in training; prob is
+    what they are compared with today. A calibrator that moves the value must
+    move prob and leave prob_model alone, or the journal measures one scale
+    twice."""
+    df, reg, model_dir = fake_asset
+    monkeypatch.setattr(scoring.live_gate, "gate", lambda name, prob, sig: (sig, None))
+    monkeypatch.setattr(scoring, "load_calibrator", lambda md, t: "cal")
+    monkeypatch.setattr(scoring, "apply_calibrator",
+                        lambda cal, p: np.asarray(p) * 0.5 if cal else np.asarray(p))
+    res = scoring.score_asset(df, "AAPL", "aapl", reg,
+                              {"AAPL": {"buy": 0.55, "sell": 0.45}}, model_dir)
+    assert res["prob_model"] == pytest.approx(0.7)
+    assert res["prob_raw"] == pytest.approx(0.35)

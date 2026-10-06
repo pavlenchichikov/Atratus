@@ -66,6 +66,13 @@ SETTINGS = (
     ("LLAMA_ARG_CACHE_RAM", "server", "", _int(),
      ("prompt cache in MB beside a loaded model, 0 = off; same answers, only "
       "repeated prompts get slower; empty = 8192")),
+    ("LLAMA_ARG_N_CPU_MOE", "server", "", _int(),
+     ("MoE models: expert weights of the first N layers stay in RAM, the rest go "
+      "to the GPU with the model's layers; gemma 26b IQ3_S at 64k ctx: 27 = "
+      "3.8 of 4 GB VRAM, 12 tok/s; empty = Ollama decides; no effect on dense models")),
+    ("LLAMA_ARG_THREADS", "server", "", _int(1),
+     ("CPU threads per model; 4 = the P-cores only, 15 tok/s vs 12 at the default 6 "
+      "on gemma 26b; empty = llama-server's own")),
 )
 _BY_KEY = {s[0]: s for s in SETTINGS}
 
