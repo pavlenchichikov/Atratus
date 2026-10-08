@@ -227,7 +227,7 @@ def tail_rank(closes) -> float | None:
     return float((rel <= rel.iloc[-1]).mean())
 
 
-def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+def engineer_features(df: pd.DataFrame, keep_last: bool = False) -> pd.DataFrame:
     """Compute technical indicators from OHLCV data.
 
     Input: DataFrame with columns [Date, Open, High, Low, Close, Volume]
@@ -359,7 +359,19 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     # "Input X contains infinity" and kill the whole asset. Coerce infinities to
     # NaN first so the dropna below drops exactly those rows.
     df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.dropna()
+    if keep_last:
+        # Serve: the newest bars have no label only because their future has not
+        # happened yet. A plain dropna removed them, so every live signal was
+        # scored from the PREVIOUS bar and logged against the next move (live
+        # 0.508 vs 0.532 on the right bar, 2026-10-08). Keep that trailing run;
+        # its label is meaningless (-1 where it was NaN) and never read at serve.
+        labels = [c for c in ('target', 'label_span', 'next_ret') if c in df.columns]
+        unlabeled = df[labels].isna().any(axis=1)
+        trailing = unlabeled[::-1].cummin()[::-1]
+        df = df[df.drop(columns=labels).notna().all(axis=1) & (~unlabeled | trailing)]
+        df['target'] = df['target'].fillna(-1)
+    else:
+        df = df.dropna()
     df['target'] = df['target'].astype(int)
 
     # Preserve Date as column for downstream joins
@@ -777,7 +789,7 @@ def add_cross_lag_features(df: pd.DataFrame, engine) -> pd.DataFrame:
     return df.reset_index()
 
 
-def build_features(df_raw, table, engine):
+def build_features(df_raw, table, engine, keep_last=False):
     """The canonical feature chain, in the one place its order is defined.
 
     Returns (df, skipped) where skipped names any DSL spec that could not be
@@ -787,8 +799,11 @@ def build_features(df_raw, table, engine):
 
     With nothing adopted this is byte-identical to the old five-step chain:
     add_dsl_features with no specs does nothing.
+
+    keep_last=True is for SERVE callers: the newest bar, which has no label yet,
+    stays in the frame so the signal is scored from it.
     """
-    df = engineer_features(df_raw)
+    df = engineer_features(df_raw, keep_last=keep_last)
     df = add_weekly_features(df, table, engine)
     df = add_crossasset_features(df, table, engine)
     df = add_macro_features(df, engine)

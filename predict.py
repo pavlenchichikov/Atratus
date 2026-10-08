@@ -109,7 +109,7 @@ def _predict_asset(name, registry, thresholds):
                              index_col="Date", parse_dates=["Date"])
         df_raw.index = pd.to_datetime(df_raw.index).normalize()
         df_raw = df_raw[~df_raw.index.duplicated(keep='last')].sort_index()
-        df, _skipped = build_features(df_raw, table, engine)
+        df, _skipped = build_features(df_raw, table, engine, keep_last=True)
         if len(df) < 50:
             return None
     except Exception as e:

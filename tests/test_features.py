@@ -460,3 +460,15 @@ def test_direction_h_is_the_sign_of_the_h_bar_move_and_reaches_h_bars():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+def test_keep_last_serves_the_newest_bar():
+    # Serve scored the PREVIOUS bar for months: dropna removed the newest one
+    # because its label needs tomorrow. keep_last must keep it and change nothing else.
+    raw = _ohlcv()
+    train = engineer_features(raw)
+    serve = engineer_features(raw, keep_last=True)
+    assert serve["date"].iloc[-1] == raw["Date"].iloc[-1]
+    assert train["date"].iloc[-1] < raw["Date"].iloc[-1]
+    assert serve.iloc[:len(train)].reset_index(drop=True).equals(train.reset_index(drop=True))
+    assert np.isnan(serve["next_ret"].iloc[-1])

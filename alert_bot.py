@@ -181,7 +181,7 @@ def analyze_asset(df, name, registry, thresholds):
     try:
         # One shared chain, so this path cannot fall behind training again.
         table = name.lower().replace("^", "").replace(".", "").replace("-", "")
-        df, _skipped = build_features(df, table, db_engine)
+        df, _skipped = build_features(df, table, db_engine, keep_last=True)
 
         if len(df) < 50:
             return None
