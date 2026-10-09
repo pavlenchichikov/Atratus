@@ -131,17 +131,18 @@ def _predict_asset(name, registry, thresholds):
 
 
 def _range_forecast(df_raw, name):
-    """HAR forecast of the NEXT bar's range from the bars the signal was scored on
-    (core.levels.range_forecast, the asset card's number), or None."""
+    """HAR forecast of the NEXT bar's range from the bars the signal was scored on,
+    with its ratio to the usual day: dashboard.range_of, the radar's own numbers
+    (typical/q90 equal the asset card's). None when it cannot be formed."""
     from config import MOEX_ASSETS
-    from core.levels import range_forecast
+    from core.dashboard import range_of
 
-    tail = df_raw.tail(60)
+    tail = df_raw.tail(90)  # same window as dashboard.range_index
     try:
         bars = [{"date": d.strftime("%Y-%m-%d"), "high": float(r["high"]),
                  "low": float(r["low"]), "close": float(r["close"])}
                 for d, r in tail.iterrows()]
-        return range_forecast(bars, weekdays_only=name in MOEX_ASSETS)
+        return range_of(bars, moex=name in MOEX_ASSETS)
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -239,6 +240,7 @@ def run_radar(names=None):
                                    shadow_action=res.get("shadow_action"),
                                    har_typical=(res.get("har") or {}).get("typical"),
                                    har_q90=(res.get("har") or {}).get("q90"),
+                                   har_ratio=(res.get("har") or {}).get("ratio"),
                                    date=res["bar_date"])
                     logged += 1
                     # The side the TIMING LAYER is on, which is the side

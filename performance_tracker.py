@@ -76,7 +76,9 @@ def _migrate(cur):
     # and the true range that then happened, as shares of the signal bar's close.
     # Added 2026-10-09 so the volatility forecast is checked live: q90 should be
     # exceeded on about 1 day in 10. Earlier rows keep NULL.
-    for _col in ('har_typical', 'har_q90', 'actual_range'):
+    # har_ratio: the forecast over the asset's usual day (median TR of 60 bars),
+    # the radar's wide/normal/calm, so accuracy can be split by it.
+    for _col in ('har_typical', 'har_q90', 'actual_range', 'har_ratio'):
         if cols and _col not in cols:
             cur.execute('ALTER TABLE prediction_log ADD COLUMN %s REAL' % _col)
 
@@ -105,7 +107,8 @@ def _ensure_table(cur):
             model_prob REAL,
             har_typical REAL,
             har_q90 REAL,
-            actual_range REAL
+            actual_range REAL,
+            har_ratio REAL
         )
     """)
     _migrate(cur)
@@ -167,7 +170,7 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                    timing_action=None, timing_reason=None,
                    timing_stage=None, shadow_action=None,
                    tf_prob=None, tcn_prob=None, model_prob=None,
-                   har_typical=None, har_q90=None):
+                   har_typical=None, har_q90=None, har_ratio=None):
     # Date the prediction by the wall clock (one row per asset per day). Non-trading
     # days for an asset (a stock predicted on a weekend/holiday) are not stamped onto
     # a neighbouring bar here; update_actuals() reconciles only exact trading-bar dates
@@ -197,12 +200,12 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                (date, asset, signal, probability, actual_next_ret, correct,
                 cb_prob, lstm_prob, model_version, meta_prob, sig_shown, gate_reason,
                 timing_action, timing_reason, timing_stage, shadow_action,
-                tf_prob, tcn_prob, model_prob, har_typical, har_q90)
-               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                tf_prob, tcn_prob, model_prob, har_typical, har_q90, har_ratio)
+               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (today, asset, signal, probability, cb_prob, lstm_prob,
              model_version, meta_prob, sig_shown, gate_reason,
              timing_action, timing_reason, timing_stage, shadow_action,
-             tf_prob, tcn_prob, model_prob, har_typical, har_q90),
+             tf_prob, tcn_prob, model_prob, har_typical, har_q90, har_ratio),
         )
         con.commit()
 
@@ -962,13 +965,37 @@ def range_summary():
                 "WHERE har_typical IS NOT NULL AND actual_range IS NOT NULL").fetchall()
         except sqlite3.OperationalError:
             rows = []
+        try:
+            calls = con.execute(
+                "SELECT har_ratio, correct FROM prediction_log WHERE har_ratio IS NOT NULL "
+                "AND correct IS NOT NULL AND signal IN ('BUY','SELL')").fetchall()
+        except sqlite3.OperationalError:
+            calls = []
     n = len(rows)
-    if not n:
-        return {"n": 0}
-    return {"n": n,
-            "over_typical": sum(a > t for t, _q, a in rows) / n,
-            "over_q90": sum(a > q for _t, q, a in rows) / n,
-            "se": (0.25 / n) ** 0.5}
+    out = {"n": n, "by_regime": _accuracy_by_regime(calls)}
+    if n:
+        out.update(over_typical=sum(a > t for t, _q, a in rows) / n,
+                   over_q90=sum(a > q for _t, q, a in rows) / n,
+                   se=(0.25 / n) ** 0.5)
+    return out
+
+
+def _accuracy_by_regime(calls):
+    """Direction accuracy of the model's calls on calm / normal / wide days (the
+    radar's cut points), each with a 2-se band."""
+    from core.dashboard import RANGE_CALM, RANGE_WIDE
+    groups = {"calm": [], "normal": [], "wide": []}
+    for ratio, correct in calls:
+        key = "wide" if ratio >= RANGE_WIDE else "calm" if ratio <= RANGE_CALM else "normal"
+        groups[key].append(correct)
+    out = []
+    for label, hits in groups.items():
+        n = len(hits)
+        acc = sum(hits) / n if n else None
+        band = 2 * (0.25 / n) ** 0.5 if n else None
+        out.append({"label": label, "n": n, "acc": acc,
+                    "lo": acc - band if n else None, "hi": acc + band if n else None})
+    return out
 
 
 def level_summary(days=None):

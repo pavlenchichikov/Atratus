@@ -670,3 +670,24 @@ def test_reconcile_records_next_bar_range_and_moex_skips_weekend(tmp_path, monke
     con.close()
     assert got["BTC"] == pytest.approx((112 - 100) / 100)   # prev close 100 below the low
     assert got["SBER"] == pytest.approx((103 - 98) / 100)   # Monday, not the 0.2% Saturday
+
+
+def test_range_summary_splits_call_accuracy_by_forecast_regime(tmp_path, monkeypatch):
+    import performance_tracker as pt
+    db = str(tmp_path / "h.db")
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+    pt._prepare()
+    con = sqlite3.connect(db)
+    rows = [("BUY", 1, 1.5), ("SELL", 1, 1.3), ("BUY", 0, 1.0), ("WAIT", None, 1.6),
+            ("BUY", 0, 0.7)]
+    for i, (sig, ok, ratio) in enumerate(rows):
+        con.execute("INSERT INTO prediction_log (date, asset, signal, correct, har_ratio, "
+                    "har_typical, har_q90, actual_range) VALUES (?,?,?,?,?,?,?,?)",
+                    ("2026-10-%02d" % (i + 1), "BTC", sig, ok, ratio, 0.02, 0.04, 0.03))
+    con.commit(); con.close()
+    s = pt.range_summary()
+    by = {r["label"]: r for r in s["by_regime"]}
+    assert (by["wide"]["n"], by["wide"]["acc"]) == (2, 1.0)    # WAIT is not a call
+    assert (by["normal"]["n"], by["calm"]["n"]) == (1, 1)
+    assert s["n"] == 5 and s["over_typical"] == 1.0 and s["over_q90"] == 0.0

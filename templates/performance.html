@@ -71,7 +71,25 @@
   </div>
   <p class="dim">Far above 50% / 10% means the forecast runs narrow and stops set from it
     sit too close; far below means it runs wide.</p>
-  {% else %}
+  {% endif %}
+  {% if har and har.by_regime and har.by_regime | selectattr('n') | list %}
+  <table class="grid">
+    <thead><tr><th>Model calls on a day forecast</th><th class="num">n</th><th class="num">Accuracy</th><th class="num">&plusmn;2 se</th></tr></thead>
+    <tbody>
+      {% for r in har.by_regime %}
+      <tr><td class="mono">{{ r.label }}</td><td class="num">{{ r.n }}</td>
+        {% if r.n %}
+        <td class="num {{ 't-buy' if r.lo > 0.5 else ('t-sell' if r.hi < 0.5 else '') }}">{{ "%.1f"|format(r.acc * 100) }}<small>%</small></td>
+        <td class="num dim">{{ "%.0f"|format(r.lo * 100) }}-{{ "%.0f"|format(r.hi * 100) }}</td>
+        {% else %}<td class="num dim">-</td><td class="num dim">-</td>{% endif %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="dim">Wide = HAR forecast at least 1.25x the asset's usual day,
+    calm = at most 0.80x (the radar's colours). A band clear of 50% on wide days says the
+    direction calls are worth more when a big move is expected.</p>
+  {% endif %}
+  {% if not (har and har.n) %}
   <p class="dim">No resolved days yet. The forecast is logged from 2026-10-09 with every
     radar run and checked when the next bar lands.</p>
   {% endif %}
