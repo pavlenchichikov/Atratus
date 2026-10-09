@@ -55,6 +55,28 @@
 </section>
 {% endif %}
 
+{# The HAR range forecast logged beside every signal, against the range that then
+   happened (performance_tracker.range_summary). #}
+<section class="panel fade">
+  <div class="panel-head"><h2>Range forecast, live</h2>
+    <span class="dim mono">HAR forecast of the next bar's range vs what happened</span></div>
+  {% if har and har.n %}
+  <div class="statgrid">
+    <div class="stat"><span class="stat-label">Wider than typical</span>
+      <span class="stat-value">{{ "%.1f"|format(har.over_typical * 100) }}<small>%</small></span>
+      <span class="stat-sub">should be about 50%; {{ har.n }} asset-days, &plusmn;{{ "%.1f"|format(har.se * 200) }} pts</span></div>
+    <div class="stat"><span class="stat-label">Wider than the 1-in-10 level</span>
+      <span class="stat-value">{{ "%.1f"|format(har.over_q90 * 100) }}<small>%</small></span>
+      <span class="stat-sub">should be about 10%</span></div>
+  </div>
+  <p class="dim">Far above 50% / 10% means the forecast runs narrow and stops set from it
+    sit too close; far below means it runs wide.</p>
+  {% else %}
+  <p class="dim">No resolved days yet. The forecast is logged from 2026-10-09 with every
+    radar run and checked when the next bar lands.</p>
+  {% endif %}
+</section>
+
 <section class="panel fade">
   <div class="panel-head"><h2>Leaders (current model)</h2></div>
   {% if leaderboard %}

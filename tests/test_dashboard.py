@@ -355,3 +355,25 @@ def test_levels_sheet_is_cached_and_clears_by_name():
     dashboard.cache_clear("levels_sheet", "my_positions")
     assert ("levels_sheet", (0.0,), ()) not in dashboard._CACHE
     assert news_like() == 1
+
+
+def test_range_of_flags_a_wide_day_and_drops_moex_weekends():
+    import datetime as dt
+
+    import pytest
+
+    from core import dashboard
+
+    start = dt.date(2026, 6, 1)
+    days = [start + dt.timedelta(d) for d in range(120)]
+    weekdays = [d for d in days if d.weekday() < 5][:80]
+    bars = [{"date": d.isoformat(), "high": 100.5, "low": 99.5, "close": 100.0} for d in weekdays]
+    calm = dashboard.range_of(bars)
+    assert calm["regime"] == "normal" and calm["ratio"] == pytest.approx(1.0, rel=0.3)
+    for b in bars[-5:]:
+        b["high"], b["low"] = 102.0, 98.0               # a week four times wider
+    assert dashboard.range_of(bars)["regime"] == "wide"
+    sat = (dt.date.fromisoformat(bars[-1]["date"]) + dt.timedelta(1))
+    sat += dt.timedelta((5 - sat.weekday()) % 7)
+    thin = bars + [{"date": sat.isoformat(), "high": 100.01, "low": 99.99, "close": 100.0}]
+    assert dashboard.range_of(thin, moex=True) == dashboard.range_of(bars)

@@ -126,7 +126,24 @@ def _predict_asset(name, registry, thresholds):
         # today's US bar does not exist until the evening, so clock-keyed rows
         # were dropped: no US or EU asset was logged 2026-09-04..09-11.
         res["bar_date"] = df_raw.index[-1].strftime("%Y-%m-%d")
+        res["har"] = _range_forecast(df_raw, name)
     return res
+
+
+def _range_forecast(df_raw, name):
+    """HAR forecast of the NEXT bar's range from the bars the signal was scored on
+    (core.levels.range_forecast, the asset card's number), or None."""
+    from config import MOEX_ASSETS
+    from core.levels import range_forecast
+
+    tail = df_raw.tail(60)
+    try:
+        bars = [{"date": d.strftime("%Y-%m-%d"), "high": float(r["high"]),
+                 "low": float(r["low"]), "close": float(r["close"])}
+                for d, r in tail.iterrows()]
+        return range_forecast(bars, weekdays_only=name in MOEX_ASSETS)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _refresh_bars(names):
@@ -220,6 +237,8 @@ def run_radar(names=None):
                                    timing_stage=res.get("timing_stage"),
                                    timing_reason=res.get("timing_reason"),
                                    shadow_action=res.get("shadow_action"),
+                                   har_typical=(res.get("har") or {}).get("typical"),
+                                   har_q90=(res.get("har") or {}).get("q90"),
                                    date=res["bar_date"])
                     logged += 1
                     # The side the TIMING LAYER is on, which is the side

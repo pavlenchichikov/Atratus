@@ -937,6 +937,10 @@ th.sort-asc::after { content: " B4"; color: var(--amber); }
 .taleb-elevated { color: var(--amber); font-weight: 600; }
 .taleb-extreme { color: var(--red); font-weight: 700; }
 .taleb-na { color: var(--dim); }
+/* HAR range on the radar: tomorrow vs the asset's usual day */
+.range-wide { color: var(--amber); font-weight: 600; }
+.range-normal { color: var(--text); }
+.range-calm { color: var(--dim); }
 
 /* ---- responsive ---- */
 

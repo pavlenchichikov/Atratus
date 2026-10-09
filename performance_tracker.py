@@ -72,6 +72,13 @@ def _migrate(cur):
     # `probability` afterwards. Rows before 2026-10-06 keep NULL.
     if cols and "model_prob" not in cols:
         cur.execute("ALTER TABLE prediction_log ADD COLUMN model_prob REAL")
+    # Tomorrow's range from HAR (core.levels.range_forecast) beside the signal,
+    # and the true range that then happened, as shares of the signal bar's close.
+    # Added 2026-10-09 so the volatility forecast is checked live: q90 should be
+    # exceeded on about 1 day in 10. Earlier rows keep NULL.
+    for _col in ('har_typical', 'har_q90', 'actual_range'):
+        if cols and _col not in cols:
+            cur.execute('ALTER TABLE prediction_log ADD COLUMN %s REAL' % _col)
 
 
 def _ensure_table(cur):
@@ -95,7 +102,10 @@ def _ensure_table(cur):
             shadow_action TEXT,
             tf_prob REAL,
             tcn_prob REAL,
-            model_prob REAL
+            model_prob REAL,
+            har_typical REAL,
+            har_q90 REAL,
+            actual_range REAL
         )
     """)
     _migrate(cur)
@@ -156,7 +166,8 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                    sig_shown=None, gate_reason=None,
                    timing_action=None, timing_reason=None,
                    timing_stage=None, shadow_action=None,
-                   tf_prob=None, tcn_prob=None, model_prob=None):
+                   tf_prob=None, tcn_prob=None, model_prob=None,
+                   har_typical=None, har_q90=None):
     # Date the prediction by the wall clock (one row per asset per day). Non-trading
     # days for an asset (a stock predicted on a weekend/holiday) are not stamped onto
     # a neighbouring bar here; update_actuals() reconciles only exact trading-bar dates
@@ -186,12 +197,12 @@ def log_prediction(asset, signal, probability, cb_prob=None, lstm_prob=None,
                (date, asset, signal, probability, actual_next_ret, correct,
                 cb_prob, lstm_prob, model_version, meta_prob, sig_shown, gate_reason,
                 timing_action, timing_reason, timing_stage, shadow_action,
-                tf_prob, tcn_prob, model_prob)
-               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                tf_prob, tcn_prob, model_prob, har_typical, har_q90)
+               VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (today, asset, signal, probability, cb_prob, lstm_prob,
              model_version, meta_prob, sig_shown, gate_reason,
              timing_action, timing_reason, timing_stage, shadow_action,
-             tf_prob, tcn_prob, model_prob),
+             tf_prob, tcn_prob, model_prob, har_typical, har_q90),
         )
         con.commit()
 
@@ -305,6 +316,23 @@ def timing_state(asset, cooldown_days=0, column="timing_action", con=None):
     return st
 
 
+def _next_range(df, pos, asset):
+    """True range of the bar after `pos` as a share of the close at `pos`: what
+    the logged HAR forecast predicted. MOEX skips weekend bars, as the forecast
+    does (range_forecast weekdays_only). None when it cannot be formed."""
+    from config import MOEX_ASSETS
+    j = pos + 1
+    if asset in MOEX_ASSETS:
+        while j < len(df) and df.index[j].weekday() >= 5:
+            j += 1
+    if j >= len(df) or "high" not in df or "low" not in df:
+        return None
+    base, hi, lo = df["close"].iloc[pos], df["high"].iloc[j], df["low"].iloc[j]
+    if not base or pd.isna(hi) or pd.isna(lo):
+        return None
+    return float(max(hi, base) - min(lo, base)) / float(base)
+
+
 def _load_bars(asset, cache):
     """Return a per-asset (Date-indexed, lowercase-columns) close series, cached
     for the duration of one reconcile pass. None if the price table is missing."""
@@ -313,7 +341,7 @@ def _load_bars(asset, cache):
     table = _price_table(asset)
     try:
         df = pd.read_sql(
-            f'SELECT Date, Close FROM "{table}" ORDER BY Date',
+            f'SELECT * FROM "{table}" ORDER BY Date',  # high/low optional (range)
             _engine(),
             index_col="Date",
         )
@@ -400,8 +428,9 @@ def update_actuals():
                 correct = 1 if ret < 0 else 0
 
             cur.execute(
-                "UPDATE prediction_log SET actual_next_ret=?, correct=? WHERE rowid=?",
-                (ret, correct, rowid),
+                "UPDATE prediction_log SET actual_next_ret=?, correct=?, actual_range=? "
+                "WHERE rowid=?",
+                (ret, correct, _next_range(df, pos, asset), rowid),
             )
             reconciled += 1
 
@@ -917,6 +946,29 @@ def intraday_reach_lines(s=None):
         out.append("   %-6s n=%-5d said %.1f%%, happened %.1f%%"
                    % (name, v["n"], 100 * v["quoted"], 100 * v["realised"]))
     return out
+
+
+def range_summary():
+    """Live check of the HAR range forecast logged beside each signal.
+
+    A calibrated forecast is exceeded on about half the days at `typical` and one
+    day in ten at `q90`. Counts every logged asset-day with an outcome, signal
+    or not, since the range forecast does not depend on the call."""
+    _prepare()
+    with _conn() as con:
+        try:
+            rows = con.execute(
+                "SELECT har_typical, har_q90, actual_range FROM prediction_log "
+                "WHERE har_typical IS NOT NULL AND actual_range IS NOT NULL").fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+    n = len(rows)
+    if not n:
+        return {"n": 0}
+    return {"n": n,
+            "over_typical": sum(a > t for t, _q, a in rows) / n,
+            "over_q90": sum(a > q for _t, q, a in rows) / n,
+            "se": (0.25 / n) ** 0.5}
 
 
 def level_summary(days=None):

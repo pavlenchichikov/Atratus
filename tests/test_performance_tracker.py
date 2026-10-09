@@ -643,3 +643,30 @@ def test_log_prediction_records_the_uncalibrated_model_prob(tmp_path, monkeypatc
     con.close()
     assert rows["2026-01-01"] is None, "the migration invented a value for an old row"
     assert abs(rows[today] - 0.4981) < 1e-9
+
+
+def test_reconcile_records_next_bar_range_and_moex_skips_weekend(tmp_path, monkeypatch):
+    # The logged HAR forecast is checked against the true range of the next bar
+    # (share of the signal close). MOEX forecasts skip weekend bars, so must this.
+    import performance_tracker as pt
+    db = str(tmp_path / "r.db")
+    _seed(db)   # legacy prediction_log: the new columns arrive by migration
+    con = sqlite3.connect(db)
+    con.execute("UPDATE btc SET high=112, low=104 WHERE Date='2026-06-13'")
+    con.execute("CREATE TABLE sber (Date TEXT, open REAL, high REAL, low REAL, close REAL, volume REAL)")
+    con.executemany("INSERT INTO sber VALUES (?,?,?,?,?,?)", [
+        ("2026-09-25", 1, 101, 99, 100.0, 1),    # Friday, the signal bar
+        ("2026-09-26", 1, 100.1, 99.9, 100.0, 1),  # thin Saturday session
+        ("2026-09-28", 1, 103, 98, 101.0, 1),    # Monday
+    ])
+    con.execute("INSERT INTO prediction_log VALUES ('2026-09-25','SBER','BUY',0.7,NULL,NULL,NULL,NULL)")
+    con.commit(); con.close()
+    monkeypatch.setattr(pt, "DB_PATH", db)
+    monkeypatch.setattr(pt, "_ENGINE", None)
+    pt._prepare()
+    pt.update_actuals()
+    con = sqlite3.connect(db)
+    got = dict(con.execute("SELECT asset, actual_range FROM prediction_log").fetchall())
+    con.close()
+    assert got["BTC"] == pytest.approx((112 - 100) / 100)   # prev close 100 below the low
+    assert got["SBER"] == pytest.approx((103 - 98) / 100)   # Monday, not the 0.2% Saturday

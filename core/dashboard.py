@@ -536,6 +536,56 @@ def tail_for_asset(asset):
         return None
 
 
+# ponytail: fixed cut points for "wider/calmer than usual"; fit them on the logged
+# actual_range (performance_tracker.range_summary) once a few weeks exist.
+RANGE_WIDE, RANGE_CALM = 1.25, 0.80
+
+
+def range_of(bars, moex=False):
+    """Tomorrow's HAR range for one asset, set against its usual day.
+
+    {typical, q90, ratio, regime}: typical/q90 as in core.levels.range_forecast,
+    ratio = typical over the median true range of the last 60 bars, regime
+    "wide" / "normal" / "calm". MOEX weekend bars are dropped first, as the
+    forecast itself does. None under 22 bars."""
+    import datetime as _dt
+    import statistics
+
+    from core import levels as levels_mod
+
+    if moex:
+        bars = [b for b in bars if _dt.date.fromisoformat(str(b["date"])[:10]).weekday() < 5]
+    f = levels_mod.range_forecast(bars)
+    if not f:
+        return None
+    rel = [tr / b["close"] for tr, b in zip(levels_mod._true_ranges(bars), bars) if b["close"]]
+    usual = statistics.median(rel[-60:]) if rel else 0
+    ratio = f["typical"] / usual if usual > 0 else None
+    regime = (None if ratio is None else "wide" if ratio >= RANGE_WIDE
+              else "calm" if ratio <= RANGE_CALM else "normal")
+    return {"typical": f["typical"], "q90": f["q90"], "ratio": ratio, "regime": regime}
+
+
+@ttl_cache(1800, stale_ok=True)
+def range_index():
+    """{asset: range_of(...)} for every asset, over ONE connection (a connection
+    per asset costs ~13 ms of schema parse each). Daily data: 30 min is fresh."""
+    from config import FULL_ASSET_MAP, MOEX_ASSETS
+    from core import track_record
+
+    out = {}
+    con = track_record._connect()
+    try:
+        for asset in FULL_ASSET_MAP:
+            r = range_of(track_record.ohlc_series(asset, days=90, con=con),
+                         moex=asset in MOEX_ASSETS)
+            if r:
+                out[asset] = r
+    finally:
+        con.close()
+    return out
+
+
 @ttl_cache(300, stale_ok=True)
 def tail_index():
     """Tail rank per asset: {asset: float|None}.

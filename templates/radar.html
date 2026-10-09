@@ -145,7 +145,7 @@
   </div>
   <table class="grid">
     <thead>
-      <tr><th>Asset</th><th>Signal</th><th class="num">p</th><th>Confidence</th><th>Accuracy</th><th class="num" title="Taleb risk: where today's volatility sits in this asset's own history, 0-100 (size cut above {{ "%.0f"|format(config.tail_soft_rank * 100) }}, no new entry above {{ "%.0f"|format(config.tail_hard_rank * 100) }})">Taleb</th><th>30 days</th><th class="num" title="The session each signal forecasts. It is computed from the previous close, so it is normally the next trading day.">Forecast for</th></tr>
+      <tr><th>Asset</th><th>Signal</th><th class="num">p</th><th>Confidence</th><th>Accuracy</th><th class="num" title="Taleb risk: where today's volatility sits in this asset's own history, 0-100 (size cut above {{ "%.0f"|format(config.tail_soft_rank * 100) }}, no new entry above {{ "%.0f"|format(config.tail_hard_rank * 100) }})">Taleb</th><th class="num" title="HAR forecast of the next session's move: half its expected high-to-low range. Colour: wider or calmer than this asset's usual day (median range of 60 bars).">Range</th><th>30 days</th><th class="num" title="The session each signal forecasts. It is computed from the previous close, so it is normally the next trading day.">Forecast for</th></tr>
     </thead>
     <tbody>
       {% for s in g.rows %}
@@ -165,6 +165,11 @@
         <td class="num mono c-taleb">
           {% if s.tail is not none %}
           <span class="taleb-{{ s.tail_regime }}" title="{{ s.tail_regime }}">{{ "%.0f"|format(s.tail * 100) }}</span>
+          {% else %}<span class="dim">-</span>{% endif %}
+        </td>
+        <td class="num mono c-range">
+          {% if s.range %}
+          <span class="range-{{ s.range.regime or 'normal' }}" title="typical high-to-low {{ "%.2f"|format(s.range.typical * 100) }}%, 1 day in 10 wider than {{ "%.2f"|format(s.range.q90 * 100) }}%{% if s.range.ratio %}; x{{ "%.2f"|format(s.range.ratio) }} of the usual day ({{ s.range.regime }}){% endif %}">&plusmn;{{ "%.2f"|format(s.range.typical * 50) }}%</span>
           {% else %}<span class="dim">-</span>{% endif %}
         </td>
         <td class="cell-spark">

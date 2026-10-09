@@ -60,6 +60,7 @@ def _warm_heavy_pages():
                  dashboard.sector_momentum, dashboard.sector_heatmap,
                  dashboard.correlation_stress, dashboard.correlation_heatmap,
                  dashboard.tail_index, dashboard.top_movers, dashboard.signal_noise,
+                 dashboard.range_index,
                  dashboard.global_regime):
         try:
             warm()
@@ -594,6 +595,7 @@ def _grouped_signals(signals):
 def radar(request: Request):
     signals = track_record.latest_signals()
     tail = dashboard.tail_index()
+    ranges = dashboard.range_index()
     soft_cap, hard_cap = RISK_CONFIG["tail_soft_rank"], RISK_CONFIG["tail_hard_rank"]
     spark_series = track_record.price_series_many(
         [s["asset"] for s in signals], days=30)
@@ -602,6 +604,7 @@ def radar(request: Request):
         s["spark"] = _spark(closes)
         s["tail"] = tail.get(s["asset"])
         s["tail_regime"] = dashboard.tail_regime(s["tail"], soft_cap, hard_cap)
+        s["range"] = ranges.get(s["asset"])
     stale = track_record.stale_assets()
     regime = dashboard.global_regime()
     score = dashboard.regime_score(regime)
@@ -1337,7 +1340,12 @@ def performance_page(request: Request):
         levels = performance_tracker.level_summary()
     except Exception:
         levels = {"issued": 0}
+    try:
+        har = performance_tracker.range_summary()
+    except Exception:
+        har = {"n": 0}
     context = {
+        "har": har,
         "series": dashboard.accuracy_timeseries(),
         "leaderboard": dashboard.top_leaderboard(limit=20),
         "version": dashboard.current_model_version(),
