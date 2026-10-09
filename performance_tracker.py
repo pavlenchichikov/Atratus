@@ -218,7 +218,7 @@ def last_logged_prob(asset, db_path=None):
     return float(row[0]) if row and row[0] is not None else None
 
 
-def timing_state(asset, cooldown_days=0, column="timing_action"):
+def timing_state(asset, cooldown_days=0, column="timing_action", con=None):
     """Rebuild the timing policy's position state from the shadow log.
 
     `column` picks WHOSE history to rebuild: the served decisions in
@@ -251,7 +251,8 @@ def timing_state(asset, cooldown_days=0, column="timing_action"):
     from core.timing_policy import FRESH_STATE
     _prepare()
     st = dict(FRESH_STATE)
-    with _conn() as con:
+    con = con or _conn()  # con: one connection across a page loop
+    with con:
         if column not in ("timing_action", "shadow_action"):
             raise ValueError("unknown timing column: %r" % (column,))
         rows = con.execute(

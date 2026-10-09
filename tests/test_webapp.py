@@ -292,7 +292,7 @@ def test_api_risk_alerts_returns_report_alerts(client, monkeypatch):
         {"level": "overbought", "message": "BTC: RSI=80 (OVERBOUGHT)"},
         {"level": "regime", "message": "VIX: 34 (FEAR)"},
     ]
-    monkeypatch.setattr(performance_report, "collect_risk_alerts", lambda: fake)
+    monkeypatch.setattr(performance_report, "collect_risk_alerts", lambda **kw: fake)
     webapp._ALERTS_CACHE.update(ts=0.0, alerts=None)  # start from a cold cache
 
     data = client.get("/api/risk/alerts?force=1").json()

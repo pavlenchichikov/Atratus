@@ -67,9 +67,14 @@ def ttl_cache(ttl_seconds, stale_ok=False):
     return deco
 
 
-def cache_clear():
-    """Drop all cached values (tests, manual refresh)."""
-    _CACHE.clear()
+def cache_clear(*names):
+    """Drop cached values: all of them, or only those of the named accessors
+    (a fill changes the levels pages, not the news digest)."""
+    if not names:
+        _CACHE.clear()
+        return
+    for key in [k for k in _CACHE if k[0] in names]:
+        _CACHE.pop(key, None)
 
 
 @ttl_cache(300)
@@ -708,6 +713,9 @@ def my_positions(equity=0.0, today=None):
     return out
 
 
+# Cached again 2026-10-09: 1a8da4d inserted my_positions between this decorator
+# and levels_sheet, so the sheet lost it and /levels took 30-50 s on every visit.
+@ttl_cache(300, stale_ok=True)
 def levels_sheet(equity=0.0):
     """The trade-level sheet: one row per asset carrying an active signal.
 
@@ -733,22 +741,26 @@ def levels_sheet(equity=0.0):
     show_timing = timing_policy.timing_on() and timing_policy.load_policy() is not None
 
     rows = []
+    # One connection and one fills read for the whole sheet: a connection per
+    # asset paid the ~13 ms schema parse 2000+ times (27 of 31 s, 2026-10-09).
+    fills_open = fills_mod.open_fills()
+    con = track_record._connect()
     for s in track_record.latest_signals():
         asset = s["asset"]
         # The side a trade would actually be placed on, not the raw call: the
         # sheet exists to be traded from, so a bar the policy sits out belongs
         # off it, and a position it is still holding belongs on it even after
         # today's signal went quiet.
-        side = levels_mod.acting_side(s["signal"], asset, s.get("timing_action"))
+        side = levels_mod.acting_side(s["signal"], asset, s.get("timing_action"), con=con)
         if not _tradeable(asset) or side not in ("BUY", "SELL"):
             continue
-        bars = track_record.ohlc_series(asset, days=60)
+        bars = track_record.ohlc_series(asset, days=60, con=con)
         segment = None
         held = 0
         # asset_track is newest first and build_positions wants oldest first.
         # The open position is the LAST segment: `current` is the state card and
         # carries no start_date, so it cannot drive the trailing stop.
-        track = track_record.asset_track(asset, limit=60)
+        track = track_record.asset_track(asset, limit=60, con=con)
         if track:
             segs = positions_mod.build_positions(list(reversed(track)))["segments"]
             if segs and segs[-1]["open"]:
@@ -759,7 +771,7 @@ def levels_sheet(equity=0.0):
         # the bar the signal turned prices a trade nobody took: the order was
         # placed by hand, on a later day, at a different price. Only an open
         # fill overrides; absent one, nothing changes.
-        filled = fills_mod.open_segment(asset)
+        filled = fills_mod.segment_of(fills_open.get(asset))
         if filled:
             segment = filled
             held = filled["bars"]
@@ -787,5 +799,6 @@ def levels_sheet(equity=0.0):
                      "entry_source": (segment or {}).get("source", "signal"),
                      "fill_price": (segment or {}).get("entry_price"),
                      **lv, **sz})
+    con.close()
     rows.sort(key=lambda r: (r["status"] != "ok", r["asset"]))
     return rows

@@ -418,9 +418,11 @@ def member_spread(row):
     return float(max(vals) - min(vals))
 
 
-def asset_track(asset: str, limit: int = 30, db_path=None) -> list:
-    """Signal history for an asset, newest first."""
-    with _connect(db_path) as con:
+def asset_track(asset: str, limit: int = 30, db_path=None, con=None) -> list:
+    """Signal history for an asset, newest first. `con`: reuse one connection
+    across a loop (see price_series)."""
+    con = con or _connect(db_path)
+    with con:
         cols = _plog_cols(con)
         # Both timing columns, so a row can say what each policy decided that
         # day and be checked against what the bar then did. Guarded: a database
@@ -516,10 +518,12 @@ def volume_series(asset: str, days: int = 60, db_path=None) -> list:
             for d, v, val in rows if v is not None]
 
 
-def ohlc_series(asset: str, days: int = 120, db_path=None) -> list:
-    """Last `days` OHLC bars ascending by date: [{date,open,high,low,close}, ...]."""
+def ohlc_series(asset: str, days: int = 120, db_path=None, con=None) -> list:
+    """Last `days` OHLC bars ascending by date: [{date,open,high,low,close}, ...].
+    `con`: reuse one connection across a loop (see price_series)."""
     table = _table_name(asset)
-    with _connect(db_path) as con:
+    con = con or _connect(db_path)
+    with con:
         try:
             rows = con.execute(
                 f'SELECT Date, Open, High, Low, Close FROM "{table}" '

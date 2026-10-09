@@ -334,3 +334,24 @@ def test_news_digest_empty_on_failure(monkeypatch):
     monkeypatch.setattr(news_analyzer, "fetch_authority_digest",
                         lambda **k: (_ for _ in ()).throw(RuntimeError("net")))
     assert dash.news_digest() == []
+
+
+def test_levels_sheet_is_cached_and_clears_by_name():
+    # 1a8da4d slid a function in under this decorator and /levels went to 30-50 s
+    # per visit; a fill must still drop only the levels pages, not the news.
+    from core import dashboard
+
+    assert hasattr(dashboard.levels_sheet, "__wrapped__")
+    calls = []
+
+    @dashboard.ttl_cache(300)
+    def news_like():
+        calls.append(1)
+        return len(calls)
+
+    dashboard.cache_clear()
+    news_like()
+    dashboard._CACHE[("levels_sheet", (0.0,), ())] = (9e18, ["stale"])
+    dashboard.cache_clear("levels_sheet", "my_positions")
+    assert ("levels_sheet", (0.0,), ()) not in dashboard._CACHE
+    assert news_like() == 1

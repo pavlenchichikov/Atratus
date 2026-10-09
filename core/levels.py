@@ -267,7 +267,7 @@ _TIMING_SIDE = {"ENTER:+1": "BUY", "ENTER:-1": "SELL",
                 "EXIT": "WAIT", "STAY_OUT": "WAIT"}
 
 
-def acting_side(signal, asset, timing_action):
+def acting_side(signal, asset, timing_action, con=None):
     """The side levels belong to: the timing layer's, on any bar it decided.
 
     Levels answer "where to get in and where to bail", which only means
@@ -295,7 +295,7 @@ def acting_side(signal, asset, timing_action):
     # in the log, so a tracker that cannot answer falls back to the signal.
     try:
         from performance_tracker import timing_state
-        pos = timing_state(asset)["pos"]
+        pos = timing_state(asset, con=con)["pos"]
     except Exception:
         return signal
     return {1: "BUY", -1: "SELL"}.get(pos, "WAIT")

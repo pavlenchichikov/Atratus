@@ -929,6 +929,7 @@ async def api_fills_open(request: Request):
                          float(body.get("price")), entry_date=body.get("date") or None)
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, str(exc))
+    dashboard.cache_clear("levels_sheet", "my_positions")
     return {"ok": True, "asset": asset}
 
 
@@ -947,6 +948,7 @@ async def api_fills_close(asset: str, request: Request):
         raise HTTPException(400, "price must be positive")
     if fills_mod.close(asset.upper(), price, exit_date=body.get("date") or None) is None:
         raise HTTPException(404, f"No open position for {asset.upper()}")
+    dashboard.cache_clear("levels_sheet", "my_positions")
     return {"ok": True}
 
 
@@ -1581,7 +1583,10 @@ async def api_risk_alerts(force: bool = False):
         return {"alerts": _ALERTS_CACHE["alerts"], "cached": True}
     try:
         import performance_report
-        alerts = await run_in_threadpool(performance_report.collect_risk_alerts)
+        # Only the VIX level is read from the regime; the cached one skips the
+        # 12 s market-breadth pass _regime_info would do and throw away.
+        alerts = await run_in_threadpool(performance_report.collect_risk_alerts,
+                                         regime_data={"regime": dashboard.global_regime()})
         _ALERTS_CACHE.update(ts=now, alerts=alerts)
         return {"alerts": alerts, "cached": False}
     except Exception as exc:
