@@ -67,26 +67,26 @@
    uses. Sizing is deliberately absent: it needs an equity figure and lives on
    the trade-levels sheet, which is where a position is actually placed from. #}
 <details class="fold" data-fold="levels" open><summary>Trade levels</summary>
-{% set vu = 'HAR' if levels and levels.vol_unit == 'har' else 'ATR' %}
 {% if levels and levels.status == 'ok' %}
 <div class="statgrid">
   <div class="stat fade">
     <span class="stat-label">Entry zone</span>
     <span class="stat-value">{{ "%.4g"|format(levels.entry_low) }}<span class="stat-sep">..</span>{{ "%.4g"|format(levels.entry_high) }}</span>
-    <span class="stat-sub">{{ "%.2g"|format((levels.entry_high - levels.close) / levels.atr) }} {{ vu }} either side of the close</span>
-    <span class="help">Where to place the entry: a limit order inside this band. {% if vu == 'HAR' %}HAR is the forecast of tomorrow's typical range from the last 1, 5 and 22 days{% else %}ATR is the average daily range of the last 14 days{% endif %}, so the band scales with how much this asset usually moves.</span>
+    <span class="stat-sub">{{ "%.2g"|format((levels.entry_high - levels.close) / levels.atr) }} ATR either side of the close</span>
+    {% if levels.get("fill") is not none %}<span class="stat-sub">a limit at {{ "%.4g"|format(levels.entry_low if levels.side > 0 else levels.entry_high) }} filled next day on {{ "%.0f"|format(levels.fill * 100) }}% of past days</span>{% endif %}
+    <span class="help">Where to place the entry: a limit order inside this band. The fill share: how often the next session reached the band's best edge, counting each past day in its own expected range. ATR is the average daily range of the last 14 days, so the band scales with how much this asset usually moves.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">{{ 'Trailing stop' if levels.trailing else 'Stop' }}</span>
     <span class="stat-value">{{ "%.4g"|format(levels.stop) }}</span>
-    <span class="stat-sub">{% if levels.trailing %}trailed to the best level since entry{% else %}{{ "%.2g"|format((levels.close - levels.stop) | abs / levels.atr) }} {{ vu }} against the position{% endif %}</span>
-    <span class="help">Exit if the price reaches this level against you. Measured in {{ vu }} so it is equally far, in this asset's own terms, on a quiet and on a wild name.</span>
+    <span class="stat-sub">{% if levels.trailing %}trailed to the best level since entry{% else %}{{ "%.2g"|format((levels.close - levels.stop) | abs / levels.atr) }} ATR against the position{% endif %}</span>
+    <span class="help">Exit if the price reaches this level against you. Measured in ATR so it is equally far, in this asset's own terms, on a quiet and on a wild name.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Last close</span>
     <span class="stat-value">{{ "%.4g"|format(levels.close) }}</span>
-    <span class="stat-sub">{{ 'HAR range' if vu == 'HAR' else 'ATR(14)' }} {{ "%.4g"|format(levels.atr) }}</span>
-    <span class="help">The last completed close the levels are computed from, and {% if vu == 'HAR' %}the HAR forecast of tomorrow's typical range{% else %}ATR(14): the average high-to-low range of the last 14 days{% endif %}, in price units.</span>
+    <span class="stat-sub">ATR(14) {{ "%.4g"|format(levels.atr) }}</span>
+    <span class="help">The last completed close the levels are computed from, and ATR(14): the average high-to-low range of the last 14 days, in price units.</span>
   </div>
   <div class="stat fade">
     <span class="stat-label">Expected payoff (1 bar)</span>
@@ -112,7 +112,7 @@
   {% if levels_policy and levels_policy.adopted %}These come from a fitted
   levels policy adopted {{ levels_policy.adopted[:10] }}, accepted on a held-out
   slice at p={{ "%.4f"|format(levels_policy.p) }} over {{ levels_policy.n }} assets,
-  measured in {{ vu }}.
+  measured in ATR.
   {% else %}These come from the shipped constants, half an ATR for the zone and
   two ATR for the stop. No fitted policy has been adopted.{% endif %}
 </p>
@@ -124,8 +124,8 @@
     <span class="stat-sub">
       {%- if not levels or levels.status == 'no_signal' %}no side while the signal is WAIT, so no entry zone and no stop
       {%- elif levels.status == 'no_bars' %}no price history loaded for this asset yet
-      {%- elif levels.status == 'short_history' %}{{ 'fewer than 22 bars, not enough for a HAR forecast' if vu == 'HAR' else 'fewer than 14 bars, not enough for an ATR' }}
-      {%- elif levels.status == 'flat_atr' %}the {{ vu }} is zero here, every level would sit on the close
+      {%- elif levels.status == 'short_history' %}fewer than 14 bars, not enough for an ATR
+      {%- elif levels.status == 'flat_atr' %}the ATR is zero here, every level would sit on the close
       {%- else %}unavailable ({{ levels.status }}){% endif %}
     </span>
     <span class="help">No entry zone or stop is drawn when there is no side to take.</span>
@@ -136,8 +136,7 @@
 
 {# Tomorrow's range from a HAR forecast (core/levels.range_forecast). Shown for
    every asset, signal or not: a stop inside the typical range is a stop the
-   noise will take. The stop uses the levels policy's unit (ATR14, or HAR once
-   a HAR policy is adopted). #}
+   noise will take. The stop stays in ATR14: a HAR refit HOLDs (2026-10-09). #}
 {% if range %}
 <details class="fold" data-fold="range" open><summary>Range tomorrow</summary>
 <div class="statgrid">
@@ -154,6 +153,18 @@
     <span class="help">Only 1 day in 10 has a wider range than this. A stop beyond it survives all but the unusual days.</span>
   </div>
 </div>
+{% if moves and moves.values() | select | list %}
+<div class="statgrid">
+  {% for h, mv in moves.items() if mv %}
+  <div class="stat fade">
+    <span class="stat-label">Usual move, {{ h }} day{{ 's' if h != 1 else '' }}</span>
+    <span class="stat-value">&plusmn;{{ "%.2f"|format(mv.typical * 100) }}<small>%</small></span>
+    <span class="stat-sub">close to close, either way; 1 in 10 beyond &plusmn;{{ "%.1f"|format(mv.q90 * 100) }}%</span>
+    <span class="help">Half of past {{ h }}-day stretches moved less than this, scaled to today's volatility. A call or a target over this horizon that is smaller than it is inside the noise.</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 <p class="dim">Forecast from the mean range over the last 1, 5 and 22 days, fitted to 2022 and
   checked on 2023-2026: it tracked tomorrow's range better than ATR(14) (0.41 against 0.36;
   MOEX 0.51 against 0.43). The 1-in-10 band was exceeded on 9.6% of test days, 12% on MOEX
@@ -243,6 +254,7 @@
       <span class="stat-label">Call</span>
       <span class="stat-value">{{ {'up':'LONG','down':'SHORT','flat':'FLAT'}.get(analyst.direction, analyst.direction) }}</span>
       <span class="stat-sub">conviction {{ analyst.conviction }}/5 &middot; expects {{ analyst.vol_regime }} volatility</span>
+      {% set mv = moves.get(analyst.horizon or 1) if moves else none %}{% if mv %}<span class="stat-sub">a usual {{ analyst.horizon or 1 }}-day move here is &plusmn;{{ "%.1f"|format(mv.typical * 100) }}% (1 in 10 beyond &plusmn;{{ "%.1f"|format(mv.q90 * 100) }}%)</span>{% endif %}
     <span class="help">The analyst's own direction for this horizon. Conviction 1 is barely a lean, 5 the strongest. It never sees the model's call.</span>
     </div>
     <div class="stat">

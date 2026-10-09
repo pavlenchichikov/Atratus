@@ -539,6 +539,16 @@ def tail_for_asset(asset):
 # ponytail: fixed cut points for "wider/calmer than usual"; fit them on the logged
 # actual_range (performance_tracker.range_summary) once a few weeks exist.
 RANGE_WIDE, RANGE_CALM = 1.25, 0.80
+# Mean |next close-to-close return| per unit of HAR typical range: median over
+# 845 assets, two years, 0.58 (IQR 0.55-0.61), measured 2026-10-09.
+ABS_MOVE_PER_RANGE = 0.58
+
+
+def expected_move(p, typical):
+    """(2p - 1) times the expected size of tomorrow's move: what a call at
+    probability `p` is worth before costs, as a share of the close. Only as
+    good as p, which live has not confirmed yet."""
+    return (2 * p - 1) * ABS_MOVE_PER_RANGE * typical
 
 
 def range_of(bars, moex=False):
@@ -739,7 +749,7 @@ def my_positions(equity=0.0, today=None):
         row = {"asset": asset, "side": side, "qty": qty, "entry": entry,
                "entry_date": fill["entry_date"], "held_days": seg["bars"],
                "close": lv["close"], "stop": lv["stop"], "trailing": lv["trailing"],
-               "status": lv["status"], "vol_unit": lv.get("vol_unit", "atr"),
+               "status": lv["status"],
                "pnl": None, "pnl_pct": None, "risk_to_stop": None,
                "risk_pct_equity": None, "stop_in_days": None, "typical": None,
                "fit_qty": None}
@@ -778,6 +788,7 @@ def levels_sheet(equity=0.0):
     deposit forever. Zero means the account was never declared, and the caller
     shows percentages instead of money.
     """
+    from config import MOEX_ASSETS
     from core import fills as fills_mod
     from core import levels as levels_mod
     from core import positions as positions_mod
@@ -804,7 +815,8 @@ def levels_sheet(equity=0.0):
         side = levels_mod.acting_side(s["signal"], asset, s.get("timing_action"), con=con)
         if not _tradeable(asset) or side not in ("BUY", "SELL"):
             continue
-        bars = track_record.ohlc_series(asset, days=60, con=con)
+        history = track_record.ohlc_series(asset, days=250, con=con)
+        bars = history[-60:]
         segment = None
         held = 0
         # asset_track is newest first and build_positions wants oldest first.
@@ -828,6 +840,10 @@ def levels_sheet(equity=0.0):
         taleb_hi, risky = regime_flags(asset)
         lv = levels_mod.levels(bars, side, segment=segment,
                                taleb_hi=taleb_hi, risky=risky)
+        if lv["status"] == "ok" and lv.get("side"):
+            lv["fill"] = levels_mod.fill_chance(
+                history, lv["side"], lv["entry_low"] if lv["side"] > 0 else lv["entry_high"],
+                weekdays_only=asset in MOEX_ASSETS)
         sz = levels_mod.size_for(lv["close"], lv["stop"], equity,
                                  RISK_CONFIG["risk_per_trade"],
                                  RISK_CONFIG["max_single_position"])

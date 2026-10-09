@@ -955,6 +955,22 @@ def test_asset_page_shows_the_trade_levels(client, monkeypatch):
     assert "Stop" in r.text
 
 
+def test_the_card_shows_the_fill_share_and_the_usual_moves(client, monkeypatch):
+    import webapp
+    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
+        "side": 1, "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
+        "stop": 96.0, "trailing": False, "status": "ok"})
+    monkeypatch.setattr(webapp.levels_mod, "fill_chance", lambda *a, **k: 0.42)
+    monkeypatch.setattr(webapp.levels_mod, "range_forecast",
+                        lambda *a, **k: {"typical": 0.02, "q90": 0.035, "atr": 0.02})
+    monkeypatch.setattr(webapp.levels_mod, "move_band", lambda bars, h, **k:
+                        {"typical": 0.01 * h, "q90": 0.02 * h, "n": 100})
+    r = client.get("/asset/BTC")
+    assert r.status_code == 200
+    assert "a limit at 99 filled next day on 42% of past days" in r.text
+    assert "Usual move, 20 days" in r.text and "&plusmn;20.00" in r.text
+
+
 def test_the_card_says_why_there_are_no_levels_on_wait(client, monkeypatch):
     """A blank panel reads as a bug. WAIT has no side, so it has no levels."""
     import webapp
@@ -1997,7 +2013,7 @@ def test_positions_are_recorded_closed_and_shown_on_the_levels_page(client, monk
     monkeypatch.setattr(dashboard, "my_positions", lambda equity=0.0, today=None: [{
         "asset": "SBER", "side": 1, "qty": 100.0, "entry": 275.5, "entry_date": "2026-10-01",
         "held_days": 2, "close": 280.0, "stop": 270.0, "trailing": False, "status": "ok",
-        "vol_unit": "atr", "pnl": 450.0, "pnl_pct": 0.0163, "risk_to_stop": 1000.0,
+        "pnl": 450.0, "pnl_pct": 0.0163, "risk_to_stop": 1000.0,
         "risk_pct_equity": 0.02, "stop_in_days": 2.2, "typical": 4.5, "fit_qty": 50.0}])
     page = client.get("/levels").text
     assert "My positions" in page and "+450.00" in page and "2.2 typical days" in page
@@ -2006,19 +2022,3 @@ def test_positions_are_recorded_closed_and_shown_on_the_levels_page(client, monk
     assert client.post("/api/fills/SBER/close", json={"price": 281}).status_code == 200
     assert client.post("/api/fills/SBER/close", json={"price": 281}).status_code == 404
     assert fills.open_fills() == {}
-
-
-def test_a_har_policy_card_names_its_unit(client, monkeypatch):
-    """Levels drawn in HAR must not say ATR: the multiples would read wrong."""
-    import webapp
-    monkeypatch.setattr(webapp.levels_mod, "levels", lambda bars, signal, segment=None, **kw: {
-        "close": 100.0, "atr": 2.0, "entry_low": 99.0, "entry_high": 101.0,
-        "stop": 96.0, "trailing": False, "status": "ok", "vol_unit": "har"})
-    monkeypatch.setattr(webapp.levels_mod, "policy_evidence", lambda path=None: {
-        "adopted": "2026-10-04T10:00:00", "p": 0.001, "n": 200, "mean_d": 0.2,
-        "vol_unit": "har"})
-    r = client.get("/asset/BTC")
-    assert r.status_code == 200
-    assert "2 HAR against the position" in r.text and "HAR range 2" in r.text
-    assert "measured in HAR" in r.text
-    assert "ATR against the position" not in r.text

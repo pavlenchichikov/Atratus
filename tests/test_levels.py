@@ -1,8 +1,9 @@
 """Unit tests for core.levels (pure, no I/O)."""
 
 import pandas as pd
+import pytest
 
-from core.levels import atr_abs, levels, size_for
+from core.levels import atr_abs, fill_chance, levels, move_band, size_for
 
 
 def _bars(n=20, close=100.0, rng=2.0):
@@ -216,3 +217,34 @@ def test_a_thin_weekend_session_is_left_out_when_asked():
     kept = range_forecast(bars, weekdays_only=True)["typical"]
     assert kept > range_forecast(bars)["typical"]
     assert 0.015 < kept < 0.025
+
+
+def _trend(n=120, step=0.01):
+    """Close up `step` every bar, high/low +-1% of it: a constant relative range."""
+    out, c = [], 100.0
+    for i in range(n):
+        c *= 1 + step
+        out.append({"date": "d%03d" % i, "open": c, "high": c * 1.01,
+                    "low": c * 0.99, "close": c})
+    return out
+
+
+def test_move_band_is_the_past_move_priced_at_todays_range():
+    bars = _trend()
+    for h in (1, 5, 20):
+        assert move_band(bars, h)["typical"] == pytest.approx(1.01 ** h - 1, rel=1e-6)
+    assert move_band(bars[:40], 20) is None, "fewer than 30 past moves"
+
+
+def test_fill_chance_counts_how_often_the_next_bar_reached_the_price():
+    bars = []
+    for i in range(80):
+        low = 97.0 if i % 2 else 99.0     # every other day dips to 97
+        bars.append({"date": "d%03d" % i, "open": 100.0, "high": 101.0,
+                     "low": low, "close": 100.0})
+    near, mid, far = (fill_chance(bars, 1, p) for p in (99.5, 98.5, 96.0))
+    assert near == 1.0 and far == 0.0
+    assert 0.3 < mid < 0.7, mid
+    assert fill_chance(bars, 1, 100.5) == 1.0, "a buy limit above the close"
+    assert fill_chance(bars, -1, 102.0) == 0.0, "highs never pass 101"
+    assert fill_chance(bars[:25], 1, 99.0) is None

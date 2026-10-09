@@ -19,7 +19,7 @@
   {% if levels_policy and levels_policy.adopted %}These come from a fitted
   levels policy adopted {{ levels_policy.adopted[:10] }}, accepted on a held-out
   slice at p={{ "%.4f"|format(levels_policy.p) }} over {{ levels_policy.n }} assets,
-  measured in {{ 'HAR' if levels_policy.vol_unit == 'har' else 'ATR' }}.
+  measured in ATR.
   {% else %}These come from the shipped constants, half an ATR for the zone and
   two ATR for the stop. No fitted policy has been adopted.{% endif %}
 </p>
@@ -120,6 +120,7 @@
         <th>Asset</th>
         <th>Side</th>
         <th class="num">Entry zone</th>
+        <th class="num" title="How often the next session reached the zone's best edge (the bottom for a long, the top for a short) on this asset's past days, each counted in its own expected range">Fill at edge</th>
         <th class="num">Stop</th>
         <th class="num">Size</th>
         <th>Bound by</th>
@@ -137,6 +138,7 @@
             {{ "%.4f"|format(r.entry_low) }} to {{ "%.4f"|format(r.entry_high) }}
           {%- else -%}-{%- endif -%}
         </td>
+        <td class="num mono">{{ "%.0f"|format(r.fill * 100) ~ "%" if r.get("fill") is not none else "-" }}</td>
         <td class="num mono">
           {%- if r.stop is not none -%}
             {{ "%.4f"|format(r.stop) }}{% if r.trailing %} <span class="dim">trailing</span>{% endif %}

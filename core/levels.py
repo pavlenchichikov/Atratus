@@ -116,8 +116,8 @@ def atr_series(bars, period=ATR_PERIOD):
 # 0.355 for ATR14 and QLIKE 0.135 against 0.158; on MOEX 0.505 against 0.428.
 # Calibration on the test years: the typical range was exceeded on 48.5% of
 # days and the q90 band on 9.6% (MOEX 13.4%, SBER 11.0%). Measured 2026-09-28.
-# Shown beside the stop, not used by it: the stop multipliers in
-# levels_policy.json were fitted on ATR14 and would need a refit to move.
+# Shown beside the stop, not used by it: a [TL] refit in HAR units HOLDs
+# (2026-10-09, mean_d -0.003, p 0.50 on 626 assets), so the stops stay ATR14.
 HAR_INTERCEPT = -0.2994
 HAR_WEIGHTS = (0.2000, 0.3209, 0.4208)    # 1-day, 5-day, 22-day mean true range
 HAR_RESID_SD = 0.4764                     # of log(true range), for the q90 band
@@ -126,9 +126,8 @@ Z90 = 1.2816
 
 def har_series(bars):
     """HAR's typical next-day true range in PRICE units, aligned one-to-one with
-    `bars` like atr_series, None until 22 bars exist. The unit a policy with
-    vol_unit "har" draws its levels in: same formula as range_forecast, read at
-    every bar so a trailing stop and the fitter see the same number serving does.
+    `bars` like atr_series, None until 22 bars exist: range_forecast read at
+    every bar, which is what fill_chance and move_band scale history by.
     """
     rel = [tr / b["close"] if b["close"] else 0.0
            for tr, b in zip(_true_ranges(bars), bars)]
@@ -146,14 +145,60 @@ def har_series(bars):
     return out
 
 
-VOL_UNITS = ("atr", "har")
+def _weekdays(bars):
+    return [b for b in bars if "date" not in b
+            or datetime.date.fromisoformat(str(b["date"])[:10]).weekday() < 5]
 
 
-def vol_series(bars, unit="atr"):
-    """The volatility unit a levels policy measures in: ATR14 (what every policy
-    before 2026-10-03 was fitted on) or HAR (IC 0.41 against 0.36 for tomorrow's
-    range). One function, so serving, trailing and train_levels agree."""
-    return har_series(bars) if unit == "har" else atr_series(bars)
+MIN_HISTORY = 30   # past days below which a share of them is not shown
+
+
+def fill_chance(bars, side, price, weekdays_only=False):
+    """Share of past sessions on which a limit order this far from the close
+    would have filled the next day, or None under MIN_HISTORY days.
+
+    A buy limit below the close (side +1) fills when the next low reaches it, a
+    sell limit above it (side -1) when the next high does. Each past day's
+    distance is counted in that day's own HAR range and today's in today's, so
+    a calm week is not judged by a wild month."""
+    if weekdays_only:
+        bars = _weekdays(bars)
+    har = har_series(bars)
+    if not har or not har[-1]:
+        return None
+    need = side * (bars[-1]["close"] - price) / har[-1]
+    if need <= 0:
+        return 1.0
+    reach = [side * (b["close"] - (n["low"] if side > 0 else n["high"])) / h
+             for b, n, h in zip(bars, bars[1:], har) if h]
+    if len(reach) < MIN_HISTORY:
+        return None
+    return sum(r >= need for r in reach) / len(reach)
+
+
+def move_band(bars, horizon, weekdays_only=False):
+    """{typical, q90, n}: how far the close usually moves over `horizon` bars,
+    either way, as shares of the last close; None under MIN_HISTORY moves.
+
+    Past moves are counted in their own day's HAR range, then priced at
+    today's: the median and the 90th percentile of that. Directionless: it says
+    how big a call over this horizon has to be to stand out from noise."""
+    # ponytail: today's 1-day HAR scales every horizon, but a wide regime
+    # fades within weeks, so 20-day bands run wide on wild days. Scale long
+    # horizons by a fitted multi-day HAR if that starts to matter.
+    if weekdays_only:
+        bars = _weekdays(bars)
+    har = har_series(bars)
+    if not har or not har[-1]:
+        return None
+    m = sorted(abs(bars[i + horizon]["close"] / bars[i]["close"] - 1)
+               / (har[i] / bars[i]["close"])
+               for i in range(len(bars) - horizon) if har[i])
+    if len(m) < MIN_HISTORY:
+        return None
+    today = har[-1] / bars[-1]["close"]
+    return {"typical": m[len(m) // 2] * today,
+            "q90": m[int(0.9 * len(m))] * today, "n": len(m)}
 
 
 def range_forecast(bars, weekdays_only=False):
@@ -170,8 +215,7 @@ def range_forecast(bars, weekdays_only=False):
     ATR14 the stops use, on the same scale for comparison.
     """
     if weekdays_only:
-        bars = [b for b in bars if "date" not in b
-                or datetime.date.fromisoformat(str(b["date"])[:10]).weekday() < 5]
+        bars = _weekdays(bars)
     if len(bars) < 22:
         return None
     rel = [tr / b["close"] for tr, b in zip(_true_ranges(bars), bars)]
@@ -232,12 +276,10 @@ def load_policy(path=None):
             stored = (json.load(fh) or {}).get("params") or {}
         params = dict(POLICY_DEFAULTS)
         params.update({k: float(stored[k]) for k in POLICY_DEFAULTS if k in stored})
-        unit = stored.get("vol_unit", "atr")
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
-    if params["k_entry"] <= 0 or params["k_stop"] <= 0 or unit not in VOL_UNITS:
+    if params["k_entry"] <= 0 or params["k_stop"] <= 0:
         return None
-    params["vol_unit"] = unit
     return params
 
 
@@ -257,8 +299,7 @@ def policy_evidence(path=None):
             body = json.load(fh) or {}
         gate = body.get("gate") or {}
         return {"adopted": body.get("adopted"), "p": gate.get("p"),
-                "n": gate.get("n"), "mean_d": gate.get("mean_d"),
-                "vol_unit": (body.get("params") or {}).get("vol_unit", "atr")}
+                "n": gate.get("n"), "mean_d": gate.get("mean_d")}
     except (OSError, ValueError, TypeError, AttributeError):
         return None
 
@@ -338,13 +379,10 @@ def levels(bars, signal, segment=None, k_entry=None, k_stop=None,
     # adopted policy decides, resolved for THIS bar's regime.
     policy = load_policy()
     fit_entry, fit_stop = effective_multipliers(policy, taleb_hi, risky)
-    unit = (policy or {}).get("vol_unit", "atr")
     k_entry = fit_entry if k_entry is None else k_entry
     k_stop = fit_stop if k_stop is None else k_stop
-    # "atr" holds the policy's unit (ATR14 or HAR), whichever the levels use.
     row = {"side": 0, "close": None, "atr": None, "entry_low": None,
-           "entry_high": None, "stop": None, "trailing": False, "status": "ok",
-           "vol_unit": unit}
+           "entry_high": None, "stop": None, "trailing": False, "status": "ok"}
     side = _side(signal)
     row["side"] = side
     if side == 0:
@@ -357,11 +395,8 @@ def levels(bars, signal, segment=None, k_entry=None, k_stop=None,
     if len(bars) < ATR_PERIOD:
         row["status"] = "short_history"
         return row
-    atrs = vol_series(bars, unit)
+    atrs = atr_series(bars)
     atr = atrs[-1]
-    if atr is None and unit == "har" and len(bars) < 22:
-        row["status"] = "short_history"
-        return row
     if atr is None or atr <= 0:
         row["status"] = "flat_atr"
         return row

@@ -605,6 +605,8 @@ def radar(request: Request):
         s["tail"] = tail.get(s["asset"])
         s["tail_regime"] = dashboard.tail_regime(s["tail"], soft_cap, hard_cap)
         s["range"] = ranges.get(s["asset"])
+        s["exp_move"] = (dashboard.expected_move(s["probability"], s["range"]["typical"])
+                         if s["range"] and s.get("probability") is not None else None)
     stale = track_record.stale_assets()
     regime = dashboard.global_regime()
     score = dashboard.regime_score(regime)
@@ -741,18 +743,32 @@ def asset_page(request: Request, name: str):
     # records and the fit is measured against. Showing the raw call here while
     # the badge below reports a policy that disagrees is two instructions on one
     # card; the badge is what says they differ, and that is its whole job.
-    bars60 = track_record.ohlc_series(name, days=60)
+    history = track_record.ohlc_series(name, days=500)
+    bars60 = history[-60:]
     asset_levels = levels_mod.levels(
         bars60,
         levels_mod.acting_side((current or {}).get("signal"), name,
                                (current or {}).get("timing_action")),
         segment=open_segment, taleb_hi=taleb_hi, risky=risky)
+    moex = name in MOEX_ASSETS
+    # How far the close usually travels over each horizon on the card: the
+    # yardstick a 20-day call is read against.
+    analyst_all = _analyst_judgments(name)
+    horizons = {1, 5, 20} | {j.get("horizon") or 1 for j in analyst_all}
+    moves = {h: levels_mod.move_band(history, h, weekdays_only=moex)
+             for h in sorted(horizons)}
+    side = asset_levels.get("side")
+    if asset_levels.get("status") == "ok" and side:
+        best = asset_levels["entry_low"] if side > 0 else asset_levels["entry_high"]
+        asset_levels["fill"] = levels_mod.fill_chance(history, side, best,
+                                                      weekdays_only=moex)
 
     return templates.TemplateResponse(request, "asset.html", {
         "asset": name,
         "ticker": FULL_ASSET_MAP[name],
         "levels": asset_levels,
-        "range": levels_mod.range_forecast(bars60, weekdays_only=name in MOEX_ASSETS),
+        "range": levels_mod.range_forecast(bars60, weekdays_only=moex),
+        "moves": moves,
         "levels_policy": levels_mod.policy_evidence(),
         "tail": tail,
         "tail_regime": dashboard.tail_regime(tail, soft_cap, hard_cap),
@@ -782,7 +798,7 @@ def asset_page(request: Request, name: str):
         "payoff": _payoff_context(name, asset_levels.get("atr"),
                                   asset_levels.get("close")),
         "analyst": _analyst_for_asset(name),
-        "analyst_all": _analyst_judgments(name),
+        "analyst_all": analyst_all,
         "analyst_intraday": _analyst_intraday_for_asset(name),
     })
 
