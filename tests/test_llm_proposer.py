@@ -409,6 +409,41 @@ def test_a_timed_out_ollama_call_is_not_retried(monkeypatch):
         lp._call_ollama("hi")
 
 
+def test_a_connect_timeout_is_retried_and_blames_the_network(monkeypatch):
+    """2026-10-09: ollama.com dropped one handshake; Windows gave up after 22s
+    and the analyst said the model was too slow after 5333s."""
+    import httpx
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "ok"}}
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        def post(self, url, json=None):
+            calls.append(url)
+            if len(calls) < 2:
+                raise httpx.ConnectTimeout("10060")
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    monkeypatch.setattr(lp, "_detect_ollama_model", lambda: "gemma4:26b")
+    monkeypatch.setattr(lp, "_ollama_unload", lambda *a, **k: None)
+    assert "ok" in lp._call_ollama("hi")
+    assert len(calls) == 2
+
+    calls.clear()
+    _fake_httpx(monkeypatch, {}, raises=httpx.ConnectTimeout("10060"))
+    with pytest.raises(lp.CallTimedOut, match="could not connect"):
+        lp._call_ollama("hi")
+
+
 def test_auto_research_reads_the_env_file_for_the_timeout(monkeypatch):
     """The configured timeout has to reach the process that calls the model.
 

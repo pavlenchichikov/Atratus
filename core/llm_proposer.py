@@ -777,12 +777,21 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
     client = httpx.Client(trust_env=False, timeout=timeout,
                           **({"headers": auth} if auth else {}))
 
-    def send(body):
+    def send(body, tries=3):
         try:
             if think:
                 # Only a trace can loop, so only a traced call pays for streaming.
                 return _ollama_stream_trace(client, url, body)
             resp = client.post(url, json=body)
+        except httpx.ConnectTimeout as exc:
+            # The host never answered the handshake (Windows gives up after
+            # ~21s, 2026-10-09 ollama.com), so nothing was sent: safe to retry,
+            # and the model's speed has nothing to do with it.
+            if tries > 1:
+                return send(body, tries - 1)
+            raise CallTimedOut(
+                f"could not connect to {url.split('/')[2]} (network or VPN, not "
+                "the model; run again)") from exc
         except httpx.TimeoutException as exc:
             raise CallTimedOut(
                 f"ollama call timed out after {timeout:.0f}s (model too slow for "

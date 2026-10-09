@@ -405,9 +405,8 @@ def cmd_run(args):
                 # Stop the sweep: every remaining asset would spend the same
                 # hour to fail the same way.
                 print("[analyst] %s" % exc)
-                print("[analyst] stopped after the first timeout. Try a smaller "
-                      "model for this path, or raise GTRADE_AR_LLM_TIMEOUT if "
-                      "the machine really is that slow.")
+                print("[analyst] stopped after the first timeout; the line "
+                      "above says why.")
                 return 1
             except ProviderUnavailable as exc:
                 # One line, then stop. A sweep of 28 assets would otherwise
