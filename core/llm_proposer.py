@@ -685,7 +685,24 @@ def _ollama_size_mb(base, model):
 _RAM_OVERHEAD_MB = 2000
 
 
-def wait_for_ram(base, model, sleep=time.sleep, clock=time.monotonic):
+# Ollama keeps this much of the card back for itself ("minimum" in its log).
+_OLLAMA_VRAM_RESERVE_MB = 457
+
+
+def card_share_mb(base):
+    """VRAM a local load may take right now, or 0: nothing may train on the
+    card and at least GTRADE_OLLAMA_MIN_FREE_MB must be free. In a search this
+    is the pause between two evaluations, when the trainers have exited and
+    release_card will clear the card again before the next one starts."""
+    if not _is_local(base) or _card_in_training():
+        return 0
+    free = _vram_free_mb()
+    if free is None or free < int(_setting("GTRADE_OLLAMA_MIN_FREE_MB")):
+        return 0
+    return max(0, free - _OLLAMA_VRAM_RESERVE_MB)
+
+
+def wait_for_ram(base, model, sleep=time.sleep, clock=time.monotonic, card_mb=0):
     """Hold a local load until the machine has the RAM for it.
 
     The 2026-10-02 08:36 bugcheck 0x10E VIDEO_MEMORY_MANAGEMENT_INTERNAL came
@@ -694,15 +711,16 @@ def wait_for_ram(base, model, sleep=time.sleep, clock=time.monotonic):
     _RAM_OVERHEAD_MB plus GTRADE_OLLAMA_RAM_MARGIN_MB (default 2048), the file
     scaled by GTRADE_OLLAMA_RAM_SHARE (1.0; lower lets a mapped model page), then refuses with
     ProviderUnavailable: the search turns its LLM off for the run instead of
-    taking the machine down. A loaded model costs nothing new.
+    taking the machine down. A loaded model costs nothing new. `card_mb`: the
+    part that goes to an idle card (card_share_mb) is not asked of the RAM.
     """
     if not _is_local(base) or model in _ollama_loaded(base):
         return
     size = _ollama_size_mb(base, model)
     if size is None:
         return
-    need = (int(size * float(_setting("GTRADE_OLLAMA_RAM_SHARE"))) + _RAM_OVERHEAD_MB
-            + int(_setting("GTRADE_OLLAMA_RAM_MARGIN_MB")))
+    need = (max(0, int(size * float(_setting("GTRADE_OLLAMA_RAM_SHARE"))) - card_mb)
+            + _RAM_OVERHEAD_MB + int(_setting("GTRADE_OLLAMA_RAM_MARGIN_MB")))
     deadline = clock() + float(_setting("GTRADE_OLLAMA_RAM_WAIT"))
     said = False
     while True:
@@ -721,7 +739,8 @@ def wait_for_ram(base, model, sleep=time.sleep, clock=time.monotonic):
         sleep(15)
 
 
-def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
+def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think,
+                        on_card=False):
     """One call over Ollama's OWN /api/chat, which is the only place `think`
     is honoured.
 
@@ -752,9 +771,13 @@ def _ollama_native_chat(base, model, prompt, temperature, max_tokens, think):
             options["num_ctx"] = int(_setting("GTRADE_OLLAMA_NUM_CTX"))
         if _setting("GTRADE_OLLAMA_MMAP") in ("0", "1"):
             options["use_mmap"] = _setting("GTRADE_OLLAMA_MMAP") == "1"
-    if keep:
-        # Resident on the CPU only: layers on the card would hold it for good,
-        # and Ollama cannot move them off without reloading the model.
+    if keep and on_card:
+        # The card is idle (card_share_mb): Ollama places the model as it does
+        # for Hermes. The next trainer's release_card unloads it before TF
+        # starts, so the card is never shared with training (0x116).
+        pass
+    elif keep:
+        # A card in use: resident on the CPU only.
         options["num_gpu"] = 0
     elif num_gpu.isdigit():
         options["num_gpu"] = _gpu_layers(int(num_gpu), base)
@@ -842,7 +865,8 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
             "(for example gpt-oss:120b).")
     _ollama_headers(base)   # a missing cloud key stops here, not after three retries
     model = model_override() or _detect_ollama_model()
-    wait_for_ram(base, model)
+    card_mb = card_share_mb(base) if keep_loaded(base) else 0
+    wait_for_ram(base, model, card_mb=card_mb)
     # Reasoning models spend tokens on the trace BEFORE the answer, so a cap the
     # trace uses up leaves nothing for the answer. GTRADE_AR_LLM_MAX_TOKENS
     # overrides; 0 means no cap, which is fine for a one-shot call and risky for
@@ -862,7 +886,7 @@ def _call_ollama(prompt, temperature=None, max_tokens=_UNSET, think=None):
     for _attempt in range(3):
         try:
             out, trace = _ollama_native_chat(base, model, prompt, temperature,
-                                             max_toks, think)
+                                             max_toks, think, on_card=card_mb > 0)
         except TerminalCallError:
             # A timeout, or an answer the trace ate: the same prompt, model and
             # cap produce the same outcome next time, so asking again only
