@@ -2140,7 +2140,11 @@ class _RlController:
             available.append("nets")
         if len(elites) >= 2:
             available.append("cross")
-        if llm_proposer.llm_selected():
+        # Not once the backend is off for the run: every draw would then be an
+        # empty child booked as a failure, which is evidence about the machine,
+        # not the arm, and it persists. Measured 2026-10-10: 17 refused draws
+        # took llm from n26 to n43 (mean 0.05) and the next run never drew it.
+        if llm_proposer.llm_selected() and not _LLM_WARNED:
             available.append("llm")
         if qd_surrogate.surrogate_on():
             available.append("surr")
